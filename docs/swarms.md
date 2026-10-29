@@ -180,6 +180,15 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
   them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
   chosen, or Codex.
+- **On the round dial.** Each project has two screens. The PM screen is the project's face as before, with two dots at
+  the right edge. Swipe up for the Buddy screen: a lilac ring, the Buddy's avatar (Desktop's pattern and colour) and
+  its last message. Swipe down to return to the PM screen. A swipe down on the PM screen still opens the inbox when
+  something is unread. The dial keeps the screen per Swarm as you move between projects; opening another conversation
+  on the desktop puts the dial back on what the desktop shows. A project without a Buddy shows "No Buddy here yet". Tap
+  to talk works on both screens: on the Buddy screen the words go to the Buddy chat, with the Buddy's engine
+  listening, and a refused post shows as an error on the dial, never as words in a terminal. A new line from the
+  Buddy is quiet: no beep and no inbox entry, only a lilac badge on the lower dot and "Your Buddy replied", until you
+  open the Buddy screen.
 - **The product manager's lines to one person.** What the product manager tells one person directly goes to that
   person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
   decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads

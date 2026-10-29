@@ -95,14 +95,16 @@ export const startTarget = (request: { machineId: string; engine: string; model?
     ...(request.requirements ? { devices: request.requirements.devices } : {}), ...(request.gridModel ? { gridModel: request.gridModel } : {}) })
 
 /** A started agent was launched with `--effort`, which Claude never reports back, so its configuration may say `auto`; its
- * start record still holds what it was launched with (manual run 2026-10-19). */
+ * start record still holds what it was launched with (manual run 2026-10-19). A command loads only unfinished starts, so
+ * whether it was launched on the engine's default is read from the agent itself; the start only for one from before that. */
 export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
   const reported = worker.configuration.effort
   const start = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)
   const launched = start?.request.effort
   return { machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
     effort: reported && reported !== 'auto' ? reported : launched ?? reported, devices: start?.request.requirements?.devices ?? [],
-    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(start && !worker.gridModel && !start.request.gridModel && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}) }
+    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(!worker.gridModel && (worker.launchedDefault || (start && !start.request.gridModel && (start.request.model ?? 'default') === 'default'))
+      ? { launchedDefault: true as const } : {}) }
 }
 
 /** The policy's strength of a subscription model, as the CLI's route rates it (cli superTabs/route.ts rateFor): its named row

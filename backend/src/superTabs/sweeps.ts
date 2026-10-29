@@ -5,6 +5,7 @@ import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
+import { expireEvidence } from './evidence/store.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -87,10 +88,14 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
 
 /** Finished starts are kept 7 days, then removed (spec, Archive); their tombstones go 7 days later (purge index). */
 async function expireStarts(db: PrismaClient, now: number): Promise<number> {
-  const rows = await db.swarmStart.findMany({ where: { deleted: false, finishedAt: { lt: new Date(now - RETENTION_MS) } }, take: BATCH })
+  // A plain match: Prisma sent `finishedAt: { lt }` as $expr, where a null finish time is less than any date, so every start
+  // still starting was removed too (2026-10-29). Here a start with no finish time never matches.
+  const rows = await db.swarmStart.aggregateRaw({ pipeline: [
+    { $match: { deleted: false, finishedAt: { $lt: { $date: new Date(now - RETENTION_MS).toISOString() } } } }, { $limit: BATCH },
+    { $project: { tabId: 1, key: 1, version: 1, data: 1 } }] }) as unknown as Array<{ tabId: string; key: string; version: number; data: unknown }>
   let expired = 0
   for (const row of rows) {
-    if (await guarded(db, { tabId: row.tabId, op: 'remove', kind: 'start', key: row.key, seen: row.version, data: row.data as unknown as AgentStart })) expired++
+    if (await guarded(db, { tabId: row.tabId, op: 'remove', kind: 'start', key: row.key, seen: Number(row.version), data: row.data as AgentStart })) expired++
   }
   return expired
 }
@@ -121,7 +126,7 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

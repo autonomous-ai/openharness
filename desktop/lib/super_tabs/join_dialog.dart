@@ -8,6 +8,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'controller.dart';
 import 'join_link.dart';
+import 'join_machine.dart' show swarmNewMemberRole;
 
 /// The native URL channel queues links before authentication. This host only
 /// presents them after sign-in and never joins on the person's behalf.
@@ -69,9 +70,13 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
                   onJoined: (id, name) {
                     if (!current()) return;
                     app.openSuperTab(id, name);
-                    // Joined by the person at this Mac: macOS asks once for
-                    // the Harness Team account (cli/src/team/autoSetup.ts).
-                    unawaited(app.offerTeamAccount('join', tabId: id));
+                  },
+                  // Joined by the person at this computer: it is added to the
+                  // Swarm, then the system asks once for the Harness Team
+                  // account (super_tabs/join_machine.dart).
+                  onNewMember: (id, role) {
+                    if (!current()) return;
+                    unawaited(app.addMachineOnJoin(id, role: role));
                   },
                 )
               : AlertDialog(
@@ -111,11 +116,16 @@ class SwarmJoinDialog extends StatefulWidget {
     required this.request,
     required this.onJoined,
     required this.isCurrent,
+    this.onNewMember,
   });
   final SwarmJoinLink link;
   final String accountEmail;
   final SuperTabRequest request;
   final void Function(String id, String name) onJoined;
+
+  /// After a join that made this account a member, with the role it joined
+  /// as; never for someone who was one already.
+  final void Function(String id, String role)? onNewMember;
   final bool Function() isCurrent;
 
   @override
@@ -178,6 +188,7 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
       _error = null;
     });
     try {
+      String? newRole;
       if (_preview!['alreadyMember'] != true) {
         final result = await widget.request(
           'POST',
@@ -188,9 +199,11 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
         if (result['id'] != widget.link.tabId) {
           throw const FormatException('Invalid invitation');
         }
+        newRole = swarmNewMemberRole(result);
       }
       if (!_current) return;
       widget.onJoined(widget.link.tabId, _preview!['name'] as String);
+      if (newRole != null) widget.onNewMember?.call(widget.link.tabId, newRole);
       if (mounted) Navigator.pop(context);
     } catch (failure) {
       if (_current) setState(() => _error = _errorMessage(failure));

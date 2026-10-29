@@ -58,7 +58,7 @@ static void select_companion(void) {}
 static ht_tab_carousel_t tab_carousel;
 #define PANE_PITCH 60
 static struct {
-    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
+    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active, pane_pos;
     uint32_t error_until;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
@@ -122,6 +122,9 @@ bool queue(action_t action) { if (queue_full) return false; queued = action; ret
 # The Swarm's data and lookups, for the Lead a face voice turn goes to.
 harness += source[source.index('enum { SUPERTAB_RECAP_GET'):source.index('static const char *swarm_fixed_text(')]
 harness += function('voice_lead')
+# and whose engine it listens with: the Buddy's on a Swarm's Buddy side.
+for name in ['swarm_side_slot', 'swarm_side_buddy', 'swarm_on_buddy', 'swarm_voice_engine']:
+    harness += function(name)
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
 harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n' + dispatch + '} }\n'
@@ -162,9 +165,39 @@ int main(void) {
         strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
         dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
         assert(recording && s.view == VOICE && !strcmp(started_for, "h1"));
-        assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile"));
+        assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile") && !sw.voice_buddy);
         done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
         assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
+        // Words for the Swarm chat are always reviewed, a plain tap included, by a daemon that posts a reviewed draft there.
+        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); done();
+        assert(reviews == 1 && s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
+        // On the Buddy side the turn is pinned to it when it starts, with the Buddy's engine; a later side change moves neither.
+        {
+            static ht_supertab_t buddy_card;
+            ht_lead_in_t b = {.id = "L1", .project = "mobile", .engine = "codex", .local = "h1", .state = "done", .order = 0, .since = -1,
+                              .buddies = true, .buddy = {.present = true, .chat_id = "b1", .name = "diego's Buddy", .engine = "claude",
+                                                         .color = "#d6a79a", .cells = 25513, .live = true}};
+            assert(ht_supertab_init(&buddy_card, "s1", "", "openharness", 1) && ht_supertab_lead_add(&buddy_card, &b));
+            ht_supertabs_put(&swarm, &buddy_card, now, ev, 4);
+            reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1"); strcpy(sw.side[0].tab, "s1"); sw.side[0].buddy = true;
+            dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
+            assert(s.voice_open && sw.voice_buddy && !strcmp(s.voice_engine, "claude"));
+            sw.side[0].buddy = false;
+            assert(sw.voice_buddy);
+            discard(); finish_audio();
+            reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1"); sw.side[0].buddy = false;
+            dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
+            assert(s.voice_open && !sw.voice_buddy && !strcmp(s.voice_engine, "codex"));
+            discard(); finish_audio();
+            ht_supertabs_put(&swarm, &card, now, ev, 4); memset(sw.side, 0, sizeof sw.side);
+        }
+        // An older daemon would type a reviewed draft into the Lead's terminal: no review on the face, even when held.
+        reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
+        assert(!reviews && !s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
         // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
         strcpy(s.agents[0].engine, "claude"); begin();
         assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));

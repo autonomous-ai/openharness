@@ -63,6 +63,33 @@ void openSwarmConversation(
 @visibleForTesting
 Future<bool> Function() openSwarmSettings = openAppSettings;
 
+/// A composer's + — the chat's, or a thread's reply box: the sheet, then the
+/// picker it names, its files into [files], and what to say under the box to
+/// [note]. A refusal of the camera or photos offers the phone's Settings.
+/// Nothing is added, or said, once [stillWanted] fails.
+Future<void> attachSwarmFiles(
+  BuildContext context,
+  SwarmOutgoingFiles files, {
+  required bool Function() stillWanted,
+  required ValueChanged<String?> note,
+}) async {
+  final source = await showSwarmAttachSheet(context);
+  if (source == null || !stillWanted()) return;
+  final outcome = await addSwarmPicked(files, source, stillWanted: stillWanted);
+  if (!stillWanted() || !context.mounted) return;
+  switch (outcome) {
+    case SwarmPicked(note: final said):
+      note(said);
+    case SwarmPickFailed(:final message):
+      note(message);
+    case SwarmPickDenied(:final source):
+      note(null);
+      if (await showSwarmAccessOff(context, source)) {
+        unawaited(openSwarmSettings());
+      }
+  }
+}
+
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
 /// quote leading to its original; the decisions asked of the person in it;
@@ -75,10 +102,8 @@ class SwarmConversationPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.conversationId,
-    this.title,
-    this.subtitle,
-    this.action,
-    this.below,
+    this.header = true,
+    this.buddy,
     this.messageId,
     this.decisionId,
     this.mention,
@@ -91,17 +116,15 @@ class SwarmConversationPage extends StatefulWidget {
   /// private line is answered in the project chat.
   final String? mention;
 
-  /// The header's lines in place of the chat's name and its project: a
-  /// project's chat is its project's screen, under the project's name and
-  /// who is in it (`swarm_project_page.dart`).
-  final String? title, subtitle;
+  /// Its own header: back, its name and its project, and — the person's own
+  /// Buddy chat — Remove Buddy at its end. None in a project's tab
+  /// (`swarm_project_page.dart`), under the project's own header.
+  final bool header;
 
-  /// At the header's end: a project's ⋮ menu. The person's own Buddy chat
-  /// has its own, Remove Buddy, when this is null.
-  final Widget? action;
-
-  /// Under the header: a project's team in one line.
-  final Widget? below;
+  /// What the person does to their Buddy, where the page around the chat
+  /// holds it, for its own header's menu; null makes the chat its own while
+  /// it is their Buddy chat.
+  final SwarmBuddyActions? buddy;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -301,8 +324,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _seeBuddy(SwarmConversation c, String? project) {
     final kept = _buddy;
     if (kept?.reader == c.reader && kept?.projectId == project) return;
-    kept?.dispose();
-    _buddy = project == null ? null : SwarmBuddyActions(c.reader, project);
+    if (kept != widget.buddy) kept?.dispose();
+    _buddy = switch (widget.buddy) {
+      _ when project == null => null,
+      final held? when held.reader == c.reader && held.projectId == project =>
+        held,
+      _ => SwarmBuddyActions(c.reader, project),
+    };
   }
 
   void _close() {
@@ -315,7 +343,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       c.reader.removeListener(_see);
       c.dispose();
     }
-    _buddy?.dispose();
+    if (_buddy != widget.buddy) _buddy?.dispose();
     _buddy = null;
     _rows.clear();
     _madeFrom = null;
@@ -366,31 +394,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _send(c);
   }
 
-  /// The composer's +: the sheet, then the picker it names, its files into
-  /// [c]'s. A refusal of the camera or photos offers the phone's Settings.
+  /// The composer's + ([attachSwarmFiles]), its files into [c]'s.
   Future<void> _pickFiles(SwarmConversation c) async {
     if (_picking) return;
     _picking = true;
     try {
-      final source = await showSwarmAttachSheet(context);
-      if (source == null || !mounted || _conversation != c) return;
-      final outcome = await addSwarmPicked(
+      await attachSwarmFiles(
+        context,
         c.files,
-        source,
         stillWanted: () => mounted && _conversation == c,
+        note: (note) => _attachNote.value = note,
       );
-      if (!mounted || _conversation != c) return;
-      switch (outcome) {
-        case SwarmPicked(:final note):
-          _attachNote.value = note;
-        case SwarmPickFailed(:final message):
-          _attachNote.value = message;
-        case SwarmPickDenied(:final source):
-          _attachNote.value = null;
-          if (await showSwarmAccessOff(context, source)) {
-            unawaited(openSwarmSettings());
-          }
-      }
     } finally {
       _picking = false;
     }
@@ -578,7 +592,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             c.reader.snapshot?.personLook(c.reader.accountId) ??
             (picture: null, status: null),
         text: text,
-        files: const [],
+        files: t.pendingFiles,
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
         // Taken by the backend and not read back yet: still on its way.
         sending: t.sending || t.confirmed,
@@ -696,12 +710,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
+        // Under a project's header, which keeps clear of the status bar.
+        top: widget.header,
         child: session == null
             ? Align(
                 alignment: Alignment.topLeft,
-                child: TtyBackButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
+                child: widget.header
+                    ? TtyBackButton(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      )
+                    : null,
               )
             : c == null
             ? _unopened(context, session, tty)
@@ -722,14 +740,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _header(
-          context,
-          tty,
-          title: widget.title ?? (inbox.loaded ? 'Chat' : null),
-          project: widget.subtitle,
-          action: widget.action,
-        ),
-        ?widget.below,
+        if (widget.header)
+          _header(context, tty, title: inbox.loaded ? 'Chat' : null),
         Expanded(
           child: inbox.loaded
               ? _said(_notOpen)
@@ -840,27 +852,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       // Placeholders until the chat is known, unless it is not open.
-      ListenableBuilder(
-        listenable: c,
-        builder: (context, _) => _header(
-          context,
-          tty,
-          title:
-              widget.title ??
-              (view.known || c.state == SwarmChatState.lost
-                  ? view.title
-                  : null),
-          project: widget.subtitle ?? view.project,
-          // The person's own Buddy chat: Remove Buddy.
-          action:
-              widget.action ??
-              switch (_buddy) {
-                final buddy? => SwarmBuddyMenuButton(actions: buddy),
-                null => null,
-              },
+      if (widget.header)
+        ListenableBuilder(
+          listenable: c,
+          builder: (context, _) => _header(
+            context,
+            tty,
+            title: view.known || c.state == SwarmChatState.lost
+                ? view.title
+                : null,
+            project: view.project,
+            // The person's own Buddy chat: Remove Buddy.
+            action: switch (_buddy) {
+              final buddy? => SwarmBuddyMenuButton(actions: buddy),
+              null => null,
+            },
+          ),
         ),
-      ),
-      ?widget.below,
       if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
       Expanded(
         child: Stack(
@@ -1524,24 +1532,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          SwarmOutgoingChips(conversation: c),
+          SwarmOutgoingChips(box: c),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               if (swarmSendsFiles)
-                SwarmRoundButton(
+                SwarmAttachButton(
                   key: const ValueKey('swarm-attach'),
-                  label: 'Attach files',
                   onTap: c.uploading || c.files.room <= 0
                       ? null
                       : () => unawaited(_pickFiles(c)),
-                  child: Icon(
-                    LucideIcons.plus,
-                    size: AppIconSize.standalone,
-                    color: c.uploading || c.files.room <= 0
-                        ? AppPalette.textFaint
-                        : AppPalette.textSecondary,
-                  ),
                 ),
               const SizedBox(width: 6),
               Expanded(
@@ -2576,6 +2576,25 @@ class SwarmRoundButton extends StatelessWidget {
         decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
         child: child,
       ),
+    ),
+  );
+}
+
+/// A composer's + ([attachSwarmFiles]): off, and faint, while files go up or
+/// no more fit.
+class SwarmAttachButton extends StatelessWidget {
+  const SwarmAttachButton({super.key, required this.onTap});
+
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => SwarmRoundButton(
+    label: 'Attach files',
+    onTap: onTap,
+    child: Icon(
+      LucideIcons.plus,
+      size: AppIconSize.standalone,
+      color: onTap == null ? AppPalette.textFaint : AppPalette.textSecondary,
     ),
   );
 }
