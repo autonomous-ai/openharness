@@ -111,3 +111,5 @@ the CLI's source so a new machine request cannot silently leave unencrypted.
 
 `third_party/xterm/` is patched code: preserve its mobile input, rendering and accessibility changes.
 Never commit local signing edits to `ios/Runner.xcodeproj/project.pbxproj`.
+
+<!-- CI reuse demo (#1107): never merged. -->
