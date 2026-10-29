@@ -58,7 +58,8 @@ class SwarmReadMarkSender {
 
 /// How far the person has read each chat of one Swarm ([reader]), as the
 /// desktop keeps it (`SuperTabController.unread`): a chat is unread while its
-/// newest message is past the higher of the server's mark
+/// newest message in the main stream ([SuperTabConversation.mainSequence]; a
+/// reply only in a thread is not) is past the higher of the server's mark
 /// ([SuperTabSnapshot.readMarks], #2131) and this phone's own. Unread is drawn
 /// as the chat's name in bold (design system: Unread).
 ///
@@ -116,11 +117,12 @@ class SwarmReadMarks extends ChangeNotifier {
 
   String get _key => 'swarm_read_marks.${reader.accountId}.${reader.tabId}';
 
-  /// Whether [group] has messages past what the person has read.
+  /// Whether [group] has messages in its main stream past what the person
+  /// has read.
   bool unread(SuperTabConversation group) {
     if (!_loaded || !_started) return false;
     final server = reader.snapshot?.readMarks[group.id] ?? 0;
-    return group.lastMessageSequence > max(server, _marks[group.id] ?? 0);
+    return group.mainSequence > max(server, _marks[group.id] ?? 0);
   }
 
   /// The person saw [conversationId] through [sequence]: sent to the server,

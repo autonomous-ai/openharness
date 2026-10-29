@@ -11,6 +11,7 @@ import 'change_wifi_page.dart';
 import 'computer_github_page.dart';
 import 'computer_password_page.dart';
 import 'computer_ssh_page.dart';
+import 'computer_use_page.dart';
 import 'computer_version_page.dart';
 import 'link_page.dart';
 import 'phone_navigation.dart';
@@ -247,6 +248,18 @@ PhoneSheetRows? _machineRows(
                     notifier: notifier,
                     machineId: machineId,
                   ),
+                ),
+              ),
+            ),
+          if (notifier.osFeature(machineId, 'computer_use'))
+            PhoneSheetAction(
+              icon: LucideIcons.flaskConical300,
+              label: 'Computer use',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) =>
+                      ComputerUsePage(notifier: notifier, machineId: machineId),
                 ),
               ),
             ),

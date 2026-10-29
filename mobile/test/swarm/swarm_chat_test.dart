@@ -200,6 +200,7 @@ void main() {
       upload: upload,
       notices: SilentSystemNotices(),
       features: features,
+      readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await show(
@@ -339,6 +340,32 @@ void main() {
     );
     expect(key('swarm-lit-m1'), findsOneWidget);
     expect(inView(tester, find.text('Message 1\nMore text')), isTrue);
+  });
+
+  testWidgets('opened at an earlier message, the chat is read only once the '
+      'person goes down to its newest', (tester) async {
+    final fake = backend([
+      for (var i = 1; i <= 40; i++)
+        message('m$i', i, text: 'Message $i\nMore text', minute: i),
+    ]);
+    List<Object?> marksSent() => [
+      for (final call in fake.calls)
+        if (call.method == 'POST' &&
+            call.path == '/api/super-tabs/$tab/conversations/g1/read')
+          call.body?['sequence'],
+    ];
+    await pump(tester, fake, messageId: 'm1');
+    expect(inView(tester, find.text('Message 1\nMore text')), isTrue);
+
+    expect(marksSent(), everyElement(lessThanOrEqualTo(1)));
+
+    for (var i = 0; i < 10; i++) {
+      await tester.drag(key('swarm-messages'), const Offset(0, -2000));
+      await tester.pumpAndSettle();
+    }
+
+    expect(inView(tester, find.text('Message 40\nMore text')), isTrue);
+    expect(marksSent().last, 40);
   });
 
   testWidgets(
@@ -1343,6 +1370,20 @@ void main() {
       expect(find.text('On it @River'), findsOneWidget);
     });
 
+    /// The read marks sent for g1, in order.
+    List<Object?> marksSent(FakeSwarm fake) => [
+      for (final call in fake.calls)
+        if (call.method == 'POST' &&
+            call.path == '/api/super-tabs/$tab/conversations/g1/read')
+          call.body?['sequence'],
+    ];
+
+    /// Whether g1 reads as unread on the phone.
+    bool unread(SwarmHost host) {
+      final reader = host.session!.inbox.reader(tab)!;
+      return reader.readMarks!.unread(reader.snapshot!.conversation('g1')!);
+    }
+
     /// g1 moved on to [sequence], as the Swarm's next read says.
     void movedOn(FakeSwarm fake, int sequence) =>
         fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
@@ -1474,11 +1515,95 @@ void main() {
         findsOneWidget,
       );
 
+      // Waiting below, it is not read: no mark goes past what they saw.
+      expect(marksSent(fake), everyElement(lessThan(40)));
+      expect(unread(host), isTrue);
+
       await tester.tap(key('swarm-new-pill'));
       await tester.pumpAndSettle();
 
       expect(inView(tester, find.text('Fresh news')), isTrue);
       expect(key('swarm-new-pill'), findsNothing);
+      expect(marksSent(fake).last, 40, reason: 'shown now, so read');
+      expect(unread(host), isFalse);
+    });
+
+    testWidgets('a message left waiting below stays unread when the chat '
+        'opens again from what it kept, at an earlier message', (tester) async {
+      final fake = backend([
+        for (var i = 1; i < 40; i++)
+          message('m$i', i, text: 'Line $i\nof the log', minute: i),
+      ]);
+      final host = await pump(tester, fake);
+      await tester.drag(key('swarm-messages'), const Offset(0, 300));
+      await tester.pumpAndSettle();
+      movedOn(fake, 40);
+      fake.routes['$messages?after=39'] = (_) => {
+        'messages': [message('m40', 40, text: 'Fresh news', minute: 45)],
+        'next': null,
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(marksSent(fake), everyElement(lessThan(40)));
+
+      // Closed with 40 unseen; the chat keeps what it read.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(SwarmChatCache.length, greaterThan(0));
+      // A notice opens it again at its first message.
+      await show(tester, host, messageId: 'm1');
+
+      expect(inView(tester, find.text('Line 1\nof the log')), isTrue);
+      expect(marksSent(fake), everyElement(lessThan(40)));
+      expect(unread(host), isTrue);
+    });
+
+    testWidgets('a message that arrives while Harness is behind is read only '
+        'once Harness is in front again', (tester) async {
+      final fake = backend([message('m1', 1, text: 'The plan', minute: 1)]);
+      final host = await pump(tester, fake);
+      // The app's states, one step at a time, as the platform moves them.
+      void go(List<AppLifecycleState> states) {
+        for (final state in states) {
+          tester.binding.handleAppLifecycleStateChanged(state);
+        }
+      }
+
+      const behind = [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ];
+      const front = [
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ];
+      addTearDown(() {
+        if (tester.binding.lifecycleState == AppLifecycleState.paused) {
+          go(front);
+        }
+      });
+
+      go(behind);
+      movedOn(fake, 2);
+      fake.routes['$messages?after=1'] = (_) => {
+        'messages': [message('m2', 2, text: 'Fresh news', minute: 2)],
+        'next': null,
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      // Behind, no frame is drawn, but the chat reads the message all the
+      // same: it is not seen.
+      expect(marksSent(fake), everyElement(lessThan(2)));
+      expect(unread(host), isTrue);
+
+      go(front);
+      await tester.pumpAndSettle();
+
+      expect(marksSent(fake).last, 2);
+      expect(unread(host), isFalse);
     });
   });
 

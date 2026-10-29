@@ -79,6 +79,7 @@ import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
+import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
@@ -2459,6 +2460,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
+    if (mounted && call.method == 'keymapCommand') {
+      final command = (call.arguments as Map?)?['command'];
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) return;
+    }
+
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -6336,6 +6342,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
+              hidden: (row) =>
+                  app.superTabs
+                      .peek(superTabTarget.tabId)
+                      ?.snapshot
+                      ?.agents
+                      .any(
+                        (agent) =>
+                            agent.isBuddy &&
+                            agent.machineId == row.machineId &&
+                            agent.harnessId == row.agentId,
+                      ) ==
+                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6360,6 +6378,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
+                  // Buddies are personal; the picker does not list them either.
+                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6382,7 +6402,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null)
           for (final agent
-              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.teamAgents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -8100,7 +8120,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: Focus(
+            child: SuperTabQuickSwitcherScope(
+              app: app,
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(

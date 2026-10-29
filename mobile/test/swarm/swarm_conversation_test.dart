@@ -187,6 +187,46 @@ void main() {
     },
   );
 
+  // The phone has no thread view yet: a reply only in its thread is read
+  // and shown in the chat, though it leaves the chat's main stream where it
+  // was (PM, 10-29; desktop_parity_test).
+  test('a reply only in its thread is read and shown in the chat, so nothing '
+      'is lost', () async {
+    final r = rig(sequence: 2);
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m2', 2)],
+      'next': null,
+    };
+    r.swarm.routes['$messages?after=2'] = (_) => {
+      'messages': [
+        {...message('m3', 3, text: 'in the thread'), 'thread': 'm2'},
+      ],
+      'next': null,
+    };
+    final c = await open(r.reader);
+
+    r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      groups: [
+        part('g1', 30, {
+          ...groupData(
+            'g1',
+            title: 'Fix login',
+            agentIds: ['agent-lead', 'agent-builder'],
+            lastMessageSequence: 3,
+          ),
+          'lastMainSequence': 2,
+        }),
+      ],
+    );
+    await r.reader.refresh();
+    await settle();
+
+    expect([for (final m in c.messages) m.text], ['hello', 'in the thread']);
+    expect(c.messages.last.threadReply, isTrue);
+    expect(r.reader.snapshot!.conversation('g1')!.mainSequence, 2);
+  });
+
   test(
     'a post goes to the agents mentioned in it, and clears the draft',
     () async {
@@ -1095,6 +1135,33 @@ void main() {
 
       expect(m.sent, [2, 3]);
       expect(m.marks.unread(r.reader.snapshot!.conversation('g1')!), isFalse);
+    });
+
+    test('a chat read before, opened again covered or at an earlier '
+        'message, marks nothing past what is seen of what it kept', () async {
+      final r = rig();
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': null,
+      };
+      await r.reader.refresh();
+      // Read while covered: kept, and not read.
+      var c = SwarmConversation(r.reader, 'g1', shown: false);
+      await c.load();
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty);
+
+      c = SwarmConversation(r.reader, 'g1', shown: false);
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty, reason: 'covered from the start');
+
+      c = SwarmConversation(r.reader, 'g1', heldAt: 'm1');
+      addTearDown(c.dispose);
+      await settle();
+      expect(m.sent, [1], reason: 'only through the message it opened at');
     });
 
     test('a Swarm without read marks marks nothing', () async {
