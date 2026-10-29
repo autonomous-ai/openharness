@@ -2,11 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -21,7 +19,6 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
-import 'leaderboard/goal_line.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
@@ -29,8 +26,7 @@ import 'leaderboard/waiting_line.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
-import 'team_glance.dart';
-import 'team_glance_panel.dart';
+import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
 /// leaderboard of the open conversation's project, and agents from the
@@ -555,11 +551,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
         ],
       ),
-      if (board != null)
-        LeaderboardGoalLine(
-          goal: board.goal,
-          weekName: weekName(_board.week, current),
-        ),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -576,6 +567,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           score: scores[person.id],
           columns: columns,
           own: person.id == c.accountId,
+          weekName: weekName(_board.week, current),
           onTap: () => _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)
@@ -603,14 +595,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
-        actions: [
-          AppIconButton(
-            icon: AppIcons.layoutGrid,
-            tooltip: 'Team at a glance',
-            onPressed: () =>
-                unawaited(showSuperTabTeamGlance(context, c, widget.app)),
-          ),
-        ],
       ),
       for (final agent in [...leads, ...agents]) _agent(agent),
     ];

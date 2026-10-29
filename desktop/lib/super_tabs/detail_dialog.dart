@@ -11,7 +11,7 @@ const _halfGap = _gap / 2;
 /// Where every value of a details dialog starts: after the label column and its gap.
 const superTabDetailLabelWidth = 120.0;
 
-/// The frame the Swarm's details dialogs share (machine, person, project, Team at a glance, Share Swarm, Add
+/// The frame the Swarm's details dialogs share (machine, person, project, Share Swarm, Add
 /// machine): the title with a quiet close, a hairline under it only while content has scrolled beneath it, a
 /// scrolling body, and actions at the bottom — [leadingActions] at the left, [actions] at the right, at most one of
 /// them filled.
