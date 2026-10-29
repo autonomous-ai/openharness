@@ -51,6 +51,10 @@ const envSchema = z.object({
   // that lands on an instance NOT holding the agent's manager socket is forwarded to the instance that
   // does (agent:{machineId}:appinst), so the data path is a direct backpressured socket, not Redis relay.
   // Off by default (single-instance/dev needs nothing — it's always co-located). Enable in multi-instance.
+  // Roadmap Phase 1.3: refuse a bad token on /api/web-ws with HTTP 401 before the upgrade, instead of upgrading and closing
+  // 4401, for sockets that declare `auth=http` (the daemon's relay from 1.3.64). Off by default; turn on once that release
+  // is out. Browsers and the phone keep the 4401, since a browser cannot read the status of a failed upgrade.
+  WEB_WS_AUTH_HTTP_401: z.string().default('false').transform((v) => v === 'true'),
   MESH_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Host the mesh endpoint is reachable at from OTHER instances: 127.0.0.1 for a single-host pm2 cluster,
   // the VM's routable IP for multi-VM. Advertised verbatim in Redis.
