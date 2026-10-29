@@ -775,6 +775,39 @@ describe('the roster note and the directory', () => {
     expect(String((await odd.ask({ action: 'send', pane: '%1' })).roster).endsWith(RULES)).toBe(true)
   })
 
+  it('reads the tabs when the desk or the machine list is pushed, and on its own only every five minutes', async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    t.service.start()
+    await vi.advanceTimersByTimeAsync(0)
+    const reads = () => t.backend.mock.calls.filter((c) => c[1] === '/api/agent-messages').length
+    const first = reads()
+    // Nothing pushed: no read for the 15 s the old poll waited, nor until just short of five minutes.
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first)
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 15_001)
+    expect(reads()).toBe(first)
+    // The safety net.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reads()).toBe(first + 1)
+    // A machine renamed or deleted names the panes again, as a changed desk does.
+    t.notice({ type: 'machines_changed', reason: 'renamed' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads()).toBe(first + 2)
+    t.notice({ type: 'desk_changed', revision: 5 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads()).toBe(first + 3)
+    // A read that fails is tried again 15 s later, as the old poll did, not a safety net later.
+    t.backend.mockResolvedValueOnce({ status: 503, body: { success: false, data: t.directory } })
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(reads()).toBe(first + 4)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first + 5)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first + 5)
+    t.service.stop()
+  })
+
   it('counts Agent Messages turned on or off as a change of the directory, at its next read', async () => {
     // Deliveries and notes get another look at once, as for a tab changed (messages/directory.ts).
     vi.useFakeTimers()

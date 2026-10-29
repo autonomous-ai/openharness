@@ -126,13 +126,13 @@ function pod(options: { cache?: SwarmCache | null } = {}) {
   return { store, reads: new SwarmReads(store), cache }
 }
 
-/** The rich fixture Swarm in parts, with a conversation private to `peer` (and the project's Lead). */
+/** The rich fixture Swarm in parts, with a conversation private to `peer`: their Buddy chat. */
 async function privateScene() {
   const s = richSwarm(Date.now())
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peerActor.userId)!.generation
-    state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peerActor.userId, generation }] }
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peerActor.userId, generation }] } })
   })
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })

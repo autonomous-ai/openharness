@@ -29,7 +29,6 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'model.dart';
-import 'pm_chat.dart';
 import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
@@ -168,11 +167,22 @@ class _SuperTabViewState extends State<SuperTabView>
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
 
-  /// Your own message reads You, in the row and in the quote of it.
-  String _shownAuthor(SuperTabController c, SuperTabMessage message) =>
-      message.authorId == c.accountId && !message.fromAgent
-      ? 'You'
-      : _authorName(message);
+  /// Your own message reads You, in the row and in the quote of it. In your
+  /// Buddy chat the PM's private lines read as lines to you, "River (PM) →
+  /// you": the PM writes there but cannot read it (Lead, 10-29).
+  String _shownAuthor(SuperTabController c, SuperTabMessage message) {
+    if (message.authorId == c.accountId && !message.fromAgent) return 'You';
+    final name = _authorName(message);
+    final snapshot = c.snapshot;
+    final project = snapshot?.projectFor(message.conversationId);
+    final chat = project == null ? null : c.buddyChat(project.id);
+    return message.fromAgent &&
+            chat?.id == message.conversationId &&
+            snapshot!.conversation(project!.leadConversationId)?.leadId ==
+                message.authorId
+        ? '$name (PM) → you'
+        : name;
+  }
 
   @override
   void initState() {
@@ -180,7 +190,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
-    c.pmChatOpener = _openPmChat;
+    c.buddyChatOpener = _openBuddyChat;
     _registerDial();
     _changed();
   }
@@ -208,11 +218,11 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
-      if (oldWidget.controller.pmChatOpener == _openPmChat) {
-        oldWidget.controller.pmChatOpener = null;
+      if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
+        oldWidget.controller.buddyChatOpener = null;
       }
       c.addListener(_changed);
-      c.pmChatOpener = _openPmChat;
+      c.buddyChatOpener = _openBuddyChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
       }
@@ -496,7 +506,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
-    if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
+    if (c.buddyChatOpener == _openBuddyChat) c.buddyChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
@@ -1209,28 +1219,21 @@ class _SuperTabViewState extends State<SuperTabView>
       c.select(id);
       _closeSidebar();
     },
-    onOpenPmChat: (projectId) => unawaited(_openPmChat(projectId)),
+    onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
 
-  /// Opens [projectId]'s PM chat in front of Notifications, pull requests and
-  /// a terminal: the sidebar's way in and ⇧⌘K's ([SuperTabController.pmChatOpener]).
-  Future<bool> _openPmChat(String projectId) {
+  /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
+  /// pull requests and a terminal, opening it on the server when they have
+  /// none yet: the sidebar's way in and ⇧⌘K's
+  /// ([SuperTabController.buddyChatOpener]).
+  Future<bool> _openBuddyChat(String projectId) {
     setState(() {
       _showNotifications = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
-    if (c.buddiesOn && c.buddyChat(projectId) == null) {
-      // No Buddy here yet: the shortcut offers to add one.
-      if (c.canWrite) {
-        unawaited(
-          showAddBuddy(context, c, projectId: projectId, app: widget.app),
-        );
-      }
-      return Future.value(false);
-    }
-    return c.openPmChat(projectId);
+    return c.openBuddyChat(projectId);
   }
 
   /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
@@ -1497,10 +1500,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// The reader's own private chat with its project's Product Manager.
-  bool _isPmChat(SuperTabConversation group) =>
-      c.pmChat(group.projectId)?.id == group.id;
-
   /// Whom a Buddy's proposal speaks for, by name; null for other messages.
   String? _proposalOwner(SuperTabMessage message) =>
       message.proposalOwnerId == null
@@ -1539,8 +1538,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
         : group.id == c.snapshot!.leadsConversationId
         ? '# $kProductManagersChannel'
-        : _isPmChat(group)
-        ? kChatWithPm
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null
@@ -1564,9 +1561,6 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (group.id == snapshot.leadsConversationId) {
       return 'Message #$kProductManagersChannel';
-    }
-    if (_isPmChat(group)) {
-      return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
     }
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
@@ -2449,11 +2443,9 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null && _isBuddyChat(group))
-          SuperTabBuddyBar(controller: c, chat: group),
-        // The reader's own chat with the PM shows what the PM asked them;
-        // with Buddies on, their Buddy chat does instead.
-        if (group != null &&
-            (c.buddiesOn ? _isBuddyChat(group) : _isPmChat(group)))
+          SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+        // The reader's own Buddy chat shows what the PM asked them.
+        if (group != null && _isBuddyChat(group))
           SuperTabDecisionsPanel(
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
@@ -2480,8 +2472,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? 'Discuss the plan with your product manager.'
                           : _buddyName(group) != null
                           ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
-                          : _isPmChat(group)
-                          ? 'Only you and the Product Manager read this chat.'
                           : 'Start the conversation.',
                       textAlign: TextAlign.center,
                       style: DesktopChrome.text(color: DesktopChrome.muted),

@@ -105,8 +105,23 @@ class ApiExperimentalSettingsTransport
 /// Account opt-ins. No installation-wide cache can enable another account's experiments.
 /// Changes are displayed only after acknowledgement; reads never write or migrate local choices.
 class ExperimentalFeaturesStore extends ChangeNotifier {
-  ExperimentalFeaturesStore({this.pollInterval = const Duration(seconds: 30)});
+  ExperimentalFeaturesStore({
+    this.pollInterval = safetyNet,
+    this.retryInterval = const Duration(seconds: 30),
+  });
+
+  /// The read with no push: a missed one. Every write is pushed
+  /// (`desk_changed`, backend routes/experimentalSettings.ts), so the 30 s poll
+  /// this was read from every open app and almost always found nothing new
+  /// (WebSocket roadmap, Phase 2 item 4). The CLI's copy waits as long.
+  static const safetyNet = Duration(minutes: 5);
+
+  /// How long the safety net waits after a good read, by it or by a push.
   final Duration pollInterval;
+
+  /// How soon a read that failed is tried again, as the old poll did.
+  final Duration retryInterval;
+  int _quietLooks = 0;
   final _choices = <ExperimentalFeature, bool>{};
   final _available = <ExperimentalFeature, bool>{};
   ExperimentalSettingsTransport? _transport;
@@ -143,9 +158,20 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
     if (account != null && transport != null) {
       unawaited(refresh());
       if (pollInterval > Duration.zero) {
-        _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
+        final every = pollInterval < retryInterval
+            ? pollInterval
+            : retryInterval;
+        _poll = Timer.periodic(every, (_) => _look(every));
       }
     }
+  }
+
+  /// Counted in looks, not by the clock: a good read holds the next one off
+  /// for [pollInterval]; a failed one, or none yet, is tried at the next look.
+  void _look(Duration every) {
+    final quiet =
+        loaded && error == null && every * ++_quietLooks < pollInterval;
+    if (!quiet) unawaited(refresh());
   }
 
   void _notify() {
@@ -179,6 +205,7 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
       _apply(result);
       error = null;
       errorFeature = null;
+      _quietLooks = 0;
     } catch (_) {
       error = 'Couldn’t read your account settings. Refresh to try again.';
     }
