@@ -1144,7 +1144,7 @@ void main() {
     expect(box.engine, 'codex');
     expect(
       box.leadBlocked,
-      'The Swarm’s model list has no enabled Codex model. Choose another engine under Advanced.',
+      'The Swarm’s model list has no enabled Codex model. Choose another engine.',
     );
     expect(tester.widget<FilledButton>(_start).onPressed, isNull);
     await unmount(tester);

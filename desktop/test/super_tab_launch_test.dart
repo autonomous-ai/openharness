@@ -1260,7 +1260,7 @@ void main() {
     expect(await box.create(), NewHarnessOutcome.failed);
   });
 
-  test('an engine chosen under Advanced that the chosen machine cannot run '
+  test('an engine chosen that the chosen machine cannot run '
       'says why, and the machine stays', () async {
     final f = SuperTabLaunchFixture();
     noLocalEngines(f);
@@ -1282,7 +1282,7 @@ void main() {
     expect(
       box.leadBlocked,
       '2x 4090 Rig can’t run Claude Code: Claude Code isn’t offered here. '
-      'Choose another engine under Advanced.',
+      'Choose another engine.',
     );
   });
 
@@ -1301,7 +1301,7 @@ void main() {
       ['claude'],
       <Map<String, dynamic>>[],
       '2x 4090 Rig can’t run Codex: Codex isn’t offered here. Choose another '
-          'engine under Advanced.',
+          'engine.',
     ),
   ]) {
     test(
@@ -1361,7 +1361,7 @@ void main() {
     expect(
       box.error,
       'Mac Studio can’t run Codex: Codex isn’t signed in. Choose another '
-      'engine under Advanced.',
+      'engine.',
     );
     expect(commandsOf(f, 'project.create'), isEmpty);
     expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);

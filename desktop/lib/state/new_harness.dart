@@ -1670,7 +1670,7 @@ class NewHarnessController extends ChangeNotifier {
     final refusal = leadMachine?.engineRefusals[_engine];
     if (refusal != null) {
       return '${leadMachine!.name} can’t run $agentLabel: $refusal. '
-          'Choose another engine under Advanced.';
+          'Choose another engine.';
     }
     if (leadThroughSwarm) {
       if (leadRepositoryUrl == null) {
@@ -1679,7 +1679,7 @@ class NewHarnessController extends ChangeNotifier {
       }
       if (_model != null) {
         return 'Models on the grid run only where this Desktop starts the '
-            'Product Manager. Choose the default model under Advanced.';
+            'Product Manager. Choose the default model.';
       }
     }
     return _leadModelListRefusal;
@@ -1755,10 +1755,10 @@ class NewHarnessController extends ChangeNotifier {
     final list = integration?.leadModels;
     if (!placesLead || list == null) return null;
     if (list.engineRefusal(_engine) case final why?) {
-      return '$why Choose another engine under Advanced.';
+      return '$why Choose another engine.';
     }
     final why = _leadModelRefusal(_model?.id, grid: _model != null);
-    return why == null ? null : '$why Choose another model under Advanced.';
+    return why == null ? null : '$why Choose another model.';
   }
 
   /// The remote [project] on [machineId] has, when anything says so: a

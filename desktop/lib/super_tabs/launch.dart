@@ -757,7 +757,7 @@ class SuperTabLaunch {
           : !chosen.startable
           ? '${chosen.name} has no free agents. Choose another machine.'
           : '${chosen.name} can’t run ${leadEngineLabel(engine!)}: $refusal. '
-                'Choose another engine under Advanced.',
+                'Choose another engine.',
     );
   }
 
