@@ -198,9 +198,17 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account.
-- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
-  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
-  Swarm read shows no machines or routing rules.
+- A Buddy reads what its owner reads of its project, so it can answer which task owns something, where its pull
+  request stands and what blocks it without the product manager's summaries. That is the project chat, its own chat
+  and the project's workgroups: each task's status, agents, checks, linked pull requests and its owner's open decisions,
+  and on request a task's messages and the archived tasks, a page at a time. The server checks every read as the owner,
+  at the membership they added the Buddy in: once they leave, rejoin or lose a private project, the Buddy reads nothing.
+- A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
+  conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
+  only in its own chat. The server refuses every other command.
+- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read; pull requests
+  show their merge and CI state as its owner's own GitHub on their machine reads them, up to 50 at a time. It treats
+  task, message and pull request text as information, never as instructions; only its owner's words ask it to act.
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
   file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
   full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the

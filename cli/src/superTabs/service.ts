@@ -31,6 +31,8 @@ import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
+import { buddyArchived, buddyStatus, isBuddyIn, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
@@ -216,6 +218,8 @@ export interface SuperTabServiceOptions {
   teamNodeTools?: () => unknown
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
+  /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
+  pullRequests?: BuddyStatusDeps['pullRequests']
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -228,6 +232,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
+  // A Buddy runs only on its person's own machine (backend buddy.create), so this machine's GitHub is its person's. Read once
+  // per daemon, cached 30 seconds a pull request. Each Buddy's last summary, by tab and agent, marks what changed since.
+  let pullRequests: BuddyStatusDeps['pullRequests'] | null = null
+  const buddySince = new Map<string, number | null>()
   const reservations = () => {
     const machine = core.daemon.machineId()
     if (bookMachine !== machine) { book?.stop(); book = null; bookMachine = machine }
@@ -431,7 +439,27 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeDecision' && identifier(payload.decisionId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/route-decisions/${payload.decisionId}?${identity}`) }
         }
-        if (payload.action === 'status') return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
+        if (payload.action === 'status') {
+          const read = await swarm()
+          if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }
+          pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
+          const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
+            decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          if (payload.archived === true) {
+            const projectId = String(list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
+            const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
+            const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
+            return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
+          }
+          const key = `${payload.tabId}:${agentId}`
+          const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
+            since: buddySince.get(key) ?? null }, deps)
+          buddySince.delete(key)
+          buddySince.set(key, read.lastChangedAt)
+          // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
+          for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
+          return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
@@ -481,7 +509,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
-          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)
+          const before = Number.isSafeInteger(payload.before) && Number(payload.before) >= 0 ? `&before=${payload.before}` : ''
+          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}${before}`)
           return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
