@@ -254,12 +254,16 @@ class SuperTabController extends ChangeNotifier {
 
   /// Why the files of each conversation's last send did not go up. Kept apart
   /// from [operationError] so it shows only under its own conversation.
-  final _uploadErrors = <String, String>{};
+  final _uploadErrors = <Object, String>{};
 
   /// What the composer of [conversationId] says went wrong: the last action's
   /// [operationError], else its own upload failure.
   String? composerError(String conversationId) =>
       operationError ?? _uploadErrors[conversationId];
+
+  /// The same for the reply box of [root]'s thread in [conversationId].
+  String? threadComposerError(String conversationId, String root) =>
+      operationError ?? _uploadErrors[(conversationId, root)];
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -375,12 +379,22 @@ class SuperTabController extends ChangeNotifier {
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
+
+  /// The files waiting to go with the next reply of each thread, by its
+  /// conversation and root: a root id alone is not enough to keep two
+  /// conversations' files apart.
+  final _threadAttachments = <(String, String), HarnessAttachments>{};
   // Files already uploaded for the message being sent, so a retry sends their
   // ids rather than uploading them again.
   final _uploaded = <HarnessAttachment, String>{};
   final _progress = <HarnessAttachment, double>{};
   CancelToken? _cancel;
-  ({String conversationId, List<HarnessAttachment> files})? _sending;
+  ({
+    String conversationId,
+    HarnessAttachments owner,
+    List<HarnessAttachment> files,
+  })?
+  _sending;
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
 
@@ -527,23 +541,37 @@ class SuperTabController extends ChangeNotifier {
 
   /// The files waiting to go with the next message in a conversation. They
   /// stay in memory: only the text of a draft is saved.
-  HarnessAttachments attachments(String id) => _attachments.putIfAbsent(id, () {
+  HarnessAttachments attachments(String id) =>
+      _attachments.putIfAbsent(id, () => _newFiles(id, id));
+
+  /// The files waiting to go with the next reply of [root]'s thread in
+  /// [conversationId]. Like [attachments], they stay in memory, and they are
+  /// forgotten with the thread when access to the conversation goes.
+  HarnessAttachments threadAttachments(String conversationId, String root) =>
+      _threadAttachments.putIfAbsent(
+        (conversationId, root),
+        () => _newFiles(conversationId, (conversationId, root)),
+      );
+
+  /// An empty set of files for a message to [conversationId] whose upload
+  /// failures are kept under [errorKey].
+  HarnessAttachments _newFiles(String conversationId, Object errorKey) {
     final files = HarnessAttachments(
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
     );
     files.addListener(() {
       // Changing the files answers a refused upload.
-      if (_uploadErrors.remove(id) != null) _changed();
+      if (_uploadErrors.remove(errorKey) != null) _changed();
       // Taking a chip off while its files go up gives the upload up.
       if (uploading &&
-          _sending?.conversationId == id &&
+          identical(_sending?.owner, files) &&
           !files.files.toSet().containsAll(_sending!.files)) {
         cancelUpload();
       }
     });
     return files;
-  });
+  }
 
   /// Whether [file] is still on its way to the backend in a send.
   bool isUploading(HarnessAttachment file) =>
@@ -840,6 +868,16 @@ class SuperTabController extends ChangeNotifier {
     };
     _threadRows.removeWhere((root, _) => roots.contains(root));
     _threadBefore.removeWhere((root, _) => roots.contains(root));
+    _threadAttachments.removeWhere((key, files) {
+      if (!gone(key.$1)) return false;
+      // Files on their way for a conversation that is gone are given up.
+      if (identical(_sending?.owner, files)) cancelUpload();
+      files.dispose();
+      return true;
+    });
+    _uploadErrors.removeWhere(
+      (key, _) => key is (String, String) && gone(key.$1),
+    );
     if (openedThread case final open? when gone(open.conversationId)) {
       openedThread = null;
     }
@@ -952,20 +990,34 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft to its root; [alsoSend] shows it in the
-  /// main stream too.
-  Future<Map<String, dynamic>?> sendThreadReply({bool alsoSend = false}) async {
+  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
+  /// main stream too. [onSending] is told when the reply is on its way, which
+  /// is after its files have gone up.
+  Future<Map<String, dynamic>?> sendThreadReply({
+    bool alsoSend = false,
+    VoidCallback? onSending,
+  }) async {
     final open = openedThread;
-    final text = threadDraft(open?.root ?? '').trim();
-    if (open == null ||
-        text.isEmpty ||
+    if (open == null) return null;
+    final text = threadDraft(open.root).trim();
+    final owner = threadAttachments(open.conversationId, open.root);
+    final files = owner.files;
+    if ((text.isEmpty && files.isEmpty) ||
         selected == null ||
         selected!.archived ||
         !canWrite ||
+        uploading ||
         saving ||
         _pending != null) {
       return null;
     }
+    final ids = await _uploadAll(
+      open.conversationId,
+      owner,
+      (open.conversationId, open.root),
+    );
+    if (ids == null) return null;
+    final before = _pending;
     final sending = command({
       'type': 'message.send',
       'conversationId': open.conversationId,
@@ -973,12 +1025,19 @@ class SuperTabController extends ChangeNotifier {
       'replyTo': open.root,
       'recipientIds': const <String>[],
       if (alsoSend) 'alsoSend': true,
+      if (ids.isNotEmpty) 'attachmentIds': ids,
     });
-    if (_pending != null) {
-      _threadDrafts.remove(open.root);
+    if (_pending case final pending? when !identical(pending, before)) {
+      // Only a draft still holding what went: more may have been typed since.
+      if (_threadDrafts[open.root]?.trim() == text) {
+        _threadDrafts.remove(open.root);
+      }
+      onSending?.call();
       _changed();
     }
-    return await sending;
+    final result = await sending;
+    _forgetRefusedUploads(result);
+    return result;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -2759,6 +2818,9 @@ class SuperTabController extends ChangeNotifier {
           for (final entry in _uploaded.entries.toList()) {
             if (sent.contains(entry.value)) {
               _attachments[id]?.remove(entry.key);
+              for (final MapEntry(:key, :value) in _threadAttachments.entries) {
+                if (key.$1 == id) value.remove(entry.key);
+              }
               _uploaded.remove(entry.key);
             }
           }
@@ -2896,7 +2958,11 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
-    final ids = await _uploadAll(conversationId, files);
+    final ids = await _uploadAll(
+      conversationId,
+      attachments(conversationId),
+      conversationId,
+    );
     if (ids == null) return null;
     final before = _pending;
     final tags = Map<String, String>.of(_mentions[conversationId] ?? const {});
@@ -2920,14 +2986,18 @@ class SuperTabController extends ChangeNotifier {
       _changed();
     }
     final result = await sending;
-    // A refusal of the files themselves sends them up once more; one of the
-    // message (a mention, a recipient) leaves them uploaded.
+    _forgetRefusedUploads(result);
+    return result;
+  }
+
+  /// A refusal of the files themselves sends them up once more; one of the
+  /// message (a mention, a recipient) leaves them uploaded.
+  void _forgetRefusedUploads(Map<String, dynamic>? result) {
     if (result == null &&
         _pending == null &&
         operationErrorCode?.contains('ATTACHMENT') == true) {
       _uploaded.clear();
     }
-    return result;
   }
 
   /// Uploads each of [files] that has not gone up yet and returns their ids,
@@ -2935,15 +3005,17 @@ class SuperTabController extends ChangeNotifier {
   /// files stay where they are.
   Future<List<String>?> _uploadAll(
     String conversationId,
-    List<HarnessAttachment> files,
+    HarnessAttachments owner,
+    Object errorKey,
   ) async {
-    // Any send of this conversation answers its last refused upload.
-    _uploadErrors.remove(conversationId);
+    final files = owner.files;
+    // Any send from this box answers its last refused upload.
+    _uploadErrors.remove(errorKey);
     if (files.isEmpty) return const [];
     final run = ++_uploadRun;
     uploading = true;
     operationError = null;
-    _sending = (conversationId: conversationId, files: files);
+    _sending = (conversationId: conversationId, owner: owner, files: files);
     _uploaded.removeWhere((file, _) => !files.contains(file));
     _changed();
     try {
@@ -2962,7 +3034,7 @@ class SuperTabController extends ChangeNotifier {
     } catch (failure) {
       if (!_disposed && run == _uploadRun) {
         // Into the conversation the files were for, whichever is shown now.
-        _uploadErrors[conversationId] = failure is SuperTabFailure
+        _uploadErrors[errorKey] = failure is SuperTabFailure
             ? failure.message
             : failure is TimeoutException
             ? 'The upload stopped moving. Try again.'

@@ -25,6 +25,7 @@ import 'recording_notice.dart';
 import 'identity.dart' show superTabPersonName;
 import 'profile_actions.dart';
 import 'pull_requests.dart';
+import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -713,12 +714,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// A line break at the cursor. The field only calls [_composerEdited] for
   /// edits that come from the platform, so this reports its own.
-  void _insertNewline() {
-    final value = withNewline(_composer.value);
-    if (value == null) return;
-    _composer.value = value;
-    _composerEdited(value.text);
-  }
+  void _insertNewline() => insertComposerNewline(_composer, _composerEdited);
 
   void _composerMoved() {
     if (!mounted) return;
@@ -3141,20 +3137,18 @@ class _SuperTabViewState extends State<SuperTabView>
                     _readAll()) {
                   return KeyEventResult.handled;
                 }
-                final enterDown =
-                    _focus.hasFocus &&
-                    event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.enter &&
-                    !(composing.isValid && !composing.isCollapsed);
-                if (!enterDown) return KeyEventResult.ignored;
-                if (keys.isControlPressed || keys.isMetaPressed) {
-                  return KeyEventResult.ignored;
-                }
-                // Shift+Enter and Alt+Enter write the line themselves: the platform
-                // gives Option+Return none, and a handled key never reaches it.
-                if (keys.isShiftPressed || keys.isAltPressed) {
-                  _insertNewline();
-                  return KeyEventResult.handled;
+                switch (composerEnter(
+                  event,
+                  focused: _focus.hasFocus,
+                  value: _composer.value,
+                )) {
+                  case ComposerEnter.ignore:
+                    return KeyEventResult.ignored;
+                  case ComposerEnter.newline:
+                    _insertNewline();
+                    return KeyEventResult.handled;
+                  case ComposerEnter.send:
+                    break;
                 }
                 unawaited(_send());
                 return KeyEventResult.handled;
@@ -3185,23 +3179,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          ListenableBuilder(
-                            listenable: _files,
-                            builder: (context, _) => _files.isEmpty
-                                ? const SizedBox.shrink()
-                                : Padding(
-                                    padding: const EdgeInsets.only(
-                                      bottom: 8,
-                                      right: 8,
-                                    ),
-                                    child: NewHarnessAttachmentChips(
-                                      attachments: _files,
-                                      enabled: !c.saving,
-                                      isUploading: c.isUploading,
-                                      progressOf: c.uploadProgress,
-                                    ),
-                                  ),
-                          ),
+                          SuperTabComposerChips(controller: c, files: _files),
                           ConstrainedBox(
                             constraints: BoxConstraints(
                               minHeight: grid.AppControl.heightFieldScaled,
