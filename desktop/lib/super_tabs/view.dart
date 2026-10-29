@@ -18,6 +18,7 @@ import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
+import 'leaderboard/reader.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'identity.dart' show superTabPersonName;
@@ -154,6 +155,10 @@ class _SuperTabViewState extends State<SuperTabView>
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
 
+  /// The open project's week board, read once for the right pane's members
+  /// and the left sidebar's Models, so both show one week.
+  late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
+
   /// A device with a Lead of this Swarm open scrolls the chat on screen.
   late final _dial = DialListScroll(() => _scroll[c.selectedId]);
   VoidCallback? _unregisterDial;
@@ -225,6 +230,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
     }
     if (oldWidget.controller != c) {
+      _board.dispose();
+      _board = SuperTabProjectBoard(c);
       oldWidget.controller.removeListener(_changed);
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
@@ -427,6 +434,7 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _board.dispose();
     c.removeListener(_changed);
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
@@ -1107,6 +1115,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     app: widget.app,
+    board: _board,
     onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     devicesSelected: _devicesVisible,
@@ -3231,8 +3240,11 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _chatCovered = chatCovered;
       final roster = SuperTabRoster(
+        // A new board is a new roster: the old one read another Swarm.
+        key: ObjectKey(_board),
         controller: c,
         app: widget.app,
+        board: _board,
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
           setState(() {
