@@ -701,6 +701,25 @@ export class RelayGateway implements GatewayPort {
       return
     }
 
+    // A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now.
+    // Naming none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
+    if (type === 'swarm_host_changed') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number'
+        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt } : { type })
+      return
+    }
+
+    // A Swarm the account is in changed (backend lib/swarmClientPushes.ts): the windows read it again. Naming none, the server
+    // says it pushes. Backend-only like desk_changed: a client could only make a window read early.
+    if (type === 'swarm_changed') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      const parts = Array.isArray(p.parts) && p.parts.length && p.parts.every(part => part === 'main' || part === 'machine') ? p.parts as Array<'main' | 'machine'> : null
+      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number' && parts
+        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt, parts } : { type })
+      return
+    }
+
     // The account's device key log grew: this daemon re-reads and verifies it (deviceLogSyncer.ts), and
     // the window re-reads its Devices list. Backend-only for the same reason as desk_changed.
     if (type === 'device_keys_changed') {

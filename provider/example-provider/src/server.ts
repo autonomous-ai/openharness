@@ -471,8 +471,11 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 export function start(config = loadConfig(), port = config.port): Promise<{ url: string; close: () => Promise<void> }> {
   const { server } = createProviderServer(config)
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // An occupied port must reject startup rather than escape as an uncaught server error.
+    server.once('error', reject)
     server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject)
       const addr = server.address()
       const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : port}`
       resolve({ url, close: () => new Promise<void>((r) => server.close(() => r())) })

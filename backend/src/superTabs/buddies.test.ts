@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
-import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
+import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
+import { machineOffline, sessionStopped } from './lostReason.js'
 import { reassemble, split } from './parts/index.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -72,20 +73,90 @@ describe('who reads a Buddy chat', () => {
 })
 
 describe('what a Buddy reads', () => {
-  it('is its project\'s chat and its own chat: no workgroup, no Chat with PM, no other project, no Leads conversation', () => {
+  it('is its project\'s chat, its own chat and its project\'s workgroups: no Chat with PM, no other project, no Leads conversation', () => {
     const f = setup(), buddy = agentActor('buddy')
+    const web = f.run({ type: 'conversation.create', projectId: f.web.projectId, title: 'Landing', brief: '', checks: [] }).result.conversationId as string
     expect(canReadGroup(f.state, buddy, group(f, f.app.conversationId))).toBe(true)
-    expect(canReadGroup(f.state, buddy, group(f, f.group))).toBe(false)
+    expect(canReadGroup(f.state, buddy, group(f, f.group))).toBe(true)
     expect(canReadGroup(f.state, buddy, group(f, f.pmChat))).toBe(false)
     expect(canReadGroup(f.state, buddy, group(f, f.web.conversationId))).toBe(false)
-    expect(visibleState(f.state, buddy).conversations.map(c => c.id).sort()).toEqual([f.app.conversationId, f.chat].sort())
+    expect(canReadGroup(f.state, buddy, group(f, web))).toBe(false)
+    expect(canReadGroup(f.state, peer, group(f, f.state.leadsConversationId!))).toBe(true)
+    expect(canReadGroup(f.state, buddy, group(f, f.state.leadsConversationId!))).toBe(false)
+    expect(visibleState(f.state, buddy).conversations.map(c => c.id).sort()).toEqual([f.app.conversationId, f.chat, f.group].sort())
+  })
+
+  it('is no other person\'s private chat, nor one its own person shares with others, nor what was asked in them', () => {
+    const f = setup(), buddy = agentActor('buddy')
+    // Chats with PM from before Buddies replaced them: nobody opens one now, but their rows and decisions stay.
+    const legacy = (id: string, people: string[]) => f.state.conversations.push({ ...group(f, f.group), id, kind: undefined, number: undefined,
+      audience: { people: people.map(p => ({ id: p, generation: f.state.people.find(x => x.id === p)!.generation })) } })
+    legacy('owners', ['owner'])
+    legacy('shared', ['owner', 'peer'])
+    expect(readsRecordsIn(f.state, peer, group(f, 'shared'))).toBe(true)
+    for (const id of ['owners', 'shared']) {
+      expect(canReadGroup(f.state, buddy, group(f, id))).toBe(false)
+      expect(readsRecordsIn(f.state, buddy, group(f, id))).toBe(false)
+    }
+  })
+
+  it('is nothing once its person rejoins at a new membership or leaves the Swarm', () => {
+    const f = setup(), buddy = agentActor('buddy')
+    f.state.people.find(p => p.id === 'peer')!.generation = 'second'
+    expect([f.app.conversationId, f.group, f.chat].map(id => canReadGroup(f.state, buddy, group(f, id)))).toEqual([false, false, false])
+    f.state.people = f.state.people.filter(p => p.id !== 'peer')
+    expect([f.app.conversationId, f.group, f.chat].map(id => canReadGroup(f.state, buddy, group(f, id)))).toEqual([false, false, false])
+  })
+
+  it('is no workgroup of a private project its person is not a member of', () => {
+    const f = setup(), buddy = agentActor('buddy')
+    const app = f.state.projects!.find(p => p.id === f.app.projectId)!
+    app.visibility = 'private'
+    expect(canReadGroup(f.state, peer, group(f, f.group))).toBe(false)
+    expect(canReadGroup(f.state, buddy, group(f, f.group))).toBe(false)
+    expect(canReadGroup(f.state, buddy, group(f, f.app.conversationId))).toBe(false)
+    app.members.push({ id: 'peer', generation: 'first' })
+    expect(canReadGroup(f.state, buddy, group(f, f.group))).toBe(true)
   })
 
   it('shows no machines, starts or rules in its Swarm read: only names in the roster', () => {
     const f = setup()
     machine(f, 'peer-mac', 'peer')
     f.run({ type: 'rule.set', projectId: f.app.projectId, rule: { kind: 'preferIdle' }, text: 'Idle first.' })
+    // A start names the machine and the folder on it: a workgroup the Buddy reads still shows none of its starts.
+    f.state.starts = [{ id: 'start', creationId: 'c', actorKey: 'k', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'owner',
+      hostGrant: null, harnessId: null, dispatched: false, error: null,
+      request: { conversationId: f.group, machineId: 'peer-mac', engine: 'claude', name: 'Builder', cwd: '/Users/owner/app', worktree: true } as never }]
+    // The project's repository names the folder on its machine: a Buddy keeps the address alone (security review 2 of #2115).
+    f.state.projects!.find(p => p.id === f.app.projectId)!.repository = { machineId: 'owner-mac', cwd: '/Users/owner/app', repositoryUrl: 'https://github.com/acme/app' }
     const seen = visibleState(f.state, agentActor('buddy'))
+    expect(seen.conversations.map(c => c.id)).toContain(f.group)
+    expect(seen.starts ?? []).toEqual([])
+    expect(seen.projects!.find(p => p.id === f.app.projectId)!.repository).toEqual({ repositoryUrl: 'https://github.com/acme/app' })
+    expect(visibleState(f.state, agentActor(f.pm)).projects!.find(p => p.id === f.app.projectId)!.repository).toMatchObject({ cwd: '/Users/owner/app' })
+    expect(JSON.stringify(seen)).not.toContain('/Users/owner/app')
+    // No machines means none: agents and a task's assignment keep no machine or terminal id (review 1 of #2115, item 3).
+    f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
+      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host' } } as never
+    f.state.conversations.find(c => c.id === f.group)!.lostAttempt = { id: 'a0', agentId: f.pm, machineId: 'machine', engine: 'claude' }
+    const strict = visibleState(f.state, agentActor('buddy'))
+    expect(strict.agents.map(a => [a.machineId, a.harnessId])).toEqual(strict.agents.map(() => ['', '']))
+    const task = strict.conversations.find(c => c.id === f.group)!
+    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: 'host' })
+    expect(task.lostAttempt).toEqual({ id: 'a0', agentId: f.pm })
+    expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.machineId).toBe('machine')
+    // A lost task's reason without its machine, on the task and on the agent; a reason naming none stays (re-check 2).
+    const lostTask = (reason: string) => {
+      f.state.conversations.find(c => c.id === f.group)!.assignment!.lost = { reason, at: 1000 }
+      f.state.agents.find(a => a.id === f.pm)!.lostTask = { conversationId: f.group, assignmentId: 'a1', reason, at: 1000 }
+      const read = visibleState(f.state, agentActor('buddy'))
+      return [read.conversations.find(c => c.id === f.group)!.assignment!.lost!.reason, read.agents.find(a => a.id === f.pm)!.lostTask!.reason]
+    }
+    expect(lostTask(machineOffline("Ken's MacBook Pro"))).toEqual(['its machine has been offline for 2 minutes', 'its machine has been offline for 2 minutes'])
+    expect(lostTask(sessionStopped('studio.local'))).toEqual(['its session stopped', 'its session stopped'])
+    expect(lostTask('no progress for 12 minutes')).toEqual(['no progress for 12 minutes', 'no progress for 12 minutes'])
+    expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.lostTask!.reason).toBe('no progress for 12 minutes')
+    expect(visibleState(f.state, agentActor(f.pm)).starts).toHaveLength(1)
     expect(seen.machines ?? []).toEqual([])
     expect(seen.rules ?? []).toEqual([])
     expect(seen.agents.map(a => a.id)).toContain(f.pm)
