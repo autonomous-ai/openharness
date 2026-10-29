@@ -43,7 +43,9 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       id: id,
       name: superTabMachineName(m['name'] as String? ?? ''),
       inSwarm: true,
-      offline: app?.stateOf(id)?.isOffline ?? false,
+      // Not in the account's list (yet): only a fresh Swarm reading says it
+      // is there, else it is offline until one does (review of #2240).
+      offline: app?.stateOf(id)?.isOffline ?? _silent(m),
     );
   }
   String? here;
@@ -124,10 +126,10 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     width: width,
     child: Padding(
       padding: EdgeInsets.fromLTRB(
-        AppMenuRowMetrics.roomy.padding.left + 6,
-        6,
-        AppMenuRowMetrics.roomy.padding.right + 6,
-        2,
+        AppMenuRowMetrics.roomy.padding.left + grid.AppDesktop.menuInset,
+        grid.AppDesktop.menuInset,
+        AppMenuRowMetrics.roomy.padding.right + grid.AppDesktop.menuInset,
+        grid.AppDesktop.listRowGap,
       ),
       child: Semantics(
         header: true,
@@ -140,9 +142,12 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
   );
 
   Widget _row(BuddyMachine m, double width, String? focusId) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+    padding: const EdgeInsets.symmetric(
+      horizontal: grid.AppDesktop.menuInset,
+      vertical: grid.AppDesktop.listRowGap / 2,
+    ),
     child: SizedBox(
-      width: width - 12,
+      width: width - 2 * grid.AppDesktop.menuInset,
       child: MenuItemButton(
         key: ValueKey('super-buddy-machine-option-${m.id}'),
         autofocus: m.id == focusId,
@@ -354,4 +359,16 @@ class BuddyNoMachine extends StatelessWidget {
     key: const ValueKey('super-buddy-no-machine'),
     style: DesktopChrome.metadata(),
   );
+}
+
+/// Whether [pool]'s last reading is too old to take a Buddy now, as the
+/// Machines list calls a machine offline; no reading is offline.
+bool _silent(Map<String, dynamic> pool) {
+  final observation = pool['observation'];
+  final at = observation is Map ? observation['receivedAt'] : null;
+  if (at is! num) return true;
+  final age = DateTime.now().difference(
+    DateTime.fromMillisecondsSinceEpoch(at.toInt()),
+  );
+  return superTabMachineStatus(age: age) == SuperTabMachineStatus.offline;
 }
