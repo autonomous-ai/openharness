@@ -156,12 +156,11 @@ class _AgentsLimit extends StatelessWidget {
     grid.AppTheme.watch(context);
     final value = this.value;
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      // "Agents" on the line of its first choice.
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-          child: Text('Agents', style: DesktopChrome.text()),
-        ),
+        Text('Agents', style: DesktopChrome.text()),
         const SizedBox(width: grid.AppDesktop.groupGap),
         Expanded(
           child: RadioGroup<String>(
@@ -852,30 +851,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           atMostEdited = next;
                         }),
                       ),
-                      if (view != null && _canRemove(view.id)) ...[
-                        const SizedBox(height: grid.AppDesktop.controlGap),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            style: superTabQuietAction,
-                            onPressed: busy || _removeReason(view.id) != null
-                                ? null
-                                : () {
-                                    Navigator.pop(context);
-                                    WidgetsBinding.instance
-                                        .addPostFrameCallback((_) {
-                                          if (mounted) {
-                                            unawaited(_remove(view));
-                                          }
-                                        });
-                                  },
-                            child: const Text('Remove from this Swarm'),
-                          ),
-                        ),
-                        // Why it cannot, in words rather than a dimmed button alone.
-                        if (_removeReason(view.id) case final reason?)
+                      // Why it cannot be removed, in words rather than a dimmed button alone.
+                      if (view != null && _canRemove(view.id))
+                        if (_removeReason(view.id) case final reason?) ...[
+                          const SizedBox(height: grid.AppDesktop.controlGap),
                           Text(reason, style: DesktopChrome.metadata()),
-                      ],
+                        ],
                       if (!canSave && why != null) ...[
                         const SizedBox(height: grid.AppDesktop.controlGap),
                         Text(why.message, style: DesktopChrome.metadata()),
@@ -886,6 +867,25 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       ],
                     ],
                   ),
+                  // One clear action at the right; the rarer one quiet at the
+                  // left, as in the machine's details.
+                  leadingActions: [
+                    if (view != null && _canRemove(view.id))
+                      TextButton(
+                        style: superTabQuietAction,
+                        onPressed: busy || _removeReason(view.id) != null
+                            ? null
+                            : () {
+                                Navigator.pop(context);
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) {
+                                  if (mounted) unawaited(_remove(view));
+                                });
+                              },
+                        child: const Text('Remove from this Swarm'),
+                      ),
+                  ],
                   actions: [
                     FilledButton(
                       onPressed: busy || !canSave ? null : save,
