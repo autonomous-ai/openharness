@@ -14,7 +14,9 @@
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runPowershell } from '../lib/windows/powershell.js'
 import { untarGz } from './tmux.js'
+import { WINDOWS_GH_BUILDS, windowsUnzipScript } from './windowsTeam.js'
 
 export interface GhBuild { version: string; url: string; sha256: string; size: number; archiveRoot: string; format: 'zip' | 'tar.gz' }
 
@@ -39,9 +41,18 @@ export const GH_LINUX_BUILDS: Readonly<Record<string, GhBuild>> = {
 
 /** The pinned build for this system, or undefined where none is. */
 export function ghBuildFor(platform: NodeJS.Platform, arch: string): GhBuild | undefined {
-  const builds = platform === 'darwin' ? GH_BUILDS : platform === 'linux' ? GH_LINUX_BUILDS : null
+  const builds: Readonly<Record<string, GhBuild>> | null = platform === 'darwin' ? GH_BUILDS : platform === 'linux' ? GH_LINUX_BUILDS
+    : platform === 'win32' ? WINDOWS_GH_BUILDS : null
   return builds && Object.hasOwn(builds, arch) ? builds[arch] : undefined
 }
+
+/**
+ * Where a build's gh is once unpacked, and what to unpack it into. GitHub's Windows zip holds `bin\gh.exe` at its top with
+ * no folder around it (./windowsTeam.ts), so it is unpacked into a folder of that name; the others hold one.
+ */
+const ghLayout = (build: GhBuild, staging: string) => 'binary' in build
+  ? { into: join(staging, build.archiveRoot), binary: join(build.archiveRoot, 'bin', 'gh.exe') }
+  : { into: staging, binary: join(build.archiveRoot, 'bin', 'gh') }
 
 export type TeamGhOutcome = 'not-team' | 'present' | 'installed' | 'unsupported' | 'failed'
 
@@ -74,7 +85,8 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
       return 'unsupported'
     }
     const target = join(deps.runtimeDir, build.archiveRoot)
-    const binary = join(target, 'bin', 'gh')
+    const layout = ghLayout(build, '')
+    const binary = join(deps.runtimeDir, layout.binary)
     if (!existsSync(binary)) {
       mkdirSync(deps.runtimeDir, { recursive: true, mode: 0o700 })
       const staging = join(deps.runtimeDir, `.gh-staging-${process.pid}`)
@@ -83,8 +95,8 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
       try {
         const archive = join(staging, `gh.${build.format}`)
         writeFileSync(archive, await deps.download(build), { mode: 0o600 })
-        await deps.unzip(archive, staging)
-        if (!existsSync(join(staging, build.archiveRoot, 'bin', 'gh'))) throw new Error(`the gh archive has no ${build.archiveRoot}/bin/gh`)
+        await deps.unzip(archive, ghLayout(build, staging).into)
+        if (!existsSync(join(staging, layout.binary))) throw new Error(`the gh archive has no ${layout.binary}`)
         rmSync(target, { recursive: true, force: true })
         renameSync(join(staging, build.archiveRoot), target)
       } finally {
@@ -94,8 +106,13 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
     if (!await deps.runs(binary)) throw new Error(`the installed gh does not run here: ${binary}`)
     // On the PATH the team daemon gives its agents, and last on a login shell's: an unreadable Homebrew before it is skipped.
     mkdirSync(deps.binDir, { recursive: true })
-    rmSync(join(deps.binDir, 'gh'), { force: true })
-    symlinkSync(binary, join(deps.binDir, 'gh'))
+    if (deps.platform === 'win32') {
+      // A link needs a privilege on Windows: a command file in its place, which cmd.exe and PowerShell find as `gh`.
+      writeFileSync(join(deps.binDir, 'gh.cmd'), `@"${binary}" %*\r\n`)
+    } else {
+      rmSync(join(deps.binDir, 'gh'), { force: true })
+      symlinkSync(binary, join(deps.binDir, 'gh'))
+    }
     deps.log(`team: installed gh ${build.version} for the Harness Team account → ${target}`)
     return 'installed'
   } catch (error) {
@@ -110,9 +127,15 @@ export const ghRunsAt = (binary: string) => new Promise<boolean>((resolve) => {
     (error, stdout) => resolve(!error && /^gh version \S+/.test(String(stdout).trim())))
 })
 
-/** Unpacks a .zip with the system's ditto, which every Mac has, and Linux's .tar.gz with the system's tar. */
-export const unzipArchive = (archive: string, into: string): Promise<void> => archive.endsWith('.tar.gz')
+/** Unpacks a .zip with the system's ditto, which every Mac has, Linux's .tar.gz with the system's tar, and on Windows a .zip
+ *  with Windows PowerShell's Expand-Archive. */
+export const unzipArchive = (archive: string, into: string, platform: NodeJS.Platform = process.platform): Promise<void> => archive.endsWith('.tar.gz')
   ? untarGz(archive, into)
+  : platform === 'win32' ? new Promise<void>((resolve, reject) => {
+    const query = windowsUnzipScript(archive, into)
+    if (runPowershell(query.script, query.inputs).status === 0) resolve()
+    else reject(new Error(`could not unpack ${archive}`))
+  })
   : new Promise<void>((resolve, reject) => {
     execFile('/usr/bin/ditto', ['-x', '-k', archive, into], { timeout: 60_000 }, (error) => error ? reject(new Error(`could not unpack ${archive}`)) : resolve())
   })

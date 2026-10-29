@@ -83,6 +83,14 @@ describe('the Harness Team account\'s own tmux', () => {
     expect(manifest).not.toHaveBeenCalled()
   })
 
+  it('on Windows, needs no tmux: agents run in its own terminal host', async () => {
+    const manifest = vi.fn(async () => { throw new Error('never read') })
+    const windows = deps({ platform: 'win32', candidates: () => [], manifest })
+    expect(await ensureTeamTmux(windows.d)).toBe('present')
+    expect(windows.d.download).not.toHaveBeenCalled()
+    expect(windows.d.log).not.toHaveBeenCalled()
+  })
+
   it('says so when no build is published for this Mac, and fails without throwing', async () => {
     expect(await ensureTeamTmux(deps({ arch: 'ia32' }).d)).toBe('unsupported')
     const noBinary = deps({ download: async () => archive('tmux-3.7c-darwin-arm64', false) })

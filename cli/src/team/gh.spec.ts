@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensureTeamGh, GH_BUILDS, ghBuildFor, ghRunsAt, unzipArchive, type TeamGhDeps } from './gh.js'
+import { WINDOWS_GH_BUILDS } from './windowsTeam.js'
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -48,7 +49,25 @@ describe('the Harness Team account\'s own gh on Linux', () => {
       sha256: 'ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63', size: 13_661_485 })
     expect(ghBuildFor('darwin', 'arm64')).toBe(GH_BUILDS.arm64)
     expect(ghBuildFor('linux', 'ia32')).toBeUndefined()
-    expect(ghBuildFor('win32', 'x64')).toBeUndefined()
+    expect(ghBuildFor('win32', 'x64')).toBe(WINDOWS_GH_BUILDS.x64)
+    expect(ghBuildFor('win32', 'ia32')).toBeUndefined()
+  })
+
+  it('on Windows, unpacks the zip that has no folder of its own into one, and leaves a gh.cmd on its agents\' PATH', async () => {
+    const home = temp('team-gh-')
+    const unzip = vi.fn(async (_archive: string, into: string) => {
+      mkdirSync(join(into, 'bin'), { recursive: true })
+      writeFileSync(join(into, 'bin', 'gh.exe'), 'MZ')
+    })
+    const d: TeamGhDeps = {
+      team: () => true, platform: 'win32', arch: 'x64', candidates: () => [], runs: vi.fn(async (binary: string) => binary.startsWith(home)),
+      download: vi.fn(async () => Buffer.from('zip')), unzip, runtimeDir: join(home, 'runtime'), binDir: join(home, 'bin'), log: vi.fn(),
+    }
+    expect(await ensureTeamGh(d)).toBe('installed')
+    const binary = join(home, 'runtime', 'gh_2.103.3_windows_amd64', 'bin', 'gh.exe')
+    expect(existsSync(binary)).toBe(true)
+    expect(unzip.mock.calls[0]![1]).toBe(join(home, 'runtime', `.gh-staging-${process.pid}`, 'gh_2.103.3_windows_amd64'))
+    expect(readFileSync(join(home, 'bin', 'gh.cmd'), 'utf8')).toBe(`@"${binary}" %*\r\n`)
   })
 
   it('installs the pinned tarball in its own home, unpacked with tar', async () => {

@@ -55,6 +55,8 @@ export function tmuxBuildFor(manifest: unknown, platform: NodeJS.Platform, arch:
 export async function ensureTeamTmux(deps: TeamTmuxDeps): Promise<TeamTmuxOutcome> {
   try {
     if (!deps.team()) return 'not-team'
+    // Windows runs agents in its own terminal host, the pty payload setup gave the account (./windowsScript.ts), never tmux.
+    if (deps.platform === 'win32') return 'present'
     for (const binary of deps.candidates()) if (await deps.runs(binary)) return 'present'
     // No managed tmux is built for Linux: the system's serves every account, and setup refuses without one (NO_TMUX).
     if (deps.platform === 'linux') {

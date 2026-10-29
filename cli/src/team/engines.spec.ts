@@ -19,6 +19,11 @@ describe('the team account\'s engines', () => {
     const result = await checkTeamEngines({ home: '/Users/harnessteam', executable: (path) => path === '/Users/harnessteam/.local/bin/claude', account, now: () => 42 })
     expect(result).toEqual({ checkedAt: 42, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } })
     expect(teamEngineBin('/h', 'codex')).toBe('/h/.local/bin/codex')
+    // Windows: npm's .cmd in the prefix itself.
+    expect(teamEngineBin('C:\\Users\\harnessteam', 'claude', 'win32')).toBe('C:\\Users\\harnessteam\\.local\\claude.cmd')
+    const windows = await checkTeamEngines({ home: 'C:\\Users\\harnessteam', platform: 'win32', now: () => 1, account,
+      executable: (path) => path === 'C:\\Users\\harnessteam\\.local\\codex.cmd' })
+    expect(windows).toMatchObject({ claude: { installed: false }, codex: { installed: true } })
     const failing = await checkTeamEngines({ home: '/h', executable: () => true, account: async () => { throw new Error('unreadable') }, now: () => 1 })
     expect(failing.claude).toEqual({ installed: true, signedIn: null })
   })

@@ -12,7 +12,7 @@
  */
 import { accessSync, constants } from 'node:fs'
 import { userInfo } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
@@ -38,11 +38,15 @@ export const TEAM_ENGINES: readonly TeamEngineInfo[] = [
 export interface EngineReadiness { installed: boolean; signedIn: boolean | null; relayed?: boolean }
 export type TeamEngines = { checkedAt: number } & Record<TeamEngine, EngineReadiness>
 
-/** Where the team account's engines are: its npm prefix's bin folder, on its daemon's PATH (./script.ts). */
-export const teamEngineBin = (home: string, engine: TeamEngine) => join(home, '.local', 'bin', engine)
+/** Where the team account's engines are: its npm prefix's bin folder, on its daemon's PATH (./script.ts). On Windows npm
+ *  puts a command's `.cmd` in the prefix itself (./windowsScript.ts). */
+export const teamEngineBin = (home: string, engine: TeamEngine, platform: NodeJS.Platform = 'darwin') =>
+  platform === 'win32' ? win32.join(home, '.local', `${engine}.cmd`) : join(home, '.local', 'bin', engine)
 
 export interface EngineCheckDeps {
   home: string
+  /** Where the engines are kept, by system: a Mac's unless told (the real deps say this one's). */
+  platform?: NodeJS.Platform
   executable(path: string): boolean
   account(engine: TeamEngine): Promise<EngineAccount>
   now(): number
@@ -54,7 +58,7 @@ export interface EngineCheckDeps {
 export async function checkTeamEngines(deps: EngineCheckDeps): Promise<TeamEngines> {
   const result = { checkedAt: deps.now() } as TeamEngines
   for (const { engine } of TEAM_ENGINES) {
-    const installed = deps.executable(teamEngineBin(deps.home, engine))
+    const installed = deps.executable(teamEngineBin(deps.home, engine, deps.platform))
     let signedIn: boolean | null = null
     try { signedIn = (await deps.account(engine)).signedIn } catch { /* cannot say */ }
     result[engine] = { installed, signedIn, ...(signedIn !== true && deps.relayed?.() ? { relayed: true } : {}) }
@@ -64,6 +68,7 @@ export async function checkTeamEngines(deps: EngineCheckDeps): Promise<TeamEngin
 
 export const realEngineCheckDeps = (home: string, env: NodeJS.ProcessEnv = process.env): EngineCheckDeps => ({
   home,
+  platform: process.platform,
   executable: (path) => { try { accessSync(path, constants.X_OK); return true } catch { return false } },
   // Only presence is read, never a secret (lib/engineAccount.ts). The team daemon has no login shell of the owner's to read.
   account: (engine) => engineAccount(engine, { home, env, lastUsed: false }),
