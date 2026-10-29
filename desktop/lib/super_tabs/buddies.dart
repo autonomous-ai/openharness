@@ -60,10 +60,13 @@ String buddyMachineName(
   String machineId, {
   AppNotifier? app,
 }) {
-  final row = c.snapshot?.pool(machineId);
-  // A machine of the reader's own outside the Swarm is in no Swarm list
-  // (backend buddyOnly): their account names it.
-  final name = row?['name'] ?? app?.stateOf(machineId)?.machine.displayName;
+  // The name its person gave it, else the Swarm's (docs/naming-system.md). A
+  // machine of the reader's own outside the Swarm is in no Swarm list
+  // (backend buddyOnly), so their account names it.
+  final given = app?.stateOf(machineId)?.machine.displayName;
+  final name = given != null && given.isNotEmpty
+      ? given
+      : c.snapshot?.pool(machineId)?['name'];
   return name is String && name.isNotEmpty
       ? superTabMachineName(name)
       : 'another machine';

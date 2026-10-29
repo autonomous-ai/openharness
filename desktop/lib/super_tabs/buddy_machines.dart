@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../models/model_search_catalog.dart' show thisComputerName;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
@@ -28,9 +27,9 @@ const kBuddyMachineOffline = 'offline';
 /// The reader's own machines a Buddy may run on, like a Lead, whatever its
 /// engine (Ken, 10-28): those signed in to their account, in the Swarm or not,
 /// and those of theirs the Swarm lists. Never a machine someone shared with
-/// them, nor a Harness Team account; the backend refuses any other. With
-/// [app], the Mac running Harness comes first as `This Mac · NAME`, then the
-/// online machines, then the offline ones.
+/// them, nor a Harness Team account; the backend refuses any other. Each by
+/// the name its person gave it. With [app], the Mac running Harness comes
+/// first, then the online machines, then the offline ones.
 List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
   final byId = <String, BuddyMachine>{};
   for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[]) {
@@ -54,14 +53,11 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
     }
     final id = s.machine.machineId;
     final listed = byId[id];
-    String name = listed?.name ?? superTabMachineName(s.machine.displayName);
-    if (s.isLocalMachine) {
-      here = id;
-      final label = thisComputerName();
-      name =
-          '${label[0].toUpperCase()}${label.substring(1)} · '
-          '${superTabMachineName(s.machine.displayName)}';
-    }
+    if (s.isLocalMachine) here = id;
+    // The name its person gave it, as every machine row reads (Dee, 10-29;
+    // docs/naming-system.md): no "This Mac" prefix, no owner suffix.
+    final given = superTabMachineName(s.machine.displayName);
+    final name = given.isNotEmpty ? given : listed?.name ?? id;
     byId[id] = (
       id: id,
       name: name,

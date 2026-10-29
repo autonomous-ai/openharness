@@ -197,23 +197,15 @@ void main() {
         );
 
         expect(
-          find.descendant(
-            of: barMachine,
-            matching: find.text('This Mac · $mac'),
-          ),
+          find.descendant(of: barMachine, matching: find.text(mac)),
           findsOneWidget,
         );
         await tester.tap(barMachine);
         await tester.pumpAndSettle();
         expect(find.text(kBuddyOwnMachines), findsOneWidget);
         expect(
-          menuRows(tester, [
-            'This Mac · $mac',
-            '2x 4090 Rig',
-            'Studio',
-            'MacBook Air',
-          ]),
-          ['This Mac · $mac', '2x 4090 Rig', 'Studio', 'MacBook Air'],
+          menuRows(tester, [mac, '2x 4090 Rig', 'Studio', 'MacBook Air']),
+          [mac, '2x 4090 Rig', 'Studio', 'MacBook Air'],
         );
         expect(find.text('Lent Mac'), findsNothing);
         expect(find.text('Team account'), findsNothing);
@@ -242,7 +234,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(
-        find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
+        find.descendant(of: barMachine, matching: find.text(mac)),
         findsOneWidget,
       );
       await close(tester, f, c);
@@ -342,7 +334,7 @@ void main() {
       expect(c.buddy('lead'), isNull);
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
       expect(
-        find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
+        find.descendant(of: barMachine, matching: find.text(mac)),
         findsOneWidget,
       );
       await close(tester, f, c);
@@ -381,7 +373,7 @@ void main() {
     });
 
     testWidgets(
-      'a Mac already in the Swarm is still this Mac, and starts with no setup',
+      'a Mac already in the Swarm comes first by the name its person gave it, and starts with no setup',
       (tester) async {
         final (:f, :c, :mac) = await open(
           tester,
@@ -392,10 +384,7 @@ void main() {
         );
 
         expect(
-          find.descendant(
-            of: barMachine,
-            matching: find.text('This Mac · $mac'),
-          ),
+          find.descendant(of: barMachine, matching: find.text(mac)),
           findsOneWidget,
         );
         await tester.tap(start);
@@ -424,7 +413,7 @@ void main() {
 
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(find.textContaining('This Mac'), findsNothing);
+      expect(option('m'), findsNothing);
       await close(tester, f, c);
     });
 
@@ -438,10 +427,7 @@ void main() {
         find.byKey(const ValueKey('super-buddy-start')),
       );
       expect(field, lessThan(bar.width / 2));
-      expect(
-        tester.getSize(find.text('This Mac · $mac').last).width,
-        lessThan(field),
-      );
+      expect(tester.getSize(find.text(mac).last).width, lessThan(field));
       await close(tester, f, c);
     });
   });
@@ -458,10 +444,7 @@ void main() {
       );
 
       expect(
-        find.descendant(
-          of: dialogMachine,
-          matching: find.text('This Mac · $mac'),
-        ),
+        find.descendant(of: dialogMachine, matching: find.text(mac)),
         findsOneWidget,
       );
       expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
@@ -559,7 +542,7 @@ void main() {
       expect(tester.widget<FilledButton>(start).onPressed, isNull);
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(find.text('This Mac · $mac'), findsOneWidget);
+      expect(find.text(mac), findsOneWidget);
       await close(tester, f, c);
     });
 
