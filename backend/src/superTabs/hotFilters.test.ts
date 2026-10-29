@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, posix, relative } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
@@ -9,9 +9,9 @@ import { describe, expect, it } from 'vitest'
 // readBy, invitedSwarms.ts, pageReads.ts, swarmRows.ts) with a plan test. This test finds every Prisma call on a hot Swarm
 // collection (every SuperTab and Swarm model of the schema) whose filter uses one of those operators, also through a delegate
 // alias. The ones there were when it was written are allowed (hotFilters.allowed.json) and that list may only shrink: a new
-// one fails here. It reads source, not types: a call on a receiver it cannot tell (an imported name, another object's field, a
-// call's result) is listed as `unresolved` for review rather than passed, and a filter a helper function builds and returns
-// (parts/load.ts `or`) is not followed.
+// one fails here. It reads source, not types: a call passes only when its receiver is proven another model's Prisma delegate
+// (`db.machine` on a client typed or imported as one); any receiver it cannot tell is listed as `unresolved` for review rather
+// than passed. A filter a helper function builds and returns (parts/load.ts `or`) is not followed.
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const ALLOWED = join(import.meta.dirname, 'hotFilters.allowed.json')
@@ -43,14 +43,16 @@ const UNRESOLVED = 'unresolved'
 
 /**
  * What a type says the value is: a hot delegate (`Prisma.SwarmGroupDelegate`, `typeof db.swarmGroup`,
- * `PrismaClient['swarmGroup']`), another model's delegate (undefined), or nothing it can tell (UNRESOLVED).
+ * `PrismaClient['swarmGroup']`), another model's Prisma delegate type (`Prisma.MachineDelegate`: undefined), or nothing it can
+ * prove (UNRESOLVED).
  */
 function typeReceiver(type: ts.TypeNode): string | undefined {
   let other = false
   for (const word of type.getText().match(/\w+/g) ?? []) {
-    const delegate = word.endsWith('Delegate') ? word[0]!.toLowerCase() + word.slice(1, -'Delegate'.length) : word
-    if (HOT.has(delegate)) return delegate
-    if (DELEGATES.has(delegate)) other = true
+    if (HOT.has(word)) return word
+    const delegate = word.endsWith('Delegate') ? word[0]!.toLowerCase() + word.slice(1, -'Delegate'.length) : undefined
+    if (delegate && HOT.has(delegate)) return delegate
+    if (delegate && DELEGATES.has(delegate)) other = true
   }
   return other ? undefined : UNRESOLVED
 }
@@ -58,13 +60,66 @@ function typeReceiver(type: ts.TypeNode): string | undefined {
 /** Combines what the branches of a conditional may be: hot if any is, else unresolved if any is. */
 const either = (...receivers: Array<string | undefined>) => receivers.find(r => r && r !== UNRESOLVED) ?? receivers.find(r => r === UNRESOLVED)
 
+/** Whether a type names a Prisma client or transaction, also through a type alias declared in the same file. */
+function clientType(type: ts.TypeNode, seen = new Set<string>()): boolean {
+  for (const word of type.getText().match(/\w+/g) ?? []) {
+    if (word === 'PrismaClient' || word === 'TransactionClient') return true
+    if (seen.has(word)) continue
+    seen.add(word)
+    const alias = type.getSourceFile().statements.find((statement): statement is ts.TypeAliasDeclaration =>
+      ts.isTypeAliasDeclaration(statement) && statement.name.text === word)
+    if (alias && clientType(alias.type, seen)) return true
+  }
+  return false
+}
+
+/**
+ * Whether `node` is proven a Prisma client or transaction: a name typed as one, `new PrismaClient()`, the app's client
+ * imported from lib/prisma, a `$transaction` callback's parameter, or a class field that is one.
+ */
+function prismaClient(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
+  const inner = unwrap(node)
+  if (seen.has(inner)) return false
+  seen.add(inner)
+  if (ts.isNewExpression(inner)) return ts.isIdentifier(inner.expression) && inner.expression.text === 'PrismaClient'
+  if (ts.isConditionalExpression(inner)) return prismaClient(inner.whenTrue, seen) && prismaClient(inner.whenFalse, seen)
+  if (ts.isBinaryExpression(inner)) return prismaClient(inner.left, seen) && prismaClient(inner.right, seen)
+  const bound = ts.isIdentifier(inner) ? declaration(inner.text, inner)
+    : ts.isPropertyAccessExpression(inner) && inner.expression.kind === ts.SyntaxKind.ThisKeyword ? classField(inner.name.text, inner) : undefined
+  if (!bound) return ts.isIdentifier(inner) && importedClient(inner)
+  if (ts.isBindingElement(bound)) return false
+  if (bound.type) return clientType(bound.type)
+  if (ts.isParameter(bound)) {
+    const callback = bound.parent
+    const call = callback.parent
+    return (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) && ts.isCallExpression(call)
+      && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === '$transaction'
+  }
+  return !!bound.initializer && prismaClient(bound.initializer, seen)
+}
+
+/** Whether `name` is imported from the app's Prisma client module (src/lib/prisma.ts). */
+function importedClient(name: ts.Identifier): boolean {
+  return name.getSourceFile().statements.some(statement => ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
+    && posix.join(posix.dirname(name.getSourceFile().fileName), statement.moduleSpecifier.text).replace(/\.js$/, '') === 'src/lib/prisma'
+    && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)
+    && statement.importClause.namedBindings.elements.some(element => element.name.text === name.text))
+}
+
+/** A delegate reached by name from `owner`: hot by its name, exempt only when `owner` is proven a Prisma client, else unresolved. */
+function memberReceiver(owner: ts.Expression, name: string): string | undefined {
+  if (HOT.has(name)) return name
+  return DELEGATES.has(name) && prismaClient(owner) ? undefined : UNRESOLVED
+}
+
 /** What a declared name holds: by its delegate property when destructured, its type, else its initializer. */
 function boundReceiver(bound: Binding | ts.PropertyDeclaration, seen: Set<ts.Node>): string | undefined {
   if (ts.isBindingElement(bound)) {
     const property = bound.propertyName ? nameOf(bound.propertyName as ts.PropertyName) : ts.isIdentifier(bound.name) ? bound.name.text : undefined
-    if (property && HOT.has(property)) return property
-    if (property && DELEGATES.has(property)) return undefined
-    return bound.initializer ? hotReceiver(bound.initializer, seen) : UNRESOLVED
+    if (bound.initializer) return either(property && HOT.has(property) ? property : undefined, hotReceiver(bound.initializer, seen))
+    const owner = bound.parent.parent
+    const from = ts.isObjectBindingPattern(bound.parent) && (ts.isVariableDeclaration(owner) || ts.isParameter(owner)) ? owner.initializer : undefined
+    return property && from ? memberReceiver(from, property) : property && HOT.has(property) ? property : UNRESOLVED
   }
   if (bound.type) return typeReceiver(bound.type)
   return bound.initializer ? hotReceiver(bound.initializer, seen) : UNRESOLVED
@@ -86,25 +141,25 @@ function classField(name: string, at: ts.Node): ts.PropertyDeclaration | ts.Para
 }
 
 /**
- * The hot collection a call's receiver is: `x.swarmGroup`, `x['swarmGroup']`, `delegate(tx, kind)`, or a name bound to one
- * (`const groups = db.swarmGroup`, `const { swarmGroup: groups } = db`, a parameter or field typed as a hot delegate),
- * followed through aliases and conditionals. Undefined when it is surely another collection; UNRESOLVED when the lint cannot
- * tell (an imported name, a field of another object, a call's result), so that call is listed for review rather than passed.
+ * The hot collection a call's receiver is: `x.swarmGroup`, `x['swarmGroup']`, `delegate(tx, kind)`, or a name or field bound
+ * to one (`const groups = db.swarmGroup`, `const { swarmGroup: groups } = db`, `this.groups`, a parameter typed as a hot
+ * delegate), followed through aliases and conditionals. Undefined only when it is proven another model's Prisma delegate
+ * (`db.machine` on a proven client, a name typed `Prisma.MachineDelegate`); UNRESOLVED otherwise (an imported name, another
+ * object's field, a call's result, a computed key), so that call is listed for review rather than passed.
  */
 function hotReceiver(receiver: ts.Expression, seen = new Set<ts.Node>()): string | undefined {
   const inner = unwrap(receiver)
   if (seen.has(inner)) return UNRESOLVED
   seen.add(inner)
   if (ts.isPropertyAccessExpression(inner)) {
-    const name = inner.name.text
-    if (HOT.has(name)) return name
-    if (DELEGATES.has(name)) return undefined
-    const field = inner.expression.kind === ts.SyntaxKind.ThisKeyword ? classField(name, inner) : undefined
-    return field ? boundReceiver(field, seen) : UNRESOLVED
+    if (inner.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const field = classField(inner.name.text, inner)
+      return field ? boundReceiver(field, seen) : UNRESOLVED
+    }
+    return memberReceiver(inner.expression, inner.name.text)
   }
   if (ts.isElementAccessExpression(inner)) {
-    const key = ts.isStringLiteralLike(inner.argumentExpression) ? inner.argumentExpression.text : undefined
-    return key && HOT.has(key) ? key : key && DELEGATES.has(key) ? undefined : UNRESOLVED
+    return ts.isStringLiteralLike(inner.argumentExpression) ? memberReceiver(inner.expression, inner.argumentExpression.text) : UNRESOLVED
   }
   if (ts.isCallExpression(inner)) return ts.isIdentifier(inner.expression) && inner.expression.text === PART_DELEGATE ? 'part' : UNRESOLVED
   if (ts.isConditionalExpression(inner)) return either(hotReceiver(inner.whenTrue, seen), hotReceiver(inner.whenFalse, seen))
@@ -238,9 +293,12 @@ function counted(filters: HotFilter[]): Record<string, number> {
   return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)))
 }
 
+/** Fixture source, after a proven Prisma client `db` and transaction `tx`. */
+const lint = (source: string) => hotFilters('fixture.ts', `declare const db: PrismaClient\ndeclare const tx: Prisma.TransactionClient\n${source}`)
+
 describe('no new Prisma in/has filter on a hot Swarm collection', () => {
   it('finds them through where, spreads, conditionals and local constants, and only on hot collections', () => {
-    const found = hotFilters('fixture.ts', `
+    const found = lint(`
       const assignmentId = { in: ids }
       const open = cond ? { status: { in: OPEN } } : {}
       await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId }, data: { status: 'cancelled' } })
@@ -255,7 +313,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
   })
 
   it('follows a delegate through aliases, destructuring, element access and typed parameters', () => {
-    const found = hotFilters('fixture.ts', `
+    const found = lint(`
       const groups = db.swarmGroup
       await groups.findMany({ where: { key: { in: ids } } })
       const again = groups
@@ -283,7 +341,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
   })
 
   it('resolves a name to the declaration in force at the call, not one in a sibling block or nested function', () => {
-    const found = hotFilters('fixture.ts', `
+    const found = lint(`
       const groups = db.swarmGroup
       if (flag) { const groups = db.machine }
       await groups.findMany({ where: { key: { in: ids } } })
@@ -304,7 +362,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
   })
 
   it('resolves a var to its function, also from a nested block', () => {
-    const found = hotFilters('fixture.ts', `
+    const found = lint(`
       async function read() {
         { var groups = db.swarmGroup }
         await groups.findMany({ where: { key: { in: ids } } })
@@ -318,7 +376,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
   })
 
   it('lists a call on a receiver it cannot resolve for review, and passes one surely on another collection', () => {
-    const found = hotFilters('fixture.ts', `
+    const found = lint(`
       import { groups } from './elsewhere'
       await groups.findMany({ where: { key: { in: ids } } })
       await repo.groups.findMany({ where: { key: { in: ids } } })
@@ -328,7 +386,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
       await groups.findMany({ where: { key } })
       class Store {
         private groups = db.swarmGroup
-        constructor(private machines: Prisma.MachineDelegate, private runs: typeof db.superTabRun) {}
+        constructor(private db: PrismaClient, private machines: Prisma.MachineDelegate, private runs: typeof db.superTabRun) {}
         async read() {
           await this.groups.findMany({ where: { key: { in: ids } } })
           await this.machines.findMany({ where: { machineId: { in: ids } } })
@@ -343,6 +401,30 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
       ['swarmGroup.findMany', 'in'], ['superTabRun.count', 'in'], ['unresolved.findMany', 'in']])
   })
 
+  it('passes a non-hot model name only on a proven Prisma client', () => {
+    const found = lint(`
+      class Store {
+        private machine = db.swarmGroup
+        read() { return this.machine.findMany({ where: { key: { in: ids } } }) }
+      }
+      await repo.machine.findMany({ where: { machineId: { in: ids } } })
+      await db[name].findMany({ where: { machineId: { in: ids } } })
+      await repo['machine'].findMany({ where: { machineId: { in: ids } } })
+      await db['machine'].findMany({ where: { machineId: { in: ids } } })
+      await db.machine.findMany({ where: { machineId: { in: ids } } })
+      await prisma.machine.findMany({ where: { machineId: { in: ids } } })
+      await db.$transaction(async t => t.machine.findMany({ where: { machineId: { in: ids } } }))
+      async function run(client: Client) { await client.machine.findMany({ where: { machineId: { in: ids } } }) }
+      type Client = Prisma.TransactionClient
+      const { machine } = db
+      await machine.findMany({ where: { machineId: { in: ids } } })
+      const { machine: other } = repo
+      await other.findMany({ where: { machineId: { in: ids } } })
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([['swarmGroup.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'],
+      ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in']])
+  })
+
   it('covers every SuperTab and Swarm model in the schema', () => {
     const schema = readFileSync(SCHEMA, 'utf8')
     const models = hotModels(schema)
@@ -350,7 +432,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(models).toEqual(all.filter(model => /^(SuperTab|Swarm)/.test(model)))
     expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup', 'SwarmWorkspace']))
     expect(hotModels('model SwarmNew {\n  id String @id\n}\nmodel Machine {\n}\nmodel SuperTabLater {\n}\n')).toEqual(['SwarmNew', 'SuperTabLater'])
-    const found = hotFilters('fixture.ts', 'await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
+    const found = lint('await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
     expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])
   })
 
