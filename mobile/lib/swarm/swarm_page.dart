@@ -40,6 +40,17 @@ void openSwarmHome(BuildContext context) {
   unawaited(Navigator.of(context).push(phoneRoute((_) => const SwarmPage())));
 }
 
+/// Whether Home still lists project [projectId] of Swarm [swarmId]: the
+/// Swarm is still the account's, its read not taken away, and the project
+/// still in it.
+bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
+  final reader = inbox.reader(swarmId);
+  return reader != null &&
+      !reader.accessRevoked &&
+      inbox.swarms.any((swarm) => swarm.id == swarmId) &&
+      (reader.snapshot?.projects.any((p) => p.id == projectId) ?? false);
+}
+
 /// Swarm Home, direction B (Tony's prototype B1, 2026-10-29): what needs the
 /// person ("Needs you", two of it and See all), then the projects they
 /// pinned on this phone, then the others by their latest activity, those
@@ -417,20 +428,27 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  /// A long press on a project: Pin to top, or Unpin.
+  /// A long press on a project: Pin to top, or Unpin. The project taken away
+  /// meanwhile — its Swarm or itself — closes the sheet, and pins nothing.
   Future<void> _pin(
     BuildContext context,
     SwarmSession session,
     SwarmHomeProject project,
   ) async {
-    final pinned = session.home.pinned(project.swarmId, project.project.id);
+    final (swarmId, projectId) = (project.swarmId, project.project.id);
+    final inbox = session.inbox;
+    bool listed() => swarmHomeListed(inbox, swarmId, projectId);
+    final pinned = session.home.pinned(swarmId, projectId);
     final tapped = await showSwarmPinSheet(
       context,
       name: project.project.name,
       pinned: pinned,
+      // The read itself, as its revoke tells at once; the inbox for the list.
+      watch: Listenable.merge([inbox, ?inbox.reader(swarmId)]),
+      listed: listed,
     );
-    if (tapped != true || !mounted || _session != session) return;
-    session.home.pin(project.swarmId, project.project.id, !pinned);
+    if (tapped != true || !mounted || _session != session || !listed()) return;
+    session.home.pin(swarmId, projectId, !pinned);
   }
 
   /// Home before the list answers: Needs you and the projects as rows on

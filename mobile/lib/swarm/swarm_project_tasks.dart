@@ -24,8 +24,8 @@ const _finished = {'done', 'stopped', 'cancelled'};
 
 /// One project's tasks as B2's Tasks tab groups them (Tony, 2026-10-29):
 /// what waits on the person there ([waiting]: Needs you's own, so one rule
-/// says what waits), the work going on ([working]), and the work finished
-/// today ([doneToday]), newest first.
+/// says what waits), the work going on ([working]), and the work the read
+/// shows done today ([doneToday], [swarmDoneToday]), newest first.
 typedef SwarmProjectTaskLists = ({
   List<SwarmNeed> waiting,
   List<SuperTabConversation> working,
@@ -60,15 +60,10 @@ SwarmProjectTaskLists swarmProjectTasks(
   final work = swarmProjectWork(snapshot, project, buddies: reader.buddies);
   bool over(SuperTabConversation g) =>
       g.closed || _finished.contains(g.assignment?['status']);
-  final today = DateTime(now.year, now.month, now.day);
   final doneToday = [
     for (final g in [...work.active, ...work.older])
-      if (!waits.contains(g.id) &&
-          over(g) &&
-          g.changedAt != null &&
-          !g.changedAt!.toLocal().isBefore(today))
-        g,
-  ]..sort((a, b) => b.changedAt!.compareTo(a.changedAt!));
+      if (!waits.contains(g.id) && swarmDoneToday(g, now)) g,
+  ]..sort((a, b) => swarmProgressAt(b)!.compareTo(swarmProgressAt(a)!));
   return (
     waiting: waiting,
     working: [
@@ -78,6 +73,28 @@ SwarmProjectTaskLists swarmProjectTasks(
     doneToday: doneToday,
   );
 }
+
+/// Whether the read shows [g]'s work done on [now]'s day: its agent said
+/// Done — stopped, cancelled or lost work was not done, nor was work only
+/// archived — and its last progress ([swarmProgressAt]) was today. The read
+/// holds no time of the Done itself (the server keeps it in a ledger it does
+/// not send), and that progress comes at or before it, so a task this says
+/// is done today is; one done today after earlier progress, and archived
+/// work no read holds, are not counted: what it counts is a floor. A new
+/// message on work done before does not make it today's.
+bool swarmDoneToday(SuperTabConversation g, DateTime now) {
+  if (g.assignment?['status'] != 'done') return false;
+  final at = swarmProgressAt(g);
+  return at != null && !at.isBefore(DateTime(now.year, now.month, now.day));
+}
+
+/// [g]'s agent's last progress on its work, which its Done comes at or
+/// after (backend liveness.ts `renewLease`); null when the server sent none.
+DateTime? swarmProgressAt(SuperTabConversation g) =>
+    switch (g.assignment?['progressAt']) {
+      final num at => DateTime.fromMillisecondsSinceEpoch(at.toInt()),
+      _ => null,
+    };
 
 /// The project [need] was asked in, by id: a tag from an older server names
 /// none, and its chat's project is the one.
@@ -197,12 +214,14 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
                 )
               else
                 SwarmGroup(children: [for (final g in tasks.working) work(g)]),
+              // What the read shows done today is a floor ([swarmDoneToday]),
+              // and says so.
               const SwarmCaption('Done today'),
               if (done == 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
                   child: SwarmRow.line(
-                    'Nothing done yet today.',
+                    'Nothing done today in recent work.',
                     key: const ValueKey('swarm-done-none'),
                   ),
                 )
@@ -213,7 +232,9 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
                       expanded: _doneOpen,
                       child: SwarmRow(
                         key: const ValueKey('swarm-done-today'),
-                        title: done == 1 ? '1 task done' : '$done tasks done',
+                        title: done == 1
+                            ? 'At least 1 task done'
+                            : 'At least $done tasks done',
                         chevron: _doneOpen
                             ? LucideIcons.chevronUp300
                             : LucideIcons.chevronDown300,

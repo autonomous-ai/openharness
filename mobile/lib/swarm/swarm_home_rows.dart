@@ -400,87 +400,148 @@ class _Dot extends StatelessWidget {
 }
 
 /// A project's pin, offered on a long press of its Home row: one row, Pin or
-/// Unpin ([pinned]). Answers true when it was tapped, null when closed.
+/// Unpin ([pinned]). Answers true when it was tapped, null when closed. While
+/// it is open, [watch] tells of changes to what Home lists: once the project
+/// is no longer [listed] — its Swarm or its project taken away — it shows
+/// nothing of it and closes, and a tap answers nothing.
 Future<bool?> showSwarmPinSheet(
   BuildContext context, {
   required String name,
   required bool pinned,
+  required Listenable watch,
+  required bool Function() listed,
 }) => showModalBottomSheet<bool>(
   context: context,
   backgroundColor: AppGlass.rowFill,
   shape: AppControl.sheetShape,
-  builder: (context) => SafeArea(
-    top: false,
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpace.l,
-        AppSpace.s,
-        AppSpace.l,
-        AppSpace.l,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // The grabber: a capsule as wide as the two largest steps.
-          Center(
-            child: Container(
-              width: AppSpace.xl + AppSpace.m,
-              height: AppSpace.xs,
-              margin: const EdgeInsets.only(bottom: AppSpace.s),
-              decoration: ShapeDecoration(
-                color: AppGlass.hair,
-                shape: const StadiumBorder(),
-              ),
-            ),
+  builder: (context) =>
+      _PinSheet(name: name, pinned: pinned, watch: watch, listed: listed),
+);
+
+class _PinSheet extends StatefulWidget {
+  const _PinSheet({
+    required this.name,
+    required this.pinned,
+    required this.watch,
+    required this.listed,
+  });
+
+  final String name;
+  final bool pinned;
+  final Listenable watch;
+  final bool Function() listed;
+
+  @override
+  State<_PinSheet> createState() => _PinSheetState();
+}
+
+class _PinSheetState extends State<_PinSheet> {
+  bool _closing = false;
+
+  /// Closes the sheet once, after the frame it went blank in.
+  void _close() {
+    if (_closing) return;
+    _closing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route == null || !route.isActive) return;
+      if (route.isCurrent) {
+        Navigator.of(context).pop();
+      } else {
+        Navigator.of(context).removeRoute(route);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.watch,
+    builder: (context, _) {
+      if (_closing || !widget.listed()) {
+        _close();
+        return const SizedBox.shrink();
+      }
+      final pinned = widget.pinned;
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.l,
+            AppSpace.s,
+            AppSpace.l,
+            AppSpace.l,
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.m,
-              AppSpace.xs,
-              AppSpace.m,
-              AppSpace.s,
-            ),
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.caption(color: AppPalette.textSecondary),
-            ),
-          ),
-          Semantics(
-            button: true,
-            child: InkWell(
-              key: const ValueKey('swarm-pin'),
-              borderRadius: BorderRadius.circular(AppControl.radius),
-              onTap: () => Navigator.of(context).pop(true),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: minTouchTarget),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpace.m,
-                    vertical: AppSpace.s,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        pinned ? LucideIcons.pinOff300 : LucideIcons.pin300,
-                        size: 20,
-                        color: AppPalette.textPrimary,
-                      ),
-                      const SizedBox(width: AppSpace.m),
-                      Text(
-                        pinned ? 'Unpin' : 'Pin to top',
-                        style: AppType.body(color: AppPalette.textPrimary),
-                      ),
-                    ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // The grabber: a capsule as wide as the two largest steps.
+              Center(
+                child: Container(
+                  width: AppSpace.xl + AppSpace.m,
+                  height: AppSpace.xs,
+                  margin: const EdgeInsets.only(bottom: AppSpace.s),
+                  decoration: ShapeDecoration(
+                    color: AppGlass.hair,
+                    shape: const StadiumBorder(),
                   ),
                 ),
               ),
-            ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.m,
+                  AppSpace.xs,
+                  AppSpace.m,
+                  AppSpace.s,
+                ),
+                child: Text(
+                  widget.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.caption(color: AppPalette.textSecondary),
+                ),
+              ),
+              Semantics(
+                button: true,
+                child: InkWell(
+                  key: const ValueKey('swarm-pin'),
+                  borderRadius: BorderRadius.circular(AppControl.radius),
+                  // Taken away since the last frame: nothing to pin.
+                  onTap: () => widget.listed()
+                      ? Navigator.of(context).pop(true)
+                      : _close(),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      minHeight: minTouchTarget,
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.m,
+                        vertical: AppSpace.s,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            pinned ? LucideIcons.pinOff300 : LucideIcons.pin300,
+                            size: 20,
+                            color: AppPalette.textPrimary,
+                          ),
+                          const SizedBox(width: AppSpace.m),
+                          Text(
+                            pinned ? 'Unpin' : 'Pin to top',
+                            style: AppType.body(color: AppPalette.textPrimary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-    ),
-  ),
-);
+        ),
+      );
+    },
+  );
+}

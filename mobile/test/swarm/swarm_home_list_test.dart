@@ -437,6 +437,83 @@ void main() {
       });
     });
 
+    test('a Swarm lost before the choices are read back: what is read of it '
+        'does not come back, and the phone forgets it too', () async {
+      final store = _SlowStore()
+        ..values[key] = jsonEncode({
+          'pins': [
+            swarmHomeProjectKey(tab, 'p1'),
+            swarmHomeProjectKey('tab-2', 'p1'),
+          ],
+          'swarm': 'tab-2',
+        });
+      final prefs0 = SwarmHomePrefs(accountId: me, store: store);
+      addTearDown(prefs0.dispose);
+
+      prefs0.keepOnly({tab});
+      store.answer();
+      await settle();
+
+      expect(prefs0.pins, {swarmHomeProjectKey(tab, 'p1')});
+      expect(prefs0.swarmId, isNull);
+      expect(jsonDecode(store.values[key]!), {
+        'pins': [swarmHomeProjectKey(tab, 'p1')],
+      });
+    });
+
+    test(
+      'a pin taken off before the choices are read back stays off',
+      () async {
+        final store = _SlowStore()
+          ..values[key] = jsonEncode({
+            'pins': [
+              swarmHomeProjectKey(tab, 'old'),
+              swarmHomeProjectKey(tab, 'kept'),
+            ],
+          });
+        final prefs0 = SwarmHomePrefs(accountId: me, store: store);
+        addTearDown(prefs0.dispose);
+
+        prefs0
+          ..pin(tab, 'new', true)
+          ..pin(tab, 'new', false)
+          ..pin(tab, 'old', false);
+        store.answer();
+        await settle();
+
+        expect(prefs0.pins, {swarmHomeProjectKey(tab, 'kept')});
+        expect(jsonDecode(store.values[key]!), {
+          'pins': [swarmHomeProjectKey(tab, 'kept')],
+        });
+      },
+    );
+
+    test('a pin chosen before the choices are read back keeps the Swarm Home '
+        'showed; a Swarm chosen then stands', () async {
+      final record = jsonEncode({
+        'pins': [swarmHomeProjectKey(tab, 'old')],
+        'swarm': 'tab-2',
+      });
+      final store = _SlowStore()..values[key] = record;
+      final pinned = SwarmHomePrefs(accountId: me, store: store);
+      addTearDown(pinned.dispose);
+      pinned.pin(tab, 'new', true);
+      store.answer();
+      await settle();
+      expect(pinned.swarmId, 'tab-2');
+
+      store.values[key] = record;
+      final shown = SwarmHomePrefs(accountId: me, store: store);
+      addTearDown(shown.dispose);
+      shown.show(null);
+      store.answer();
+      await settle();
+      expect(shown.swarmId, isNull);
+      expect(jsonDecode(store.values[key]!), {
+        'pins': [swarmHomeProjectKey(tab, 'old')],
+      });
+    });
+
     test('another account reads none of them', () async {
       final store = MemoryKeyValueStore();
       (await prefs(store)).pin(tab, 'p1', true);

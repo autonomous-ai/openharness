@@ -39,6 +39,16 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// with what was read, and written only then, so as not to write over it.
   bool _touched = false;
 
+  /// Before the choices are read back: the pins taken off meanwhile, which
+  /// what is read does not bring back, and whether a Swarm was chosen to
+  /// show, which stands over the one read.
+  final _unpinned = <String>{};
+  bool _shownChosen = false;
+
+  /// The account's Swarms, as [keepOnly] last heard them; null before. What
+  /// is read back is held to them too.
+  Set<String>? _swarms;
+
   /// The choices were read back (or there is nowhere to read them from).
   late bool _loaded = store == null;
   bool _disposed = false;
@@ -49,28 +59,54 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// Pins [projectId] of [swarmId] at Home's top ([on]), or takes it off.
   void pin(String swarmId, String projectId, bool on) {
     final key = swarmHomeProjectKey(swarmId, projectId);
-    if (on ? !_pins.add(key) : !_pins.remove(key)) return;
-    while (_pins.length > keptPins) {
-      _pins.remove(_pins.first);
+    if (!_loaded) {
+      if (on) {
+        _unpinned.remove(key);
+      } else if (_unpinned.add(key)) {
+        // Read back pinned, it stays off.
+        _touched = true;
+      }
     }
+    if (on ? !_pins.add(key) : !_pins.remove(key)) return;
+    _cap();
     _changed();
   }
 
   /// Home shows Swarm [swarmId] alone; null shows them all.
   void show(String? swarmId) {
+    if (!_loaded) {
+      // Chosen, even if as it is: what is read back does not change it.
+      _shownChosen = true;
+      _touched = true;
+    }
     if (_swarmId == swarmId) return;
     _swarmId = swarmId;
     _changed();
   }
 
   /// The account's Swarms are [swarmIds]: the pins and the choice of any
-  /// other go, from the phone too.
+  /// other go, from the phone too, and from what is read back after.
   void keepOnly(Set<String> swarmIds) {
+    _swarms = swarmIds;
+    if (_keep(swarmIds)) _changed();
+  }
+
+  /// Drops the pins and the choice of any Swarm but [swarmIds]; whether any
+  /// went.
+  bool _keep(Set<String> swarmIds) {
     final before = _pins.length;
     _pins.removeWhere((key) => !swarmIds.contains(key.split('/').first));
     final gone = _swarmId != null && !swarmIds.contains(_swarmId);
     if (gone) _swarmId = null;
-    if (gone || _pins.length != before) _changed();
+    return gone || _pins.length != before;
+  }
+
+  /// At most [keptPins], the oldest going first; whether any went.
+  bool _cap() {
+    final over = _pins.length - keptPins;
+    if (over <= 0) return false;
+    _pins.removeAll(_pins.take(over).toList());
+    return true;
   }
 
   void _changed() {
@@ -94,24 +130,19 @@ class SwarmHomePrefs extends ChangeNotifier {
     final (pins, swarmId) = text == null
         ? (const <String>[], null)
         : _decode(text);
-    if (_touched) {
-      // Chosen meanwhile: the pins join those read, oldest first, and the
-      // Swarm chosen stands.
-      final mine = [..._pins];
-      _pins
-        ..clear()
-        ..addAll(pins)
-        ..addAll(mine);
-      while (_pins.length > keptPins) {
-        _pins.remove(_pins.first);
-      }
-      unawaited(_save());
-    } else {
-      _pins
-        ..clear()
-        ..addAll(pins);
-      _swarmId = swarmId;
-    }
+    // Chosen meanwhile: the pins pinned join those read, oldest first, those
+    // taken off stay off, and a Swarm chosen stands.
+    final mine = [..._pins];
+    _pins
+      ..clear()
+      ..addAll(pins.where((key) => !_unpinned.contains(key)))
+      ..addAll(mine);
+    if (!_shownChosen) _swarmId = swarmId;
+    _unpinned.clear();
+    // Swarms the account lost meanwhile take what was read of them too.
+    final kept = _swarms;
+    final dropped = kept != null && _keep(kept);
+    if (_cap() || dropped || _touched) unawaited(_save());
     notifyListeners();
   }
 

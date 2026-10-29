@@ -1076,6 +1076,61 @@ void main() {
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
 
+    testWidgets("a project's pin sheet whose Swarm refuses its read while it "
+        'is open shows nothing of it at once, closes and pins nothing', (
+      tester,
+    ) async {
+      final fake = two();
+      final host = await pump(tester, fake);
+      await tester.longPress(key('swarm-project-$second-$project'));
+      await tester.pumpAndSettle();
+      expect(inside('swarm-pin', find.text('Pin to top')), findsOneWidget);
+      expect(find.text('Backend'), findsNWidgets(2), reason: 'row and sheet');
+
+      Never refused(_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'You no longer have access to this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$second/changes'] = refused;
+      fake.routes['/api/super-tabs/$second/parts'] = refused;
+      await host.session!.inbox.reader(second)!.refresh();
+      expect(host.session!.inbox.reader(second)!.accessRevoked, isTrue);
+      await tester.pump();
+      expect(key('swarm-pin'), findsNothing, reason: 'blank at once');
+
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('Backend'), findsNothing);
+      expect(host.session!.home.pins, isEmpty);
+    });
+
+    testWidgets('Pin tapped as its Swarm leaves the list pins nothing: the '
+        'pin the list took away does not come back', (tester) async {
+      final fake = two();
+      final host = await pump(tester, fake);
+      await tester.longPress(key('swarm-project-$second-$project'));
+      await tester.pumpAndSettle();
+
+      final press = await tester.startGesture(
+        tester.getCenter(key('swarm-pin')),
+      );
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await press.up();
+      await tester.pumpAndSettle();
+
+      expect(host.session!.home.pins, isEmpty);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('Backend'), findsNothing);
+      expect(find.text('Pinned'), findsNothing);
+    });
+
     testWidgets('a Swarm whose read is refused lists none of its projects '
         'and says why, with no row left on its way', (tester) async {
       final fake = two()
@@ -1670,20 +1725,55 @@ void main() {
       expect((page.swarmId, page.conversationId), (tab, 'g-busy'));
     });
 
-    testWidgets('Done today folds the work finished today; work finished '
-        'before is in neither', (tester) async {
+    /// Work [id] as the server sends it: its agent's [status], its last
+    /// progress at [progress], archived or not, and its part last changed
+    /// at [changed] (a message on it moves that, not its progress).
+    Map<String, dynamic> work(
+      String id,
+      String title, {
+      required String status,
+      required DateTime changed,
+      DateTime? progress,
+      bool archived = false,
+      bool dormant = false,
+    }) {
+      final data = groupData(
+        id,
+        title: title,
+        status: status,
+        dormant: dormant,
+      );
+      return {
+        ...part(id, 2, {
+          ...data,
+          'archived': archived,
+          'assignment': {
+            ...data['assignment'] as Map<String, dynamic>,
+            'progressAt': ?progress?.millisecondsSinceEpoch,
+          },
+        }),
+        'changedAt': changed.millisecondsSinceEpoch,
+      };
+    }
+
+    testWidgets('Done today folds the work its agent said Done today; work '
+        'done before is in neither, even with a message today', (tester) async {
       final fake = backend();
       final now = DateTime.now();
-      Map<String, dynamic> done(String id, String title, DateTime at) => {
-        ...part(id, 2, groupData(id, title: title, status: 'done')),
-        'changedAt': at.millisecondsSinceEpoch,
-      };
       replace(fake, {
-        'g-busy': done('g-busy', 'Sync', now),
-        'g-atlas': done(
+        'g-busy': work(
+          'g-busy',
+          'Sync',
+          status: 'done',
+          changed: now,
+          progress: now,
+        ),
+        'g-atlas': work(
           'g-atlas',
           'Search page',
-          now.subtract(const Duration(days: 2)),
+          status: 'done',
+          progress: now.subtract(const Duration(days: 1, hours: 1)),
+          changed: now,
         ),
       });
       await pump(tester, fake);
@@ -1691,15 +1781,103 @@ void main() {
 
       expect(key('swarm-tasks-none'), findsOneWidget, reason: 'none working');
       expect(
-        inside('swarm-done-today', find.text('1 task done')),
+        inside('swarm-done-today', find.text('At least 1 task done')),
         findsOneWidget,
+        reason: 'what the read shows is a floor',
       );
       expect(key('swarm-task-g-busy'), findsNothing, reason: 'folded');
 
       await tester.tap(key('swarm-done-today'));
       await tester.pumpAndSettle();
       expect(key('swarm-task-g-busy'), findsOneWidget);
-      expect(key('swarm-task-g-atlas'), findsNothing, reason: 'not today');
+      expect(
+        key('swarm-task-g-atlas'),
+        findsNothing,
+        reason: 'done yesterday; only talked about today',
+      );
+    });
+
+    testWidgets('archived work never done, and stopped or cancelled work, '
+        'are not done today', (tester) async {
+      final fake = backend();
+      final now = DateTime.now();
+      replace(fake, {
+        'g-busy': work(
+          'g-busy',
+          'Sync',
+          status: 'working',
+          archived: true,
+          changed: now,
+          progress: now,
+        ),
+        'g-atlas': work(
+          'g-atlas',
+          'Search page',
+          status: 'stopped',
+          changed: now,
+          progress: now,
+        ),
+      });
+      await pump(tester, fake);
+      await openTasks(tester);
+
+      expect(key('swarm-done-today'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-done-none')).data,
+        'Nothing done today in recent work.',
+      );
+      expect(key('swarm-task-g-busy'), findsNothing);
+      expect(key('swarm-task-g-atlas'), findsNothing);
+    });
+
+    testWidgets('a fresh read holds no dormant work: the count says it is a '
+        "floor, and grows when the project's older work is read", (
+      tester,
+    ) async {
+      final fake = backend();
+      final now = DateTime.now();
+      // Done today too, but dormant: no first load has it.
+      final shipped = work(
+        'g-shipped',
+        'Release notes',
+        status: 'done',
+        changed: now,
+        progress: now,
+        dormant: true,
+      );
+      replace(fake, {
+        'g-busy': work(
+          'g-busy',
+          'Sync',
+          status: 'done',
+          changed: now,
+          progress: now,
+        ),
+      });
+      fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] =
+          (_) => {
+            'groups': [shipped],
+            'next': null,
+          };
+      final host = await pump(tester, fake);
+      await openTasks(tester);
+
+      expect(
+        inside('swarm-done-today', find.text('At least 1 task done')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('1 task done'),
+        findsNothing,
+        reason: 'not a whole count',
+      );
+
+      await host.session!.inbox.reader(tab)!.loadDormant(project);
+      await tester.pumpAndSettle();
+      expect(
+        inside('swarm-done-today', find.text('At least 2 tasks done')),
+        findsOneWidget,
+      );
     });
 
     testWidgets('the Chat tab says its chat is unread while another tab '

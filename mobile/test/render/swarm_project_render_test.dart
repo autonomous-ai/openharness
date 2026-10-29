@@ -138,7 +138,8 @@ void main() {
       ),
       'members': [part(me, 1, person(me))],
     };
-    // Fix login moved two minutes ago; two tasks finished today.
+    // Fix login moved two minutes ago; two tasks finished today, their
+    // agents' last progress then.
     final load = fake.routes['/api/super-tabs/$tab/parts']!;
     fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
       final answer = await load(body) as Map<String, dynamic>;
@@ -146,11 +147,28 @@ void main() {
       int ago(int minutes) =>
           now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
       final at = {'g1': ago(2), 'g4': ago(40), 'g5': ago(95)};
+      Map<String, dynamic> moved(Map<String, dynamic> row) {
+        final data = row['data'] as Map<String, dynamic>;
+        final done = (data['assignment'] as Map?)?['status'] == 'done';
+        return {
+          ...row,
+          'changedAt': ?at[row['key']],
+          if (done)
+            'data': {
+              ...data,
+              'assignment': {
+                ...data['assignment'] as Map<String, dynamic>,
+                'progressAt': at[row['key']],
+              },
+            },
+        };
+      }
+
       return {
         ...answer,
         'groups': [
           for (final row in answer['groups'] as List)
-            {...row as Map<String, dynamic>, 'changedAt': ?at[row['key']]},
+            moved(row as Map<String, dynamic>),
         ],
       };
     };
