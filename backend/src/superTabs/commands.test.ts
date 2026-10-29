@@ -237,6 +237,27 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
   })
 
+  it('files a reply under its thread root, never a nested thread, and keeps a reply to a pre-thread message inline', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
+    expect(root.thread).toBeUndefined()
+    const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
+    expect(first).toMatchObject({ replyTo: root.id, thread: root.id })
+    expect(first.alsoInChat).toBeUndefined()
+    // A reply to a reply joins the root's thread.
+    const second = f.run({ type: 'message.send', conversationId: 'lead', text: 'Agreed.', replyTo: first.id, recipientIds: [], alsoSend: true },
+      owner, { reply: { id: first.id, conversationId: 'lead', author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
+    expect(second).toMatchObject({ replyTo: first.id, thread: root.id, alsoInChat: true })
+    // A message written before threads has none: a reply to it stays an inline quote.
+    const inline = f.run({ type: 'message.send', conversationId: 'lead', text: 'Old question answered.', replyTo: 'old-message', recipientIds: [], alsoSend: true },
+      owner, { reply: { id: 'old-message', conversationId: 'lead', author: root.author, createdAt: 0, thread: null } }).messages[0]!
+    expect(inline.replyTo).toBe('old-message')
+    expect(inline.thread).toBeUndefined()
+    expect(inline.alsoInChat).toBeUndefined()
+  })
+
   it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
@@ -619,6 +640,63 @@ function routed() {
     leadActor: agentActor(lead), workerActor: agentActor(worker) }
 }
 
+describe('the Lead\'s last action on a task', () => {
+  it('is recorded with its time by the Lead\'s route, start, assignment and post there, and by nobody else\'s', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    f.run({ type: 'message.send', conversationId: group, text: 'A person posts.', replyTo: null, recipientIds: [] })
+    expect(task().leadAction).toBeUndefined()
+    f.run({ type: 'route.record', conversationId: group, decision: record() } as Command, f.leadActor, { now: 2000 })
+    expect(task().leadAction).toEqual({ kind: 'route', at: 2000 })
+    const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group), now: 3000 })
+    expect(task().leadAction).toEqual({ kind: 'start', at: 3000 })
+    // Its start keeps when it was asked for: a task whose start is never launched is orphaned 10 minutes on (liveness.ts).
+    expect(f.state.starts!.at(-1)!.requestedAt).toBe(3000)
+    f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 4000 })
+    expect(task().leadAction).toEqual({ kind: 'assign', at: 4000 })
+    f.run({ type: 'message.send', conversationId: group, text: 'Progress.', replyTo: null, recipientIds: [] }, f.workerActor, { now: 5000 })
+    expect(task().leadAction).toEqual({ kind: 'assign', at: 4000 })
+    f.run({ type: 'message.send', conversationId: group, text: 'Why it waits.', replyTo: null, recipientIds: [] }, f.leadActor, { now: 6000 })
+    expect(task().leadAction).toEqual({ kind: 'post', at: 6000 })
+  })
+
+  it('records a task\'s wait in the command that starts it, and clears it in the one that ends it, so no sweep rewrites it', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    expect(task().liveness).toBeUndefined()
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' }, f.workerActor, { now: 3000 })
+    expect(task().liveness).toEqual({ state: 'waiting', why: 'review', since: 3000 })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Fixing' }, f.workerActor, { now: 4000 })
+    expect(task().liveness).toBeUndefined()
+  })
+
+  it('keeps whom its agent asked on the task while it waits, in the status write, and forgets it once it moves on', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    f.invite()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Flag or not?',
+      ask: { personId: 'peer', options: ['Flag', 'Ship'], recommended: 0, unblocks: 'The release' } }, f.workerActor, { now: 3000 })
+    expect(task().assignment!.askedOf).toBe('peer')
+    expect(task().liveness).toMatchObject({ state: 'waiting', why: 'person', personId: 'peer' })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Flag it' }, f.workerActor, { now: 4000 })
+    expect(task().assignment!.askedOf).toBeUndefined()
+  })
+
+  it('leaves a task whose start failed orphaned, so it stays so once the failed start is no longer loaded', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
+    f.run({ type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' }, f.leadActor, { contribution: f.contribution, now: 7000 })
+    expect(task().liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: 7000 })
+  })
+})
+
 describe('route.record and route.override', () => {
   it('records a lead decision as a route message with its id', () => {
     const f = routed()
@@ -888,6 +966,18 @@ it('lets a big machine offer more than 16 agents and refuses only counts that ar
   f.run(contribute(96).data!, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
   expect(f.state.machines![0]!.maxAgents).toBe(96)
 })
+// Review of #2084: saving a paused machine's settings sends the whole contribution again, and it came back unpaused.
+it('keeps a paused machine paused when its owner saves other settings, until they unpause it', () => {
+  const f = fixture(), owners = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+  const save = (maxAgents: number): Command => ({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents })
+  f.run(save(2), owner, owners)
+  f.run({ type: 'machine.pause', machineId: 'host', paused: true })
+  f.run(save(4), owner, owners)
+  expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 4, paused: true })])
+  f.run({ type: 'machine.pause', machineId: 'host', paused: false })
+  f.run(save(3), owner, owners)
+  expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, paused: false })])
+})
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
   const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }
@@ -1012,7 +1102,9 @@ it('allows the contributor to keep a completed worker and refuses another projec
   f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, peer)
   expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('keep')
   const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
-  const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+  // On another machine: a Team account running this project's Lead takes no other project's work (leadStart.ts, #895).
+  const otherLead = f.run({ type: 'agent.add', conversationId: project.conversationId as string, machineId: 'other-host', harnessId: 'other-lead',
+    name: 'other-lead', configuration: config, lead: true }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
 })
 
@@ -1188,6 +1280,184 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, builderActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: false, lead: false })
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
+  })
+
+  describe('a review the Swarm opens by itself', () => {
+    const pr = 'https://github.com/example/project/pull/42'
+    /** reviewed() with the project's repository, the Builder working, and a second Reviewer `fresh` that is not in the group. */
+    function ready(engine: 'claude' | 'codex' = 'claude') {
+      const setup = reviewed()
+      const { f, leadActor, group, builder } = setup
+      f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/Example/project.git' }
+      const startId = f.run({ type: 'agent.start', request: request('lead', { role: 'reviewer', engine, name: 'Second reviewer' }), ...via } as Command, leadActor,
+        { contribution, ...decisionIn('lead') }).result.startId as string
+      f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
+      const fresh = f.run({ type: 'agent.started', startId, harnessId: 'native-fresh', configuration: { ...config, engine } }, leadActor, { contribution }).result.agentId as string
+      const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+      const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
+      const markReady = (result: string | null, actor: Actor = builderActor) =>
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'review', result }, actor)
+      const reviews = () => f.state.conversations.filter(c => c.reviewOf === group)
+      return { ...setup, fresh, built, builderActor, markReady, reviews }
+    }
+
+    it('opens "Review: <group>" with the handoff, the checks and the link, assigns a free Reviewer and adds it to the reviewed group', () => {
+      const { f, lead, group, reviewer, fresh, markReady, reviews } = ready()
+      f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+      const handoff = `Ready: yes. Revision a1b2c3..d4e5f6. Unverified: nothing.\n${pr}`
+      const effects = markReady(handoff)
+      expect(reviews()).toHaveLength(1)
+      const review = reviews()[0]!
+      expect(review).toMatchObject({ title: 'Review: Offline editing', number: 2, assignment: { agentId: fresh, status: 'working' },
+        checks: [{ description: 'Verdict with the reviewed revision', independent: false, evidence: null, passedBy: null }] })
+      expect(review.brief).toContain('Save edits while offline.')
+      expect(review.brief).toContain('- Reconnect preserves the edits.')
+      expect(review.brief).toContain(handoff)
+      expect(review.brief).toContain(`Pull request: ${pr}`)
+      expect(review.brief).not.toContain('Privacy first')
+      expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(fresh)
+      const toReviewer = effects.messages.find(m => m.conversationId === review.id && m.recipients.includes(fresh))!
+      expect(toReviewer.text).toBe(`${review.brief}\n\nAcceptance checks:\n- Verdict with the reviewed revision`)
+      const toLead = effects.messages.filter(m => m.conversationId === review.id && m.recipients.includes(lead))
+      expect(toLead.map(m => m.text)).toEqual(['Review opened by itself for #1: Second reviewer reviews it. Cancel it here if it is not needed.'])
+      // Every row of it is the Swarm's own, written as the project's Lead as its other notices are, never as the Engineer.
+      expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.author.kind, m.author.id, m.source?.kind]))
+        .toEqual([['agent', lead, 'auto-review'], ['agent', lead, 'auto-review'], ['agent', lead, 'auto-review']])
+    })
+
+    it('prefers a free Reviewer on another engine than the Engineer\'s', () => {
+      // The Engineer runs on Codex (config). `reviewer` comes first but runs on Codex too; `fresh` runs on Claude.
+      const { f, fresh, reviewer, markReady, reviews } = ready('claude')
+      f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('opens nothing without a link to a pull request of the project\'s repository, or when the Lead marks it ready', () => {
+      const { f, lead, markReady, reviews } = ready()
+      markReady('Ready. Revision abc.')
+      markReady('Ready. https://github.com/example/other/pull/42')
+      markReady(`Ready. ${pr}`, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+      expect(reviews()).toHaveLength(0)
+      f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: null }
+      markReady(`Ready again. ${pr}`)
+      expect(reviews()).toHaveLength(0)
+    })
+
+    it('opens no second review while the first has no verdict, and the Reviewer is woken as before', () => {
+      const { markReady, reviews, reviewer, lead } = ready()
+      markReady(`Ready. ${pr}`)
+      const again = markReady(`Ready, head 2. ${pr}`)
+      expect(reviews()).toHaveLength(1)
+      expect(again.messages.map(m => m.recipients)).toEqual([[lead, reviewer]])
+    })
+
+    it('refuses a second review by hand while the open one has no verdict, naming it, and allows one once it is cancelled', () => {
+      const { f, leadActor, group, markReady, reviews } = ready()
+      markReady(`Ready. ${pr}`)
+      const open = reviews()[0]!
+      const create = () => f.run({ type: 'conversation.create', title: 'Review: Offline editing again', brief: 'Review it.', reviewOf: group,
+        checks: [{ description: 'Verdict', independent: false }] }, leadActor)
+      expect(create).toThrow(`#${open.number} Review: Offline editing already reviews this work and has no verdict yet.`)
+      expect(reviews()).toHaveLength(1)
+      f.run({ type: 'work.cancel', conversationId: open.id, assignmentId: open.assignment!.id, reason: 'Wrong Reviewer' }, leadActor)
+      create()
+      expect(reviews()).toHaveLength(2)
+    })
+
+    it('puts privacy first when the task or the handoff touches sharing, access or confidentiality', () => {
+      const { markReady, reviews } = ready()
+      markReady(`Ready. Readers without access to the project no longer see its groups. ${pr}`)
+      expect(reviews()[0]!.brief.startsWith('Privacy first:')).toBe(true)
+    })
+
+    it('keeps a review with no verdict from being archived by hand while the work it reviews is going', () => {
+      const { f, leadActor, group, built, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      markReady(`Ready. ${pr}`)
+      const review = reviews()[0]!.id
+      expect(() => f.run({ type: 'conversation.archive', conversationId: review, archived: true }, leadActor)).toThrow('no verdict yet')
+      expect(reviews()[0]!.archived).toBe(false)
+      f.run({ type: 'work.cancel', conversationId: group, assignmentId: built, reason: 'Dropped' }, leadActor)
+      f.run({ type: 'conversation.archive', conversationId: review, archived: true }, leadActor)
+      expect(reviews()[0]!.archived).toBe(true)
+    })
+
+    it('waits for a Reviewer when none is free, and tells the Lead to route and start one', () => {
+      const { f, lead, leadActor, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      const effects = markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+    })
+
+    it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {
+      const { f, group, builderActor, built, reviewer, fresh, markReady, reviews } = ready('codex')
+      markReady(`Ready. ${pr}`)
+      const first = reviews()[0]!
+      expect(first.assignment!.agentId).toBe(reviewer)
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      // A verdict that asks for fixes still passes the review's own check: it says a verdict was given (swarm-review).
+      f.run({ type: 'work.check', conversationId: first.id, assignmentId: first.assignment!.id, checkId: first.checks[0]!.id, passed: true,
+        evidence: 'Ready: with fixes — revision d4e5f6, one Important finding.' }, reviewerActor)
+      f.run({ type: 'work.status', conversationId: first.id, assignmentId: first.assignment!.id, status: 'done', result: 'Changes needed.' }, reviewerActor)
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+      // Now only `fresh` runs on another engine than the Engineer's; the earlier head's Reviewer is still preferred.
+      f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
+      f.state.agents.find(a => a.id === fresh)!.configuration.engine = 'claude'
+      markReady(`Fixed: one finding, head 778899. ${pr}`)
+      const delta = reviews().find(c => c.id !== first.id)!
+      expect(delta.assignment!.agentId).toBe(reviewer)
+      expect(delta.brief).toContain(`Delta review: #${first.number} reviewed the earlier head. Review only the changes since.`)
+    })
+
+    it.each([
+      ['machines', { kind: 'machines', machineIds: ['elsewhere'] }],
+      ['model', { kind: 'forbidModel', model: 'test-model' }],
+      ['effort', { kind: 'minEffort', effort: 'max' }],
+    ])('gives the review to no Reviewer the owner\'s %s rule rules out, and leaves it for the Lead', (_, rule) => {
+      const { f, lead, markReady, reviews } = ready()
+      f.run({ type: 'rule.set', rule, text: 'The owner\'s rule.' } as Command)
+      const effects = markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+    })
+
+    it('passes over a Reviewer the owner\'s rules rule out for one they allow', () => {
+      // On Codex the Engineer's engine would make `reviewer` (Claude) the pick; only `fresh`'s machine is allowed.
+      const { f, fresh, markReady, reviews } = ready('codex')
+      f.state.agents.find(a => a.id === fresh)!.machineId = 'allowed'
+      f.run({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['allowed'] }, text: 'Only allowed.' } as Command)
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('passes over a Reviewer that is down for one that is up, and waits when none is up', () => {
+      // `reviewer` would be the pick on another engine than the Engineer's, but its session is gone.
+      const { f, leadActor, lead, reviewer, fresh, markReady, reviews } = ready('codex')
+      f.state.agents.find(a => a.id === reviewer)!.downSince = new Date(500).toISOString()
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+      f.run({ type: 'work.cancel', conversationId: reviews()[0]!.id, assignmentId: reviews()[0]!.assignment!.id, reason: 'Again' }, leadActor)
+      f.state.agents.find(a => a.id === fresh)!.downSince = new Date(500).toISOString()
+      const effects = markReady(`Ready again. ${pr}`)
+      const second = reviews().find(c => c.id !== reviews()[0]!.id)!
+      expect(second.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === second.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+    })
+
+    it('asks for a full review, not a delta, after a review cancelled before its verdict', () => {
+      const { f, leadActor, markReady, reviews } = ready()
+      markReady(`Ready. ${pr}`)
+      const cancelled = reviews()[0]!
+      f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignment!.id, reason: 'Wrong Reviewer' }, leadActor)
+      markReady(`Ready, same head. ${pr}`)
+      const next = reviews().find(c => c.id !== cancelled.id)!
+      expect(next.brief).not.toContain('Delta review')
+    })
   })
 
   it('does not wake a Reviewer that is stopping', () => {
@@ -1878,6 +2148,16 @@ describe('machine.remove', () => {
     expect(f.state.machines!.map(m => m.removal)).toEqual([undefined])
   })
 
+  // A settings save keeps a machine's pause (review of #2084), but nothing of a removed machine is kept.
+  it('starts a machine removed and added again unpaused, though its removal paused it', () => {
+    const { f, removalId } = cleaning()
+    expect(f.state.machines!.map(m => m.paused)).toEqual([true])
+    f.run(cleaned(removalId))
+    f.run({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: false })])
+  })
+
   it('lets the machine owner\'s host acknowledge after the owner left the Swarm', () => {
     const f = fixture()
     f.invite()
@@ -1902,11 +2182,81 @@ describe('machine.remove', () => {
       expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
         text: 'Studio left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.' })])
     expect(f.state.machines).toEqual([])
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
-    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day - 1 })).toThrow('still cleaning up')
     // Its host's late confirmation closes the cleanup without telling anyone again.
     expect(f.run(cleaned(removalId), owner, { now: 1000 + day }).messages).toEqual([])
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Diego's Mac, 2026-10-28: its cleanup never finished, and adding it back said 'still cleaning up' for good. A cleanup that
+  // has waited 30 minutes no longer holds its owner's add: the add goes through and that cleanup is dropped.
+  it('lets its owner add the machine again once its cleanup has waited 30 minutes, and drops that cleanup', () => {
+    const f = fixture()
+    contribute(f, 'owner', 'host', null)
+    f.run({ type: 'machine.remove', machineId: 'host' })
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    const asOwner = (now: number) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now })
+    expect(() => f.run(add, owner, asOwner(1000 + 30 * 60_000 - 1))).toThrow(expect.objectContaining({ code: 'MACHINE_CLEANING' }))
+    f.run(add, owner, asOwner(1000 + 30 * 60_000))
+    expect(f.state.machineCleanups).toBeUndefined()
+    expect(f.state.machines!.map(m => [m.machineId, m.removal])).toEqual([['host', undefined]])
+  })
+
+  it('lets its owner add the machine again over a cleanup recorded before cleanups carried their time', () => {
+    const f = fixture()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'before', machineOwnerId: 'owner' }, { machineId: 'other', removalId: 'kept', machineOwnerId: 'owner' }]
+    f.run({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'other', removalId: 'kept', machineOwnerId: 'owner' }])
+    expect(f.state.machines!.map(m => m.machineId)).toEqual(['host'])
+  })
+
+  it('lets only the owner of an old cleanup add its machine over it', () => {
+    const f = fixture()
+    f.invite()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'before', machineOwnerId: 'peer' }]
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    // Another member is no owner of this machine at all.
+    expect(() => f.run(add, peer, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED' }))
+    // The machine's owner now is not the person whose host owes that cleanup: it still holds.
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow(expect.objectContaining({ code: 'MACHINE_CLEANING' }))
+    f.run(add, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Ken's remote-deepseek and WIN-DELL, 2026-10-28: removed, then their machine accounts deleted, so no host would ever
+  // confirm their cleanups, which stayed for good. A machine whose account is gone takes its cleanups with it.
+  it('drops the cleanups of machines whose account is deleted, on any change, and says nothing', () => {
+    const f = fixture()
+    f.state.machineCleanups = [{ machineId: 'gone', removalId: 'a', machineOwnerId: 'owner' }, { machineId: 'host', removalId: 'b', machineOwnerId: 'owner' },
+      { machineId: 'gone', removalId: 'c', machineOwnerId: 'owner' }]
+    expect(f.run({ type: 'tab.rename', name: 'Tidy' }, owner, { deletedMachineIds: ['gone'] }).messages).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId: 'b', machineOwnerId: 'owner' }])
+    f.run({ type: 'tab.rename', name: 'Tidier' }, owner, { deletedMachineIds: ['host'] })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Review of #1986 (Minor 2, intended): the adds a host makes by itself, the owner's machine running its Lead and a Mac's
+  // Harness Team account joining where the Mac is, take an overdue cleanup's place like the owner's own add; a fresh one
+  // still holds them off without an error.
+  it('lets the automatic adds take an overdue cleanup\'s place, and leaves a fresh one waiting', () => {
+    const f = fixture()
+    const fresh = new Date(1000 + 30 * 60_000 - 1).toISOString()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh },
+      { machineId: 'team', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh }]
+    const add = (machineId: string) => ({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true }) as Command
+    const owners = (now: number, hostMachineId?: string) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner', ...(hostMachineId ? { hostMachineId } : {}) }, now })
+    // Fresh: the owner's host skips its automatic add and nothing changes.
+    f.run(add('host'), owner, owners(1000 + 30 * 60_000 - 1))
+    expect([f.state.machines ?? [], f.state.machineCleanups!.map(c => c.machineId)]).toEqual([[], ['host', 'team']])
+    // Overdue: the owner's host adds its machine, then its Team account joins where that Mac is.
+    const later = 1000 + 60 * 60_000
+    f.run(add('host'), owner, owners(later))
+    f.run(add('team'), owner, owners(later, 'host'))
+    expect(f.state.machines!.map(m => [m.machineId, m.hostMachineId, m.removal])).toEqual([['host', undefined, undefined], ['team', 'host', undefined]])
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
@@ -1937,7 +2287,7 @@ describe('machine.remove', () => {
       expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
         text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
       expect(f.state.machines).toEqual([])
-      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
       expect(visibleState(f.state, owner).machines).toEqual([])
       // Its host still gets the cleanup on its next connection; its later acknowledgement closes it and changes nothing else.
       f.run(cleaned(removalId))
@@ -1954,7 +2304,7 @@ describe('machine.remove', () => {
     expect(visibleState(f.state, owner, away).machines).toEqual([])
     f.run({ type: 'tab.rename', name: 'Still away' }, owner, { now: away })
     f.run({ type: 'tab.rename', name: 'Away a day' }, owner, { now: 1000 + 86_400_000 })
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     // It comes back, is handed that one cleanup, and acknowledges it: nothing comes back to life.
     f.run(cleaned(removalId))
     expect(f.state.machineCleanups).toBeUndefined()
@@ -1976,7 +2326,7 @@ describe('machine.remove', () => {
     expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([expect.objectContaining({
       conversationId: 'lead', text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
     expect(f.state.machines).toEqual([])
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     f.run(cleaned(removalId))
     expect(f.state.machineCleanups).toBeUndefined()
   })
@@ -2551,70 +2901,6 @@ describe('credentials in Swarm chat', () => {
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
-  })
-})
-
-describe('private conversations (an explicit audience)', () => {
-  /** A Swarm with a Lead, a worker, and the peer as a collaborator; the peer opens a private conversation with the Lead. */
-  function privateFixture() {
-    const f = fixture()
-    f.invite()
-    const lead = f.add('lead-harness', 'owner', 'lead', true)
-    const worker = f.add('worker-harness')
-    const group = f.run({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
-      .result.conversationId as string
-    const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-    // Object.assign keeps the fixture's live `state` getter; a spread would copy today's state.
-    return Object.assign(f, { lead, worker, group, agentActor })
-  }
-  const sees = (state: Parameters<typeof visibleState>[0], actor: Actor, group: string) => visibleState(state, actor).conversations.some(c => c.id === group)
-
-  it('shows it to the people listed and the project Lead only, not to the owners or other agents', () => {
-    const f = privateFixture()
-    expect(f.state.conversations.find(c => c.id === f.group)).toMatchObject({ audience: { people: [{ id: 'peer', generation: expect.any(String) }] },
-      agentIds: [f.lead], leadId: f.lead })
-    expect(sees(f.state, peer, f.group)).toBe(true)
-    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
-    expect(sees(f.state, owner, f.group)).toBe(false)
-    expect(sees(f.state, f.agentActor(f.worker), f.group)).toBe(false)
-    expect(() => f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] })).toThrow('unavailable')
-    expect(f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] }, peer).messages[0]!.recipients).toEqual([f.lead])
-  })
-
-  it('lets a person open one only with themselves in it, and a Lead with any project reader', () => {
-    const f = privateFixture()
-    expect(() => f.run({ type: 'conversation.create', title: 'Not mine', brief: '', checks: [], audience: { personIds: ['owner'] } }, peer))
-      .toThrow('yourself')
-    const opened = f.run({ type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }, f.agentActor(f.lead))
-    expect(sees(f.state, owner, opened.result.conversationId as string)).toBe(true)
-    expect(() => f.run({ type: 'conversation.create', title: 'Stranger', brief: '', checks: [], audience: { personIds: ['nobody'] } }, f.agentActor(f.lead)))
-      .toThrow()
-  })
-
-  it('lets only the Lead or a listed person change who is in it, and never makes it public', () => {
-    const f = privateFixture()
-    expect(() => f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] })).toThrow('unavailable')
-    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] }, peer)
-    expect(sees(f.state, owner, f.group)).toBe(true)
-    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: [] }, f.agentActor(f.lead))
-    expect(sees(f.state, peer, f.group)).toBe(false)
-    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
-    const shared = f.group === 'lead' ? '' : f.run({ type: 'conversation.create', title: 'Shared', brief: '', checks: [] }).result.conversationId as string
-    expect(() => f.run({ type: 'conversation.audience', conversationId: shared, personIds: ['owner'] })).toThrow('stays')
-  })
-
-  it('holds only messages and the project Lead', () => {
-    const f = privateFixture()
-    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, peer)).toThrow()
-    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, f.agentActor(f.lead)))
-      .toThrow('only the Lead')
-    expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Work', checks: [{ description: 'Done', independent: false }] }, f.agentActor(f.lead)))
-      .toThrow('chat')
-  })
-
-  it('never puts its work or titles in front of other projects\' Leads', () => {
-    const f = privateFixture()
-    expect(visibleState(f.state, f.agentActor(f.lead)).otherProjectsWork ?? []).toEqual([])
   })
 })
 

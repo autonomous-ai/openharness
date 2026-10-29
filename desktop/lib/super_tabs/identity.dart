@@ -52,6 +52,9 @@ class SuperTabAvatar extends StatelessWidget {
        pattern = true,
        now = null;
 
+  /// The avatar of a roster row, agent or person, so their names start at one inset.
+  static const rowSize = 24.0;
+
   final String identity, name;
   final double size;
   final SuperTabAvatarPicture? picture;

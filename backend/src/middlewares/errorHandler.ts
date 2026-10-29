@@ -1,11 +1,11 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify'
-import { AppError } from '../errors/index.js'
+import { AppError, ValidationError } from '../errors/index.js'
 import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { SuperTabError } from '../superTabs/model.js'
+import { RETRYABLE_SWARM_CODES } from '../superTabs/retry.js'
 
 /** The Swarm 503s that waiting fixes. Others (no attachment store, no picture uploads) are this server's setup. */
-const RETRYABLE_SWARM_CODES = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
 
 /** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
 const BUSY_RETRY_AFTER_SECONDS = 2
@@ -34,6 +34,7 @@ export async function errorHandler(
       path: request.url,
       method: request.method,
       message: error.message,
+      ...(error instanceof ValidationError && error.fields.length ? { fields: error.fields } : {}),
     })
     sendError(reply, error.message, error.code || 'APP_ERROR', error.statusCode)
     return
@@ -52,11 +53,11 @@ export async function errorHandler(
   // A unique key still taken after the retries (P2002) is a genuine duplicate: a conflict, never a 500.
   const prisma = prismaCode(error)
   if (prisma === 'P2028') {
-    logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, message: error.message })
+    logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, error: error.message })
     return sendBusy(reply, 'The server is busy. Try again in a moment.', 'BUSY')
   }
   if (prisma === 'P2002') {
-    logger.warn('Duplicate key', { path: request.url, method: request.method, message: error.message })
+    logger.warn('Duplicate key', { path: request.url, method: request.method, error: error.message })
     return sendError(reply, 'This already exists, so nothing new was saved.', 'DUPLICATE', 409)
   }
 

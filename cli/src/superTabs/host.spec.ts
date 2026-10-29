@@ -14,6 +14,7 @@ import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
+import { createAccountHttp } from '../gateway/accountHttp.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -78,6 +79,14 @@ describe('current Swarm role lookup', () => {
     expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+  })
+  it('derives a Buddy from its owner while it is in its chat, so its skill stays the Buddy\'s', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent],
+        conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
   })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
@@ -150,6 +159,23 @@ describe('the host tick on the host form', () => {
     await host.tick()
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
+  })
+  // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
+  // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
+  it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
+    const t = setup(), host = t.open()
+    const stalled = () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status: 200 })
+    const gateway = createAccountHttp({ tokens: { accessToken: async () => 'token' }, account: () => ({ machineId: 'account', signIn: null }),
+      computer: { id: 'computer', name: 'Mac', hostname: 'mac' }, environment: 'test', base: () => 'https://backend.invalid',
+      request: vi.fn<typeof fetch>(async () => stalled()), log: vi.fn() })
+    vi.mocked(t.call).mockImplementation((method, path, body) => gateway.backend(method, path, body))
+    await host.tick()
+    t.wait(1_000)
+    await host.tick()
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.',
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.'])
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
   })
 })
 
@@ -407,6 +433,20 @@ describe('Super Tab native delivery handoff', () => {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'answered' } } }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      return original(method, path, body)
+    })
+    await host.tick(); await host.reconcileReceipts()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries).toEqual({})
+  })
+  it('never types a held delivery the backend ended, and retires its journal entry', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_user')
+    // Held past its limit, or its group archived: the backend's delivery pass ended it and lists it no more.
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
       if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
       return original(method, path, body)
     })
@@ -765,6 +805,20 @@ describe('a delivery poll or claim that keeps failing', () => {
     expect(claims.n).toBe(4)
   })
 
+  // 2026-10-28: a Lead's list failed for 45 minutes and the log said only "This already exists, so nothing new was saved."
+  it('says whose delivery list keeps failing, with the backend\'s code, since when and how often', async () => {
+    const t = setup(), host = t.open()
+    failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(t.log.mock.calls.slice(-2).map(call => call[0])).toEqual([
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 1 try; next try in 1 s.',
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 2 tries; next try in 2 s.',
+    ])
+  })
+
   it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {
     const t = setup(), host = t.open()
     const lists = failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
@@ -848,6 +902,16 @@ describe('the super-tab command in delivered input', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
     expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
+  })
+  it('names a Buddy\'s commands without --agent: its pane says who it is, and its guard refuses any --agent (review 2 of #2092)', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand: vi.fn(async () => 'harness super-tab') }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
+    expect(text).not.toContain('--agent')
   })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
@@ -1530,6 +1594,30 @@ describe('the progress a host reports', () => {
   })
 })
 
+describe('the beat a host keeps', () => {
+  // 2026-10-28: the Mac Studio's reading waited behind git and launches in its pass, and its agents showed as Down.
+  it('sends its machine\'s reading again every second\'s check while a launch holds its pass up', async () => {
+    const t = setup()
+    const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: [],
+      starts: [{ id: 'start', dispatched: false }] }
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
+      ? { status: 200, body: { success: true, data: hostForm([t.row], { pools: [pool] }) } } : roster(method, path, body))
+    const local = { machineId: 'machine-1', request: vi.fn(async () => ({})), close: vi.fn() }
+    const start = vi.fn(() => new Promise(() => {}))
+    let clock = 0
+    const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
+      prepare: async () => null, start: start as never, now: () => clock } })
+    const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
+    host.start()
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    expect(readings()).toHaveLength(1)
+    clock += 15_000
+    await vi.waitFor(() => expect(readings()).toHaveLength(2), { timeout: 3_000 })
+    expect(readings()[1]![2]).toEqual(readings()[0]![2])
+  })
+})
+
 describe('the members a host lets watch its agents', () => {
   it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -1576,6 +1664,41 @@ describe('the members a host lets watch its agents', () => {
     expect(source.known()).toBeNull()
     expect(source.allows(peer)).toBe(false)
     expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+  })
+
+  it('tells a member watching the current Lead to retry through a stop, and refuses other Swarms\', ordinary and a former Lead\'s shares for good', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    // The Lead as the backend sends it: marked confidential, and its listed members watch it (Ken, 2026-10-28).
+    const lead = (membersWatch: boolean) => ({ tabId: 'tab', confidential: true, membersWatch,
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', name: 'River' }, observers: [{ email: 'peer@example.com', userId: 'peer' }] })
+    let rows: unknown[] = [lead(true)], clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
+      ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const source = observerSource(dir, () => 'machine-1', () => clock)
+    const grant = (tab: string | null, recipientEmail = 'peer@example.com') => ({ tab, agentId: 'harness', recipientEmail }) as never
+    const member = grant('super:tab'), otherSwarm = grant('super:other'), ordinary = grant(null)
+    const first = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(first)
+    await first.tick(); clock += 201
+    expect(source.allows(member)).toBe(true)
+    // Its backend link drops, or the daemon restarts for an update: viewing pauses, and the member is told to try again.
+    first.stop(); clock += 201
+    expect(source.allows(member)).toBe(false)
+    expect(source.paused(member)).toBe(true)
+    // As for any Swarm share, the next roster decides one of this Swarm's; another Swarm's or an ordinary one is closed.
+    for (const refused of [otherSwarm, ordinary]) expect(source.paused(refused)).toBe(false)
+    // The next host's first roster lets the member watch again.
+    const next = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(next)
+    await next.tick(); clock += 201
+    expect(source.allows(member)).toBe(true)
+    // No longer the Lead: closed, and a stop after that does not reopen it to a retry.
+    rows = [lead(false)]
+    clock += 1_000; await next.tick(); clock += 201
+    expect(source.allows(member)).toBe(false)
+    next.stop(); clock += 201
+    expect(source.paused(member)).toBe(false)
   })
 })
 

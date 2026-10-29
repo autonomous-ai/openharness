@@ -5,8 +5,8 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart } from '../model.js'
-import { mentionsWaiting } from '../mentions.js'
+import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -32,6 +32,9 @@ import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups'>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
+/** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
+const MACHINE_READS_MS = 15_000
+type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[]]
 
 export class SwarmReads {
   private readonly db: PrismaClient
@@ -43,6 +46,8 @@ export class SwarmReads {
     this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
   }
   private readonly avatarLinks: AvatarLinks | null
+  /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
+  private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
 
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
     const t0 = this.now()
@@ -165,14 +170,35 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, otherWorkspaceMachines, counts, newest] = await Promise.all([
-      state.machines?.length ? this.store.teamMachines(tx, state) : [],
-      state.machines?.length ? this.store.otherWorkspaceMachines(tx, state) : [],
-      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
+    const [[teamMachines, otherWorkspaceMachines], counts, newest] = await Promise.all([
+      this.machineLookups(state),
+      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
       view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines,
-        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }, state) }
+        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
+          decisionsDigest: counts[1].digest } : {}) }, state) }
+  }
+
+  /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the
+   *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
+   *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
+  private machineLookups(state: SuperTabState): Promise<MachineReads> {
+    if (!state.machines?.length) return Promise.resolve([[], []])
+    const now = this.now()
+    const key = JSON.stringify([state.id, state.environment, state.workspaceId ?? null, state.machines.map(m => m.machineId).sort()])
+    const kept = this.machineReads.get(key)
+    if (kept && now >= kept.at && now - kept.at < MACHINE_READS_MS) return kept.read
+    for (const [old, entry] of this.machineReads) {
+      if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
+      this.machineReads.delete(old)
+    }
+    const entry = { at: now, read: Promise.all([this.store.teamMachines(this.db, state), this.store.otherWorkspaceMachines(this.db, state)]) }
+    this.machineReads.delete(key)
+    this.machineReads.set(key, entry)
+    // A failed lookup is never reused.
+    entry.read.catch(() => { if (this.machineReads.get(key) === entry) this.machineReads.delete(key) })
+    return entry.read
   }
 }

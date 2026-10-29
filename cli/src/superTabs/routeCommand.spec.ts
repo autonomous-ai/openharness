@@ -220,6 +220,13 @@ describe('routeTask', () => {
     expect(await models('other')).toContain('sonnet')
     expect(await models('lead')).not.toContain('sonnet')
   })
+  it('never offers a Buddy: it brainstorms with its owner and is never assigned work', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, buddyOf: { personId: 'peer', generation: 'g' } } : a)
+    const s = scoped({ tab: t })
+    await routeTask(input, s, where as never, opener(), () => 'op')
+    const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
+    expect(titles.some(c => c.startsWith('Multiply'))).toBe(false)
+  })
   it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
     const offered = async (reviewer: boolean, reviewGroup: boolean) => {
       const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' && reviewer ? { ...a, role: 'reviewer' } : a)
@@ -464,6 +471,31 @@ describe('routeTask', () => {
     expect(v1.operationId).toBe(phase1.operationId)
     expect(v1.command.decision.assessment).not.toHaveProperty('size')
     expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
+  })
+  it('records the job kind, leaving only it out for a backend from before kinds, and phase 1 fields only after a second refusal', async () => {
+    const kinded = { ...input, assessment: { ...input.assessment, kind: 'docs' } }
+    const commands = (s: ReturnType<typeof scoped>) => s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.assessment)
+    const current = scoped()
+    await routeTask(kinded, current, where as never, opener(), () => 'op')
+    expect(commands(current)).toEqual([{ difficulty: 'medium', risk: 'low', why: 'Endpoint.', size: 'medium', kind: 'docs' }])
+    const refusing = (keys: string[]) => {
+      const s = scoped(), base = s.getMockImplementation()!
+      s.mockImplementation(async payload => {
+        const sent = payload.action === 'command' ? JSON.stringify(payload.command) : ''
+        return keys.some(key => sent.includes(`"${key}"`)) ? { error: 'VALIDATION_ERROR', detail: `Unrecognized key: "${keys[0]}"`, status: 400 } : base(payload)
+      })
+      return s
+    }
+    const beforeKinds = refusing(['kind":"docs'])
+    expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size']])
+    const beforePhase1 = refusing(['kind":"docs', 'size'])
+    expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    // A task with no kind never needs the extra try.
+    const plain = refusing(['size'])
+    await routeTask(input, plain, where as never, opener(), () => 'op')
+    expect(commands(plain)).toHaveLength(2)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())

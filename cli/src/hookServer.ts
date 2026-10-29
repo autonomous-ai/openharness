@@ -59,6 +59,8 @@ export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: read
 export interface PairOutcome {
   status: number
   body: Record<string, unknown>
+  /** A busy backend's Retry-After, passed on where an answer is forwarded whole (the usage report). */
+  retryAfterMs?: number
 }
 
 export interface HookServerHandlers {
@@ -1101,6 +1103,8 @@ export function startHookServer(
         }
         try {
           const result = await handlers.onProductUsageReport(report)
+          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
+          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return

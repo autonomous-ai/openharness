@@ -248,14 +248,14 @@ void main() {
       expect(
         rowTooltip(tester, f, 1),
         contains(
-          'Claude opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
+          'Claude Opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
         ),
       );
       expect(
         rowTooltip(tester, f, 1),
         contains('Sage · Engineer · openharness'),
       );
-      expect(f.lineText(tester, 1), 'Working · Test host · opus unknown');
+      expect(f.lineText(tester, 1), 'Working · Test host · Opus');
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(tester.getCenter(f.row(1)));
@@ -265,6 +265,34 @@ void main() {
       await f.close(tester);
     },
   );
+
+  // The PM's row and details read the configuration's raw "opus" or "claude-opus-5-5" (2026-10-28): both name the
+  // model as people know it.
+  testWidgets('agent details name the model by its display name', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['agents'] as List)[1]['configuration'] = {
+      'engine': 'claude',
+      'model': 'claude-opus-5-5',
+      'effort': 'auto',
+    };
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.lineText(tester, 1), contains('Opus 5.5'));
+    expect(f.lineText(tester, 1), isNot(contains('unknown')));
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Opus 5.5'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('claude-opus-5-5'), findsNothing);
+    await f.close(tester);
+  });
 
   testWidgets('agent tooltip omits data that neither state nor host knows', (
     tester,
@@ -576,6 +604,56 @@ void main() {
   });
 
   testWidgets(
+    'a Codex Buddy\'s mode, which New Harness does not offer, reads by name',
+    (tester) async {
+      final f = await fixture(tester);
+      f.app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a1',
+          name: 'Multiply',
+          engine: 'codex',
+          permissionMode: 'readOnlyAsk',
+        ),
+      ];
+      (f.server.state['agents'] as List)[1]['configuration'] = {
+        'engine': 'codex',
+      };
+      await f.controller.refresh();
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Read only, asks you'), findsOneWidget);
+      expect(find.text('Unrecognized setting'), findsNothing);
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
+    'a Claude Buddy\'s mode, which New Harness does not offer, reads by name',
+    (tester) async {
+      final f = await fixture(tester);
+      f.app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a1',
+          name: 'Multiply',
+          engine: 'claude',
+          permissionMode: 'buddy',
+        ),
+      ];
+      (f.server.state['agents'] as List)[1]['configuration'] = {
+        'engine': 'claude',
+      };
+      await f.controller.refresh();
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Reads only, never asks'), findsOneWidget);
+      expect(find.text('Unrecognized setting'), findsNothing);
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'question details name the machine owner only for an on-screen question',
     (tester) async {
       final f = await fixture(tester);
@@ -678,7 +756,7 @@ void main() {
     await tester.tap(f.row(0));
     await tester.pumpAndSettle();
     expect(find.text('Claude'), findsOneWidget);
-    expect(find.text('sonnet'), findsOneWidget);
+    expect(find.text('Sonnet'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
     await f.close(tester);
@@ -877,6 +955,38 @@ void main() {
     expect(f.inRow(0, find.text('PM')), findsOneWidget);
     await f.close(tester);
   });
+
+  testWidgets(
+    'Buddies are personal: with three running, nobody sees any in Agents, the reader\'s own included',
+    (tester) async {
+      for (final account in ['owner', 'maya']) {
+        final f = await fixture(tester, account: account);
+        final agents = f.server.state['agents'] as List;
+        // The owner's Buddy and another person's, both in the project, and a third on the same machine.
+        agents[1]['buddyOf'] = {'personId': 'owner', 'generation': 'fixture'};
+        agents[3]['buddyOf'] = {'personId': 'maya', 'generation': 'fixture'};
+        agents.add(<String, Object>{
+          ...(agents[3] as Map<String, Object>),
+          'id': 'agent-4',
+          'harnessId': 'a4',
+          'displayName': 'Echo',
+          'buddyOf': {'personId': 'sam', 'generation': 'fixture'},
+        });
+        await f.controller.refresh();
+        await f.show(tester);
+        expect(f.row(0), findsOneWidget, reason: '$account sees the PM');
+        for (final buddy in [1, 3, 4]) {
+          expect(
+            f.row(buddy),
+            findsNothing,
+            reason: '$account sees no Buddy (agent-$buddy)',
+          );
+        }
+        expect(find.text('Buddy'), findsNothing);
+        await f.close(tester);
+      }
+    },
+  );
 
   testWidgets('custom role name appears in the roster and agent details', (
     tester,

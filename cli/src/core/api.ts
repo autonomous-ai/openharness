@@ -1218,11 +1218,21 @@ export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolea
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
  *  order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
+export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number; chat?: SwarmChat; notice?: LeadNotice }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
-/** A Lead's last message, for its card. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
+/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face. */
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string }
+/** A project's three places to chat (design 2026-10-28-round-dial-swarm-chat): its Lead conversation, the reader's private
+ *  chat (`pm`: their Buddy chat, where the PM's private lines land since Buddies replaced Chat with PM), and a group. */
+export type ChatKind = 'lead' | 'pm' | 'group'
+/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's PM chat or a group
+ *  open. `working` only for a working group, `since` from one of its agents' turn here. */
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
+/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline: the dial's alert. */
+export interface LeadNotice { chat: 'lead' | 'pm'; chatId: string; id: string; text: string; at: number }
+/** The conversation the window has open in a Swarm tab. */
+export interface CardFocus { tabId: string; conversationId: string }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {
@@ -1481,6 +1491,26 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
 
+/**
+ * What the account's own apps away from this desk may ask of this machine and hear from it, beyond what an owner may
+ * (backendSocket.ts `remoteAppPolicy`). Set only on a Harness Team daemon, by the Swarm (superTabs/inCore/teamApps.ts):
+ * there the account is the Mac's owner's, and another person's Product Manager may run, holding people's private chats.
+ */
+export interface RemoteAppPolicy {
+  /** Why a request is refused, or null to answer it as for any owner. */
+  refuse(type: string, payload: Record<string, unknown>): { error: string; message: string } | null
+  /** A reply's payload as the apps may see it. */
+  reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
+  /** An up-frame as the apps may hear it, or null to withhold it. */
+  event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
+  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
+   *  (lib/terminalStreamManager.ts `watchOnly`). */
+  watchOnly(): boolean
+  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
+   *  (lib/terminalStreamManager.ts `closedTo`). */
+  isConfidential(id: string): boolean
+}
+
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its
  *  identity was paired under (null for none) for naming it to the person, its identity's public key (the
  *  Wi-Fi device's requests are kept apart by it), and whether it is on a device's direct link rather than
@@ -1654,6 +1684,8 @@ export const LANE_OFF: LaneSeal = {
 export interface HttpAnswer {
   status: number
   body: Record<string, unknown>
+  /** A busy or failing answer's Retry-After, when it had one (gateway/accountHttp.ts). */
+  retryAfterMs?: number
 }
 
 /** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one

@@ -244,6 +244,15 @@ describe('creating an agent', () => {
     ownerRelay.mockClear()
     await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
     expect(ownerRelay).not.toHaveBeenCalled()
+    // A Codex launch in a home of its own (a Swarm Product Manager's): the relay readies, and asks about, that home.
+    await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' }))
+    expect(ownerRelay).toHaveBeenCalledWith('codex', '/fixture/pm-home/codex')
+    // A relay that cannot sign that home in refuses the launch with why: no pane is made.
+    vi.mocked(createAndRegisterPane).mockClear()
+    const refused = vi.fn(async () => ({ refused: 'No relay here.' }))
+    expect(await setup({ ownerRelay: refused }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' })))
+      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', detail: 'No relay here.' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
@@ -842,6 +851,23 @@ describe('creating an agent', () => {
         await create(request({ agent: 'reviewer', startedBy: 'agent' }))
         expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
           '--agent', 'reviewer', `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
+      } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
+    })
+
+    it('gives a Buddy none of the machine MCP servers: it starts no MCP server at all (review 3 of #2092)', async () => {
+      const { writeMachineMcp } = await import('../../lib/machineMcp.js')
+      const { rmSync } = await import('node:fs')
+      const { env } = await import('../../config/env.js')
+      writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
+      try {
+        const { create } = setup()
+        const launched = async (role: 'buddy' | 'dev') => {
+          vi.mocked(buildEngineLaunchArgv).mockClear()
+          expect(await create(request({ cwd: folder(), swarmRole: role }))).toMatchObject({ ok: true })
+          return JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])
+        }
+        expect(await launched('dev')).toContain('lamp-mcp')
+        expect(await launched('buddy')).not.toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 

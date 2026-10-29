@@ -974,15 +974,16 @@ class AppNotifier extends ChangeNotifier {
   bool get inForeground => foreground.value;
 
   /// Whether the window can be seen at all: in front, or in sight behind the window that has focus
-  /// (`inactive`). A browser tab behind others, or a minimised window, cannot.
-  bool _inSight = true;
+  /// (`inactive`). A browser tab behind others, or a minimised window, cannot. Harness Monitor's
+  /// page reads every machine while it is seen, and stops when this turns false.
+  final ValueNotifier<bool> inSight = ValueNotifier(true);
 
   /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
   void appLifecycleChanged(AppLifecycleState? state) {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
-    _inSight =
+    inSight.value =
         state == null ||
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
@@ -1487,7 +1488,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   final experimentalFeatures = ExperimentalFeaturesStore(
-    pollInterval: kUnderTest ? Duration.zero : const Duration(seconds: 30),
+    pollInterval: kUnderTest
+        ? Duration.zero
+        : ExperimentalFeaturesStore.safetyNet,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
@@ -1755,7 +1758,7 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
-    viewStorage: localStore ?? swarmViewStore(),
+    viewStorage: swarmViewStore(beside: localStore),
     upload: uploadWith(() => api),
     avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
@@ -3626,6 +3629,7 @@ class AppNotifier extends ChangeNotifier {
     final removed = swarms.removeAt(index);
     if (removed.superTabId case final tabId?) {
       _rememberSuperTabVisibility(tabId, false);
+      superTabs.release(tabId);
     }
     Swarm? replacement;
     if (swarms.isEmpty) {
@@ -4856,6 +4860,20 @@ class AppNotifier extends ChangeNotifier {
 
   static const offlineRetryInterval = Duration(seconds: 5);
 
+  /// How long an offline machine of another computer waits between asks while an agent waits on it
+  /// ([_pollOfflineMachine]); the last repeats. Each ask is a whole machine-list read from the
+  /// backend, since nothing pushes a machine coming back to this window: every 5 s it was 12 reads
+  /// a minute for one sleeping computer, in every window (WebSocket roadmap, Phase 2 item 4). It
+  /// ends at the backend's own retry-after for an offline machine (`OFFLINE_RETRY_AFTER_MS`), and
+  /// Retry asks at once. This computer's own daemon keeps [offlineRetryInterval]: that probe
+  /// never reaches the backend.
+  static const remoteOfflineRetryDelays = <Duration>[
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 20),
+    Duration(seconds: 30),
+  ];
+
   /// Waits before each automatic reattach of a pane whose stream died while its machine stayed
   /// reachable; the last one repeats. A pane used to get one reopen and then sit on Reconnect until
   /// someone clicked it, in whatever tab it was (2026-10-16).
@@ -5360,6 +5378,10 @@ class AppNotifier extends ChangeNotifier {
 
   /// What a machine hears the moment its socket is up — first connect, or a
   /// reconnect after its daemon restarted, which has forgotten all of it.
+  /// [machineId]'s socket, if it has one: the test's stand-in, or the pool's.
+  WsConn? _connectionOf(String machineId) =>
+      connectionForTest?.call(machineId) ?? _pool?[machineId];
+
   void _onMachineConnected(String machineId, MachineState machine) {
     machine._selectedConnection =
         connectionForTest?.call(machineId) ?? _pool?[machineId];
@@ -5662,6 +5684,18 @@ class AppNotifier extends ChangeNotifier {
         null => null,
       };
 
+  /// The conversation open in this Swarm tab (its Lead's, Chat with PM or a
+  /// group), which the round dial's face follows (design
+  /// 2026-10-28-round-dial-swarm-chat). Left out on the machines view and
+  /// before the Swarm has loaded: the dial then shows each project's Lead.
+  /// A change of it re-announces through `onSelection`, as a project's does.
+  String? _dialConversation(String tabId) {
+    final controller = superTabs.peek(tabId);
+    if (controller == null || controller.devicesSelected) return null;
+    final id = controller.selectedId;
+    return controller.snapshot?.conversation(id) == null ? null : id;
+  }
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5729,6 +5763,7 @@ class AppNotifier extends ChangeNotifier {
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
             'projectId': ?_rememberDialProject(tabId),
+            'conversationId': ?_dialConversation(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)
@@ -8721,9 +8756,45 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The backend refused to select [machine] ([code]), straight or through this computer's daemon.
+  void _selectRefused(MachineState machine, String code) {
+    final name = machine.machine.displayName;
+    if (code == 'NOT_YOUR_MACHINE' && machine.machine.machineShare != null) {
+      // Its owner stopped sharing it: no retry brings it back, and the list drops it.
+      _noteSharingEnded(machine.machine);
+      _lastError =
+          '${machine.machine.machineShare!.owner} stopped sharing $name with you.';
+      _lastErrorRetryable = false;
+      _sharingEndedError = (
+        machineId: machine.machine.machineId,
+        text: _lastError!,
+      );
+      unawaited(refreshMachines());
+    } else {
+      _lastError = machineSelectErrorText(code, name);
+      _lastErrorRetryable =
+          code != 'NOT_YOUR_MACHINE' && code != 'MACHINE_ENV_MISMATCH';
+      // Removed from the account: its socket has stopped (WsConn), and the account's list, read
+      // again, takes it out of the list and its tabs. Prod, 2026-10-28: a laptop removed in
+      // September was still selected every few seconds.
+      if (code == 'NOT_YOUR_MACHINE') unawaited(refreshMachines());
+    }
+    machine.connectionStatus = ConnectionStatus.disconnected;
+  }
+
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
     if (machine == null) return;
+    // The daemon's relay closing for a refusal no redial changes (WsConn), with the backend's code.
+    if (finalSelectRefusals.contains(reason)) {
+      productConnections.refused(
+        machineId,
+        ProductHealthMeasure.connectErrorOther,
+      );
+      _selectRefused(machine, reason);
+      notifyListeners();
+      return;
+    }
     productConnections.refused(
       machineId,
       code == 4404
@@ -9600,6 +9671,9 @@ class AppNotifier extends ChangeNotifier {
         _stopOfflineRetry(entry.key);
         _stopLinkRetry(entry.key);
         _stopAgentSyncTimer(entry.key);
+        // The socket goes too, as on mobile: left in the pool it kept selecting a machine the
+        // backend refuses (roadmap Phase 1.1, 2026-10-28), and nothing here looked at it again.
+        unawaited(_pool?.closeMachine(entry.key));
       }
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
@@ -9648,6 +9722,11 @@ class AppNotifier extends ChangeNotifier {
           reportedOnline != null &&
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
         unawaited(_applyInventoryNodeStatus(state, reportedOnline));
+      }
+      // A relayed machine that was off waits for word it is back (WsConn.isParked), and this
+      // list is that word, whether or not this row ever read as offline.
+      if (!state.isLocalMachine && reportedOnline == true) {
+        _connectionOf(machine.machineId)?.wake('listed online');
       }
     }
     // A list that arrived but does not name this computer (a stale copy from before this computer
@@ -9755,7 +9834,7 @@ class AppNotifier extends ChangeNotifier {
   /// and not while recovery is the one asking (a failed or stale list, see
   /// [_scheduleMachineRecovery]) or a reload is open, so two never read side by side.
   bool get _deafReadWanted =>
-      _inSight &&
+      inSight.value &&
       _viewerIsDeaf &&
       _machineRecoveryTimer == null &&
       _retryInFlight == null;
@@ -9848,10 +9927,32 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_offlineRetryTimers.containsKey(machineId)) return;
+    if (!machine.isLocalMachine) {
+      _scheduleRemoteOfflinePoll(machineId, 0);
+      return;
+    }
     _offlineRetryTimers[machineId] = Timer.periodic(
       offlineRetryInterval,
       (_) => unawaited(_pollOfflineMachine(machineId)),
     );
+  }
+
+  /// The [attempt]th ask of [remoteOfflineRetryDelays], then the next once it answered, until
+  /// [_stopOfflineRetry] takes its timer away.
+  void _scheduleRemoteOfflinePoll(String machineId, int attempt) {
+    final delay = remoteOfflineRetryDelays[min(
+      attempt,
+      remoteOfflineRetryDelays.length - 1,
+    )];
+    late final Timer timer;
+    timer = Timer(delay, () async {
+      await _pollOfflineMachine(machineId);
+      if (_disposed || !identical(_offlineRetryTimers[machineId], timer)) {
+        return;
+      }
+      _scheduleRemoteOfflinePoll(machineId, attempt + 1);
+    });
+    _offlineRetryTimers[machineId] = timer;
   }
 
   void _stopOfflineRetry(String machineId) {
@@ -12039,6 +12140,11 @@ class AppNotifier extends ChangeNotifier {
     if (machineStates[machineId]?.machine.isShared == true) {
       throw StateError('This harness is shared with view-only access.');
     }
+    // A machine id the loaded list does not name (a deleted machine a pane or a Swarm agent still
+    // names) gets no socket: it would only select a machine the backend refuses (roadmap Phase 1.1).
+    if (_machineInventoryLoaded && !machineStates.containsKey(machineId)) {
+      throw StateError('This machine is no longer on your account.');
+    }
     final testConnection = connectionForTest;
     if (testConnection != null) return testConnection(machineId);
     // The local-manual dev fixture exercises a locally-run backend+node stack directly (no real
@@ -14126,9 +14232,27 @@ class AppNotifier extends ChangeNotifier {
     int? beforeTurn,
     int? maxChars,
   }) async {
+    final reply = await readSessionTailReply(
+      machineId,
+      sessionId,
+      beforeTurn: beforeTurn,
+      maxChars: maxChars,
+    );
+    return reply == null || reply['error'] != null ? null : reply;
+  }
+
+  /// [readSessionTail]'s reply with its refusal kept (`NOT_INDEXED`: the
+  /// machine's index no longer holds the session). Null when the machine did
+  /// not answer.
+  Future<Map<String, dynamic>?> readSessionTailReply(
+    String machineId,
+    String sessionId, {
+    int? beforeTurn,
+    int? maxChars,
+  }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
-      final reply = await _conn(machineId).request(
+      return await _conn(machineId).request(
         'session_tail',
         payload: {
           'sessionId': sessionId,
@@ -14137,8 +14261,11 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 4),
       );
-      if (reply['error'] != null) return null;
-      return reply;
+    } on WsRequestFailure catch (failure) {
+      // The connection throws a refusal; it is still an answer. Swallowed, a
+      // NOT_INDEXED row read as no answer and was re-read every 5 seconds:
+      // 2,139 failed reads in 3 hours from one computer (2026-10-29).
+      return {...failure.payload, 'error': failure.code};
     } catch (_) {
       return null;
     }
@@ -17392,6 +17519,7 @@ class AppNotifier extends ChangeNotifier {
       _startOfflineRetry(machine);
     } else {
       _stopOfflineRetry(machineId);
+      if (!machine.isLocalMachine) _connectionOf(machineId)?.wake('online');
       if (wasOnline == false) {
         _markSessionsUnreachable(
           machine,
@@ -21341,26 +21469,7 @@ class AppNotifier extends ChangeNotifier {
         await _applyNodeStatus(machine, online, why: 'node_status');
         break;
       case 'machine_select_error':
-        final code = '${payload['error'] ?? ''}';
-        final name = machine.machine.displayName;
-        if (code == 'NOT_YOUR_MACHINE' &&
-            machine.machine.machineShare != null) {
-          // Its owner stopped sharing it: no retry brings it back, and the list drops it.
-          _noteSharingEnded(machine.machine);
-          _lastError =
-              '${machine.machine.machineShare!.owner} stopped sharing $name with you.';
-          _lastErrorRetryable = false;
-          _sharingEndedError = (
-            machineId: machine.machine.machineId,
-            text: _lastError!,
-          );
-          unawaited(refreshMachines());
-        } else {
-          _lastError = machineSelectErrorText(code, name);
-          _lastErrorRetryable =
-              code != 'NOT_YOUR_MACHINE' && code != 'MACHINE_ENV_MISMATCH';
-        }
-        machine.connectionStatus = ConnectionStatus.disconnected;
+        _selectRefused(machine, '${payload['error'] ?? ''}');
         break;
       case 'agent_synced':
         final raw = payload['agent'];
@@ -21800,6 +21909,7 @@ class AppNotifier extends ChangeNotifier {
     _stopWakeFollowers();
     modelStarts.dispose();
     foreground.dispose();
+    inSight.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
     agentUnread.dispose();

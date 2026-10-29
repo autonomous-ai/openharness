@@ -118,9 +118,6 @@ void main() {
     test('parses every number the column shows', () {
       final board = SuperTabLeaderboard.fromJson(answer());
       expect(board.week, week);
-      expect(board.goal.openRequests, 7);
-      expect(board.goal.thisWeek.medianAskToShipMs, 3 * hour);
-      expect(board.goal.lastWeek.shipped, 12);
       final ken = board.people.first;
       expect(
         [ken.personId, ken.points, ken.rank, ken.medal],

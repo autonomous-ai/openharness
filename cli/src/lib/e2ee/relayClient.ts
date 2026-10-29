@@ -16,6 +16,7 @@ import type { TerminalBinaryClear } from '../terminalBinary.js'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
+import { declaredClientQuery } from '../declaredClient.js'
 
 type Frame = Record<string, unknown>
 
@@ -209,7 +210,7 @@ export async function connectWithPassword(opts: {
    *  machineId gets pinned back by a target that understands it, so the link works both ways. */
   self?: { machineId?: string; kind: 'machine' | 'viewer'; label?: string }
 }): Promise<PwConnectResult> {
-  const url = `${opts.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(opts.autonomousEnv)}`
+  const url = `${opts.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(opts.autonomousEnv)}&${declaredClientQuery('link')}`
   const ws = new WebSocket(url, [opts.accessToken])
   const sid = C.newPairId()
   const sidB64 = C.b64e(sid)

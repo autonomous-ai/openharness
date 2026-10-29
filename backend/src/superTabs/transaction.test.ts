@@ -62,6 +62,12 @@ describe('Swarm transactions', () => {
     await expect(transaction(other as never, async () => 1, async () => {})).rejects.toThrow('boom')
     expect(other.$transaction).toHaveBeenCalledTimes(1)
   })
+
+  it('retries a transient unique key conflict and returns the successful attempt', async () => {
+    const db = flaky(Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }))
+    expect(await transaction(db as never, async () => 'committed', async () => {})).toBe('committed')
+    expect(db.$transaction).toHaveBeenCalledTimes(2)
+  })
 })
 
 /** A database whose commit fails with each of `failures` in turn, after the body has run, as a write conflict at commit does. */

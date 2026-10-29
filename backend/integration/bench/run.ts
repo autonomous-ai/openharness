@@ -7,6 +7,7 @@ import { localDatabase } from './mongo.js'
 import { readProfile, renderProfile, startProfiling } from './profile.js'
 import { renderMarkdown } from './report.js'
 import { benchStamps } from './stamps.js'
+import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
 
 /** `npm run bench:swarm-state -- [options] [--profile]` (README.md). Writes `<driver>-<time>.json` and `.md` to the results
  *  folder; with `--profile`, every database operation of the run goes through Mongo's profiler and the report adds what each
@@ -16,6 +17,8 @@ async function main() {
   const { config, out, driver, cache } = parseArgs(argv.filter(arg => arg !== '--profile'))
   const folder = out ?? join(process.cwd(), 'integration/bench/results')
   const database = await localDatabase()
+  // As each server does at startup (server.ts): hot reads name the indexes the database has.
+  await listGroupIndexes(database.db)
   const stamps = await benchStamps(cache)
   try {
     if (profile) await startProfiling(database.db)

@@ -270,6 +270,9 @@ class SuperTabParts {
     if (_derived['mentionsWaiting'] case final num waiting) {
       state['mentionsWaiting'] = waiting.toInt();
     }
+    if (_derived['mentionsDigest'] case final String digest) {
+      state['mentionsDigest'] = digest;
+    }
     if (_derived['decisionsWaiting'] case final num waiting) {
       state['decisionsWaiting'] = waiting.toInt();
     }
