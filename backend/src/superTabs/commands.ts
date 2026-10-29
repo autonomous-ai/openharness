@@ -421,7 +421,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
+  // So does choosing one's own username (usernames.ts).
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -548,7 +549,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,

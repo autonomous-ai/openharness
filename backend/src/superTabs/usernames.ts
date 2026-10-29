@@ -1,3 +1,4 @@
+import { assignAgentDisplayNames } from './agentNames.js'
 import { fail, person, type Actor, type Person, type SuperTabState } from './model.js'
 
 /** A username as a person types it: 2 to 32 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit. */
@@ -13,12 +14,13 @@ function base(email: string): string {
 }
 
 /**
- * Every person's username, by id: the one they chose, else their email prefix, numbered (`ken2`, `ken3`) after the names
- * of everyone who joined before them and every chosen name. Only chosen names are stored; Desktop works out the same
- * defaults by this rule (desktop/lib/super_tabs/model.dart superTabUsernames), from the people in join order.
+ * Every person's username, by id: the one they chose (or one kept for them), else their email prefix, numbered (`ken2`,
+ * `ken3`) after the names of everyone who joined before them, every chosen name and every agent's name, so nobody is
+ * `@River` beside the Product Manager. [people] are in join order (the state's own order). Readers get these names from
+ * the server (read/views.ts, model.ts visibleState); Desktop works out the same defaults only for an older server.
  */
-export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username'>>): Map<string, string> {
-  const taken = new Set(people.flatMap(p => p.username ? [p.username] : []))
+export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username'>>, agentNames: Iterable<string> = []): Map<string, string> {
+  const taken = new Set([...people.flatMap(p => p.username ? [p.username] : []), ...[...agentNames].map(name => name.toLowerCase())])
   const names = new Map<string, string>()
   for (const member of people) {
     if (member.username) {
@@ -34,31 +36,41 @@ export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'u
   return names
 }
 
-export const usernameOf = (state: SuperTabState, id: string): string | undefined => usernames(state.people).get(id)
+/** The names the Swarm shows its agents, as `assignAgentDisplayNames` gives them, without changing [state]. */
+export function agentNames(state: Pick<SuperTabState, 'agents'>): string[] {
+  const named = state.agents.map(agent => ({ ...agent }))
+  assignAgentDisplayNames(named)
+  return named.map(agent => agent.displayName ?? agent.name)
+}
+
+/** Every person's username in [state], by id. */
+export const swarmUsernames = (state: Pick<SuperTabState, 'people' | 'agents'>): Map<string, string> => usernames(state.people, agentNames(state))
+export const usernameOf = (state: SuperTabState, id: string): string | undefined => swarmUsernames(state).get(id)
 
 /** `member.username`: a person chooses their own name, or clears it to go back to their default. Unique in the Swarm. */
 export function setUsername(state: SuperTabState, actor: Actor, input: string | null): void {
   if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a username.', 403)
+  // A viewer too: their name is theirs, though they write nothing else (commands.ts authorizeCommandAccess).
   const member = person(state, actor.userId)
-  if (member.role === 'viewer') fail('READ_ONLY', 'You have read-only access to this Super Tab.', 403)
   if (input === null) return void delete member.username
   const name = input.trim().toLowerCase()
   if (!SHAPE.test(name)) fail('INVALID_USERNAME', 'Use 2 to 32 letters, digits, dots, dashes or underscores, starting with a letter or digit.', 400)
-  for (const [id, other] of usernames(state.people)) {
+  if (agentNames(state).some(agent => agent.toLowerCase() === name)) fail('USERNAME_TAKEN', `${name} is an agent’s name here.`, 409)
+  for (const [id, other] of swarmUsernames(state)) {
     if (id !== member.id && other === name) fail('USERNAME_TAKEN', `${name} is taken.`, 409)
   }
   member.username = name
 }
 
 /** A name never changes under anyone, since tags and habits use it: when a command would move someone's default (the name
- *  before it was freed by a rename or a departure), they keep the name they had, stored now. */
+ *  before it was freed by a rename or a departure, or an agent now has it), they keep the name they had, stored now. */
 export function keepUsernames(before: SuperTabState, after: SuperTabState): void {
-  const was = usernames(before.people)
+  const was = swarmUsernames(before)
   // Only defaults: someone who cleared their own chosen name meant to go back to theirs.
   const defaulted = new Set(before.people.filter(p => !p.username).map(p => p.id))
   // One at a time: keeping one person's name can move the next default again.
   for (;;) {
-    const now = usernames(after.people)
+    const now = swarmUsernames(after)
     const moved = after.people.find(p => !p.username && defaulted.has(p.id) && now.get(p.id) !== was.get(p.id))
     if (!moved) return
     moved.username = was.get(moved.id)!

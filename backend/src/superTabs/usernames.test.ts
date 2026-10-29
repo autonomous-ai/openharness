@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor } from './model.js'
+import { createSuperTab, visibleState, type Actor } from './model.js'
+import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
+import { changesFor } from './read/changes.js'
+import { readerView } from './read/views.js'
 import { usernameOf, usernames } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
 const NOW = Date.parse('2026-10-29T01:00:00.000Z')
+const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const person = (id: string, email: string) => ({ kind: 'person', userId: id, email }) as Extract<Actor, { kind: 'person' }>
 
 function fixture() {
@@ -122,13 +126,57 @@ describe('member.username', () => {
     expect(f.state.people[0]!.username).toBeUndefined()
   })
 
-  it('is the person’s own: refused for an agent and a viewer', () => {
+  it('is every person’s own, a viewer’s too; refused for an agent and anyone outside', () => {
     const f = fixture()
     const viewer = person('viewer', 'viewer@example.com')
     f.join(viewer, 'viewer')
-    expect(() => f.run({ type: 'member.username', username: 'watcher' }, viewer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+    f.run({ type: 'member.username', username: 'watcher' }, viewer)
+    expect(f.name('viewer')).toBe('watcher')
+    // A viewer still writes nothing else.
+    expect(() => f.run({ type: 'member.status', status: { text: 'Hi' } }, viewer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
     expect(() => f.run({ type: 'member.username', username: 'bot' }, { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' })).toThrow()
-    expect(f.state.people.map(p => p.username)).toEqual([undefined, undefined])
+    expect(() => f.run({ type: 'member.username', username: 'stranger' }, person('stranger', 'stranger@example.com'))).toThrow()
+    expect(f.state.people.map(p => p.username)).toEqual([undefined, 'watcher'])
+  })
+
+  it('never gives a person an agent’s name: a default is numbered, a choice refused', () => {
+    const f = fixture()
+    f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    f.join(person('river', 'River@autonomous.ai'))
+    expect(f.name('river')).toBe('river2')
+    expect(() => f.run({ type: 'member.username', username: 'RIVER' })).toThrow(expect.objectContaining({ code: 'USERNAME_TAKEN' }))
+    // An automatic agent name counts too.
+    const nova = f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'builder', machineId: 'machine', name: 'Builder', configuration,
+      lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+    const shown = f.state.agents.find(a => a.id === nova)!.displayName!
+    expect(() => f.run({ type: 'member.username', username: shown.toLowerCase() })).toThrow(expect.objectContaining({ code: 'USERNAME_TAKEN' }))
+  })
+
+  it('keeps a person’s name when an agent named like them arrives later', () => {
+    const f = fixture()
+    f.join(person('river', 'river@autonomous.ai'))
+    expect(f.name('river')).toBe('river')
+    f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.name('river')).toBe('river')
+  })
+
+  it('reaches readers as each person’s username whatever order the members are read in', () => {
+    const f = fixture()
+    f.join(person('earlier', 'ken@example.com'))
+    f.join(person('rejoined', 'ken@other.org'))
+    const parts = split(f.state, { tabId: 'tab', version: 1, now: NOW })
+    // Member parts load in no fixed order (parts/load.ts); their ordinals keep the join order.
+    parts.members = [parts.members[0]!, parts.members[2]!, parts.members[1]!]
+    const view = readerView(parts, owner, NOW, { teamMachines: [] })
+    expect(Object.fromEntries(view.parts.members.map(m => [m.key, m.data.username])))
+      .toEqual({ owner: 'ken15', earlier: 'ken', rejoined: 'ken2' })
+    // So do changes, which send the member as the reader's view has it.
+    const changed = changesFor(view, [parts.members.find(m => m.key === 'rejoined')!], owner)
+    expect(changed.members.map(m => ('data' in m ? m.data.username : null))).toEqual(['ken2'])
+    // And a whole-state read.
+    expect(visibleState(f.state, owner, NOW).people.map(p => p.username)).toEqual(['ken15', 'ken', 'ken2'])
   })
 
   it('touches every person and the head, so two people choosing one name at once, or a join, retry', () => {

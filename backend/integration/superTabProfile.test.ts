@@ -126,6 +126,15 @@ describe('usernames', () => {
     expect(stranger.text).not.toContain('pilot')
   })
 
+  it('lets a viewer choose their own name, and nothing else', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Office')).id
+    const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
+    await run(tab, { type: 'member.username', username: 'watcher' }, peer)
+    expect((await members(tab)).find(m => m.key === peer.sub)!.data.username).toBe('watcher')
+    await expect(run(tab, { type: 'member.status', status: { text: 'Hi' } }, peer)).rejects.toMatchObject({ code: 'READ_ONLY' })
+  })
+
   it('gives a name to one of two people choosing it at once', async () => {
     const tab = await swarm()
     const results = await Promise.allSettled([run(tab, { type: 'member.username', username: 'captain' }),
