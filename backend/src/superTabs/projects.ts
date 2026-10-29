@@ -215,7 +215,11 @@ export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent,
  * agents, which keep their own rules (mayDrive).
  */
 export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): 'watch' | 'none' | 'member' | null {
-  if (!target.teamAccount || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
+  // Read from its machine, whichever way it joined (security review 1 of #2089): a Mac's Team account names its Mac, and a
+  // machine used only for agents reports from a team session (machines.ts teamAccountPool).
+  const pool = state.machines?.find(m => m.machineId === target.machineId)
+  const team = !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
+  if (!team || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
   if (actor.userId === projectOf(state, agentProjectId(state, target)).ownerId) return 'watch'
   if (actor.userId === target.machineOwnerId) return 'none'
   return watchClosed(state, target, elsewhere) ? 'none' : 'member'

@@ -206,6 +206,10 @@ interface ActiveStream {
 export interface TerminalStreamManagerDeps {
   /** An independent observer manager never acquires the owner control lease. */
   readOnly?: boolean
+  /** A connection held to watching now, whatever it asks (core/api.ts RemoteAppPolicy `watchOnly`): the Mac owner's apps on a
+   *  Harness Team daemon running a Swarm Product Manager (#895). Asked at each open and each frame, binary input included,
+   *  so a stream opened before the hold began is held too. */
+  watchOnly?: (connId: string) => boolean
   terminals: TerminalBackendCoordinator
   resolveAgent: (agentId: string) => RegisteredSession | undefined
   sendTarget: (connId: string, type: string, payload: FramePayload) => boolean
@@ -339,7 +343,7 @@ export class TerminalStreamManager {
     // controller, so anything that reaches tmux — input, resize, paste, scroll, an upload — has to
     // be stopped, and stopping them one by one is how the next write path added gets forgotten.
     // Same allow-list a read-only deployment uses, for the same reason.
-    if (!TerminalStreamManager.WATCH_SAFE_TYPES.includes(type) && this.isWatching(connId, payload)) {
+    if (!TerminalStreamManager.WATCH_SAFE_TYPES.includes(type) && (this.isWatching(connId, payload) || this.deps.watchOnly?.(connId) === true)) {
       this.sendError(connId, 'VIEW_ONLY', {
         requestId: payload.requestId,
         streamId: typeof payload.streamId === 'string' ? payload.streamId : undefined,
@@ -399,7 +403,7 @@ export class TerminalStreamManager {
     // Every binary kind below writes to the terminal, so a watcher's are dropped outright — see the
     // gate in `handleFrame`. Silent, like the other drops here: the client already knows it is
     // read-only (`terminal_ready`) and withholds input itself; this is the backstop.
-    if (this.isWatching(connId, { streamId: frame.streamId })) return
+    if (this.isWatching(connId, { streamId: frame.streamId }) || this.deps.watchOnly?.(connId) === true) return
     if (frame.kind !== TerminalBinaryKind.input && frame.kind !== TerminalBinaryKind.paste
       && frame.kind !== TerminalBinaryKind.imagePaste && frame.kind !== TerminalBinaryKind.pasteFile) return
     const state = this.streams.get(frame.streamId)
@@ -550,7 +554,7 @@ export class TerminalStreamManager {
       // A watch-only stream is not anyone holding it: a window reconnecting politely beside one is
       // answered as it would be alone, not made to watch a terminal nobody drives.
       const holders = incumbents.filter((state) => !state.watchOnly)
-      const watching = !this.deps.readOnly && (watchOnly || (!takeover && holders.length > 0))
+      const watching = !this.deps.readOnly && (watchOnly || this.deps.watchOnly?.(connId) === true || (!takeover && holders.length > 0))
       // Who a watcher is watching, named on its banner — "MacBook Pro is using this terminal" — as
       // `takenBy` names the winner on the incumbent's. Read now, before any stream below moves.
       const heldBy = watching ? this.holderOf(holders, reservedPlacement) : undefined

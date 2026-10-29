@@ -1190,6 +1190,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinaryTarget: (connId, frame) => backend.sendTerminalBinaryTo(connId, frame),
     isLoopback: isLocalClientId,
+    // The Mac owner's apps on a Team daemon running a Swarm Product Manager only watch (superTabs/inCore/teamApps.ts).
+    watchOnly: (connId) => backend.appWatchOnly(connId),
     // For a client that did not introduce itself on `terminal_open` (an older build). A loopback
     // window can only be this computer's desktop; a paired peer is named by its pairing label unless
     // that label is one of the placeholders pairing hands out — those name nothing.
@@ -1427,7 +1429,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
   // On a Harness Team daemon the account is the Mac's owner's, and another person's Product Manager may run here: the
   // owner's own apps never reach the Swarm's confidential sessions, and only watch the rest while one runs (#895).
-  if (swarm) backend.remoteAppPolicy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list())
+  // Decided once, as it starts: only a Team daemon has it (security review 1 of #2089), and it reads the stopped sessions too.
+  if (swarm?.isTeamDaemon()) {
+    backend.remoteAppPolicy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(),
+      () => [...registry.list(), ...stoppedAgents.list()], () => registry.list().map((s) => s.agentId))
+  }
   const questionWatcher = asking.questionWatcher
 
 

@@ -1503,6 +1503,9 @@ export interface RemoteAppPolicy {
   reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
   /** An up-frame as the apps may hear it, or null to withhold it. */
   event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
+  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
+   *  (lib/terminalStreamManager.ts `watchOnly`). */
+  watchOnly(): boolean
 }
 
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its

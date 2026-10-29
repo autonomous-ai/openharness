@@ -1,10 +1,10 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
-import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
-import { LEAD_NAME, leadStartFailed } from './leadStart.js'
+import { leadStartFailed } from './leadStart.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -175,6 +175,17 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
     text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
 }
 
+/** A Product Manager's start that stopped trying ([text], leadStart.ts), said once in its project's conversation in the name
+ *  of the person who asked for it, as a Buddy's is in its owner's. Nothing while it still waits for a machine. */
+function leadNotice(state: SuperTabState, start: AgentStart, text: string | null): MessageDraft[] {
+  const asker = start.request.leadFor!
+  const person = state.people.find(p => p.id === asker.personId && p.generation === asker.generation)
+  if (!text || !person || !state.conversations.some(c => c.id === start.request.conversationId)) return []
+  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation },
+    text, source: { kind: 'start-timeout', startId: start.id } }]
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
@@ -192,9 +203,8 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
       if (start.request.leadFor) {
-        start.error = `${machineName(state, start.request.machineId)} did not start this ${LEAD_NAME}. Update Harness on it, then start it again.`
-        leadStartFailed(state, start, start.error)
-        return []
+        start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
+        return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
       }
       start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
       return buddyNotice(state, start)
@@ -207,7 +217,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
-    leadStartFailed(state, start, start.error)
+    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)

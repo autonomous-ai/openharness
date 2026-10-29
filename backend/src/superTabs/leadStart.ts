@@ -7,6 +7,7 @@ import { admitMachineStart, failTeamWork, machineContribution, machineSlots, pro
   type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, stableId, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { mutableProjects, projectsOf, type SwarmProject } from './projects.js'
+import { failureNotice, publicReason } from './startFailure.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
@@ -28,7 +29,14 @@ export interface LeadPlacement {
   reason?: string
   /** Machines a start from the queue already failed on, tried again only once no other is free. */
   skipped?: string[]
+  /** How many starts from the queue failed, and when it is placed again: each wait twice the last (security review 1 of
+   *  #2089: one that kept failing was placed again at every machine reading, each failure a row in its conversation). */
+  failures?: number
+  retryAt?: number
 }
+/** A Product Manager from the queue gives up after this many failed starts, and says so once. */
+export const LEAD_QUEUE_ATTEMPTS = 3
+const RETRY_BASE_MS = 60_000, RETRY_MAX_MS = 15 * 60_000
 /** `repositoryUrl`: the address its folder is cloned from, recorded for a project that has none yet. */
 export interface LeadRequest { engine: string; model?: string; effort?: string; branchRef?: string; repositoryUrl?: string }
 
@@ -106,18 +114,31 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   return `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
 }
 
-/** Its start failed with [reason]: on the machine its person chose, the project says why and waits for them; placed from
- *  the queue, it waits for another machine. */
-export function leadStartFailed(state: SuperTabState, start: AgentStart, reason: string): void {
+/** Its start failed with [reason] at [now]: on the machine its person chose, the project says why and waits for them; placed
+ *  from the queue, it waits for another machine, longer after each failure, and gives up after LEAD_QUEUE_ATTEMPTS. The line
+ *  its conversation shows, once, when it stops trying; null while it still waits. */
+export function leadStartFailed(state: SuperTabState, start: AgentStart, reason: string, now: number): string | null {
   const placement = placementOf(state, start)
-  if (!placement) return
+  if (!placement) return null
   delete placement.startId
-  if (placement.chosen !== null) Object.assign(placement, { status: 'failed', reason })
-  else {
-    Object.assign(placement, { status: 'waiting', reason, skipped: [...new Set([...placement.skipped ?? [], start.request.machineId])].slice(-16) })
-    delete placement.machineId
-    delete placement.machineName
+  // Every reader of the project reads its placement: the reason a group member may read, never the host's own words, which
+  // can name a folder on the machine or a token problem (startFailure.ts). Its asker reads those on the start.
+  const shown = publicReason(reason)
+  if (placement.chosen !== null) {
+    Object.assign(placement, { status: 'failed', reason: shown })
+    return failureNotice(start.request.name, reason)
   }
+  const failures = (placement.failures ?? 0) + 1
+  delete placement.machineId
+  delete placement.machineName
+  if (failures >= LEAD_QUEUE_ATTEMPTS) {
+    delete placement.retryAt
+    Object.assign(placement, { status: 'failed', reason: shown, failures })
+    return `The ${LEAD_NAME} could not start after ${failures} tries. The last one: ${shown} Start it again when a machine is ready.`
+  }
+  Object.assign(placement, { status: 'waiting', reason: shown, failures, retryAt: now + Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS),
+    skipped: [...new Set([...placement.skipped ?? [], start.request.machineId])].slice(-16) })
+  return null
 }
 
 export const WAITING_TEXT = `Waiting for a machine to start the ${LEAD_NAME}.`
@@ -153,7 +174,7 @@ function placeOnFree(state: SuperTabState, project: SwarmProject, by: Person, st
 /** On a machine's reading: each project whose Product Manager waits starts on the first free machine. The ids of those
  *  placed. Nothing is read or written for a Swarm with none waiting. */
 export function placeWaitingLeads(state: SuperTabState, context: LeadContext): string[] {
-  const waiting = projectsOf(state).filter(p => p.lead?.status === 'waiting')
+  const waiting = projectsOf(state).filter(p => p.lead?.status === 'waiting' && !(p.lead.retryAt !== undefined && p.lead.retryAt > context.now))
   if (!waiting.length || state.paused) return []
   const placed: string[] = []
   for (const { id } of waiting) {

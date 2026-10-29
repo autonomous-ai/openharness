@@ -296,6 +296,13 @@ export class BackendSocket {
   /** On a Harness Team daemon, what the account's own apps may ask and hear (core/api.ts RemoteAppPolicy): another person's
    *  Product Manager may run there, and the account is the Mac's owner's (#895). Null everywhere else. */
   remoteAppPolicy: RemoteAppPolicy | null = null
+
+  /** Whether [connId] is one of the account's own apps away from this desk, held to watching its terminals now. */
+  appWatchOnly(connId: string): boolean {
+    if (!this.remoteAppPolicy || !connId || this.localClients.has(connId) || isLocalClientId(connId)) return false
+    const client = this.remoteClient(connId)
+    return !!client && client.guest === undefined && this.remoteAppPolicy.watchOnly()
+  }
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null

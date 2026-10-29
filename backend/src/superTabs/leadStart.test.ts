@@ -165,7 +165,8 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     const f = swarm()
     const startId = f.lead('mate-mac').result.startId as string
     f.run({ type: 'agent.startFailed', startId, error: 'Could not clone the repository.' }, owner, hosted(f, 'mate-team'))
-    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Could not clone the repository.' })
+    // Every reader of the project reads it, so not the host's own words (startFailure.ts publicReason).
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Its machine could not prepare or launch it.' })
     // They can start it again.
     expect(f.lead('owner-mac').result.machineId).toBe('owner-mac')
   })
@@ -175,8 +176,12 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     const f = swarm()
     f.lead('mate-mac')
     f.machine('mate-team').observation = { ...f.machine('mate-team').observation!, receivedAt: NOW + BUDDY_PICKUP_MS + MINUTE }
-    sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + MINUTE)
-    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'MacBook Pro did not start this Product Manager. Update Harness on it, then start it again.' })
+    const said = sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + MINUTE)
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Its machine did not start it. Harness there may need an update.' })
+    // Said once in its project's conversation, in the name of the person who asked for it.
+    expect(said.map(m => [m.conversationId, m.author])).toEqual([[f.app.conversationId, expect.objectContaining({ kind: 'person', id: 'owner' })]])
+    expect(said[0]!.text).toBe('Could not start Product Manager: its machine did not start it. Harness there may need an update.')
+    expect(sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + 2 * MINUTE)).toEqual([])
   })
 })
 
@@ -184,6 +189,8 @@ describe('a Product Manager waiting for a machine', () => {
   const full = (f: ReturnType<typeof swarm>, machineId: string) => { f.machine(machineId).maxAgents = 0 }
   const place = async (f: ReturnType<typeof swarm>, context: Partial<LeadContext> = {}) => {
     const { placeWaitingLeads } = await import('./leadStart.js')
+    // Placed on a machine's reading: the machines report as of then.
+    for (const m of f.state.machines!) if (m.observation) m.observation = { ...m.observation, receivedAt: context.now ?? NOW }
     const teamMachines = f.state.machines!.filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
     return placeWaitingLeads(f.state, { now: NOW, teamMachines, ...context })
   }
@@ -224,9 +231,34 @@ describe('a Product Manager waiting for a machine', () => {
     const f = swarm()
     const startId = f.lead(null).result.startId as string
     f.run({ type: 'agent.startFailed', startId, error: 'Out of disk.' }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
-    expect(f.project().lead).toMatchObject({ status: 'waiting', reason: 'Out of disk.', skipped: ['owner-mac'] })
-    expect(await place(f)).toEqual([f.app.projectId])
+    expect(f.project().lead).toMatchObject({ status: 'waiting', reason: 'Its machine could not prepare or launch it.', skipped: ['owner-mac'] })
+    expect(await place(f, { now: NOW + MINUTE })).toEqual([f.app.projectId])
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-team' })
+  })
+
+  // Security review 1 of #2089: a queued Product Manager that kept failing was placed again at every machine reading, each
+  // failure a row in its conversation.
+  it('failing again and again, waits longer each time, gives up after three, and says so once', async () => {
+    const { LEAD_QUEUE_ATTEMPTS } = await import('./leadStart.js')
+    expect(LEAD_QUEUE_ATTEMPTS).toBe(3)
+    const f = swarm()
+    const fail = (startId: string, now: number) => f.run({ type: 'agent.startFailed', startId, error: 'Out of disk.' }, owner,
+      { now, contribution: { machineOwnerId: f.state.starts!.find(s => s.id === startId)!.machineOwnerId, contributorId: f.state.starts!.find(s => s.id === startId)!.contributorId, hostGrant: null } })
+    const said = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => m.conversationId === f.app.conversationId).map(m => m.text)
+    let startId = f.lead(null).result.startId as string
+    expect(said(fail(startId, NOW))).toEqual([])
+    expect(f.project().lead).toMatchObject({ status: 'waiting', failures: 1, retryAt: NOW + MINUTE })
+    // Not before its time, then on the next free machine.
+    expect(await place(f, { now: NOW + MINUTE - 1 })).toEqual([])
+    expect(await place(f, { now: NOW + MINUTE })).toEqual([f.app.projectId])
+    startId = f.project().lead!.startId!
+    expect(said(fail(startId, NOW + MINUTE))).toEqual([])
+    expect(f.project().lead).toMatchObject({ status: 'waiting', failures: 2, retryAt: NOW + 3 * MINUTE })
+    expect(await place(f, { now: NOW + 3 * MINUTE })).toEqual([f.app.projectId])
+    startId = f.project().lead!.startId!
+    expect(said(fail(startId, NOW + 3 * MINUTE))).toEqual(['The Product Manager could not start after 3 tries. The last one: Its machine could not prepare or launch it. Start it again when a machine is ready.'])
+    expect(f.project().lead).toMatchObject({ status: 'failed', failures: 3 })
+    expect(await place(f, { now: NOW + 60 * MINUTE })).toEqual([])
   })
 
   it('is dropped when the person who asked left the Swarm, and waits while the Swarm is paused', async () => {
@@ -282,6 +314,19 @@ describe('the terminal of a Product Manager in a Team account', () => {
     expect(t.watch(mate)).toBe(false)
     expect(t.screen(mate)).toBe('TERMINAL_PRIVATE')
     expect(t.input(mate)).toBe('TERMINAL_PRIVATE')
+  })
+
+  it('is known by its machine, however it joined: a Lead added by hand in a Team account is held the same way', () => {
+    const f = swarm()
+    f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'public', memberIds: [] })
+    const home = f.state.conversations.find(c => c.id === f.app.conversationId)!
+    f.state.agents.push({ id: 'added-pm', machineId: 'mate-team', harnessId: 'h', projectId: f.app.projectId, machineOwnerId: 'mate', contributorId: 'mate',
+      membershipGeneration: f.state.people.find(p => p.id === 'mate')!.generation, hostGrant: null, name: 'PM', configuration: config })
+    home.agentIds.push('added-pm'); home.leadId = 'added-pm'
+    const code = (actor: Actor, command: Command) => refusal(() => f.run(command, actor))?.code ?? 'ok'
+    expect(code(owner, { type: 'agent.screen', agentId: 'added-pm', scrollback: 50 })).toBe('ok')
+    expect(code(owner, { type: 'agent.input', agentId: 'added-pm', text: 'ls' })).toBe('TERMINAL_PRIVATE')
+    expect(code(mate, { type: 'agent.screen', agentId: 'added-pm', scrollback: 50 })).toBe('TERMINAL_PRIVATE')
   })
 
   it('on the project owner\'s own machine, its owner still reads and types in it', async () => {

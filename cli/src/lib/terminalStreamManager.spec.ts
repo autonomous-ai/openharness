@@ -1171,6 +1171,50 @@ describe('TerminalStreamManager', () => {
   // hn with no terminal (its server, kept for the sessions a closed window left) reads every pane of the desk. On
   // 2026-10-14 it reopened first after each daemon restart, took the terminals at its 80x24 layout and left the
   // window the person was using watching a shrunken agent until they typed. It opens with `watch: true` now.
+  // A Harness Team daemon running a Swarm Product Manager (#895, superTabs/inCore/teamApps.ts): the Mac owner's apps only
+  // watch, and keystrokes arrive as binary frames that no request gate sees (security review 1 of #2089).
+  describe('a connection held to watching', () => {
+    let held: boolean
+    beforeEach(() => {
+      held = true
+      manager = newManager({ watchOnly: (connId) => held && connId === 'owner-app' })
+    })
+    const ready = (connId: string) => sent.findLast((frame) => frame.connId === connId && frame.type === 'terminal_ready')!
+    const type = (streamId: string, text: string) => manager.handleBinary('owner-app', { kind: TerminalBinaryKind.input, streamId, seq: 0,
+      bytes: Buffer.from(text), compressed: false })
+
+    it('opens as a watcher though it asks to take the terminal, and its keystrokes, pastes and resizes reach nothing', async () => {
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('owner-app').payload.readOnly).toBe(true)
+      const streamId = ready('owner-app').payload.streamId as string
+      await type(streamId, 'cat ~/.claude/projects/*\r')
+      await manager.handleBinary('owner-app', { kind: TerminalBinaryKind.paste, streamId, seq: 0, bytes: Buffer.from('ls'), compressed: false })
+      await manager.handleFrame('owner-app', 'terminal_resize', { streamId, resizeSeq: 1, cols: 30, rows: 10 })
+      expect(sent.at(-1)?.payload.code).toBe('VIEW_ONLY')
+      expect([stream.writes, stream.sizes]).toEqual([[], []])
+    })
+
+    it('drops the input of a stream it opened before it was held, from then on', async () => {
+      held = false
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('owner-app').payload.readOnly).toBe(false)
+      const streamId = ready('owner-app').payload.streamId as string
+      await type(streamId, 'a')
+      await vi.waitFor(() => expect(stream.writes).toHaveLength(1))
+      held = true
+      await type(streamId, 'b')
+      await manager.handleFrame('owner-app', 'terminal_resize', { streamId, resizeSeq: 1, cols: 30, rows: 10 })
+      expect(sent.at(-1)?.payload.code).toBe('VIEW_ONLY')
+      expect(stream.writes).toHaveLength(1)
+      expect(stream.sizes).toEqual([])
+    })
+
+    it('leaves every other connection as it was', async () => {
+      await manager.handleFrame('desktop-1', 'terminal_open', { requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('desktop-1').payload.readOnly).toBe(false)
+    })
+  })
+
   describe('a watch-only open', () => {
     let readOnlyOpens: boolean[]
     beforeEach(() => {

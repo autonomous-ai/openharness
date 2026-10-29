@@ -10,10 +10,13 @@ export const TIMED_OUT_SUFFIX = ' did not start it within 3 minutes'
 /** liveness.ts writes these after a machine named the start as preparing: past its limit, or with its reports stopped. */
 export const STILL_PREPARING_SUFFIX = ' was still preparing it after 15 minutes'
 export const STOPPED_REPORTING_SUFFIX = ' stopped reporting while preparing it'
+/** liveness.ts writes this after a machine named a Product Manager's start that it never took (leadStart.ts). */
+export const LEAD_PICKUP_SUFFIX = ' did not start this Product Manager. Update Harness on it, then start it again.'
 /** Each suffix the server writes after a machine name, with what a group member reads instead. */
 const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
   [STILL_PREPARING_SUFFIX, 'Its machine was still preparing it after 15 minutes.'],
-  [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.']]
+  [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.'],
+  [LEAD_PICKUP_SUFFIX, 'Its machine did not start it. Harness there may need an update.']]
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'

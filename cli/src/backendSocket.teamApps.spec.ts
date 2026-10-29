@@ -16,6 +16,7 @@ describe('the account\'s own apps under a remote app policy', () => {
       : type === 'message' ? { error: 'TEAM_READ_ONLY', message: 'read only' } : null,
     reply: (_type, payload) => Array.isArray(payload.agents) ? { ...payload, agents: (payload.agents as Array<{ id: string }>).filter(a => a.id !== 'pm') } : payload,
     event: (frame) => (frame.payload as { agentId?: unknown } | undefined)?.agentId === 'pm' ? null : frame,
+    watchOnly: () => true,
   }
 
   function session(guest?: string) {
@@ -71,6 +72,16 @@ describe('the account\'s own apps under a remote app policy', () => {
     socket.send({ type: 'text_delta', payload: { agentId: 'pm', text: 'private' } })
     socket.send({ type: 'text_delta', payload: { agentId: 'worker', text: 'hello' } })
     expect(broadcast.mock.calls.map(([frame]) => frame)).toEqual([{ type: 'text_delta', payload: { agentId: 'worker', text: 'hello' } }])
+  })
+
+  it('holds the account\'s own apps to watching their terminals, and no guest, window here or daemon without a policy', () => {
+    const { socket } = session()
+    expect(socket.appWatchOnly('remote')).toBe(true)
+    expect(socket.appWatchOnly('')).toBe(false)
+    expect(socket.appWatchOnly('unknown-connection')).toBe(false)
+    socket.remoteAppPolicy = null
+    expect(socket.appWatchOnly('remote')).toBe(false)
+    expect(session('kim@acme.io').socket.appWatchOnly('remote')).toBe(false)
   })
 
   it('leaves a guest to the guest policy, which refuses it first', async () => {
