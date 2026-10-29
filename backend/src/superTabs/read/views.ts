@@ -32,6 +32,8 @@ export interface ReadExtras {
   teamMachines: string[]
   /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
   otherWorkspaceMachines?: string[]
+  /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
+  machineVersions?: Record<string, string>
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** Which ones they are, as a digest (mentions.ts). */
@@ -107,8 +109,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
+    const version = extras.machineVersions?.[pool.machineId]
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
-      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }] as const
+      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
