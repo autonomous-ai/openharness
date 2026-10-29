@@ -2105,6 +2105,8 @@ static void swarm_buddy_checks(const char *dir) {
     // A daemon that came back has forgotten the Lead open here (the dial's link dropped, as ui_set_connected(false)
     // leaves it): the next frame tells it again, so a drag scrolls its Swarm and recaps reach the face (review of #2232).
     buddy_setup(); sw.opened = false;
+    // Until then the daemon has no Lead open, and would hand a drag to the focused pane: none is sent.
+    drag_v(330, 150); assert(!moves && !ups);
     buddy_card("lead");
     assert(wire_has(0, "open s1 B0") && wire_has(0, "recap.get s1 B0"));
     { int n = swarm_sent; buddy_card("lead"); assert(swarm_sent == n); }

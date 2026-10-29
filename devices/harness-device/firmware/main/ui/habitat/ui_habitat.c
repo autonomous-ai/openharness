@@ -3498,8 +3498,9 @@ static void worker(void *unused)
 // shorter, and stays the side's, after any rest before it (review of #2232).
 static bool swarm_scroll_reportable(uint32_t held)
 {
+    // And only once the daemon has the Lead open: before, it would hand the drag to the focused pane (review of #2232).
     return held >= 250 && s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && swarm_mode() &&
-           swarm_lead() && !display_is_asleep() && !s.voice_open && !audio_client_active();
+           swarm_lead() && sw.opened && !display_is_asleep() && !s.voice_open && !audio_client_active();
 }
 void habitat_touch(bool down, int x, int y, uint32_t now)
 {

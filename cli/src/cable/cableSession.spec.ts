@@ -4893,6 +4893,12 @@ describe('swarm cards', () => {
         await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
         expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
         expect(host.sendTurn).not.toHaveBeenCalled()
+        // Held to review, the same: no draft whose Send would say sent while the words went nowhere.
+        port.say({ t: 'voice.begin', uploadId: 'u-l2', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-l2', review: true })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(2))
+        expect(ofType(port, 'voice.error')[1].message).toBe('Could not reach the Swarm. Try again.')
+        expect(ofType(port, 'voice.draft')).toEqual([])
       } finally { await session.stop() }
     })
 
