@@ -4,11 +4,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
-import '../../widgets/finger_target.dart';
 import '../identity.dart';
 import '../model.dart';
 import '../until.dart';
 import 'format.dart';
+import 'member_row.dart';
 import 'model.dart';
 
 /// The gap between a row's columns, and half of it: the spacing scale's 8
@@ -16,18 +16,11 @@ import 'model.dart';
 const _gap = grid.AppDesktop.controlGap;
 const _halfGap = _gap / 2;
 
-/// The avatar the Agents rows below draw, so without a rank column a person's
-/// name starts where an agent's does.
+/// The avatar People and Agents rows both draw, in one column.
 const _avatarSize = SuperTabAvatar.rowSize;
 
-/// Numbers and rankings (desktop design system): the rank a bold numeral in
-/// secondary ink, the points the one emphasized number, every figure in a
-/// column of one width so the column holds row under row.
-TextStyle leaderboardRankStyle() => grid.AppType.label(
-  fontWeight: FontWeight.w700,
-  color: grid.AppPalette.textSecondary,
-  fontFeatures: grid.AppFont.tabularFigures,
-);
+/// Numbers (desktop design system): the points the one emphasized number, in
+/// a column of one width so it holds row under row.
 TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontWeight: grid.AppFont.semibold,
   color: grid.AppPalette.textPrimary,
@@ -55,57 +48,38 @@ List<String> leaderboardNumbers(SuperTabPersonScore score) {
   ];
 }
 
-/// The board's fixed numeric columns, each as wide as its widest value at
-/// the current text size, so rank and points line up on every row.
+/// The board's points column, as wide as its widest value at the current text
+/// size, so the points line up on every row.
 class LeaderboardColumns {
-  const LeaderboardColumns({required this.rank, required this.points});
+  const LeaderboardColumns({required this.points});
 
-  factory LeaderboardColumns.of(
-    BuildContext context,
-    List<SuperTabPersonScore> scores,
-  ) => LeaderboardColumns.measure(
-    context,
-    ranks: scores.map((score) => score.rank),
-    points: scores.map((score) => score.points),
-  );
-
-  /// The columns for any ranked list: people, agents or models.
   factory LeaderboardColumns.measure(
     BuildContext context, {
-    required Iterable<int> ranks,
     required Iterable<int> points,
   }) {
-    final scaler = MediaQuery.textScalerOf(context);
-    double width(String text, TextStyle style) {
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: style),
-        textDirection: TextDirection.ltr,
-        textScaler: scaler,
-      )..layout();
-      final width = painter.width;
-      painter.dispose();
-      return width;
-    }
-
     // Digits are of one width, so the longest number is the widest.
-    String widest(Iterable<int> values) => values
+    final widest = points
         .map((value) => '$value')
         .fold('0', (a, b) => b.length > a.length ? b : a);
-    return LeaderboardColumns(
-      rank: width(widest(ranks), leaderboardRankStyle()),
-      points: width(widest(points), leaderboardPointsStyle()),
-    );
+    final painter = TextPainter(
+      text: TextSpan(text: widest, style: leaderboardPointsStyle()),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return LeaderboardColumns(points: width);
   }
 
-  final double rank, points;
+  final double points;
 }
 
-/// One person in the Humans section: their rank as a bold numeral in its own
-/// column, avatar, name (number one's with a crown beside it) and status, and
-/// a quiet line of their non-zero numbers beneath; at the right their points,
-/// the one number (Dee, 2026-10-29). The viewer's own row carries the selected
-/// fill. Without a [score] (no board yet, or a server without
-/// one) only the name and status.
+/// One person in the People section, in the row shape the agents share
+/// (Dee, 2026-10-29): avatar, name (number one's with a crown beside it) and
+/// status, their points at the right of that line, and a quiet line of their
+/// non-zero numbers beneath. No rank. The viewer's own row carries the
+/// selected fill. Without a [score] (no board yet, or a server without one)
+/// only the name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
     super.key,
@@ -120,7 +94,7 @@ class LeaderboardPersonRow extends StatelessWidget {
   final SuperTabPersonScore? score;
   final VoidCallback onTap;
 
-  /// The numeric columns, the same on every row; null without a board.
+  /// The points column, the same on every row; null without a board.
   final LeaderboardColumns? columns;
 
   /// Whether this is the viewer's own row.
@@ -136,94 +110,36 @@ class LeaderboardPersonRow extends StatelessWidget {
     final numbers = score == null
         ? const <String>[]
         : leaderboardNumbers(score);
-    final radius = BorderRadius.circular(DesktopChrome.rowRadius);
-    Widget column(String kind, double width, Widget? child) => Padding(
-      padding: const EdgeInsets.only(left: _gap),
-      child: SizedBox(
-        key: ValueKey('leaderboard-$kind-${person.id}'),
-        width: width,
-        child: Align(alignment: Alignment.centerRight, child: child),
-      ),
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: _gap),
-      child: Material(
-        color: own ? grid.AppSurface.selectedFill : Colors.transparent,
-        borderRadius: radius,
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          key: ValueKey('super-person-${person.id}'),
-          onTap: onTap,
-          // Hover and focus keep their treatment over the viewer's own fill.
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
-          borderRadius: radius,
-          child: ConstrainedBox(
-            // A phone's row is a finger's height; a mouse keeps a field's.
-            constraints: BoxConstraints(
-              minHeight: fingerHeight(
-                grid.AppControl.heightField,
-                enabled: workspaceIsCompact(context),
-              ),
+    return SuperTabMemberRow(
+      rowKey: ValueKey('super-person-${person.id}'),
+      onTap: onTap,
+      selected: own,
+      avatar: SuperTabAvatar.person(person, size: _avatarSize),
+      name: _name(),
+      detail: numbers.isEmpty
+          ? null
+          : LeaderboardNumbers(
+              key: ValueKey('leaderboard-meta-${person.id}'),
+              parts: numbers,
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: _gap,
-                vertical: _halfGap,
-              ),
-              child: Row(
-                children: [
-                  if (columns != null) ...[
-                    SizedBox(
-                      key: ValueKey('leaderboard-rank-${person.id}'),
-                      width: columns.rank,
-                      child: score == null
-                          ? null
-                          : Text(
-                              '${score.rank}',
-                              maxLines: 1,
-                              textAlign: TextAlign.right,
-                              style: leaderboardRankStyle(),
-                            ),
-                    ),
-                    const SizedBox(width: _gap),
-                  ],
-                  SuperTabAvatar.person(person, size: _avatarSize),
-                  const SizedBox(width: _gap),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _name(),
-                        if (numbers.isNotEmpty)
-                          LeaderboardNumbers(
-                            key: ValueKey('leaderboard-meta-${person.id}'),
-                            parts: numbers,
-                          ),
-                      ],
-                    ),
+      trailing: columns == null || score == null
+          ? null
+          : SizedBox(
+              key: ValueKey('leaderboard-points-${person.id}'),
+              width: columns.points,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Semantics(
+                  label: '${score.points} points',
+                  excludeSemantics: true,
+                  child: Text(
+                    '${score.points}',
+                    maxLines: 1,
+                    style: leaderboardPointsStyle(),
                   ),
-                  if (columns != null && score != null)
-                    column(
-                      'points',
-                      columns.points,
-                      Semantics(
-                        label: '${score.points} points',
-                        excludeSemantics: true,
-                        child: Text(
-                          '${score.points}',
-                          maxLines: 1,
-                          style: leaderboardPointsStyle(),
-                        ),
-                      ),
-                    ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ),
     );
   }
 

@@ -16,12 +16,11 @@ import 'support/super_tab_fixture.dart';
 
 /// The leaderboard lives in the right pane's Humans section (Dee, 2026-10-27),
 /// built to the desktop design system (2026-10-28): a small week picker, then
-/// everyone, most points first, by display
-/// name. Each row is a bold rank in its own column, avatar, name, a quiet line
-/// of the non-zero numbers in words, and the points as the one number,
-/// right-aligned (Dee, 2026-10-29: one number per person, no team total line).
-/// Number one wears a crown beside their name (People are celebrated, design
-/// system); no cups, trophies or medal colours. A tap shows what the numbers
+/// everyone, by display name (Dee, 2026-10-29: no ranks). Each row is the
+/// avatar, name, a quiet line of the non-zero numbers in words, and the points
+/// as the one number, right-aligned (one number per person, no team total
+/// line). Number one wears a crown beside their name (People are celebrated,
+/// design system); no cups, trophies or medal colours. A tap shows what the numbers
 /// are made of. There is no separate leaderboard view.
 void main() {
   Finder person(String id) => find.byKey(ValueKey('super-person-$id'));
@@ -76,7 +75,41 @@ void main() {
     controller.dispose();
   }
 
-  testWidgets('lists every person, most points first, with no cut-off', (
+  testWidgets(
+    'lists every person by name, whatever their points, with no cut-off',
+    (tester) async {
+      final controller = await show(tester, humansSwarm());
+      // Dee, diego, huy, Ken, maximilian…, scholes, Tony: letter case aside.
+      final ids = [
+        'peer',
+        'diego',
+        'huy',
+        'owner',
+        'maximilian.alexander.longname',
+        'scholes',
+        'tony',
+      ];
+      for (final id in ids) {
+        expect(person(id), findsOneWidget);
+      }
+      expect(find.textContaining('Show '), findsNothing);
+      final tops = [for (final id in ids) tester.getTopLeft(person(id)).dy];
+      expect(tops, [...tops]..sort());
+      await close(tester, controller);
+    },
+  );
+
+  Finder within(String id, String text) =>
+      find.descendant(of: person(id), matching: find.text(text));
+  // Number one's name carries the crown beside it in the same line.
+  Finder nameIn(String id, String name) =>
+      find.descendant(of: person(id), matching: find.textContaining(name));
+  Finder part(String kind, String id) =>
+      find.byKey(ValueKey('leaderboard-$kind-$id'));
+  TextStyle styleOf(WidgetTester tester, Finder text) =>
+      tester.widget<Text>(text).style!;
+
+  testWidgets('shows no rank: each row starts with the avatar, in one column', (
     tester,
   ) async {
     final controller = await show(tester, humansSwarm());
@@ -89,64 +122,27 @@ void main() {
       'huy',
       'maximilian.alexander.longname',
     ];
+    double avatarLeft(String id) => tester
+        .getTopLeft(
+          find.descendant(
+            of: person(id),
+            matching: find.byType(SuperTabAvatar),
+          ),
+        )
+        .dx;
     for (final id in ids) {
-      expect(person(id), findsOneWidget);
+      expect(part('rank', id), findsNothing, reason: id);
+      expect(avatarLeft(id), avatarLeft('peer'), reason: id);
     }
-    expect(find.textContaining('Show '), findsNothing);
-    final tops = [for (final id in ids) tester.getTopLeft(person(id)).dy];
-    expect(tops, [...tops]..sort());
+    // Nothing stands before the avatar.
+    expect(
+      avatarLeft('peer') - tester.getTopLeft(person('peer')).dx,
+      lessThanOrEqualTo(grid.AppDesktop.controlGap),
+    );
+    // Dee is first with 21, yet no numeral says so.
+    expect(within('peer', '1'), findsNothing);
     await close(tester, controller);
   });
-
-  Finder within(String id, String text) =>
-      find.descendant(of: person(id), matching: find.text(text));
-  // Number one's name carries the crown beside it in the same line.
-  Finder nameIn(String id, String name) =>
-      find.descendant(of: person(id), matching: find.textContaining(name));
-  Finder part(String kind, String id) =>
-      find.byKey(ValueKey('leaderboard-$kind-$id'));
-  TextStyle styleOf(WidgetTester tester, Finder text) =>
-      tester.widget<Text>(text).style!;
-
-  testWidgets(
-    'ranks each person with a bold numeral in its own right-aligned column',
-    (tester) async {
-      final controller = await show(tester, humansSwarm());
-      final ranks = {
-        'peer': '1',
-        'owner': '2',
-        'tony': '3',
-        'scholes': '4',
-        'diego': '5',
-        'huy': '6',
-        'maximilian.alexander.longname': '6',
-      };
-      for (final MapEntry(key: id, value: rank) in ranks.entries) {
-        expect(
-          find.descendant(of: part('rank', id), matching: find.text(rank)),
-          findsOneWidget,
-          reason: id,
-        );
-      }
-      final right = tester.getTopRight(part('rank', 'peer')).dx;
-      for (final id in ranks.keys) {
-        expect(tester.getTopRight(part('rank', id)).dx, right, reason: id);
-      }
-      // The rank stands before the avatar, in its own column.
-      final avatar = find.descendant(
-        of: person('peer'),
-        matching: find.byType(SuperTabAvatar),
-      );
-      expect(right, lessThanOrEqualTo(tester.getTopLeft(avatar).dx));
-      final rank = styleOf(
-        tester,
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-      );
-      expect(rank.fontWeight, FontWeight.w700);
-      expect(rank.fontFeatures, grid.AppFont.tabularFigures);
-      await close(tester, controller);
-    },
-  );
 
   testWidgets(
     'gives each person their points as the one emphasized number, right-aligned',
@@ -175,12 +171,6 @@ void main() {
       expect(points.fontWeight, grid.AppFont.semibold);
       expect(points.fontFeatures, grid.AppFont.tabularFigures);
       expect(points.color, grid.AppPalette.textPrimary);
-      // The rank is quieter than the points.
-      final rank = styleOf(
-        tester,
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-      );
-      expect(rank.color, grid.AppPalette.textSecondary);
       // A long name is cut short rather than pushing the points out.
       final name = tester.widget<Text>(
         within(
@@ -276,7 +266,7 @@ void main() {
         find.bySemanticsLabel(RegExp('Number one this week')),
         findsOneWidget,
       );
-      // After the name, before the points; the numeral stays.
+      // After the name, before the points.
       expect(
         tester.getTopLeft(crown('peer')).dx,
         greaterThan(tester.getTopLeft(nameIn('peer', 'dee')).dx),
@@ -284,10 +274,6 @@ void main() {
       expect(
         tester.getTopRight(crown('peer')).dx,
         lessThan(tester.getTopLeft(part('points', 'peer')).dx),
-      );
-      expect(
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-        findsOneWidget,
       );
       // A crowned row is as tall as one without; the columns hold.
       expect(
@@ -414,8 +400,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    final right = tester.getTopRight(part('rank', 'peer')).dx;
-    expect(tester.getTopRight(part('rank', 'huy')).dx, right);
     final points = tester.getTopRight(part('points', 'peer')).dx;
     expect(tester.getTopRight(part('points', 'owner')).dx, points);
     await close(tester, controller);
@@ -478,7 +462,7 @@ void main() {
   });
 
   testWidgets(
-    'keeps a row with no points in rank order, its 0 in the points style',
+    'keeps a row with no points in name order, its 0 in the points style',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       final zero = styleOf(
