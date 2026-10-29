@@ -80,6 +80,19 @@ function writeWorktrees(file: string, worktrees: SwarmWorktree[]) {
   writeFileSync(`${file}.next`, JSON.stringify({ version: 1, worktrees }), { mode: 0o600, flush: true })
   renameSync(`${file}.next`, file)
 }
+/** The starts this machine launched whose engines have not recorded their sessions yet (ContributedMachines `abandoned`),
+ *  kept across a restart: in memory only, a daemon restarted between the launch and the Swarm failing the start would
+ *  forget the agent it launched, and it would stay up with no Swarm agent, as ten did on Mac Auto (2026-10-29). */
+export const swarmUnconfirmedFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-unconfirmed-${machineId}.json`)
+type SavedLaunch = { startId: string; path: string; harnessId: string; creationId: string }
+function readUnconfirmed(file: string): SavedLaunch[] {
+  let saved: unknown
+  try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
+  const rows = object(saved).launches
+  return (Array.isArray(rows) ? rows.map(object) : []).filter(l => [l.startId, l.harnessId, l.creationId].every(identifier)
+    && typeof l.path === 'string' && l.path.startsWith('/api/')) as unknown as SavedLaunch[]
+}
+
 const within = (parent: string, path: string) => {
   const rel = relative(resolve(parent), resolve(path))
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
@@ -369,6 +382,7 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
@@ -593,8 +607,8 @@ export class ContributedMachines {
               else this.preparing.delete(String(start.id))
               // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
               if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
-                this.unconfirmed.set(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
-              } else this.unconfirmed.delete(String(start.id))
+                this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
+              } else this.forget(String(start.id))
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
@@ -620,6 +634,36 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+  private unconfirmedLoaded = false
+  /** The launches an earlier run of this daemon kept ([swarmUnconfirmedFile]), once, before the first pass looks at them. */
+  private loadUnconfirmed(): void {
+    if (this.unconfirmedLoaded) return
+    this.unconfirmedLoaded = true
+    for (const launch of readUnconfirmed(swarmUnconfirmedFile(this.core.dataDir, this.machineId))) {
+      if (!this.unconfirmed.has(launch.startId)) {
+        this.unconfirmed.set(launch.startId, { path: launch.path, harnessId: launch.harnessId, creationId: launch.creationId, tries: 0, checking: false })
+      }
+    }
+  }
+  private remember(startId: string, launch: Unconfirmed): void {
+    const known = this.unconfirmed.get(startId)
+    this.unconfirmed.set(startId, launch)
+    if (!known || known.harnessId !== launch.harnessId || known.creationId !== launch.creationId) this.saveUnconfirmed()
+  }
+  private forget(startId: string): void {
+    if (this.unconfirmed.delete(startId)) this.saveUnconfirmed()
+  }
+  /** Written whole on each change; a write that fails leaves the launches in memory, as before. */
+  private saveUnconfirmed(): void {
+    const file = swarmUnconfirmedFile(this.core.dataDir, this.machineId)
+    const launches: SavedLaunch[] = [...this.unconfirmed].map(([startId, l]) => ({ startId, path: l.path, harnessId: l.harnessId, creationId: l.creationId }))
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+      writeFileSync(`${file}.next`, JSON.stringify({ version: 1, launches }), { mode: 0o600 })
+      renameSync(`${file}.next`, file)
+    } catch (error) { this.log(`Could not keep the starts awaiting their sessions: ${error instanceof Error ? error.message : String(error)}`) }
+  }
+
   /**
    * A start this host launched, its engine never recording its session, that the backend no longer lists as pending: when
    * the backend says it failed (its machine did not start it within 3 minutes, say) and joined no agent, the agent this
@@ -632,20 +676,20 @@ export class ContributedMachines {
     launch.checking = true
     try {
       const status = object(await this.deps.backend(this.core, 'GET', launch.path))
-      if (identifier(status.harnessId) || !status.error) { this.unconfirmed.delete(startId); return }
+      if (identifier(status.harnessId) || !status.error) { this.forget(startId); return }
       const close = this.core.agents.closeMember
-      if (!close) { this.unconfirmed.delete(startId); return }
+      if (!close) { this.forget(startId); return }
       const closed = await close(launch.harnessId, launch.creationId)
       if ('closed' in closed && closed.closed) {
-        this.unconfirmed.delete(startId)
+        this.forget(startId)
         this.log(`Stopped the agent a failed start launched (start ${startId}, session ${launch.harnessId.slice(0, 8)}): ${String(status.error)}`)
         return
       }
       // Not this start's own agent, as its receipt says: nothing here to stop.
-      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.unconfirmed.delete(startId); return }
+      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.forget(startId); return }
       throw new Error(`${'error' in closed ? closed.error : 'unknown'}${'detail' in closed && closed.detail ? `: ${closed.detail}` : ''}`)
     } catch (error) {
-      if (++launch.tries >= ABANDONED_TRIES) this.unconfirmed.delete(startId)
+      if (++launch.tries >= ABANDONED_TRIES) this.forget(startId)
       this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
     } finally { launch.checking = false }
   }
