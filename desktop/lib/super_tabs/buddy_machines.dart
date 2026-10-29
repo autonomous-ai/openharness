@@ -18,13 +18,12 @@ import 'machines.dart';
 /// 10-29). An [offline] one is listed but cannot be picked.
 typedef BuddyMachine = ({String id, String name, bool inSwarm, bool offline});
 
-/// The menu's group of the reader's own machines, and who reads the chat of a
-/// Buddy there (Dee, 10-29).
+/// The menu's group of the reader's own machines. The picker has only its
+/// headings, machine names and 'offline': no notes (Dee, 10-29).
 const kBuddyOwnMachines = 'Your machines';
-const kBuddyOwnMachinesReaders = 'Only you can read the chat';
 
-/// Why a row cannot be picked.
-const kBuddyMachineOffline = 'Offline';
+/// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
+const kBuddyMachineOffline = 'offline';
 
 /// The reader's own machines a Buddy may run on, like a Lead, whatever its
 /// engine (Ken, 10-28): those signed in to their account, in the Swarm or not,
@@ -104,8 +103,8 @@ class BuddyMachineField extends StatefulWidget {
   final bool busy;
   final bool fitNames;
 
-  /// Wide enough for the heading and its note on one line.
-  static const menuMinWidth = 300.0;
+  /// Wide enough for a long machine name and its state on one line.
+  static const menuMinWidth = 260.0;
 
   @override
   State<BuddyMachineField> createState() => _BuddyMachineFieldState();
@@ -136,19 +135,9 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
       ),
       child: Semantics(
         header: true,
-        child: Row(
-          children: [
-            Text(kBuddyOwnMachines, style: DesktopChrome.control(medium: true)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                kBuddyOwnMachinesReaders,
-                key: const ValueKey('super-buddy-machines-readers'),
-                textAlign: TextAlign.end,
-                style: DesktopChrome.metadata(color: DesktopChrome.muted),
-              ),
-            ),
-          ],
+        child: Text(
+          kBuddyOwnMachines,
+          style: DesktopChrome.control(medium: true),
         ),
       ),
     ),
