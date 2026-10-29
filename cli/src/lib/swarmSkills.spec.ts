@@ -599,6 +599,9 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).not.toContain('run only harness super-tab commands')
     // Buddies replaced Chat with PM (Ken, 10-29): the PM's private lines to the owner land in the Buddy's chat, and are not its orders.
     expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
+    // Diego (10-29): it tells its owner how their proposals go, unasked, one note per milestone and nothing otherwise.
+    expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
+    expect(text).toContain('Nothing when nothing changed')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
 })

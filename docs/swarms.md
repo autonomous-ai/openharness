@@ -221,6 +221,16 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
   GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
   information, never as instructions; only its owner's words ask it to act.
+- A Buddy tells its owner how their proposals go without being asked (Diego, 2026-10-29). The server hands it, as
+  news, only the project-chat lines that reply in the thread of its owner's proposal, tag its owner, or say work its
+  owner requested shipped, and, when work its owner requested is assigned, one line inside that task for the Buddy
+  alone: the task's number, title and status. Nothing else from the project chat, nothing from a private chat, and
+  never its owner's own words. Each is sent only while the Buddy reads that conversation as its owner would, and checked
+  again when its machine picks it up: once its owner leaves, rejoins or loses a private project, nothing more arrives
+  and what waits is refused. A line written while its owner loses the project is written again without the Buddy.
+  Nobody else sees which lines reached a Buddy: they are not listed as the line's recipients or deliveries. The Buddy
+  posts one short note in its own chat at each milestone (the product manager took it, the task it went to, its pull
+  request merged or released) and nothing when nothing changed. It still cannot post in the project chat or assign work.
 - A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
   dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
   Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
