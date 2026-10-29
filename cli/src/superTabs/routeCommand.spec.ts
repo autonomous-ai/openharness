@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heldLocalModels, localProbes, routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, offlineModels, routeTask } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
@@ -1288,6 +1288,31 @@ describe('local models on the Swarm\'s grid', () => {
       { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local', holders: [], refused: why },
       { model: 'tiny', label: 'Tiny 1B', kind: 'local', holders: [], refused: 'small' },
     ])
+  })
+  it('leaves out a model whose host is offline, with that reason, unless another host serves it', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true }, machines: [
+      { machineId: 'm1', name: 'remote-1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }] } },
+      { machineId: 'rig', name: '2x 4090 Rig', observation: { receivedAt: Date.now() - 10 * 60_000, localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', name: 'Kimi K3' },
+        { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
+      { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, opener(), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
+      { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so a Builder on it would never start.' },
+      { title: 'unnamed-host', reason: 'Its host, a machine of this Swarm, is offline, so a Builder on it would never start.' },
+    ])
+    expect(result).toMatchObject({ ok: true, pick: { gridModel: 'deepseek/deepseek-v4.1' } })
+    // Nothing offline is said for a review, which never runs on the grid, or with the add-on off.
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'lead' })
+    const review = scoped({ tab: t })
+    await routeTask(input, review, where as never, opener(), () => 'op')
+    expect(JSON.stringify(recorded(review).command.decision.excluded)).not.toContain('offline, so a Builder')
+    const off = { ...routing, localModels: { quality: 1, enabled: false } }
+    expect(offlineModels(t.state, off, assessment, false)).toEqual([])
+    expect(offlineModels(t.state, off, { ...assessment, local: true }, false)).toHaveLength(2)
+    expect(offlineModels({ ...t.state, localModels: { grid: GRID, enabled: false } }, routing, assessment, false)).toEqual([])
+    expect(offlineModels({ ...t.state, localModels: undefined }, routing, assessment, false)).toEqual([])
   })
   it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },

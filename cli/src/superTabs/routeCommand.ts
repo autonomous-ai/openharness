@@ -297,6 +297,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
   const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
+  choice.excluded.push(...offlineModels(state, policy, assessment, review))
   // The task stays in the Lead's queue rather than going where it cannot be done.
   if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
   const verdict = decide(choice)
@@ -419,6 +420,26 @@ export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Ass
   return [...bases.values()].flatMap(base => [...served.values()].filter(m => !m.machines || m.machines.has(base.machineId))
     .map((m): Probe => ({ ...base, model: 'default', effort: 'default', quality: gridQuality(policy, m.model, m.label), cost: 1, quota: UNKNOWN_QUOTA, known: true,
       refusals: base.refusals.filter(r => !SUBSCRIPTION.test(r)), gridModel: m.model, gridName: m.grid, gridLabel: m.label, gridKind: m.kind })))
+}
+
+/** The models a machine served for the Swarm when it last reported, while it is offline now and no other machine serves them:
+ *  left out with that reason, so no Builder is sent to a dead host (Kimi K3 on a 4090 rig, offered 15 times and never run,
+ *  2026-10-29). Only where [localProbes] would offer them. */
+export function offlineModels(state: Json, policy: Policy, a: Assessment, review: boolean, now: number = Date.now()): Array<{ title: string; reason: string }> {
+  const addOn = object(state.localModels)
+  if (addOn.enabled !== true || typeof addOn.grid !== 'string' || review || (policy.localModels?.enabled === false && !a.local)) return []
+  const served = servedModels(state, addOn.grid, now), out: Array<{ title: string; reason: string }> = []
+  for (const machine of list(state.machines)) {
+    const observed = object(machine.observation)
+    if (finite(observed.receivedAt) && now - observed.receivedAt <= LOCAL_FRESH_MS) continue
+    const host = text(machine.name)
+    for (const l of list(observed.localModels)) {
+      if (typeof l.grid !== 'string' || typeof l.model !== 'string' || l.starting === true || served.has(`${l.grid}\0${l.model}`)) continue
+      const title = text(l.name) ?? l.model
+      if (!out.some(o => o.title === title)) out.push({ title, reason: `Its host${host ? ` ${host}` : ', a machine of this Swarm,'} is offline, so a Builder on it would never start.` })
+    }
+  }
+  return out
 }
 
 async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean },
