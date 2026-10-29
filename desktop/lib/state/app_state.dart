@@ -9657,6 +9657,9 @@ class AppNotifier extends ChangeNotifier {
         _stopOfflineRetry(entry.key);
         _stopLinkRetry(entry.key);
         _stopAgentSyncTimer(entry.key);
+        // The socket goes too, as on mobile: left in the pool it kept selecting a machine the
+        // backend refuses (roadmap Phase 1.1, 2026-10-28), and nothing here looked at it again.
+        unawaited(_pool?.closeMachine(entry.key));
       }
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
@@ -12123,6 +12126,11 @@ class AppNotifier extends ChangeNotifier {
     if (machineStates[machineId]?.machine.isShared == true) {
       throw StateError('This harness is shared with view-only access.');
     }
+    // A machine id the loaded list does not name (a deleted machine a pane or a Swarm agent still
+    // names) gets no socket: it would only select a machine the backend refuses (roadmap Phase 1.1).
+    if (_machineInventoryLoaded && !machineStates.containsKey(machineId)) {
+      throw StateError('This machine is no longer on your account.');
+    }
     final testConnection = connectionForTest;
     if (testConnection != null) return testConnection(machineId);
     // The local-manual dev fixture exercises a locally-run backend+node stack directly (no real
@@ -14239,6 +14247,11 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 4),
       );
+    } on WsRequestFailure catch (failure) {
+      // The connection throws a refusal; it is still an answer. Swallowed, a
+      // NOT_INDEXED row read as no answer and was re-read every 5 seconds:
+      // 2,139 failed reads in 3 hours from one computer (2026-10-29).
+      return {...failure.payload, 'error': failure.code};
     } catch (_) {
       return null;
     }
