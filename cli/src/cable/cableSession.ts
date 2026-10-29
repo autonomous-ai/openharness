@@ -167,6 +167,8 @@ const RECAP_FRAME_MAX = 6 * 1024
 /** Repeats of one Lead's recap request inside this are ignored; a device that picks another stale announce within this is not followed. */
 const RECAP_REPEAT_MS = 1000
 const PICK_ECHO_MS = 2000
+/** Cards still not read this long after attach: the dial is told there are none, not left on a list nobody vouches for. */
+const CARDS_UNREAD_MS = 10_000
 /** The recap frame, its text shortened (on a character) until the whole JSON fits what the Pro reads. A chat's recap names
  *  its chat (`chatId`), for a round dial that speaks swarmChat; any other is today's frame. */
 export function recapFrame(r: LeadRecap): Message {
@@ -383,8 +385,8 @@ export interface CableHost {
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
-  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); empty until it has. */
-  swarmCards?(): SwarmCard[]
+  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); null until it has, which is not "no Swarms". */
+  swarmCards?(): SwarmCard[] | null
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void
   /** One Lead's last message, read on request; null when it could not be read. */
@@ -2683,6 +2685,7 @@ export class CableSession {
   /** Each Swarm's `supertab` frame as the Pro was last sent it, and the ids list: only a difference is sent again. */
   private readonly cardKeys = new Map<string, string>()
   private cardIdsKey = ''
+  private cardsUnread: ReturnType<typeof setTimeout> | null = null
   private cardTimer: ReturnType<typeof setTimeout> | null = null
   /** The Lead whose recap the Pro has open: the only one a changed text is pushed for. */
   private openLead: { tabId: string; leadId: string } | null = null
@@ -2736,6 +2739,8 @@ export class CableSession {
   private dropCards(): void {
     if (this.cardTimer) clearTimeout(this.cardTimer)
     this.cardTimer = null
+    if (this.cardsUnread) clearTimeout(this.cardsUnread)
+    this.cardsUnread = null
     this.cardKeys.clear()
     this.cardIdsKey = ''
     this.focusedKey = ''
@@ -2773,7 +2778,26 @@ export class CableSession {
   private async pushSwarmCards(force: boolean): Promise<void> {
     if (!this.swarmCard) return
     if (force) { this.cardKeys.clear(); this.cardIdsKey = ''; this.focusedKey = '' }
-    const cards = (this.host.swarmCards?.() ?? []).slice(0, SWARM_CARDS_MAX)
+    // Nothing until the core has read them: an empty list on a daemon that had just started sent the dial off the Swarm on
+    // its face, onto TABS, 2 s before the real list came (Diego, 2026-10-29). Empty only ever means no Swarms, as it does for
+    // a host with no cards at all.
+    const read = this.host.swarmCards ? this.host.swarmCards() : []
+    if (!read) {
+      // Bounded: a daemon that came back signed out never reads them, and a dial that kept its link would show the old
+      // Swarms on. After CARDS_UNREAD_MS it is told there are none; the real list replaces that whenever it comes.
+      if (force && !this.cardsUnread) {
+        this.cardsUnread = setTimeout(() => {
+          this.cardsUnread = null
+          if (this.host.swarmCards?.() || this.cardIdsKey) return
+          this.cardIdsKey = '[]'
+          this.queued(async () => { await this.send({ t: 'supertabs', ids: [] }) }).catch((err) => this.log(`cable: swarm cards failed (${(err as Error).message})`))
+        }, CARDS_UNREAD_MS)
+        this.cardsUnread.unref?.()
+      }
+      return
+    }
+    if (this.cardsUnread) { clearTimeout(this.cardsUnread); this.cardsUnread = null }
+    const cards = read.slice(0, SWARM_CARDS_MAX)
     const desk = this.host.listSwarms().swarms
     const ids = JSON.stringify(cards.map((c) => c.id))
     if (ids !== this.cardIdsKey) {
@@ -2862,7 +2886,7 @@ export class CableSession {
       return
     }
     // Not in the list yet: asked again when it arrives.
-    const card = this.host.swarmCards?.().find((c) => c.id === open.superTabId)
+    const card = this.host.swarmCards?.()?.find((c) => c.id === open.superTabId)
     if (!card) { this.logFocus(`cable: swarm focus ${named} · held: no such Swarm in the list`); return }
     const lead = open.projectId ? card.leads.find((l) => l.projectId === open.projectId) : undefined
     if (open.projectId && !lead) { this.logFocus(`cable: swarm focus ${named} · held: no Lead for that project`); return }
@@ -2905,7 +2929,7 @@ export class CableSession {
       return
     }
     if (type === 'supertab.select') {
-      const projectId = this.host.swarmCards?.().find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
+      const projectId = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
       if (!projectId) { this.log(`cable: ignored pick of unknown Lead ${lead}`); return }
       // Remembered before the window answers, so its announce of this very project is not sent back as a focus.
       this.focusedKey = `${tab}/${projectId}`

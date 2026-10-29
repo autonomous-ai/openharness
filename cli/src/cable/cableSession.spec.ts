@@ -3725,7 +3725,7 @@ describe('swarm cards', () => {
     swarms: rows.map((r) => ({ name: r.id, agents: 0, agentIds: [] as string[], panes: 0, ...r })) })
 
   /** A host whose cards, desk tab and window project the test moves. */
-  function cardHost(state: { cards: SwarmCard[]; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
+  function cardHost(state: { cards: SwarmCard[] | null; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
     return makeHost({
       swarmCards: () => state.cards,
       listSwarms: () => state.desk ?? desk(),
@@ -3781,6 +3781,58 @@ describe('swarm cards', () => {
       expect(host.swarmCardsWanted).toHaveBeenLastCalledWith(false)
       expect(host.swarmCardsWanted).toHaveBeenCalledTimes(2)
     } finally { await session.stop() }
+  })
+
+  it('on attach before the cards were read: no supertabs at all, then the real list once it comes; an empty one read is sent', async () => {
+    // A daemon that had just started told the dial "no Swarms" before the core had read them, and the dial left the Swarm
+    // on its face for TABS; the list came 2 s later (Diego, 2026-10-29).
+    const state = { cards: null as SwarmCard[] | null }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(host.swarmCardsWanted).toHaveBeenCalledWith(true))
+      await settle(); await settle()
+      expect(ofType(port, 'supertabs')).toEqual([])
+      expect(ofType(port, 'supertab')).toEqual([])
+      state.cards = [card('st1'), card('st2')]
+      await session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1', 'st2'] }])
+      // Read and empty: there are no Swarms, and the dial is told so.
+      state.cards = []
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertabs').at(-1)).toEqual({ t: 'supertabs', ids: [] })
+    } finally { await session.stop() }
+  })
+
+  it('cards still not read 10 s after attach: the dial is told no Swarms rather than keep a list nobody vouches for', async () => {
+    // A daemon that came back signed out never reads them, and a dial that kept its link would show the old Swarms on.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const state = { cards: null as SwarmCard[] | null }
+      const { session, port } = await connect(cardHost(state))
+      port.say(PRO)
+      await vi.advanceTimersByTimeAsync(9_000)
+      expect(ofType(port, 'supertabs')).toEqual([])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: [] }])
+      // Read later: the real list follows.
+      state.cards = [card('st1')]
+      await session.syncSwarmCards()
+      await vi.advanceTimersByTimeAsync(300)
+      expect(ofType(port, 'supertabs').at(-1)).toEqual({ t: 'supertabs', ids: ['st1'] })
+      // Read in time: no empty list at all.
+      const fresh = { cards: null as SwarmCard[] | null }
+      const second = await connect(cardHost(fresh))
+      second.port.say(PRO)
+      await vi.advanceTimersByTimeAsync(2_000)
+      fresh.cards = [card('st1')]
+      await second.session.syncSwarmCards()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ofType(second.port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1'] }])
+      await session.stop(); await second.session.stop()
+    } finally { vi.useRealTimers() }
   })
 
   it('still sends the cards, with no tab link, when the desktop is closed', async () => {

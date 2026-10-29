@@ -418,13 +418,13 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (superTabs/inCore/cards.ts replays). */
-  private cards: SwarmCard[] = []
+  private cards: SwarmCard[] | null = null
 
   setSwarmCards(items: SwarmCard[]): void {
     this.cards = items
   }
 
-  swarmCards(): SwarmCard[] {
+  swarmCards(): SwarmCard[] | null {
     return this.cards
   }
 
