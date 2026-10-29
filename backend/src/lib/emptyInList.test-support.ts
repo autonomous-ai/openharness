@@ -22,6 +22,14 @@ const conditionOf = (node: ts.Node): ts.Expression => ts.isIfStatement(node) ? n
 const isLengthOf = (node: ts.Node, list: string): boolean => ts.isPropertyAccessExpression(node) && ['length', 'size'].includes(node.name.text) && node.expression.getText() === list
 const numberOf = (node: ts.Node): number | null => ts.isNumericLiteral(node) ? Number(node.text) : null
 const SIGNS = ts.SyntaxKind
+/** The comparison with its two sides swapped. */
+const MIRROR: Partial<Record<ts.SyntaxKind, ts.SyntaxKind>> = { [SIGNS.EqualsEqualsToken]: SIGNS.EqualsEqualsToken, [SIGNS.EqualsEqualsEqualsToken]: SIGNS.EqualsEqualsEqualsToken,
+  [SIGNS.ExclamationEqualsToken]: SIGNS.ExclamationEqualsToken, [SIGNS.ExclamationEqualsEqualsToken]: SIGNS.ExclamationEqualsEqualsToken,
+  [SIGNS.GreaterThanToken]: SIGNS.LessThanToken, [SIGNS.GreaterThanEqualsToken]: SIGNS.LessThanEqualsToken,
+  [SIGNS.LessThanToken]: SIGNS.GreaterThanToken, [SIGNS.LessThanEqualsToken]: SIGNS.GreaterThanEqualsToken }
+/** `length <sign> number` for the comparisons that split the empty list from every other: nothing else says whether it is empty. */
+const EMPTY_OR_NOT: Array<[ts.SyntaxKind, number]> = [[SIGNS.EqualsEqualsToken, 0], [SIGNS.EqualsEqualsEqualsToken, 0], [SIGNS.ExclamationEqualsToken, 0],
+  [SIGNS.ExclamationEqualsEqualsToken, 0], [SIGNS.GreaterThanToken, 0], [SIGNS.LessThanEqualsToken, 0], [SIGNS.LessThanToken, 1], [SIGNS.GreaterThanEqualsToken, 1]]
 /** Whether `condition` tells an empty `list` from one that is not: its length alone (or `!`), or its length against 0 or 1. */
 function tellsEmpty(condition: ts.Node, list: string): boolean {
   if (ts.isParenthesizedExpression(condition)) return tellsEmpty(condition.expression, list)
@@ -31,11 +39,12 @@ function tellsEmpty(condition: ts.Node, list: string): boolean {
     const op = condition.operatorToken.kind
     if (op === SIGNS.AmpersandAmpersandToken || op === SIGNS.BarBarToken) return tellsEmpty(condition.left, list) || tellsEmpty(condition.right, list)
     const [left, right] = [numberOf(condition.left), numberOf(condition.right)]
-    const bound = isLengthOf(condition.left, list) ? right : isLengthOf(condition.right, list) ? left : null
+    // Written with the length on the left: `0 < ids.length` is `ids.length > 0`.
+    const lengthFirst = isLengthOf(condition.left, list)
+    const bound = lengthFirst ? right : isLengthOf(condition.right, list) ? left : null
     if (bound === null) return false
-    const compares = [SIGNS.EqualsEqualsToken, SIGNS.EqualsEqualsEqualsToken, SIGNS.ExclamationEqualsToken, SIGNS.ExclamationEqualsEqualsToken,
-      SIGNS.GreaterThanToken, SIGNS.GreaterThanEqualsToken, SIGNS.LessThanToken, SIGNS.LessThanEqualsToken]
-    return compares.includes(op) && (bound === 0 || bound === 1)
+    const sign = lengthFirst ? op : MIRROR[op]
+    return sign !== undefined && EMPTY_OR_NOT.some(([kind, number]) => kind === sign && number === bound)
   }
   return false
 }
@@ -89,17 +98,20 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isPropertyAccessExpression(node.expression.expression)
       && GUARDED_MODELS.has(node.expression.expression.name.text)) {
       const seen = new Set<ts.Node>()
-      /** The `const` an identifier in the call names, when it was built before the call: the filter is read as if written in it. */
+      /** What the identifier names where it is used: the nearest `const` or `let` before it in its own block or an enclosing one, and
+       *  nothing when a parameter of a nearer function has that name (it holds whatever its caller passes). */
       const builtBefore = (id: ts.Identifier): ts.Expression | undefined => {
-        let scope: ts.Node | undefined = node.parent
-        while (scope && !ts.isFunctionLike(scope)) scope = scope.parent
-        let found: ts.Expression | undefined
-        const search = (inside: ts.Node) => {
-          if (ts.isVariableDeclaration(inside) && inside.name.getText() === id.text && inside.initializer && inside.end <= node.getStart()) found = inside.initializer
-          ts.forEachChild(inside, search)
+        for (let scope: ts.Node | undefined = id.parent; scope; scope = scope.parent) {
+          if (ts.isFunctionLike(scope) && scope.parameters.some(p => p.name.getText() === id.text)) return undefined
+          const statements = ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) ? scope.statements : ts.isCaseClause(scope) || ts.isDefaultClause(scope) ? scope.statements : null
+          let found: ts.VariableDeclaration | undefined
+          for (const statement of statements ?? []) {
+            if (statement.end > id.getStart()) break
+            if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) if (declaration.name.getText() === id.text) found = declaration
+          }
+          if (found) return found.initializer
         }
-        search(scope ?? sf)
-        return found
+        return undefined
       }
       const lookFor = (inner: ts.Node) => {
         if (ts.isIdentifier(inner) && !(inner.parent && (ts.isPropertyAssignment(inner.parent) || ts.isPropertyAccessExpression(inner.parent)) && inner.parent.name === inner)) {

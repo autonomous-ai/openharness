@@ -63,6 +63,33 @@ describe('the empty id list check', () => {
     }
   })
 
+  it('counts a comparison only when it tells empty from not empty', () => {
+    const read = `return tx.user.findMany({ where: { id: { in: ids } } })`
+    // Empty or not empty, whichever way round the two sides are written.
+    for (const test of ['ids.length === 0', 'ids.length == 0', 'ids.length !== 0', 'ids.length != 0', 'ids.length > 0', 'ids.length <= 0', 'ids.length < 1', 'ids.length >= 1',
+      '0 === ids.length', '0 !== ids.length', '0 < ids.length', '0 >= ids.length', '1 > ids.length', '1 <= ids.length']) {
+      expect(lint(`async function f(tx, ids) { if (${test}) return []; ${read} }`), test).toEqual([])
+    }
+    // Always or never true, or about some other size: the empty list still goes through.
+    for (const test of ['ids.length < 0', 'ids.length >= 0', 'ids.length > 1', 'ids.length <= 1', 'ids.length === 1', 'ids.length !== 1', 'ids.length < 2', 'ids.length >= 2',
+      '0 > ids.length', '0 <= ids.length', '1 < ids.length', '1 >= ids.length', '0 === ids.length + 1']) {
+      expect(lint(`async function f(tx, ids) { if (${test}) return []; ${read} }`), test).toEqual(['ids'])
+    }
+  })
+
+  it('reads the filter variable visible at the read, not another of the same name', () => {
+    // An unused inner `where` does not hide the unsafe one the read uses.
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; { const where = { ok: true }; use(where) } return tx.user.findMany({ where }) }`)).toEqual(['ids'])
+    // An unsafe filter in an inner block is not the one the read uses.
+    expect(lint(`async function f(tx, ids, x) { const where = { ok: true }; if (x) { const where = { id: { in: ids } }; use(where) } return tx.user.findMany({ where }) }`)).toEqual([])
+    // The read inside the inner block sees the inner one.
+    expect(lint(`async function f(tx, ids, x) { const where = { ok: true }; if (x) { const where = { id: { in: ids } }; return tx.user.findMany({ where }) } }`)).toEqual(['ids'])
+    // A parameter of the same name hides an outer filter; a filter declared after the read is not seen by it.
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return (where2 => tx.user.findMany({ where: where2 }))({ ok: true }) }`)).toEqual([])
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; const g = (where) => tx.user.findMany({ where }); return g }`)).toEqual([])
+    expect(lint(`async function f(tx, ids) { const found = tx.user.findMany({ where }); const where = { id: { in: ids } }; return found }`)).toEqual([])
+  })
+
   it('accepts a literal list, a constant and other models', () => {
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { authMode: { in: BILLED_MODES } } }) }`)).toEqual([])
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { sessionKind: { in: ['team', 'person'] } } }) }`)).toEqual([])
