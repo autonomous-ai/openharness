@@ -1,0 +1,259 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+/// The project screen of Tony's Swarm Home, direction C (2026-10-30): the
+/// project's #name over its team line, and two tabs, Chat and Team.
+void main() {
+  const board = '/api/super-tabs/$tab/leaderboard?projectId=$project';
+
+  /// One Swarm whose project Mobile has three people (the viewer, diego and
+  /// ken) and four agents: River, the Product Manager; Nova at work on g1;
+  /// Juno, whose work waits on a person; and Ash with none.
+  FakeSwarm backend() {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(
+        agents: [
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+          agent('agent-builder', displayName: 'Nova'),
+          agent('agent-juno', displayName: 'Juno'),
+          agent('agent-ash', displayName: 'Ash'),
+        ],
+        groups: [
+          groupData(
+            'g1',
+            title: 'Buddy chat header',
+            number: 2156,
+            agentIds: ['agent-lead', 'agent-builder'],
+            status: 'working',
+            workerId: 'agent-builder',
+            lastMessageSequence: 3,
+          ),
+          groupData(
+            'g2',
+            title: 'Saved views cache',
+            number: 2160,
+            agentIds: ['agent-lead', 'agent-juno'],
+            status: 'needs_human',
+            workerId: 'agent-juno',
+            lastMessageSequence: 4,
+          ),
+        ],
+      ),
+      'members': [
+        part(me, 1, person(me)),
+        part('diego', 1, person('diego', role: 'collaborator')),
+        part('ken', 1, person('ken', role: 'collaborator')),
+      ],
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+        (_) => {
+          'messages': [
+            {
+              'id': 'msg-lead-1',
+              'conversationId': leadChat,
+              'text': 'CI on #2154 is green.',
+              'sequence': 1,
+              'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+              'createdAt': '2026-10-29T02:40:00.000Z',
+            },
+          ],
+          'next': null,
+        };
+    fake.routes[board] = (_) => leaderboardData(
+      people: [
+        scoreData(me, points: 1320, rank: 1),
+        scoreData('diego', points: 1050, rank: 2),
+        scoreData('ken', points: 640, rank: 3),
+      ],
+    );
+    return fake;
+  }
+
+  /// [home] under a signed-in shell's Swarm, with Swarm turned on.
+  Future<SwarmHost> pump(
+    WidgetTester tester,
+    FakeSwarm fake,
+    Widget home,
+  ) async {
+    final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+      ..value = {PhoneExperiment.swarm};
+    final account = ValueNotifier<String?>(me);
+    final host = SwarmHost(
+      accountId: () => account.value,
+      account: account,
+      request: fake.request,
+      notices: SilentSystemNotices(),
+      features: features,
+    )..foreground = false;
+    addTearDown(host.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: home,
+      ),
+    );
+    await tester.pumpAndSettle();
+    return host;
+  }
+
+  Finder key(String value) => find.byKey(ValueKey(value));
+
+  const page = SwarmProjectPage(
+    swarmId: tab,
+    projectId: project,
+    tabs: SwarmProjectTab.homeC,
+  );
+
+  group('the project screen', () {
+    testWidgets('its #name over the humans, the agents and who is working', (
+      tester,
+    ) async {
+      await pump(tester, backend(), page);
+
+      expect(
+        tester.widget<Text>(key('swarm-title')).data,
+        '#Mobile',
+        reason: 'a channel name, as Slack writes one',
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-project-team-line'),
+          matching: find.textContaining(
+            '3 humans · 4 agents · ● 1 working',
+            findRichText: true,
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('one human and one agent are said so', (tester) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(
+          agents: [agent('agent-lead', name: 'Lead', displayName: 'River')],
+        ),
+        'members': [part(me, 1, person(me))],
+      };
+      await pump(tester, fake, page);
+
+      expect(
+        find.descendant(
+          of: key('swarm-project-team-line'),
+          matching: find.textContaining(
+            '1 human · 1 agent · All idle',
+            findRichText: true,
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a private project counts only the people who read it', (
+      tester,
+    ) async {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        final head = (read['head'] as Map)['data'] as Map<String, dynamic>;
+        final mobile = (head['projects'] as List).single as Map;
+        mobile['visibility'] = 'private';
+        mobile['members'] = [
+          {'id': 'diego', 'generation': 'gen-diego'},
+        ];
+        return read;
+      };
+      await pump(tester, fake, page);
+
+      expect(
+        find.descendant(
+          of: key('swarm-project-team-line'),
+          matching: find.textContaining(
+            '2 humans · 4 agents',
+            findRichText: true,
+          ),
+        ),
+        findsOneWidget,
+        reason: 'its owner (the viewer) and diego; ken does not read it',
+      );
+    });
+
+    testWidgets('has two tabs, Chat and Team, each half the width and a '
+        "finger's height", (tester) async {
+      await pump(tester, backend(), page);
+
+      for (final name in ['buddy', 'tasks', 'leaderboard']) {
+        expect(key('swarm-project-tab-$name'), findsNothing, reason: name);
+      }
+      final width = tester.getSize(find.byType(SwarmProjectPage)).width;
+      for (final name in ['chat', 'team']) {
+        final size = tester.getSize(key('swarm-project-tab-$name'));
+        expect(size.height, greaterThanOrEqualTo(minTouchTarget), reason: name);
+        expect(size.width, greaterThan(width / 2 - 16), reason: name);
+      }
+      expect(find.text('Chat'), findsOneWidget);
+      expect(find.text('Team'), findsOneWidget);
+      expect(
+        key('swarm-project-team'),
+        findsNothing,
+        reason: 'the team is a tab, not a sheet from the header',
+      );
+    });
+
+    testWidgets('opens on its chat, and Team shows the team in its place', (
+      tester,
+    ) async {
+      await pump(tester, backend(), page);
+      expect(find.text('CI on #2154 is green.'), findsOneWidget);
+      expect(key('swarm-project-body-chat'), findsOneWidget);
+
+      await tester.tap(key('swarm-project-tab-team'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-project-body-team'), findsOneWidget);
+      expect(find.text('CI on #2154 is green.'), findsNothing);
+      expect(
+        tester
+            .widget<Semantics>(key('swarm-project-tab-team'))
+            .properties
+            .selected,
+        isTrue,
+      );
+    });
+
+    testWidgets('the four tabs of direction B stay as they were', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(),
+        const SwarmProjectPage(swarmId: tab, projectId: project),
+      );
+
+      for (final name in ['chat', 'buddy', 'tasks', 'leaderboard']) {
+        expect(key('swarm-project-tab-$name'), findsOneWidget, reason: name);
+      }
+      expect(key('swarm-project-tab-team'), findsNothing);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Mobile');
+      expect(key('swarm-project-team'), findsOneWidget);
+    });
+  });
+}
