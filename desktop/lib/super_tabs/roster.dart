@@ -13,6 +13,7 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
@@ -21,16 +22,16 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
-import 'leaderboard/goal_line.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
+import 'leaderboard/tabs.dart';
 import 'leaderboard/waiting_line.dart';
+import 'leaderboard/worker_rows.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
-import 'team_glance.dart';
-import 'team_glance_panel.dart';
+import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
 /// leaderboard of the open conversation's project, and agents from the
@@ -70,6 +71,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     every: const Duration(minutes: 5),
   );
   String? _boardProject;
+
+  /// Which of the board's lists shows: people, agents or models.
+  var _tab = LeaderboardTab.humans;
 
   /// The project of the open conversation, whose board Humans show.
   String get _projectId => c.snapshot?.projectFor(c.selectedId)?.id ?? 'lead';
@@ -367,8 +371,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'Product Manager'
             : agent.isReviewer
             ? 'Reviewer'
-            : agent.isBuddy
-            ? 'Buddy'
             : 'Engineer');
     final badge =
         customRole?.name ??
@@ -376,8 +378,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'PM'
             : agent.isReviewer
             ? 'Rev'
-            : agent.isBuddy
-            ? 'Buddy'
             : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
@@ -495,7 +495,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     // agents in it, the project's Lead.
     final audience = c.selected?.audience;
     final members =
-        state?.agents
+        state?.teamAgents
             .where(
               (agent) =>
                   (projectId == null || _agentProjectId(agent) == projectId) &&
@@ -528,11 +528,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final columns = board == null || board.people.isEmpty
         ? null
         : LeaderboardColumns.of(context, board.people);
+    final week = weekName(_board.week, current);
     return [
-      SuperTabSectionHeading(
-        'Humans',
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
+      LeaderboardHeader(
+        selected: _tab,
+        onSelect: (tab) => setState(() => _tab = tab),
         actions: [
           if (board != null || _board.week != null)
             AppSelectField<int>(
@@ -553,13 +553,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               onChanged: (week) =>
                   unawaited(_board.showWeek(week == current ? null : week)),
             ),
+          if (c.isOwner && _tab == LeaderboardTab.humans)
+            // A phone's add action is a finger's size, as the headings' is.
+            fingerTarget(
+              enabled: workspaceIsCompact(context),
+              AppIconButton(
+                icon: AppIcons.plus,
+                tooltip: 'Invite people',
+                onPressed: widget.onInvite,
+              ),
+            ),
         ],
       ),
-      if (board != null)
-        LeaderboardGoalLine(
-          goal: board.goal,
-          weekName: weekName(_board.week, current),
-        ),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -570,26 +575,33 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
-      for (final person in ranked)
-        LeaderboardPersonRow(
-          person: person,
-          score: scores[person.id],
-          columns: columns,
-          own: person.id == c.accountId,
-          onTap: () => _person(person, scores[person.id]),
-        ),
-      if (board != null && board.waiting.total > 0)
-        LeaderboardWaitingLine(
-          waiting: board.waiting,
-          viewerId: c.accountId,
-          nameOf: (id) {
-            final person = state?.people.where((p) => p.id == id).firstOrNull;
-            return person == null
-                ? 'Former member'
-                : leaderboardName(person, scores[id]);
-          },
-          onAnswer: widget.onAnswer,
-        ),
+      if (_tab == LeaderboardTab.agents)
+        ..._agentScores(board, week)
+      else if (_tab == LeaderboardTab.models)
+        ..._modelScores(board, week)
+      else ...[
+        for (final person in ranked)
+          LeaderboardPersonRow(
+            person: person,
+            score: scores[person.id],
+            columns: columns,
+            own: person.id == c.accountId,
+            weekName: week,
+            onTap: () => _person(person, scores[person.id]),
+          ),
+        if (board != null && board.waiting.total > 0)
+          LeaderboardWaitingLine(
+            waiting: board.waiting,
+            viewerId: c.accountId,
+            nameOf: (id) {
+              final person = state?.people.where((p) => p.id == id).firstOrNull;
+              return person == null
+                  ? 'Former member'
+                  : leaderboardName(person, scores[id]);
+            },
+            onAnswer: widget.onAnswer,
+          ),
+      ],
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
@@ -603,16 +615,60 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
-        actions: [
-          AppIconButton(
-            icon: AppIcons.layoutGrid,
-            tooltip: 'Team at a glance',
-            onPressed: () =>
-                unawaited(showSuperTabTeamGlance(context, c, widget.app)),
-          ),
-        ],
       ),
       for (final agent in [...leads, ...agents]) _agent(agent),
+    ];
+  }
+
+  /// The project's PM and Buddies, ranked like people (Dee, 2026-10-29).
+  List<Widget> _agentScores(SuperTabLeaderboard? board, String week) {
+    final scores = board?.agents ?? const <SuperTabAgentScore>[];
+    if (board == null) return const [];
+    if (scores.isEmpty) {
+      return const [LeaderboardEmpty('No PM or Buddy in this project yet')];
+    }
+    final snapshot = c.snapshot;
+    final columns = LeaderboardColumns.measure(
+      context,
+      ranks: scores.map((s) => s.rank),
+      points: scores.map((s) => s.points),
+    );
+    return [
+      for (final score in scores)
+        LeaderboardAgentRow(
+          score: score,
+          agent: snapshot?.agents
+              .where((a) => a.id == score.agentId)
+              .firstOrNull,
+          columns: columns,
+          weekName: week,
+          projectName: snapshot?.projects
+              .where((p) => p.id == board.projectId)
+              .firstOrNull
+              ?.name,
+          ownerName: switch (snapshot?.people
+              .where((p) => p.id == score.personId)
+              .firstOrNull) {
+            final person? => superTabPersonName(person.email),
+            null => null,
+          },
+        ),
+    ];
+  }
+
+  /// The models the Builders and Reviewers ran on, never the agents.
+  List<Widget> _modelScores(SuperTabLeaderboard? board, String week) {
+    final scores = board?.byModel ?? const <SuperTabModelScore>[];
+    if (board == null) return const [];
+    if (scores.isEmpty) return [LeaderboardEmpty('No model worked $week')];
+    final columns = LeaderboardColumns.measure(
+      context,
+      ranks: scores.map((s) => s.rank),
+      points: scores.map((s) => s.points),
+    );
+    return [
+      for (final score in scores)
+        LeaderboardModelRow(score: score, columns: columns, weekName: week),
     ];
   }
 

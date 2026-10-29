@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
@@ -47,6 +48,30 @@ Duration reconnectDelay(int attempt, Random random) {
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
 const connectionStableAfter = Duration(minutes: 1);
+
+/// This build's version, which every backend socket it dials says (`?v=`), read once at start-up
+/// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
+String? declaredAppVersion;
+
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
+/// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
+}
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
 
 /// The backend's refusals of a `machine_select` that no redial can change: the machine left the
 /// account or was never shared with it, it belongs to another environment, or its subscription stops
@@ -453,6 +478,17 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );
@@ -463,8 +499,10 @@ class WsConn {
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
             // The browser counts its person as on the web today (backend
-            // user_daily_client_presence). Not other viewer builds: they are not the web.
-            if (!_directObserver && kIsWeb) 'client': 'web',
+            // user_daily_client_presence). Other viewer builds say they are the desktop app,
+            // which counts no presence. Both say which build (WebSocket roadmap Phase 0).
+            'client': kIsWeb ? 'web' : 'desktop',
+            'v': ?declaredAppVersion,
           },
         );
       }

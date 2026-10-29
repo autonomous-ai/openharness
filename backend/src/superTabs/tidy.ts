@@ -1,7 +1,8 @@
+import type { Prisma } from '@prisma/client'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { verdictPending } from './autoReview.js'
-import { activeWork, agentRole, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, agentRole, stableId, type Agent, type Assignment, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). A Builder left with nothing to do for 15 minutes is stopped, as
@@ -16,20 +17,45 @@ const REPORT_FRESH_MS = 2 * 60_000
 const FINISHED = ['done', 'cancelled', 'stopped', 'lost']
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
+/** All stopIdleWorkers reads of a group: the Lead's poll reads only this of an asleep one (ASLEEP_FIELDS). */
+export type GroupActivity = Pick<Conversation, 'id' | 'lastActivityAt' | 'archived' | 'agentIds' | 'reviewOf'> &
+  { assignment?: (Pick<Assignment, 'agentId' | 'status' | 'progressAt'> & { lost?: Pick<NonNullable<Assignment['lost']>, 'at'> }) | null }
+
+/** The fields of an asleep group's part the Lead's poll reads, as GroupActivity: never its brief, checks or task. */
+export const ASLEEP_FIELDS = Object.fromEntries(['id', 'lastActivityAt', 'archived', 'agentIds', 'reviewOf', 'assignment.agentId', 'assignment.status',
+  'assignment.progressAt', 'assignment.lost.at'].map(field => [`data.${field}`, 1]))
+
+/**
+ * The asleep groups of `reviewers` that can still change what stopIdleWorkers decides at `now` (Diego, 10-29: the Lead's poll
+ * read every one, whole, ~4 MB a poll): those active after `now - IDLE_STOP_MS` (a message, or the progress or loss of its
+ * work, idleSince) and those reviewing work still open (recheckPending). Any other is older than every stop's threshold, so
+ * it never keeps a worker. The Reviewers' index serves it (parts/indexed.ts `agents`); the rest is checked on each of their rows.
+ */
+export function asleepMatch(state: SuperTabState, tabId: string, reviewers: string[], now: number): Record<string, Prisma.InputJsonValue> {
+  const since = now - IDLE_STOP_MS
+  const open = state.conversations.filter(c => c.assignment && !FINISHED.includes(c.assignment.status)).map(c => c.id)
+  return { tabId, deleted: false, dormant: true, agentIds: { $in: reviewers }, $or: [
+    { lastActivityAt: { $gt: { $date: new Date(since).toISOString() } } },
+    { 'data.assignment.progressAt': { $gt: since } },
+    { 'data.assignment.lost.at': { $gt: since } },
+    ...open.length ? [{ 'data.reviewOf': { $in: open } }] : [],
+  ] }
+}
+
 /** The groups a worker belongs to or worked in, with those asleep that the caller read for it (`asleep`). */
-const groupsOf = (state: SuperTabState, worker: Agent, asleep: readonly Conversation[]) =>
+const groupsOf = (state: SuperTabState, worker: Agent, asleep: readonly GroupActivity[]): GroupActivity[] =>
   [...state.conversations, ...asleep.filter(g => !state.conversations.some(c => c.id === g.id))]
     .filter(c => c.agentIds.includes(worker.id) || c.assignment?.agentId === worker.id)
 
 /** When the worker last had anything to do: its start, its Lead's keep, its own progress, or a message in one of its groups. */
-function idleSince(state: SuperTabState, worker: Agent, groups: Conversation[]): number {
+function idleSince(state: SuperTabState, worker: Agent, groups: GroupActivity[]): number {
   const seen = [time(worker.startedSession?.createdAt), worker.keptAt, ...groups.flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === worker.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
   return Math.max(...seen.filter((t): t is number => t !== undefined && Number.isFinite(t)))
 }
 
 /** A Reviewer stays while work it reviews may come back to it for a re-check: the reviewed group's task is not finished. */
-function recheckPending(state: SuperTabState, reviewer: Agent, groups: Conversation[]): boolean {
+function recheckPending(state: SuperTabState, reviewer: Agent, groups: GroupActivity[]): boolean {
   if (agentRole(reviewer) !== 'reviewer') return false
   return groups.some(g => {
     const reviewed = g.reviewOf ? state.conversations.find(c => c.id === g.reviewOf) : undefined
@@ -57,12 +83,12 @@ function reportedClean(state: SuperTabState, worker: Agent, now: number): boolea
  * Marks for stopping every worker of the project idle for IDLE_STOP_MS: started by the Swarm (a person's own session is
  * theirs to close), not a Lead, with no active task, no message waiting for it (`busy`), its host reporting nothing
  * uncommitted, not waiting to resume after a usage limit, and, for a Reviewer, no re-check pending. Each gets one quiet
- * line, to nobody, in its most recent group. Run on its Lead's poll, which knows what is waiting. `asleep` are the groups
- * of its Reviewers that ordinary loads leave out: an archived review group still says whose re-check may come (review of
- * #1807).
+ * line, to nobody, in its most recent loaded group, else the Lead conversation. Run on its Lead's poll, which knows what
+ * is waiting. `asleep` are the groups of its Reviewers that ordinary loads leave out: an archived review group still says
+ * whose re-check may come (review of #1807).
  */
 export function stopIdleWorkers(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>,
-  asleep: readonly Conversation[] = []): MessageDraft[] {
+  asleep: readonly GroupActivity[] = []): MessageDraft[] {
   if (state.tidy === false) return []
   const project = projectsOf(state).find(p => p.id === projectId)
   const leadId = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
@@ -81,7 +107,8 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
     worker.idleStop = { previous: worker.workDecision ?? null }
     worker.workDecision = 'stop'
     worker.releaseId = stableId('idle-stop', worker.id, String(since))
-    const last = groups.filter(g => !g.archived).sort((a, b) => (time(b.lastActivityAt) ?? 0) - (time(a.lastActivityAt) ?? 0))[0]
+    // Only a group the poll loaded takes the line: an asleep one refuses posts, and its refusal would fail the whole poll.
+    const last = groups.filter(g => !g.archived && state.conversations.some(c => c.id === g.id)).sort((a, b) => (time(b.lastActivityAt) ?? 0) - (time(a.lastActivityAt) ?? 0))[0]
     rows.push({ id: stableId('idle-stop', worker.id, String(since), 'line'), conversationId: last?.id ?? project.leadConversationId, replyTo: null, recipients: [],
       author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
       text: `${worker.displayName ?? worker.name} stopped: no work for 15 minutes.`, source: { kind: 'idle-stop', agentId: worker.id } })

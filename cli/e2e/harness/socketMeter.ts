@@ -29,6 +29,8 @@ export interface SocketRecord {
   closeCode: number | null
   closeReason: string
   selects: SelectRecord[]
+  /** The meter entry it came through (`entry()`), which tells apart clients that declare the same; null for the main one. */
+  via: string | null
 }
 
 export interface RefusalRecord { endpoint: string; status: number; at: number }
@@ -117,8 +119,10 @@ export class SocketMeter {
   readonly refused: RefusalRecord[]
   private readonly http: Record<string, number>
   private startedAt: number
-  private server: Server | null = null
+  private readonly servers: Server[] = []
   private readonly live = new Set<WebSocket>()
+  private upstream: URL | null = null
+  private wss: WebSocketServer | null = null
   url = ''
   wsUrl = ''
 
@@ -142,8 +146,24 @@ export class SocketMeter {
   /** Listen on a free loopback port and forward everything to `target` (`http://127.0.0.1:PORT`). */
   static async start(target: string): Promise<SocketMeter> {
     const meter = new SocketMeter({ startedAt: Date.now(), sockets: [], refused: [], http: {} })
-    const upstream = new URL(target)
-    const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, handleProtocols: (set) => [...set][0] ?? false })
+    meter.upstream = new URL(target)
+    meter.wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, handleProtocols: (set) => [...set][0] ?? false })
+    const { url, wsUrl } = await meter.listen(null)
+    meter.url = url
+    meter.wsUrl = wsUrl
+    return meter
+  }
+
+  /** Another way in, on its own port, whose sockets are recorded with `via: name`: one per daemon, which declare the
+   *  same client, version and token, so where they dial is what tells them apart. */
+  entry(name: string): Promise<{ url: string; wsUrl: string }> {
+    return this.listen(name)
+  }
+
+  private async listen(via: string | null): Promise<{ url: string; wsUrl: string }> {
+    const meter = this
+    const upstream = this.upstream!
+    const wss = this.wss!
     const server = createServer((req, res) => {
       count(meter.http, routeOf(req.method ?? 'GET', req.url ?? '/'))
       const forward = request({ host: upstream.hostname, port: upstream.port, method: req.method, path: req.url,
@@ -154,17 +174,15 @@ export class SocketMeter {
       forward.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end() })
       req.pipe(forward)
     })
-    server.on('upgrade', (req, socket, head) => meter.upgrade(req, socket, head, upstream, wss))
+    server.on('upgrade', (req, socket, head) => meter.upgrade(req, socket, head, upstream, wss, via))
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
     const port = (server.address() as { port: number }).port
-    meter.server = server
-    meter.url = `http://127.0.0.1:${port}`
-    meter.wsUrl = `ws://127.0.0.1:${port}`
-    return meter
+    this.servers.push(server)
+    return { url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}` }
   }
 
-  private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, upstream: URL, wss: WebSocketServer): void {
+  private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, upstream: URL, wss: WebSocketServer, via: string | null): void {
     const query = new URL(req.url ?? '/', 'http://meter').searchParams
     const endpoint = (req.url ?? '/').split('?')[0]
     let attached = false
@@ -200,14 +218,14 @@ export class SocketMeter {
       socket.off('readable', watch)
       if (socket.destroyed || socket.readableEnded) { backend.terminate(); return }
       attached = true
-      wss.handleUpgrade(req, socket, head, (client) => this.attach(client, backend, endpoint, query, early, hold))
+      wss.handleUpgrade(req, socket, head, (client) => this.attach(client, backend, endpoint, query, early, hold, via))
     })
   }
 
   private attach(client: WebSocket, backend: WebSocket, endpoint: string, query: URLSearchParams,
-    early: Array<[RawData, boolean]>, hold: (data: RawData, binary: boolean) => void): void {
+    early: Array<[RawData, boolean]>, hold: (data: RawData, binary: boolean) => void, via: string | null): void {
     const record: SocketRecord = { endpoint, ...declaredKind(endpoint, query), openedAt: Date.now(), closedAt: null, closeCode: null,
-      closeReason: '', selects: [] }
+      closeReason: '', selects: [], via }
     this.sockets.push(record)
     this.live.add(client)
     const pending = new Map<string, SelectRecord>()
@@ -310,10 +328,10 @@ export class SocketMeter {
 
   async close(): Promise<void> {
     for (const ws of this.live) ws.terminate()
-    const server = this.server
-    if (!server) return
-    server.closeAllConnections()
-    await new Promise((resolve) => server.close(resolve))
+    await Promise.all(this.servers.splice(0).map((server) => {
+      server.closeAllConnections()
+      return new Promise((resolve) => server.close(resolve))
+    }))
   }
 }
 

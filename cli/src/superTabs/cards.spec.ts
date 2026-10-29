@@ -125,8 +125,9 @@ describe('leadsOf', () => {
   })
 })
 
-/** `web`'s three kinds of chat: its Lead conversation, the reader's Chat with PM (a conversation with an audience), and a group. */
-const pm = (over: Record<string, unknown> = {}) => conv('pm-web', null, { projectId: 'web', audience: { people: [{ id: 'me' }] }, agentIds: ['a1'], ...over })
+/** `web`'s three kinds of chat: its Lead conversation, the reader's Buddy chat (where the PM's private lines land since
+ *  Buddies replaced Chat with PM, 10-29), and a group. The backend sends a Buddy chat to its owner alone. */
+const pm = (over: Record<string, unknown> = {}) => conv('pm-web', null, { projectId: 'web', kind: 'buddy', buddyOwnerId: 'me', agentIds: [], ...over })
 const group = (over: Record<string, unknown> = {}) => conv('g-web', null, { projectId: 'web', title: 'Fix login', agentIds: ['b1'], assignment: { status: 'working' }, ...over })
 const chats = (over: Record<string, unknown> = {}) => swarm({
   agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })],
@@ -143,7 +144,7 @@ describe('leadsOf chats', () => {
       { kind: 'lead', id: 'lead-web', name: 'Lead', working: false }, { kind: 'lead', id: 'lead-mobile', name: 'Lead', working: false }])
   })
 
-  it('follows the window to the project\'s Chat with PM', () => {
+  it('follows the window to the reader\'s Buddy chat in the project', () => {
     expect(chatOf(chats(), 'pm-web')).toEqual({ kind: 'pm', id: 'pm-web', name: 'PM', working: false })
     // The other project keeps its Lead chat.
     expect(leadsOf(chats(), 'm1', idle, 'me', 'pm-web').leads.find(l => l.projectId === 'mobile')!.chat).toMatchObject({ kind: 'lead', id: 'lead-mobile' })
@@ -634,7 +635,7 @@ describe('SwarmCards notices', () => {
     expect(t.reads('lead-web')).toBe(1)
   })
 
-  it('notices a new Lead message in Chat with PM', async () => {
+  it('notices a new private line from the Lead in the reader\'s Buddy chat', async () => {
     const t = chatSwarm({ 'pm-web': [said(2, 'a1', { text: `${'p'.repeat(1499)}éé` })] })
     await t.cards.tick()
     await t.move(1, 2)

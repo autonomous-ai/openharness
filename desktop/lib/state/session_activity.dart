@@ -20,6 +20,11 @@ class SessionActivityController extends ChangeNotifier {
 
   final AppNotifier app;
   final _external = <String, SessionActivity>{};
+
+  /// Rows whose machine said its index no longer holds the conversation: not
+  /// read again until the rows on screen change. Re-read every 5 seconds, one
+  /// such row was 2,225 failed reads on its computer in an evening (2026-10-28).
+  final _notHeld = <String>{};
   Map<String, SwarmDestination> _rows = const {};
   Map<String, SessionActivity> _last = const {};
   Timer? _timer;
@@ -67,6 +72,8 @@ class SessionActivityController extends ChangeNotifier {
     if (!changed) return;
     _revision++;
     _external.removeWhere((id, _) => !next.containsKey(id));
+    // A conversation that came back to the index shows again.
+    _notHeld.clear();
     _timer?.cancel();
     if (next.values.any((row) => row.external != null)) {
       _timer = Timer.periodic(const Duration(seconds: 5), (_) => refresh());
@@ -89,7 +96,9 @@ class SessionActivityController extends ChangeNotifier {
     final revision = _revision;
     try {
       await Future.wait([
-        for (final row in _rows.values.where((row) => row.external != null))
+        for (final row in _rows.values.where(
+          (row) => row.external != null && !_notHeld.contains(row.id),
+        ))
           _readExternal(row, revision),
       ]);
     } finally {
@@ -104,13 +113,18 @@ class SessionActivityController extends ChangeNotifier {
   }
 
   Future<void> _readExternal(SwarmDestination row, int revision) async {
-    final reply = await app.readSessionTail(
+    final reply = await app.readSessionTailReply(
       row.machineId!,
       row.external!.sessionId,
       maxChars: 1000,
     );
     if (_disposed || revision != _revision) return;
-    if (reply == null) {
+    if (reply?['error'] == 'NOT_INDEXED') {
+      _notHeld.add(row.id);
+      _external[row.id] = (at: read(row).at, status: null);
+      return;
+    }
+    if (reply == null || reply['error'] != null) {
       // A failed read cannot keep claiming work is still in progress.
       _external[row.id] = (at: read(row).at, status: HarnessActivity.unknown);
       return;

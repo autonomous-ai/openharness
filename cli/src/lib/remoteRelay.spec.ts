@@ -799,6 +799,34 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
     }
   })
 
+  // WebSocket roadmap Phase 1 item 6. The shelf held 4 per machine, and one more was torn down with no close frame, so
+  // the backend logged it as a dropped connection (1006) like any network failure, and nothing counted overflows.
+  it('the shelf keeps 8 warm background sessions per machine, and closes one more cleanly saying why', async () => {
+    const pool = new RemoteRelayPool(...ctorArgs)
+    const made: Array<{ ws: { close: ReturnType<typeof vi.fn>; terminate: ReturnType<typeof vi.fn> }; lingerTimer: ReturnType<typeof setTimeout> | null }> = []
+    const dialSpy = vi.spyOn(RemoteRelayPool.prototype as unknown as { connect: (machineId: string) => Promise<unknown> }, 'connect')
+      .mockImplementation(async function (this: unknown, machineId: string) {
+        const entry = fakeEntry({ attached: new Set(), sink: null, ws: { send: vi.fn(), close: vi.fn(), terminate: vi.fn() }, viewers: { reset: vi.fn(), close: vi.fn() } })
+        made.push(entry as unknown as typeof made[number])
+        ;(this as { entries: Map<string, unknown> }).entries.set(machineId, entry)
+        return entry
+      })
+    try {
+      const sessions = []
+      for (let i = 0; i < 9; i++) sessions.push(await pool.acquireIsolated('m1', 'env', select, sink(), vi.fn()))
+      for (const session of sessions) session.detach()
+      expect(pool.idleIsolatedCount('m1')).toBe(8)
+      const shut = made.filter((entry) => entry.ws.close.mock.calls.length > 0)
+      expect(shut).toHaveLength(1)
+      expect(shut[0].ws.close).toHaveBeenCalledWith(1000, 'shelf full')
+      expect(made.some((entry) => entry.ws.terminate.mock.calls.length > 0)).toBe(false)
+      for (const entry of made) clearTimeout(entry.lingerTimer!)
+    } finally {
+      pool.close()
+      dialSpy.mockRestore()
+    }
+  })
+
   it('a failed background dial is answered from the failure for the cooldown, not re-dialled per poll', async () => {
     vi.useFakeTimers()
     try {

@@ -18,6 +18,9 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
+import '../state/harness_attachments.dart';
+import '../state/lead_placement.dart';
+import '../super_tabs/machine_status.dart';
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -87,6 +90,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
+      box.leadBlocked == null &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
       !box.taskTooLong &&
@@ -160,6 +164,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       box.useDesktopChoices(widget.desktop);
+      box.placeLead();
       if (box.checking) _row = _Row.start;
       _syncField();
       // Restoring the successful agent can replace an unfocusable Terminal
@@ -1668,7 +1673,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   else ...[
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
-                                    _desktopSettings(),
+                                    if (box.placesLead)
+                                      _desktopLeadPanel()
+                                    else
+                                      _desktopSettings(),
                                     if (box.requiredChoice
                                         case final required?) ...[
                                       const SizedBox(height: 14),
@@ -1788,19 +1796,42 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
-  Widget _desktopHeader() {
+  String get _desktopProjectName {
     final folder = box.project.folder;
     final lastPart = folder
         ?.split(RegExp(r'[/\\]'))
         .where((p) => p.isNotEmpty)
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
-    final projectName = box.asGuest
+    return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
               lastPart ??
               box.project.repository?.name ??
               'Choose repo';
+  }
+
+  Widget _desktopHeader() {
+    // New Project in a Swarm: the repo sits in the task box and the machine
+    // on the Product Manager line, so the header keeps only Close.
+    if (box.placesLead) {
+      return widget.embedded
+          ? const SizedBox.shrink()
+          : Align(
+              alignment: Alignment.centerRight,
+              child: FocusTraversalOrder(
+                order: const NumericFocusOrder(9.9),
+                child: KeyedSubtree(
+                  key: _desktopCloseAnchor,
+                  child: Opacity(
+                    opacity: _picking ? 0 : 1,
+                    child: _desktopCloseButton(behindChooser: _picking),
+                  ),
+                ),
+              ),
+            );
+    }
+    final projectName = _desktopProjectName;
     // A phone has room for neither the capsules side by side nor a mouse's
     // target: there each is a line of its own, a finger tall.
     final phone = workspaceIsCompact(context);
@@ -1969,6 +2000,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   /// 📎 and the attached files, then New Harness — or New Harness alone.
   Widget _desktopTaskActions() {
     final attachments = box.takesTask ? box.attachments : null;
+    if (box.placesLead) return _desktopLeadActions(attachments);
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
@@ -2014,6 +2046,343 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             child: _desktopLaunchActions(includeProjectVisibility: true),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Whether New Project's machine list is open, and its Advanced part.
+  bool _leadOpen = false, _leadAdvanced = false;
+
+  /// New Project in a Swarm, as confirmed (Dee, 10-29): 📎, the repo and
+  /// visibility, then the Product Manager line beside New Project.
+  Widget _desktopLeadActions(HarnessAttachments? attachments) => LayoutBuilder(
+    builder: (context, constraints) {
+      // Enlarged text or a narrow window: the chips wrap and the Product
+      // Manager line takes a line of its own above New Project.
+      final narrow =
+          constraints.maxWidth <
+          480 * MediaQuery.textScalerOf(context).scale(1);
+      final attach = attachments == null
+          ? null
+          : FocusTraversalOrder(
+              order: const NumericFocusOrder(4.5),
+              child: NewHarnessAttachButton(
+                attachments: attachments,
+                enabled: !box.locked,
+              ),
+            );
+      final chips = attachments == null
+          ? null
+          : FocusTraversalOrder(
+              order: const NumericFocusOrder(4.65),
+              child: NewHarnessAttachmentChips(
+                attachments: attachments,
+                enabled: !box.locked,
+              ),
+            );
+      // Capped, not flexible: a loose slot beside the attachments' would
+      // take half the free space and leave it empty.
+      final repo = _desktopField(
+        order: 4.6,
+        anchor: _desktopAnchors[_Row.project]!,
+        maxWidth: narrow
+            ? constraints.maxWidth
+            : math.min(260, constraints.maxWidth * .4),
+        child: _desktopChoiceButton(
+          _Row.project,
+          AppIcons.folder,
+          label: _desktopProjectName,
+          capsule: true,
+        ),
+      );
+      final visibility = box.integration?.projectVisibility != null
+          ? _desktopProjectVisibility(4.7)
+          : null;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: 8,
+        children: narrow
+            ? [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [?attach, repo, ?visibility],
+                ),
+                ?chips,
+                _desktopLeadLine(),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _desktopLaunchActions(),
+                ),
+              ]
+            : [
+                Row(
+                  children: [
+                    if (attach != null) ...[attach, const SizedBox(width: 6)],
+                    repo,
+                    const SizedBox(width: 8),
+                    Expanded(child: chips ?? const SizedBox.shrink()),
+                    if (visibility != null) ...[
+                      const SizedBox(width: 8),
+                      visibility,
+                    ],
+                  ],
+                ),
+                Row(
+                  children: [
+                    Expanded(child: _desktopLeadLine()),
+                    const SizedBox(width: 12),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: constraints.maxWidth * .6,
+                      ),
+                      child: _desktopLaunchActions(),
+                    ),
+                  ],
+                ),
+              ],
+      );
+    },
+  );
+
+  /// A quiet text control of the Product Manager line and its panel.
+  ButtonStyle get _desktopLeadLink => TextButton.styleFrom(
+    foregroundColor: DesktopChrome.accent,
+    backgroundColor: Colors.transparent,
+    side: BorderSide.none,
+    enabledMouseCursor: SystemMouseCursors.click,
+    disabledMouseCursor: SystemMouseCursors.basic,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+    minimumSize: Size.zero,
+    textStyle: DesktopChrome.text(size: 12, medium: true),
+  );
+
+  /// "Product Manager: Mac Studio · Claude Code · Opus 5.5 · Change", or why
+  /// New Project waits.
+  Widget _desktopLeadLine() {
+    final blocked = box.leadBlocked;
+    final machine = box.leadMachine?.name ?? box.machineLabel;
+    return Row(
+      key: const ValueKey('new-harness-lead-line'),
+      children: [
+        Flexible(
+          child: Text(
+            blocked ??
+                [
+                  'Product Manager: $machine',
+                  box.agentLabel,
+                  box.leadModelLabel,
+                  if (box.leadClones)
+                    '${box.project.repository!.name} will be cloned there',
+                ].join(' · '),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          ),
+        ),
+        const SizedBox(width: 4),
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(9.8),
+          child: Semantics(
+            expanded: _leadOpen,
+            child: TextButton(
+              key: const ValueKey('new-harness-lead-change'),
+              style: _desktopLeadLink,
+              onPressed: box.locked
+                  ? null
+                  : () => setState(() => _leadOpen = !_leadOpen),
+              child: const Text('Change'),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Under the task box once Change is pressed: the Swarm's machines, best
+  /// first, each with its state in words, then Advanced.
+  Widget _desktopLeadPanel() {
+    final machines = box.integration?.leadMachines;
+    if (!_leadOpen || machines == null) return const SizedBox.shrink();
+    final repository = box.cloudRepository;
+    final label = DesktopChrome.text(size: 12, color: DesktopChrome.muted);
+    Widget setting(String name, Widget control) => Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 96 * MediaQuery.textScalerOf(context).scale(1),
+            child: Text(name, style: label),
+          ),
+          Flexible(child: control),
+        ],
+      ),
+    );
+    return Material(
+      key: const ValueKey('new-harness-lead-panel'),
+      color: DesktopChrome.field,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+        side: BorderSide(color: DesktopChrome.rim),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
+              child: Semantics(
+                header: true,
+                child: Text('Machine', style: label),
+              ),
+            ),
+            for (final (i, machine) in machines.indexed)
+              _desktopLeadRow(machine, repository, 9.81 + i / 10000),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FocusTraversalOrder(
+                order: const NumericFocusOrder(9.85),
+                child: Semantics(
+                  expanded: _leadAdvanced,
+                  child: TextButton.icon(
+                    key: const ValueKey('new-harness-lead-advanced'),
+                    style: _desktopLeadLink,
+                    onPressed: () =>
+                        setState(() => _leadAdvanced = !_leadAdvanced),
+                    icon: Icon(
+                      _leadAdvanced
+                          ? AppIcons.chevronDown
+                          : AppIcons.chevronRight,
+                      size: 16,
+                    ),
+                    label: const Text('Advanced'),
+                  ),
+                ),
+              ),
+            ),
+            if (_leadAdvanced) ...[
+              setting(
+                'Engine',
+                _desktopField(
+                  order: 9.86,
+                  anchor: _desktopAnchors[_Row.agent]!,
+                  child: _desktopChoiceButton(_Row.agent, AppIcons.code),
+                ),
+              ),
+              if (!box.isTerminal && !box.isCloud && !box.asGuest)
+                setting(
+                  'Model',
+                  _desktopField(
+                    order: 9.87,
+                    anchor: _desktopAnchors[_Row.model]!,
+                    child: _desktopChoiceButton(_Row.model, AppIcons.brain),
+                  ),
+                ),
+              if (box.usesProfile)
+                setting(
+                  'Account',
+                  _desktopField(
+                    order: 9.88,
+                    anchor: _desktopAnchors[_Row.profile]!,
+                    child: _desktopChoiceButton(_Row.profile, AppIcons.user),
+                  ),
+                ),
+              if (box.isGitProject || box.checkingGit || box.gitError != null)
+                setting(
+                  'Start from',
+                  _desktopField(
+                    order: 9.89,
+                    anchor: _desktopAnchors[_Row.branch]!,
+                    child: _desktopChoiceButton(
+                      _Row.branch,
+                      AppIcons.gitBranch,
+                      label: box.compactBranchLabel,
+                    ),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One machine of the list: its dot, name and state in words, and a check
+  /// on the one chosen. Another person's or a busy machine says why it is
+  /// not a choice.
+  Widget _desktopLeadRow(
+    LeadMachine machine,
+    String? repository,
+    double order,
+  ) {
+    final chosen = machine.id == box.machineId;
+    final enabled = machine.startable && !box.locked;
+    final detail = leadMachineDetail(machine, repository);
+    return KeyedSubtree(
+      key: ValueKey('new-harness-lead-machine-${machine.id}'),
+      child: FocusTraversalOrder(
+        order: NumericFocusOrder(order),
+        child: Semantics(
+          button: true,
+          enabled: enabled,
+          selected: chosen,
+          label: '${machine.name}, $detail',
+          excludeSemantics: true,
+          child: InkWell(
+            onTap: enabled ? () => box.chooseLeadMachine(machine.id) : null,
+            mouseCursor: enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+            hoverColor: DesktopChrome.selection,
+            focusColor: DesktopChrome.selection,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                children: [
+                  SuperTabMachineDot(
+                    status: machine.online
+                        ? SuperTabMachineStatus.live
+                        : SuperTabMachineStatus.offline,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          machine.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.text(
+                            size: 13,
+                            color: enabled
+                                ? DesktopChrome.foreground
+                                : DesktopChrome.muted,
+                          ),
+                        ),
+                        Text(
+                          detail,
+                          style: DesktopChrome.text(
+                            size: 12,
+                            color: DesktopChrome.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (chosen) ...[
+                    const SizedBox(width: 8),
+                    Icon(AppIcons.check, size: 16, color: DesktopChrome.accent),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2355,25 +2724,26 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
-        FocusTraversalOrder(
-          order: const NumericFocusOrder(9.95),
-          child: ProjectVisibility(
-            key: const ValueKey('new-harness-project-visibility'),
-            value: box.integration!.projectVisibility!,
-            disabledReason: box.integration!.projectVisibilityLocked
-                ? 'Project creation has started. Visibility is fixed for this request.'
-                : box.locked
-                ? 'Finish the current request before changing visibility.'
-                : null,
-            onChanged: box.locked || box.integration!.projectVisibilityLocked
-                ? null
-                : (value) => setState(
-                    () => box.integration!.projectVisibility = value,
-                  ),
-          ),
-        ),
+        _desktopProjectVisibility(9.95),
       _desktopStartButton(),
     ],
+  );
+
+  Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
+    order: NumericFocusOrder(order),
+    child: ProjectVisibility(
+      key: const ValueKey('new-harness-project-visibility'),
+      value: box.integration!.projectVisibility!,
+      disabledReason: box.integration!.projectVisibilityLocked
+          ? 'Project creation has started. Visibility is fixed for this request.'
+          : box.locked
+          ? 'Finish the current request before changing visibility.'
+          : null,
+      onChanged: box.locked || box.integration!.projectVisibilityLocked
+          ? null
+          : (value) =>
+                setState(() => box.integration!.projectVisibility = value),
+    ),
   );
 
   Widget _desktopStartButton() => ListenableBuilder(

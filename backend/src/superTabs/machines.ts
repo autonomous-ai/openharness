@@ -1,7 +1,9 @@
 import { z } from 'zod'
+import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -99,6 +101,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
+  /** Each running Swarm agent's token counts by model, as its session totals (costs/tokens.ts). An attempt's tokens are the
+   *  difference between its start and its end (routeDecisions.ts). Absent from hosts before it, whose attempts record none. */
+  harnessTokens: z.record(z.string().max(160), tokensByModelSchema).refine(v => Object.keys(v).length <= MAX_HARNESSES).optional(),
   /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
    *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
   harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),
@@ -123,6 +128,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
    *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
   preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
+  /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
+   *  before it, which are never given one. */
+  capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -174,6 +182,9 @@ const PRIVACY_ITEMS: Record<string, string> = {
   sentinel: 'it could read the privacy sentinel in its owner\'s home folder', 'home-listing': 'it could list its owner\'s home folder',
   gitconfig: 'it could read its owner\'s ~/.gitconfig', ssh: 'it could list its owner\'s ~/.ssh', projects: 'it could list its owner\'s project folders',
   keychain: 'it could list its owner\'s login Keychain folder', chrome: 'it could list its owner\'s Chrome profile', safari: 'it could list its owner\'s Safari folder',
+  // A Linux team account checks Firefox in place of Safari; a Windows one, Edge and the Credential Manager folders.
+  firefox: 'it could list its owner\'s Firefox profile', edge: 'it could list its owner\'s Edge profile',
+  credentials: 'it could list its owner\'s Windows Credential Manager folder',
   'standard-user': 'the team account is an administrator', unchecked: 'the check did not run',
 }
 const ONLY_OWN = 'so it runs only its owner\'s projects'
@@ -288,6 +299,26 @@ export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, 
   const subject = team ?? pool
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
 }
+
+/** The projects with work on [machineId]: its agents' and its pending starts'. */
+export function projectsOnMachine(state: SuperTabState, machineId: string): Set<string> {
+  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error)
+    .map(s => s.request.leadFor?.projectId ?? groupProject(state, conversation(state, s.request.conversationId)).id)
+  return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
+}
+
+/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. In a Harness Team account it
+ *  serves only that project: every agent there is one macOS user, which reads the others' files, the Product Manager's
+ *  saved sessions with people's private chats among them (#895). */
+export function productManagerOn(state: SuperTabState, machineId: string): string | null {
+  const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
+  if (led) return ledProject(state, led.id)!.id
+  // One removed whose host has not yet confirmed its data there is deleted (commands.ts removeAgent).
+  const closing = state.closingSessions?.find(c => c.machineId === machineId && c.heldFor)
+  if (closing) return closing.heldFor!
+  return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
+}
+
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
@@ -501,6 +532,10 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
+  if (held && held !== project.id) {
+    fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
+  }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
   if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)

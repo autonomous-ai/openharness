@@ -611,6 +611,9 @@ add a kind there, not at the call site.
 - All local state is in `HarnessFileStore` (`~/.harness/desktop-app/state.json`, mode 0600, keyed
   strings behind `LocalKeyValueStore`): connection config, skipped update version, theme, font, pane
   layout. `~/.harness/computer-id` is the machine identity shared with the CLI.
+  A Swarm's saved view (up to 512 KB of chat) is never in it: each is a private file of its own in
+  `swarm-views/` beside it (`super_tabs/view_store_native.dart`), and the first use moves out any
+  that Desktop builds from 1.3.27 on left in `state.json`. Tests that pass a memory store keep views there.
 - The window is frameless on macOS via `window_manager` (`lib/core/desktop_window.dart`, same size and
   `TitleBarStyle.hidden` as Grid). On macOS the tabs are native, in the title bar beside the traffic
   lights (`SwarmTitlebar.swift`); the pane headers are a `DragToMoveArea`. A screen that

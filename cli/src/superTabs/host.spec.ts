@@ -14,6 +14,7 @@ import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
+import { createAccountHttp } from '../gateway/accountHttp.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -158,6 +159,23 @@ describe('the host tick on the host form', () => {
     await host.tick()
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
+  })
+  // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
+  // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
+  it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
+    const t = setup(), host = t.open()
+    const stalled = () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status: 200 })
+    const gateway = createAccountHttp({ tokens: { accessToken: async () => 'token' }, account: () => ({ machineId: 'account', signIn: null }),
+      computer: { id: 'computer', name: 'Mac', hostname: 'mac' }, environment: 'test', base: () => 'https://backend.invalid',
+      request: vi.fn<typeof fetch>(async () => stalled()), log: vi.fn() })
+    vi.mocked(t.call).mockImplementation((method, path, body) => gateway.backend(method, path, body))
+    await host.tick()
+    t.wait(1_000)
+    await host.tick()
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.',
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.'])
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
   })
 })
 
@@ -885,6 +903,16 @@ describe('the super-tab command in delivered input', () => {
     expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
   })
+  it('names a Buddy\'s commands without --agent: its pane says who it is, and its guard refuses any --agent (review 2 of #2092)', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand: vi.fn(async () => 'harness super-tab') }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
+    expect(text).not.toContain('--agent')
+  })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
     const agentCommand = vi.fn(async () => { throw new Error('no shell') })
@@ -954,7 +982,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -991,7 +1019,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1601,7 +1629,7 @@ describe('the members a host lets watch its agents', () => {
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1646,7 +1674,7 @@ describe('the members a host lets watch its agents', () => {
     let rows: unknown[] = [lead(true)], clock = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
       ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const source = observerSource(dir, () => 'machine-1', () => clock)

@@ -38,7 +38,7 @@ import { agentProject } from '../lib/agentProject.js'
 import { agentSettingsPath, askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { primaryRuntime, sessionForPaneId, terminalRouteKey } from '../lib/terminalRuntime.js'
-import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
+import { type DirectoryTab, MessageDirectory, type Member } from './directory.js'
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
@@ -106,6 +106,8 @@ export interface AgentMessages {
 
 /** How often the service looks at its notes, its outbox and other machines' deliveries. */
 export const TICK_MS = 5_000
+/** How often a tab id this desk does not list may make the desk be read again (`tabActivity`). */
+export const MISSED_TAB_READ_MS = 15_000
 /** How often a message waiting on another machine is asked about. */
 export const REMOTE_STATUS_MS = 15_000
 /** How long another machine's names for its agents are kept. */
@@ -1284,9 +1286,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!messagingOn()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)
     const me = await signedInAs()
     const onDesk = (): DirectoryTab | undefined => directory.current()?.tabs.find((t) => t.id === tabId)
-    // A tab it does not know may be new: the desk is read again for it, but not more than once in POLL_MS, so ids a window
+    // A tab it does not know may be new: the desk is read again for it, but not more than once in MISSED_TAB_READ_MS, so ids a window
     // makes up cannot drive reads of the backend.
-    if (!onDesk() && now() - missedTabAt >= POLL_MS) { missedTabAt = now(); await directory.refresh() }
+    if (!onDesk() && now() - missedTabAt >= MISSED_TAB_READ_MS) { missedTabAt = now(); await directory.refresh() }
     const tab = onDesk()
     if (!tab) throw new MessageError('NOT_A_TAB', 'That tab is not on your desk.')
     const foreign = (m: Member): boolean => !!m.accountId && m.accountId !== me.accountId
@@ -1580,8 +1582,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
 
   const stopHearing = core.turns.onDelivery((event: TurnDelivery) => mailbox.observe(event))
   // Asleep, a changed desk is read when it wakes, not now. Shared tabs read theirs after the desk, whose panes they take.
+  // A machine created, renamed or deleted changes the panes and names the directory lists, as a changed desk does.
   const stopNotices = core.account.onNotice((notice) => {
-    if (notice.type === 'desk_changed' && !asleep()) void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    if ((notice.type === 'desk_changed' || notice.type === 'machines_changed') && !asleep()) {
+      void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    }
   })
 
   // Started only as it wakes, when it is stopped: never twice.

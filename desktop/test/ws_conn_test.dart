@@ -27,6 +27,7 @@ class FakeHub {
   final List<String> protocols = [];
   final List<String?> environments = [];
   final List<String?> declaredClients = [];
+  final List<String?> declaredVersions = [];
   final Map<String, int> machineSelected = {};
   final List<WebSocket> clients = [];
   Map<String, dynamic> closeResponse = {'activity': 'idle'};
@@ -50,6 +51,7 @@ class FakeHub {
       hub.protocols.add(protocol);
       hub.environments.add(request.uri.queryParameters['autonomousEnv']);
       hub.declaredClients.add(request.uri.queryParameters['client']);
+      hub.declaredVersions.add(request.uri.queryParameters['v']);
       final ws = await WebSocketTransformer.upgrade(
         request,
         protocolSelector: (protocols) =>
@@ -294,12 +296,16 @@ void main() {
         onEvent: (_) {},
         onStatus: (_) {},
       );
+      declaredAppVersion = '1.3.0';
+      addTearDown(() => declaredAppVersion = null);
       await conn!.connect();
       final result = await conn!.request('agents_list');
       expect(hub.protocols, ['access-token']);
       expect(hub.environments, ['prod']);
-      // A native build is not the web: no presence surface declared.
-      expect(hub.declaredClients, [null]);
+      // A native build is not the web (no presence surface), but says what it is and which build (WebSocket
+      // roadmap Phase 0).
+      expect(hub.declaredClients, ['desktop']);
+      expect(hub.declaredVersions, ['1.3.0']);
       expect(hub.machineSelected['m1'], 1);
       expect((result['agents'] as List).first['id'], 'a1');
     },
@@ -525,6 +531,77 @@ void main() {
       ]),
     );
     expect(conn!.isClosed, isTrue);
+  });
+
+  // The browser reads its version from the host's release file at start-up; a socket dialled while that read is out
+  // waits for it a moment, so the web build's first sockets carry it too (the e2e harness counts them per kind).
+  test('a socket waits up to a second for the version read, then dials with it', () async {
+    hub = await FakeHub.start();
+    final read = Completer<void>();
+    appVersionRead = read.future;
+    addTearDown(() {
+      appVersionRead = null;
+      declaredAppVersion = null;
+    });
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    unawaited(conn!.connect());
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    declaredAppVersion = '1.3.58';
+    read.complete();
+    await conn!.request('agents_list');
+    expect(hub.declaredVersions, ['1.3.58']);
+  });
+
+  test('a version read that never ends holds a dial for a second at most', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 2)));
+    expect(hub.declaredVersions, [null]);
+  });
+
+  // Review of #2044: a read that never ends costs the first dial its second, not every dial after it.
+  test('after a version read times out once, later dials do not wait', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    WsConn dialer() => WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final first = dialer();
+    addTearDown(first.close);
+    await first.connect();
+    conn = dialer();
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(milliseconds: 500)));
   });
 
   // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few

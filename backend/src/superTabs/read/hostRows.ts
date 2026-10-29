@@ -97,11 +97,13 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
   if (!contribution || contribution.contributorId !== user.sub) return null
   const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === contribution.generation
     && (!s.harnessId || !s.poolSettled) && !s.error)
-  // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one.
-  const starts = pending.filter(s => !s.request.buddyOf), buddyStarts = pending.filter(s => s.request.buddyOf)
+  // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one. Nor a Product
+  // Manager (leadStart.ts), which goes only to a host that said it starts one.
+  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor), buddyStarts = pending.filter(s => s.request.buddyOf)
+  const leadStarts = pending.filter(s => s.request.leadFor)
   const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
-  return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}),
+  return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
     ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s =>
       groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
@@ -112,7 +114,10 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],
-    ...(githubApp ? { githubApp: true as const } : {}) }
+    ...(githubApp ? { githubApp: true as const } : {}),
+    // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
+    // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
+    capabilitiesWanted: true as const }
 }
 
 function assignments(tabId: string, state: SuperTabState, machineId: string, user: AuthUser) {

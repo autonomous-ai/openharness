@@ -172,14 +172,23 @@ void main() {
   });
 
   group('notification list', () {
-    /// The reader leaves the private chat their tag is in, and the Lead tags
-    /// them elsewhere: one still waits. Who may read what moved.
+    /// [swarm] with a workgroup the reader is tagged in.
+    ConversationServer taggedInPlans() {
+      final server = swarm();
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('plans', 'Plans'),
+        'projectId': 'lead',
+      });
+      return server..tag('message-1', conversationId: 'plans', text: 'Private');
+    }
+
+    /// The reader loses the workgroup their tag is in, and the Lead tags them
+    /// elsewhere: one still waits. Who may read what moved.
     void leaveChatTaggedElsewhere(ConversationServer server) {
-      final pmChat = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((g) => g['id'] == 'pm-chat');
-      pmChat['audience'] = {'people': <Object>[]};
-      server.mentions.removeWhere((m) => m['conversationId'] == 'pm-chat');
+      (server.state['conversations'] as List).removeWhere(
+        (g) => (g as Map)['id'] == 'plans',
+      );
+      server.mentions.removeWhere((m) => m['conversationId'] == 'plans');
       server.state['mentionsWaiting'] =
           (server.state['mentionsWaiting'] as int) - 1;
       server.tag('message-2', text: 'Here instead');
@@ -188,8 +197,7 @@ void main() {
 
     test('drops the tags of a conversation the reader leaves at once, '
         'while the new list is slow to come', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -213,8 +221,7 @@ void main() {
 
     test('a tag the reader can no longer read stays gone when the new list '
         'fails', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -312,6 +319,83 @@ void main() {
       expect(server.mentionReads - reads, 2);
       expect(mentions.waiting.map((m) => m.text), ['Second', 'First']);
       controller.dispose();
+    });
+
+    test('a Swarm change that leaves the count and digest alone reads no '
+        'tags and tells nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      for (var i = 0; i < 5; i++) {
+        final before = controller.lastChangedAt;
+        server.append('Unrelated $i');
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(controller.lastChangedAt, isNot(before));
+      }
+      expect(server.mentionReads - reads, 0);
+      expect(notified, 0);
+
+      // One answered and another arrived: the count stays, the digest moves.
+      server.mentions.single
+        ..['resolvedAt'] = '2026-10-24T05:10:00Z'
+        ..['resolvedBy'] = 'reply';
+      server.tag('m2', text: 'Second');
+      server.state['mentionsWaiting'] = 1;
+      server.state['mentionsDigest'] = 'digest-2';
+      await controller.refresh();
+      await pumpEventQueue();
+      // Waiting once and Earlier once.
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 1);
+      expect(mentions.waiting.map((m) => m.text), ['Second']);
+      expect(mentions.earlier.map((m) => m.text), ['First']);
+    });
+
+    test('a failed read is tried again on the next Swarm change, digest or '
+        'not', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      server.failMentions = true;
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNotNull);
+      server.failMentions = false;
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNull);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+    });
+
+    test('without a digest, every Swarm change while a tag waits reads the '
+        'lists again, and the same lists tell nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 0);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
     });
 
     test(

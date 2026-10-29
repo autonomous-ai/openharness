@@ -143,6 +143,11 @@ export function buildViewerUrl(template: string, port: number, artifact: string 
   return template.replace(/\$\{port\}/g, String(port)).replace(/\$\{artifact\}/g, encoded)
 }
 
+/** One agent's viewer, as `start` tells a viewer already running (or one that failed) from another. */
+function viewerKey(dsh: InstalledDsh, viewer: ResolvedViewer, workspace: string): string {
+  return JSON.stringify([dsh.realDir, viewer.dir, workspace])
+}
+
 export class DshViewerManager {
   private readonly states = new Map<string, ViewerState>()
   /**
@@ -151,6 +156,13 @@ export class DshViewerManager {
    * kept here, a restored agent's pane opens on that artifact instead of on none.
    */
   private readonly verdictArtifacts = new Map<string, string | null>()
+  /**
+   * The viewer each agent last failed to start (`viewerKey`): it could not be started, found no port, or never listened.
+   * Its watch and process are gone, but the agents' scans attach every live agent again, and starting the same viewer
+   * at each would log a failure, or wait out another minute for a port, over and over. A stop, or another viewer or
+   * workspace, forgets it (review of #2025: a failed viewer stayed running in the list, its watch open).
+   */
+  private readonly failed = new Map<string, string>()
 
   constructor(private readonly deps: DshViewerDeps) {}
 
@@ -178,8 +190,11 @@ export class DshViewerManager {
       return
     }
     const viewer = resolved.viewer
+    const key = viewerKey(dsh, viewer, workspace)
+    if (this.failed.get(agentId) === key) return
+    this.failed.delete(agentId)
     const current = this.states.get(agentId)
-    if (current && current.dsh.realDir === dsh.realDir && current.viewer.dir === viewer.dir && current.workspace === workspace) return
+    if (current && viewerKey(current.dsh, current.viewer, current.workspace) === key) return
     // A restart keeps what the verdict last said; only stop() forgets it.
     if (current) await this.halt(current)
     const state: ViewerState = {
@@ -249,7 +264,7 @@ export class DshViewerManager {
     try {
       port = await (this.deps.freePort ?? freeLoopbackPort)()
     } catch (error) {
-      this.log(`[dsh] ${state.dsh.id} viewer: no free port · ${error instanceof Error ? error.message : error}`)
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${error instanceof Error ? error.message : error}`)
       return
     }
     if (state.stopping) return
@@ -257,17 +272,25 @@ export class DshViewerManager {
     // HARNESS_DSH/_DIR stay the harness's (the contract every DSH script relies on), HARNESS_VIEWER
     // and HARNESS_VIEWER_DIR name the package. A harness's own viewer sees both pairs agree.
     // Resolved inside the viewer's directory, as check.ts reads it: a bare `viewer.sh` is that file.
-    const child = (this.deps.spawn ?? spawnDshCommand)(resolveDshCommand({ realDir: viewer.dir }, viewer.command), {
-      cwd: viewer.dir,
-      env: {
-        HARNESS_DSH: state.dsh.id,
-        HARNESS_DSH_DIR: state.dsh.realDir,
-        HARNESS_VIEWER: viewer.id,
-        HARNESS_VIEWER_DIR: viewer.dir,
-        HARNESS_WORKSPACE: state.workspace,
-        HARNESS_VIEWER_PORT: String(port),
-      },
-    })
+    let child: ChildProcess
+    try {
+      child = (this.deps.spawn ?? spawnDshCommand)(resolveDshCommand({ realDir: viewer.dir }, viewer.command), {
+        cwd: viewer.dir,
+        env: {
+          HARNESS_DSH: state.dsh.id,
+          HARNESS_DSH_DIR: state.dsh.realDir,
+          HARNESS_VIEWER: viewer.id,
+          HARNESS_VIEWER_DIR: viewer.dir,
+          HARNESS_WORKSPACE: state.workspace,
+          HARNESS_VIEWER_PORT: String(port),
+        },
+        purpose: 'viewer',
+      })
+    } catch (error) {
+      // Windows without Git Bash (shell.ts says what to install), or an argument spawn refuses.
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${error instanceof Error ? error.message : error}`)
+      return
+    }
     state.child = child
     if (child.pid) this.deps.ledger?.add({ pid: child.pid, agentId: state.agentId, dshId: state.dsh.id, viewerDir: viewer.dir })
     let logged = 0
@@ -279,7 +302,11 @@ export class DshViewerManager {
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
-    child.on('error', (error) => this.log(`[dsh] ${state.dsh.id} viewer could not start · ${error.message}`))
+    child.on('error', (error) => {
+      const line = `[dsh] ${state.dsh.id} viewer could not start · ${error.message}`
+      if (state.child === child) void this.fail(state, line)
+      else this.log(line)
+    })
     child.on('exit', (code, signal) => {
       if (child.pid) this.deps.ledger?.remove(child.pid)
       if (state.child !== child) return
@@ -301,8 +328,8 @@ export class DshViewerManager {
     const up = await (this.deps.waitForPort ?? waitForLoopbackPort)(port, PORT_TIMEOUT_MS)
     if (state.child !== child || state.stopping) return
     if (!up) {
-      this.log(`[dsh] ${state.dsh.id} viewer did not listen on ${port} within ${PORT_TIMEOUT_MS / 1000}s`)
-      killProcessGroup(child)
+      // Stopped for good, not restarted: a viewer that did not listen in a minute would not in the next.
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer did not listen on ${port} within ${PORT_TIMEOUT_MS / 1000}s`)
       return
     }
     // Only now is there a URL to hand the pane. A pane sent to a port nobody serves yet shows a
@@ -312,9 +339,19 @@ export class DshViewerManager {
     this.publish(state)
   }
 
+  /** The viewer did not start: say why, stop what it left (its process, its watch), and remember it failed. */
+  private async fail(state: ViewerState, line: string): Promise<void> {
+    this.log(line)
+    // A stop, or a start of another viewer, has already replaced this one.
+    if (state.stopping || this.states.get(state.agentId) !== state) return
+    this.failed.set(state.agentId, viewerKey(state.dsh, state.viewer, state.workspace))
+    await this.halt(state)
+  }
+
   /** The agent's viewer is done: stop it and forget what its verdict named. */
   async stop(agentId: string): Promise<void> {
     this.verdictArtifacts.delete(agentId)
+    this.failed.delete(agentId)
     const state = this.states.get(agentId)
     if (state) await this.halt(state)
   }

@@ -287,6 +287,8 @@ export interface EngineLaunch {
   startup?: StartupContract
   /** The screen the engine's TUI runs on, where Harness chooses it; applied to every launch (kit/launchScreen.ts). */
   screen?: ScreenContract
+  /** Arguments for a session the Swarm started, never for a person's own (lib/swarmEngineArgs.ts). */
+  swarmArgs?: readonly string[]
   /** The instruction file Harness writes its own notes into (a harness's bootstrap, the saved APIs); else AGENTS.md. */
   instructionFile?: string
   /** The line, in that file, that has the engine read `file` too (Claude Code's `@AGENTS.md` import). */

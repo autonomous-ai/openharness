@@ -456,9 +456,10 @@ export interface CableHost {
   pets?(): PetStore | null
   /**
    * The image to offer a dial running `runningVersion`, or null for "nothing to do" — which covers a
-   * dial that is current, a dev build that must not be touched, and an unreachable manifest.
+   * dial that is current, a dev build that must not be touched, and an unreachable manifest. `keepalive`
+   * says the same dial on the same image greeted again, so a recent manifest read may answer it.
    */
-  firmwareFor?(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
+  firmwareFor?(runningVersion: string, key: string, keepalive?: boolean): Promise<{ version: string; image: Buffer; sha256: string } | null>
   /**
    * A dial greeted us, or the port went away.
    *
@@ -1318,8 +1319,9 @@ export class CableSession {
         const settingsChanged = JSON.stringify(settings) !== JSON.stringify(this.greetedSettings)
         this.greetedSettings = settings
         this.skinReported = hasUiSkin(msg.settings)
-        if (settingsChanged && mac === this.greetedMac && fw === this.greetedFw) this.report()
-        if (mac !== this.greetedMac || fw !== this.greetedFw) {
+        const keepalive = mac === this.greetedMac && fw === this.greetedFw
+        if (settingsChanged && keepalive) this.report()
+        if (!keepalive) {
           this.playerOffset = this.playerRequest = 0
           this.playerLibraryKey = ''
           const returning = mac === this.greetedMac
@@ -1342,7 +1344,7 @@ export class CableSession {
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
-        await this.maybeOfferFirmware(str('fw') ?? '')
+        await this.maybeOfferFirmware(str('fw') ?? '', keepalive)
         // AFTER the firmware offer, so a pending image is already `this.transfer` and the pets wait for it.
         this.readPetHello(msg)
         await this.syncPets()
@@ -1890,7 +1892,7 @@ export class CableSession {
     this.fwStall.unref?.()
   }
 
-  private async maybeOfferFirmware(runningVersion: string): Promise<void> {
+  private async maybeOfferFirmware(runningVersion: string, keepalive: boolean): Promise<void> {
     // A pack in flight also holds it back: the reader task that writes flash is busy with the pack, and the
     // next hello (every fifteen seconds) asks again.
     if (!this.host.firmwareFor || this.transfer || this.petTransfer || !runningVersion) return
@@ -1905,7 +1907,8 @@ export class CableSession {
       }
       return
     }
-    const candidate = await this.host.firmwareFor(runningVersion, key).catch(() => null)
+    const ask = keepalive ? this.host.firmwareFor(runningVersion, key, true) : this.host.firmwareFor(runningVersion, key)
+    const candidate = await ask.catch(() => null)
     // A pet transfer may have started while that await was parked (petsChanged); never start an image beside it.
     if (this.petTransfer || this.transfer) return
     // Keyed by DIAL as well as version. Holding bare version strings made this a statement about the

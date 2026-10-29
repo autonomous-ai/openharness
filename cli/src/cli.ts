@@ -181,6 +181,7 @@ Machine:
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
+  harness computer-use [on|off]  Harness OS: browser (Playwright) and desktop tools for agents to try what they build; off until you turn them on
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness machines engines <machine> [--engine E]… [--json]
                                ask another of your machines now which engines it has: installed, signed in, first prompt
@@ -2718,6 +2719,7 @@ import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
+import { computerUseCommand } from './agentClient/computerUse.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2751,13 +2753,22 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
+/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
+const swarmCommands = () => import('./superTabs/command.js')
+
+/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
+ *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
+function unlessBuddy(run: () => Promise<number>): Promise<number> {
+  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
+    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
+}
 
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2779,6 +2790,12 @@ switch (cmd) {
     process.exitCode = mcpServersCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
+  case 'computer-use': {
+    // Machine MCP servers too, refused in a Harness pane alike.
+    const pane = sendPane(process.env)
+    process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
+    break
+  }
   case 'mcp': {
     const pane = process.env.TMUX_PANE
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
@@ -2791,7 +2808,7 @@ switch (cmd) {
     replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'tell':
-    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2800,7 +2817,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2808,7 +2825,7 @@ switch (cmd) {
   // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
   // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
-    import('./superTabs/command.js').then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
@@ -2917,7 +2934,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    newCommand({
+    unlessBuddy(() => newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -2929,7 +2946,7 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    }).then((code) => { process.exitCode = code }).catch(onError)
+    })).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)

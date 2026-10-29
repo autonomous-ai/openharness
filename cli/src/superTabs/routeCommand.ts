@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -23,10 +23,11 @@ export const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
-/** Temporary (Scholes, 2026-10-26): grid's CLI does not run on Windows yet, so a Swarm agent started there never comes up
- *  (WIN-DELL took starts that silently never ran). Lifting it is emptying this list. Compared with the OS every reading
- *  has (lib/machineHardware.ts names it `Windows`), so a host from before readiness is left out too. */
-export const NO_SWARM_AGENTS_ON: readonly string[] = ['Windows']
+/** The operating systems a Swarm agent is not started on, compared with the OS every reading has (lib/machineHardware.ts
+ *  names it `Windows`). Windows was here from 2026-10-26 (Scholes): grid's CLI did not run there, so WIN-DELL took starts
+ *  that silently never ran — a held start ran grid's installer every 2 seconds instead. Lifted once grid 0.3.61 and CLI
+ *  0.4.95 ran there: a Claude Code agent on a grid model started and answered on DESKTOP-0TFH0OJ (2026-10-28). */
+export const NO_SWARM_AGENTS_ON: readonly string[] = []
 const ENGINE_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const NO_PUSH = "This machine's git login cannot push to the project repository. Its owner can sign in to GitHub there (gh auth login, then gh auth setup-git)."
 /** Said of a candidate where the task cannot be done: it never names the required machine, which the Lead may not see. */
@@ -299,11 +300,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
-  const record = (v1: boolean) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, v1) } })
-  let recorded = await record(false)
-  // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
-  if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)
+  const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, shape) } })
+  let recorded = await record('current')
+  // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
+  // the shape it knows. A task with no kind has nothing to leave out at the first step.
+  if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('v1')
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''

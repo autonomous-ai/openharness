@@ -10,9 +10,9 @@ import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
-import { GrantReads, type SuperTabStore } from '../store.js'
+import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readLastChangedAt, readMachines } from '../cachedReads.js'
+import { readLastChangedAts, readMachines } from '../cachedReads.js'
 import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
@@ -53,8 +53,8 @@ export class HostReads {
     const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
     // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
     const tx = this.db
-    await this.store.hostFor(tx, user, machineId)
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.store.hostFor(tx, user, machineId, owned)
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
     const grants = new GrantReads(owned)
@@ -67,17 +67,21 @@ export class HostReads {
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
     const tabs = []
-    const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
+    const answered = woken ? ids.filter(id => woken.has(id)) : ids
+    const cached = await this.store.view(answered)
+    const newest = await readLastChangedAts(tx, cached, answered)
     for (const tabId of ids) {
       if (woken && !woken.has(tabId)) continue
       // A wake can repeat while the cursor overlaps the same change. Share the timestamp at the read's stamp instead
       // of scanning every part kind again before the unchanged-etag shortcut.
-      const lastChangedAt = await readLastChangedAt(tx, cached, tabId), held = request.held?.[tabId]
+      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
       // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
       // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
+      // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
+      if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
       const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.

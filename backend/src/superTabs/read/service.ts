@@ -6,8 +6,9 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { mentionsWaiting } from '../mentions.js'
+import { waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
+import { readMarks, writeReadMark } from '../readMarks.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import type { CacheView } from '../cache.js'
@@ -36,6 +37,16 @@ interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedA
 const MACHINE_READS_MS = 15_000
 type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[]]
 
+/** The reader's marks of the conversations they can read now, a dormant one read by id included: a mark never names a
+ *  conversation the reader has lost. Only in a person's read; nothing for an agent. */
+function readableMarks(read: Read, marks: Map<string, number>): Pick<Derived, 'readMarks'> {
+  if (read.actor.kind !== 'person') return {}
+  const shown = new Set(read.view.parts.groups.map(g => g.key))
+  const readable = (id: string) => shown.has(id)
+    || read.parts.groups.some(g => g.key === id && g.dormant && canReadGroup(read.view.state, read.actor, g.data!))
+  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable(id))) }
+}
+
 export class SwarmReads {
   private readonly db: PrismaClient
   private readonly now: () => number
@@ -52,9 +63,11 @@ export class SwarmReads {
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
-      const { parts: loaded, view, lastChangedAt } = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
+      const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
+      const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts, derived: await this.withAvatars(view, t0) }
+        ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts,
+        derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor)) } }
     })
   }
 
@@ -82,10 +95,14 @@ export class SwarmReads {
       const changed = await readChanged(tx, cached, tabId, from.since)
       // A changed start whose group went dormant is read against that group, so its readers alone learn of it.
       const held = new Set(read.parts.groups.map(g => g.key))
-      const dormant = [...new Set(changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []))].filter(id => !held.has(id))
-      if (dormant.length) read = await this.load(tx, cached, user, tabId, asAgentId, t0, { ...light, groupIds: [...mentioned, ...dormant] }, lightly)
+      // So is a conversation whose read mark moved, so the mark goes only to a reader who can still read it.
+      const marks = await this.marksOf(tx, tabId, read.actor, from.since)
+      const unheld = [...new Set([...changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []), ...marks.keys()])]
+        .filter(id => !held.has(id))
+      if (unheld.length) read = await this.load(tx, cached, user, tabId, asAgentId, t0, { ...light, groupIds: [...mentioned, ...unheld] }, lightly)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor), derived: await this.withAvatars(read.view, t0) }
+        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor),
+        derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks) } }
     })
   }
 
@@ -116,6 +133,20 @@ export class SwarmReads {
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
+  }
+
+  /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
+   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. */
+  async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { group } = await this.group(user, tabId, conversationId)
+    const newest = group.data!.lastMessageSequence
+    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: Math.min(sequence, newest), now: this.now() }) }
+  }
+
+  /** A person's own read marks (an agent has none), every one or those moved since `since`. */
+  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<Map<string, number>> {
+    return actor.kind === 'person' ? readMarks(tx, tabId, actor.userId, since) : new Map()
   }
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
@@ -172,12 +203,13 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [[teamMachines, otherWorkspaceMachines], counts, newest] = await Promise.all([
       this.machineLookups(state),
-      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
+      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
       view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines,
-        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }, state) }
+        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
+          decisionsDigest: counts[1].digest } : {}) }, state) }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

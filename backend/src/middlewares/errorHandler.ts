@@ -3,9 +3,9 @@ import { AppError, ValidationError } from '../errors/index.js'
 import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { SuperTabError } from '../superTabs/model.js'
+import { RETRYABLE_SWARM_CODES } from '../superTabs/retry.js'
 
 /** The Swarm 503s that waiting fixes. Others (no attachment store, no picture uploads) are this server's setup. */
-const RETRYABLE_SWARM_CODES = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
 
 /** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
 const BUSY_RETRY_AFTER_SECONDS = 2

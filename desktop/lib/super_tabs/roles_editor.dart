@@ -57,14 +57,16 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Each time you are woken, look at active work.
 - A worker with active work that has said nothing for 20 minutes: ask it.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
+- Codex's "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.
 - Morning digest: when a person asks for one, set the project's digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.
-- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
+- When the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
-- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
+- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: to tell one person something directly, send person.tell; it lands in their Buddy chat, which you cannot read. Project members watching your terminal see what you send. Put nothing there you wouldn't say in the project chat.
+- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac's own account and its Team account are different: the Team account has none of the owner's tools, devices or sign-ins. If none has it, tag the requester with the choice.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -83,9 +85,10 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Answer questions, blockers and completions at once.
 - Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+- Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 
 ## Requests and Done
-- When you open a group for a person's request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
+- When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
 ''';
 
@@ -107,7 +110,8 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Say in the group that you took it and what you will do first; mark it working.
 - Read the whole brief: why, wanted, owned code, hand back, checks, most likely wrong, needs.
 - Read how the code behaves today before changing it.
-- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don't depend on it.
+- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
+- If the brief needs a person, check they are available; if not, post a "Needs:" line and do the parts that don't depend on it.
 - Harness already created your worktree; work there.
 
 ## 2. Do the work
@@ -123,6 +127,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - A person's decision: mark needs-human with one short question.
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
 - Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
+- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.
 - Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
 
 ## 4. Hand off
@@ -162,7 +167,7 @@ You give an independent verdict on one revision. Work otherwise the way you norm
 4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. When
-Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead.
+Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead. In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task.
 
 ## 2. What to look for
 - Wrong behaviour, missed cases, and what the brief asked for but is missing.

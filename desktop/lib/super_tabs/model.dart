@@ -160,9 +160,16 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       assignment = row['assignment'] == null
           ? null
-          : Map.unmodifiable(superTabMap(row['assignment']));
+          : Map.unmodifiable(superTabMap(row['assignment'])),
+      liveness = row['liveness'] is Map
+          ? Map.unmodifiable(superTabMap(row['liveness']))
+          : null,
+      leadAction = row['leadAction'] is Map
+          ? Map.unmodifiable(superTabMap(row['leadAction']))
+          : null;
   final String id, projectId, title, brief;
 
   /// What the backend calls it apart from a workgroup: `leads` for the Product
@@ -194,7 +201,20 @@ class SuperTabConversation {
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
+
+  /// Its newest message in the main stream: a reply only in its thread
+  /// leaves it. Null from a backend before threads, or before this
+  /// conversation's first message since.
+  final int? lastMainSequence;
   final Map<String, dynamic>? assignment;
+
+  /// Whether its task waits on purpose or is stuck, as the server last found
+  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
+  /// and from older backends (task_status.dart).
+  final Map<String, dynamic>? liveness;
+
+  /// The Product Manager's last action on its task (`kind`, `at`).
+  final Map<String, dynamic>? leadAction;
 }
 
 class SuperTabRole {
@@ -277,9 +297,14 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
+      mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled = row['buddies'] == true,
+      readMarks = Map.unmodifiable({
+        if (row['readMarks'] case final Map marks)
+          for (final MapEntry(:key, :value) in marks.entries)
+            if (key is String && value is num) key: value.toInt(),
+      }),
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -310,15 +335,18 @@ class SuperTabSnapshot {
   final Map<String, dynamic>? project;
   final bool paused;
 
-  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
-  /// from a backend before Buddies.
-  final bool buddiesEnabled;
-
   /// The starts of Buddies, oldest first: a Buddy's add is under way while
   /// its start has neither a harness nor an error.
   final List<Map<String, dynamic>> buddyStarts;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
+
+  /// The agents the Swarm lists and counts: its PM, Devs and Reviewers. A
+  /// Buddy is personal, so no list or count shows one, its person's included;
+  /// they see it in their Buddies section ([SuperTabController.buddy]).
+  late final List<SuperTabAgent> teamAgents = List.unmodifiable(
+    agents.where((a) => !a.isBuddy),
+  );
   final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
@@ -339,6 +367,10 @@ class SuperTabSnapshot {
   /// before tags (spec 2026-10-24-lead-mentions.md).
   final int mentionsWaiting;
 
+  /// Which tags wait, as a digest that moves when they change though the
+  /// count may not; null from a backend before it (superTabs/mentions.ts).
+  final String? mentionsDigest;
+
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
   final int decisionsWaiting;
@@ -346,6 +378,10 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
+  /// conversation, on any of their devices. Never another person's.
+  final Map<String, int> readMarks;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -443,7 +479,7 @@ class SuperTabSnapshot {
 
   /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
   /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
-  /// machine's own pool otherwise. The Machines view and Team at a glance read a machine by this one rule.
+  /// machine's own pool otherwise. The Machines view reads a machine by this one rule.
   Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
     final own = pool(machineId), team = teamPoolOf(machineId);
     final contributor =
@@ -742,12 +778,40 @@ class SuperTabDelivery {
   };
 }
 
+/// What a page says about one thread (backend threads.ts): the line under its
+/// root, and who it marks unread for.
+class SuperTabThread {
+  SuperTabThread.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      replies = (row['replies'] as num).toInt(),
+      lastSequence = (row['lastSequence'] as num).toInt(),
+      lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
+      authors = List.unmodifiable(
+        (row['authors'] as List? ?? const []).map(superTabMap),
+      ),
+      people = List.unmodifiable(
+        (row['people'] as List? ?? const []).whereType<String>(),
+      );
+  final String id;
+  final int replies, lastSequence;
+  final DateTime? lastAt;
+
+  /// The newest distinct reply authors, newest first: the first wrote the
+  /// last reply.
+  final List<Map<String, dynamic>> authors;
+
+  /// People who wrote in the thread or were tagged in it.
+  final List<String> people;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
       text = _text(row, 'text'),
       replyTo = row['replyTo'] as String?,
+      thread = row['thread'] as String?,
+      alsoInChat = row['alsoInChat'] == true,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -765,6 +829,17 @@ class SuperTabMessage {
       );
   final String id, conversationId, text;
   final String? replyTo;
+
+  /// The root of this message's thread: its own id for a top-level message,
+  /// null for one written before threads (its replies stay inline quotes).
+  final String? thread;
+
+  /// A thread reply also shown in the conversation's main stream.
+  final bool alsoInChat;
+  bool get threadReply => thread != null && thread != id;
+
+  /// Whether the main stream lists it: a thread reply only when also sent.
+  bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;

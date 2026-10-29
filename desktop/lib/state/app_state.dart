@@ -1488,7 +1488,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   final experimentalFeatures = ExperimentalFeaturesStore(
-    pollInterval: kUnderTest ? Duration.zero : const Duration(seconds: 30),
+    pollInterval: kUnderTest
+        ? Duration.zero
+        : ExperimentalFeaturesStore.safetyNet,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
@@ -1756,7 +1758,7 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
-    viewStorage: localStore ?? swarmViewStore(),
+    viewStorage: swarmViewStore(beside: localStore),
     upload: uploadWith(() => api),
     avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
@@ -1948,10 +1950,22 @@ class AppNotifier extends ChangeNotifier {
     return result;
   }
 
-  /// Whether this is a Mac, as the Harness Team account offer reads it. Off
-  /// under test, on a Mac too, unless a test sets it.
+  /// Whether the Harness Team account can be made on this computer's system,
+  /// as the offer reads it. Off under test, on a Mac too, unless a test sets
+  /// it.
   @visibleForTesting
-  bool? macOSForTest;
+  bool? teamAccountHereForTest;
+
+  /// The systems the Harness Team account is made on, by
+  /// [RuntimePlatform.operatingSystem]: a Mac, Linux and Windows
+  /// (cli/src/team/layout.ts; Windows' daemon sets it up behind User Account
+  /// Control); never a phone, a tablet or a browser.
+  static bool teamAccountOn(String operatingSystem) =>
+      const {'macos', 'linux', 'windows'}.contains(operatingSystem);
+
+  bool get _teamAccountSystem =>
+      teamAccountHereForTest ??
+      (teamAccountOn(RuntimePlatform.operatingSystem) && !kUnderTest);
 
   /// How long before asking again a daemon that could not answer the start
   /// offer; each further try waits one more step.
@@ -1988,15 +2002,16 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
+  /// The Harness Team account on this computer (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
-  /// `join`), add this Mac to one (`contribute`), or open the app
-  /// (`startup`). This Mac's own daemon decides whether it is wanted: no
-  /// account yet, not declined before, and at start only while this Mac is in
-  /// a Swarm with other people in it. It is then explained before macOS asks
-  /// ([teamSetupAsks]): macOS's prompt is titled "osascript", which nobody
-  /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
-  /// for another machine, where nobody may be at it.
+  /// `join`), add this computer to one (`contribute`), or open the app
+  /// (`startup`). This computer's own daemon decides whether it is wanted: no
+  /// account yet, not declined before, and at start only while this computer
+  /// is in a Swarm with other people in it. It is then explained before the
+  /// system asks ([teamSetupAsks]): macOS's prompt is titled "osascript",
+  /// which nobody recognised as Harness (2026-10-27). On a Mac, Linux and
+  /// Windows ([teamAccountOn]), and never for another machine, where nobody
+  /// may be at it.
   ///
   /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
   /// try team accounts in yet asks nothing (the daemon reads it).
@@ -2038,7 +2053,7 @@ class AppNotifier extends ChangeNotifier {
   /// a reconnect to it neither restarts the count nor cuts the wait short.
   Future<void> _offerTeamAccountAtStart() async {
     if (_disposed || _teamOfferBusy) return;
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    if (!_teamAccountSystem) return;
     _teamOfferBusy = true;
     try {
       final daemon = await _daemonIdentity();
@@ -2080,9 +2095,10 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// This Mac's own machine, when the Harness Team account can be made here.
+  /// This computer's own machine, when the Harness Team account can be made
+  /// here: never a machine shared with this account.
   String? _teamAccountHere() {
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return null;
+    if (!_teamAccountSystem) return null;
     return machineStates.values
         .where(
           (state) => state.isLocalMachine && !state.machine.isSharedMachine,
@@ -4843,6 +4859,20 @@ class AppNotifier extends ChangeNotifier {
   }
 
   static const offlineRetryInterval = Duration(seconds: 5);
+
+  /// How long an offline machine of another computer waits between asks while an agent waits on it
+  /// ([_pollOfflineMachine]); the last repeats. Each ask is a whole machine-list read from the
+  /// backend, since nothing pushes a machine coming back to this window: every 5 s it was 12 reads
+  /// a minute for one sleeping computer, in every window (WebSocket roadmap, Phase 2 item 4). It
+  /// ends at the backend's own retry-after for an offline machine (`OFFLINE_RETRY_AFTER_MS`), and
+  /// Retry asks at once. This computer's own daemon keeps [offlineRetryInterval]: that probe
+  /// never reaches the backend.
+  static const remoteOfflineRetryDelays = <Duration>[
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 20),
+    Duration(seconds: 30),
+  ];
 
   /// Waits before each automatic reattach of a pane whose stream died while its machine stayed
   /// reachable; the last one repeats. A pane used to get one reopen and then sit on Reconnect until
@@ -9641,6 +9671,9 @@ class AppNotifier extends ChangeNotifier {
         _stopOfflineRetry(entry.key);
         _stopLinkRetry(entry.key);
         _stopAgentSyncTimer(entry.key);
+        // The socket goes too, as on mobile: left in the pool it kept selecting a machine the
+        // backend refuses (roadmap Phase 1.1, 2026-10-28), and nothing here looked at it again.
+        unawaited(_pool?.closeMachine(entry.key));
       }
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
@@ -9894,10 +9927,32 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_offlineRetryTimers.containsKey(machineId)) return;
+    if (!machine.isLocalMachine) {
+      _scheduleRemoteOfflinePoll(machineId, 0);
+      return;
+    }
     _offlineRetryTimers[machineId] = Timer.periodic(
       offlineRetryInterval,
       (_) => unawaited(_pollOfflineMachine(machineId)),
     );
+  }
+
+  /// The [attempt]th ask of [remoteOfflineRetryDelays], then the next once it answered, until
+  /// [_stopOfflineRetry] takes its timer away.
+  void _scheduleRemoteOfflinePoll(String machineId, int attempt) {
+    final delay = remoteOfflineRetryDelays[min(
+      attempt,
+      remoteOfflineRetryDelays.length - 1,
+    )];
+    late final Timer timer;
+    timer = Timer(delay, () async {
+      await _pollOfflineMachine(machineId);
+      if (_disposed || !identical(_offlineRetryTimers[machineId], timer)) {
+        return;
+      }
+      _scheduleRemoteOfflinePoll(machineId, attempt + 1);
+    });
+    _offlineRetryTimers[machineId] = timer;
   }
 
   void _stopOfflineRetry(String machineId) {
@@ -12085,6 +12140,11 @@ class AppNotifier extends ChangeNotifier {
     if (machineStates[machineId]?.machine.isShared == true) {
       throw StateError('This harness is shared with view-only access.');
     }
+    // A machine id the loaded list does not name (a deleted machine a pane or a Swarm agent still
+    // names) gets no socket: it would only select a machine the backend refuses (roadmap Phase 1.1).
+    if (_machineInventoryLoaded && !machineStates.containsKey(machineId)) {
+      throw StateError('This machine is no longer on your account.');
+    }
     final testConnection = connectionForTest;
     if (testConnection != null) return testConnection(machineId);
     // The local-manual dev fixture exercises a locally-run backend+node stack directly (no real
@@ -14172,9 +14232,27 @@ class AppNotifier extends ChangeNotifier {
     int? beforeTurn,
     int? maxChars,
   }) async {
+    final reply = await readSessionTailReply(
+      machineId,
+      sessionId,
+      beforeTurn: beforeTurn,
+      maxChars: maxChars,
+    );
+    return reply == null || reply['error'] != null ? null : reply;
+  }
+
+  /// [readSessionTail]'s reply with its refusal kept (`NOT_INDEXED`: the
+  /// machine's index no longer holds the session). Null when the machine did
+  /// not answer.
+  Future<Map<String, dynamic>?> readSessionTailReply(
+    String machineId,
+    String sessionId, {
+    int? beforeTurn,
+    int? maxChars,
+  }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
-      final reply = await _conn(machineId).request(
+      return await _conn(machineId).request(
         'session_tail',
         payload: {
           'sessionId': sessionId,
@@ -14183,8 +14261,11 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 4),
       );
-      if (reply['error'] != null) return null;
-      return reply;
+    } on WsRequestFailure catch (failure) {
+      // The connection throws a refusal; it is still an answer. Swallowed, a
+      // NOT_INDEXED row read as no answer and was re-read every 5 seconds:
+      // 2,139 failed reads in 3 hours from one computer (2026-10-29).
+      return {...failure.payload, 'error': failure.code};
     } catch (_) {
       return null;
     }

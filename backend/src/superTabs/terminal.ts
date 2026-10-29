@@ -3,8 +3,8 @@ import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
-import { downSince } from './machines.js'
-import { agentProjectId, isConfidential, ledProject, ownSession, projectOf, readAgent } from './projects.js'
+import { downSince, productManagerOn } from './machines.js'
+import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -34,9 +34,20 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 
 /** Only the Lead of the agent's project, or a person with write access who can see the agent, reads or types in its terminal. */
 /** `elsewhere`: the agent's session is confidential in another Swarm (confidential.ts). */
-export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
+export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, kind: TerminalKind = 'input'): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
+    // A Team account holding a Product Manager: every agent there is one macOS user, which reads people's chats with it,
+    // so no person types in any of them (security review 2 of #2089). They talk to them in their groups' chats.
+    if (actor.kind === 'person' && kind === 'input' && onTeamAccount(state, target) && productManagerOn(state, target.machineId)) {
+      fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so nobody types in it through the Swarm. Talk to it in its group's chat.`, 403)
+    }
+    // In a Harness Team account: its project's owner reads its screen, and nobody types in it (projects.ts teamSessionAccess).
+    const team = teamSessionAccess(state, actor, target, elsewhere)
+    if (team === 'watch' && kind === 'screen') return
+    if (team) {
+      fail('TERMINAL_PRIVATE', `This ${ledProject(state, target.id) ? 'Product Manager' : 'agent'} runs in a Harness Team account: nobody types in it through the Swarm, and only its project's owner reads its screen. Talk to it in its project's chat.`, 403)
+    }
     // Members may watch a Lead, but only its machine's owner drives it, whether or not its session counts as private (Ken, 2026-10-28).
     if (ledProject(state, target.id) && !ownSession(actor, target)) {
       fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in a Product Manager’s terminal.', 403)
@@ -69,7 +80,7 @@ const nameOf = (target: Agent) => target.displayName ?? target.name
 export function terminalRequest(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
   command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false) {
   const target = agent(state, command.agentId)
-  mayDrive(state, actor, target, elsewhere)
+  mayDrive(state, actor, target, elsewhere, command.type === 'agent.screen' ? 'screen' : 'input')
   if (downSince(state, target, now)) fail('HOST_OFFLINE', `${nameOf(target)}’s terminal is not running or its machine is offline.`)
   const { type: _type, agentId: _agentId, ...detail } = command
   const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
