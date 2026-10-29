@@ -199,6 +199,8 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
     fakes.users.clear()
     fakes.stampUserCountry.mockClear()
     clearSsoProfileCache()
+    // The sign-in keeps a user row a few seconds (USER_ROW_TTL_MS); these tests rewrite the rows directly.
+    userService.forgetCachedUsers()
     resetGoogleSubjectFill()
     resetGridProfileLimits()
     logs = []

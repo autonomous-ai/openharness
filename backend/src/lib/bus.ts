@@ -761,7 +761,14 @@ export async function getDevicePresence(deviceId: string): Promise<boolean> {
   }
 }
 
-export interface DeviceStatusMsg { deviceId: string; online: boolean; lastSeenAt?: string }
+export interface DeviceStatusMsg {
+  deviceId: string
+  online: boolean
+  lastSeenAt?: string
+  /** The device was revoked (lib/deviceRevoke.ts): a web socket drops it from its copy of the account's devices. It
+   *  still says `online: false`, so a server that predates the field reads it as the device going offline. */
+  removed?: true
+}
 
 /** Per-USER transition channel (one sub per watching web socket); messages are PER-DEVICE. */
 export function publishDeviceStatus(userId: string, msg: DeviceStatusMsg): Promise<number> {
