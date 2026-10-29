@@ -38,9 +38,14 @@ export function teamConfigJson(config: TeamConfig): string {
   return `${JSON.stringify(config, null, 2)}\n`
 }
 
+/** Where setup writes the Team config on [platform]: the one place every reader looks (superTabs/teamDaemon.ts too). */
+export function teamConfigFile(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' ? TEAM_CONFIG_FILE : teamLayout(platform)?.configFile ?? TEAM_CONFIG_FILE
+}
+
 /** The config at [path] (this platform's, by default), every field checked; null when there is none or it is not one
  *  setup wrote. */
-export function readTeamConfig(path: string = teamLayout(process.platform)?.configFile ?? TEAM_CONFIG_FILE,
+export function readTeamConfig(path: string = teamConfigFile(),
   read: (path: string) => string = (p) => readFileSync(p, 'utf8'), platform: NodeJS.Platform = process.platform): TeamConfig | null {
   // Windows' names and paths on Windows (`DELL`, `C:\Users\DELL`), the POSIX ones elsewhere.
   const checkUser = userCheck(platform)
