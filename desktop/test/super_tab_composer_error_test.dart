@@ -113,6 +113,20 @@ void main() {
       expect(c.composerError('lead'), 'Choose an agent in this conversation.');
     });
 
+    test('a send forbidden in one conversation is not said in another',
+        () async {
+      server
+        ..refuse = {'code': 'FORBIDDEN', 'message': 'You can’t write here.'}
+        ..refuseStatus = 403;
+      c.setDraft('lead', 'Hello');
+      expect(await c.send(), isNull);
+      expect(c.composerError('lead'), 'You can’t write here.');
+
+      server.refuse = null;
+      await c.select('offline');
+      expect(c.composerError('offline'), isNull);
+    });
+
     test('a mention that is gone says so only in its own conversation',
         () async {
       c.setDraft('lead', 'Hello');
