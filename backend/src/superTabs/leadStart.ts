@@ -38,6 +38,10 @@ export interface LeadContext {
  *  on another person's Mac, its Harness Team account when that takes it now, else the Mac itself, as its owner, unless the
  *  Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason. */
 function leadPool(state: SuperTabState, project: SwarmProject, machineId: string, context: LeadContext): ContributedMachine {
+  // A machine whose owner left the Swarm stays listed while its host cleans up. Its contribution is withdrawn; machineContribution
+  // would tell the person starting the Product Manager that they lost access themselves.
+  const listed = state.machines?.find(m => m.machineId === machineId)
+  if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
   if (named.contributorId === project.ownerId) return named
   const teamMachines = context.teamMachines ?? []
