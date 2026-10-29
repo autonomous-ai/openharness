@@ -15,7 +15,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
+import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
@@ -2110,8 +2110,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
+      const waited = waitingForReview(assignment)
       assignment.status = command.status
       assignment.result = command.result
+      // A new status is a new hand-off, or the end of one: a review's earlier findings are answered.
+      delete assignment.reviewFoundAt
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
@@ -2145,6 +2148,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      // The time it waited for its review never counts, whoever moved it on.
+      if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)
       break
     }
     case 'work.cancel': {
@@ -2213,6 +2218,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       recordReview(group, check, command.passed)
       // A cheap attempt whose first review just said Ready no steps up a tier (stepUp.ts).
       if (reviewed === undefined && run?.firstReview === false && cheapAttempt(group, policy)) steppedUp(group, REVIEW_FAILED)
+      // Otherwise a review that found problems hands the work back to its Engineer, whose quiet time counts again (liveness.ts).
+      // A stepped-up attempt was cancelled just above, so it is not waiting for its review and its Engineer is told only to stop.
+      if (check.independent && !command.passed && reviewFoundProblems(group.assignment, context.now)) {
+        message(group.id, 'Working\n\nThe review found problems. Fix them, then hand it over for review again.', [group.assignment.agentId], null, SYSTEM_ROW)
+      }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
