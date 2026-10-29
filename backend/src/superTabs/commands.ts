@@ -645,13 +645,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
-  /** Steps [group] up a tier, tells the worker it stopped to stop and wakes the Lead (stepUp.ts). */
-  const steppedUp = (group: Conversation, reason: string) => {
-    const stepped = stepUp(state, group, reason, context.now)
+  /** Steps [group] up a tier, tells the worker it stopped to stop and wakes the Lead (stepUp.ts); [startId]: the failed start
+   *  that did, which steps up once. Rows of their own beside the command's. */
+  const steppedUp = (group: Conversation, reason: string, startId?: string) => {
+    const stepped = stepUp(state, group, reason, context.now, startId)
     if (!stepped) return
-    if (stepped.stopped) message(group.id, `The Swarm stepped this task up to a stronger model: ${reason.replace(/^./, c => c.toLowerCase()).replace(/\.$/, '')}. Stop working on it.`, [stepped.stopped], null, SYSTEM_ROW)
+    const row = (key: string, text: string, recipients: string[]) => effects.messages.push({ id: stableId(operationId, 'step-up', key),
+      conversationId: group.id, author: sender, text, replyTo: null, recipients, source: SYSTEM_ROW })
+    if (stepped.stopped) row('worker', `The Swarm stepped this task up to a stronger model: ${reason.replace(/^./, c => c.toLowerCase()).replace(/\.$/, '')}. Stop working on it.`, [stepped.stopped])
     const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-    message(group.id, stepped.notice, lead ? [lead] : [], null, SYSTEM_ROW)
+    row('lead', stepped.notice, lead ? [lead] : [])
   }
   /** Rules are per project. Only its owner changes them, or its Lead quoting a message the project owner wrote in its chat in
    * the last day (review of #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message
@@ -1509,7 +1512,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
         message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
-        if (start.request.gridModel && !activeWork(group)) steppedUp(group, GRID_START_FAILED)
+        if (start.request.gridModel && !activeWork(group)) steppedUp(group, GRID_START_FAILED, start.id)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')

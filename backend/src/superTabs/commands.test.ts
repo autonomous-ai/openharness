@@ -1169,7 +1169,8 @@ describe('Reviewer role', () => {
     expect(() => f.run(start, leadActor, { contribution })).toThrow('Route this task first')
     const startId = f.run({ ...start, ...via } as Command, leadActor, { contribution, ...decisionIn(group) }).result.startId as string
     f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
-    const reviewer = f.run({ type: 'agent.started', startId, harnessId: 'native-reviewer', configuration: { ...config, engine: 'claude' } }, leadActor, { contribution }).result.agentId as string
+    // A review needs a model the policy names at quality 2 or more (rules.ts reviewRefusal).
+    const reviewer = f.run({ type: 'agent.started', startId, harnessId: 'native-reviewer', configuration: { ...config, engine: 'claude', model: 'claude-opus-4-7' } }, leadActor, { contribution }).result.agentId as string
     const builder = f.add('builder', 'owner', group)
     return { f, lead, leadActor, group, reviewer, builder }
   }
@@ -1187,8 +1188,8 @@ describe('Reviewer role', () => {
     // The Builder runs Codex.
     expect(() => route({ engine: 'codex', model: 'default', effort: 'default' })).toThrow('A review runs on another engine than the reviewed Builder\'s, Codex. Route again.')
     expect(route({}).result.routeDecisionId).toBeTruthy()
-    // A Claude model the policy cannot name is not judged by strength.
-    expect(route({ model: 'default', effort: 'default' }).result.routeDecisionId).toBeTruthy()
+    // A model the policy does not name is rated 1.
+    expect(() => route({ model: 'default', effort: 'default' })).toThrow('Claude default is 1.')
     // A person assigning a grid Reviewer by hand is told.
     f.state.agents.find(a => a.id === reviewer)!.gridModel = 'qwen3'
     const byHand = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
@@ -1206,11 +1207,32 @@ describe('Reviewer role', () => {
     expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: 'No Reviewer on another engine than the Builder\'s (Claude) can run in this Swarm, so the review runs on it at the top tier.' } })
     expect(() => route({ model: 'sonnet', effort: 'medium', quality: 2 }))
       .toThrow('A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm. Route again.')
-    expect(() => route({ model: 'default', effort: 'default' })).toThrow('needs its top tier')
+    expect(() => route({ model: 'default', effort: 'default' })).toThrow('Claude default is 1.')
     expect(() => route({ model: 'default', effort: 'default', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' })).toThrow('never runs on a model served on the Swarm\'s grid')
     // A machine that offers Codex makes the other engine available, and the same engine is refused again.
     f.state.machines = [{ machineId: 'codex-box', engines: ['codex'] } as never]
     expect(() => route({})).toThrow('A review runs on another engine than the reviewed Builder\'s, Claude. Route again.')
+  })
+
+  it('never lets a small or unnamed model review: a review needs a model the policy names at quality 2 or more', () => {
+    const { f, leadActor, group, builder, reviewer } = reviewed()
+    // The Builder runs Claude; Codex, the other engine, is free to review.
+    f.state.agents.find(a => a.id === builder)!.configuration.engine = 'claude'
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, leadActor)
+    expect(() => route({ engine: 'codex', model: 'gpt-5.5-mini', effort: 'high' })).toThrow('A review needs a model of quality 2 or more, and Codex gpt-5.5-mini is 1.')
+    expect(() => route({ engine: 'codex', model: 'gpt-5-nano', effort: 'high' })).toThrow('Codex gpt-5-nano is 1.')
+    expect(route({ engine: 'codex', model: 'default', effort: 'default' }).result.routeDecisionId).toBeTruthy()
+    // A member is rated by what it runs; one launched on the engine's own model by that model's row.
+    const member = (configuration: Record<string, unknown>) => {
+      Object.assign(f.state.agents.find(a => a.id === reviewer)!.configuration, configuration)
+      return () => route({ kind: 'member', agentId: reviewer, machineId: 'host' })
+    }
+    expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).not.toThrow()
+    f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-5.5-mini'
+    expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).toThrow('Codex gpt-5.5-mini is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {
@@ -1308,7 +1330,7 @@ describe('Reviewer role', () => {
       const startId = f.run({ type: 'agent.start', request: request('lead', { role: 'reviewer', engine, name: 'Second reviewer' }), ...via } as Command, leadActor,
         { contribution, ...decisionIn('lead') }).result.startId as string
       f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
-      const fresh = f.run({ type: 'agent.started', startId, harnessId: 'native-fresh', configuration: { ...config, engine } }, leadActor, { contribution }).result.agentId as string
+      const fresh = f.run({ type: 'agent.started', startId, harnessId: 'native-fresh', configuration: { ...config, engine, ...engine === 'claude' ? { model: 'claude-opus-4-7' } : {} } }, leadActor, { contribution }).result.agentId as string
       const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
       const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
       const markReady = (result: string | null, actor: Actor = builderActor) =>
@@ -1429,7 +1451,7 @@ describe('Reviewer role', () => {
 
     it.each([
       ['machines', { kind: 'machines', machineIds: ['elsewhere'] }],
-      ['model', { kind: 'forbidModel', model: 'test-model' }],
+      ['model', { kind: 'forbidModel', model: 'opus' }],
       ['effort', { kind: 'minEffort', effort: 'max' }],
     ])('gives the review to no Reviewer the owner\'s %s rule rules out, and leaves it for the Lead', (_, rule) => {
       const { f, lead, markReady, reviews } = ready()
@@ -3270,6 +3292,8 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp!.carry).toContain('Ready: no. Two links are broken.')
     expect(g().stepUp!.carry).toContain('Ready: yes. Branch fix/docs.')
     expect(effects.messages.find(m => m.recipients.includes(kimi))!.text).toContain('Stop working on it.')
+    // Each row its own: one write stores them all.
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.find(m => m.recipients.includes(f.lead))!.text)
       .toBe(`#${g().number} stepped up to attempt 2: its first review said Ready no. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
     // The next attempt may not go back to the grid; a stronger model takes the carry-over in its brief and the step in its record.
@@ -3316,6 +3340,17 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp).toBeUndefined()
     const effects = f.run({ type: 'agent.startFailed', startId: 's2', error: 'Launch refused.' })
     expect(g().stepUp).toMatchObject({ attempt: 2, floor: 2, reason: 'Its grid host did not start the agent.' })
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.map(m => m.text)).toContain(`#${g().number} stepped up to attempt 2: its grid host did not start the agent. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
+  })
+
+  it('steps up once for one failed grid start, however often its failure is reported', () => {
+    const { f, group, g } = cheap()
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      request: { conversationId: group, machineId: 'mac', name: 'Builder', engine: 'claude', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' }, error: null }] as never
+    f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' })
+    const again = f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused again.' })
+    expect(g().stepUp).toMatchObject({ attempt: 2, startId: 's1' })
+    expect(again.messages.some(m => m.text.includes('stepped up'))).toBe(false)
   })
 })

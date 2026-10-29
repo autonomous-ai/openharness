@@ -208,12 +208,14 @@ export function repositoryKey(url: string): string | null {
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
  * Codex's slug (`gpt-5.5`). The policy names Claude families and a Codex `default`, so the id is reduced to its family
- * first, and an id with no row of its own takes the engine's `default` row before the floor. */
-export function rateFor(policy: Policy, engine: string, model: string | null, effort: string | null): { quality: number; cost: number } {
+ * first. An id with no row of its own takes the engine's `default` row only when the agent was launched on the engine's own
+ * model ([engineDefault]); otherwise it is rated 1, so a small Codex variant is never taken for a strong one (review of
+ * #2137; backend superTabs/rules.ts policyQuality). */
+export function rateFor(policy: Policy, engine: string, model: string | null, effort: string | null, engineDefault = false): { quality: number; cost: number } {
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
-  const row = policy.models.find(m => m.engine === engine && m.model === name && m.effort === (effort ?? 'default'))
-    ?? policy.models.find(m => m.engine === engine && m.model === name)
-    ?? policy.models.find(m => m.engine === engine && m.model === 'default')
+  const rowOf = (named: string) => policy.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
+    ?? policy.models.find(m => m.engine === engine && m.model === named)
+  const row = rowOf(name) ?? (engineDefault ? rowOf('default') : undefined)
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
 }
 

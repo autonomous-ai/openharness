@@ -4,7 +4,7 @@
  *  closes the failed attempt and wakes the Lead; the Lead's route and start run the next attempt, since only its machine can
  *  probe the others (autoReview.ts, the same ruling for Reviewers). */
 import { activeWork, finishWorker, type Conversation, type SuperTabState } from './model.js'
-import { policyQuality, type RunTarget } from './rules.js'
+import { policyQuality, targetQuality, type RunTarget } from './rules.js'
 import type { RoutingPolicy } from './routingPolicy.js'
 
 /** Grid, then Sonnet, then Opus; after that it is the Lead's decision (Lead, 2026-10-29). */
@@ -16,7 +16,9 @@ export const GRID_START_FAILED = 'Its grid host did not start the agent.'
 
 /** A group's last step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed
  *  attempt left for the next one's brief. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string }
+export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string
+  /** The failed start that stepped it up, so another report of that failure steps nothing up. */
+  startId?: string }
 
 const lower = (text: string) => `${text[0]!.toLowerCase()}${text.slice(1)}`
 
@@ -25,22 +27,22 @@ export function cheapAttempt(group: Conversation, policy: RoutingPolicy): boolea
   const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
   if (!run) return false
   if (run.grid) return true
-  const quality = group.stepUp ? policyQuality(policy, run.engine, run.model, run.effort ?? null) : null
-  return quality !== null && quality < 3
+  return !!group.stepUp && policyQuality(policy, run.engine, run.model, run.effort ?? null) < 3
 }
 
 /** Steps [group] up for [reason]: records the step, closes its attempt if one is going, and says what to tell its Lead and
- *  whom it stopped. Null for a review, or once it stepped up [MAX_STEP_UPS] times. */
-export function stepUp(state: SuperTabState, group: Conversation, reason: string, now: number): { notice: string; stopped: string | null } | null {
+ *  whom it stopped. Null for a review, once it stepped up [MAX_STEP_UPS] times, or for a failed start ([startId]) that
+ *  stepped it up already. */
+export function stepUp(state: SuperTabState, group: Conversation, reason: string, now: number, startId?: string): { notice: string; stopped: string | null } | null {
   const attempt = (group.stepUp?.attempt ?? 1) + 1
-  if (group.reviewOf || attempt > MAX_STEP_UPS + 1) return null
+  if (group.reviewOf || attempt > MAX_STEP_UPS + 1 || (startId && group.stepUp?.startId === startId)) return null
   const assignment = group.assignment
   const findings = group.checks.filter(c => c.independent && c.evidence && !c.passedBy).map(c => c.evidence!)
   const carry = [...group.pullRequestUrls?.length ? [`Pull requests: ${group.pullRequestUrls.join(' ')}`] : [],
     ...assignment?.result ? [`Last result: ${assignment.result}`] : [], ...findings.length ? [`Findings:\n${findings.join('\n')}`] : []]
     .join('\n').slice(0, CARRY_CHARS)
   const floor = attempt === 2 ? 2 : 3
-  group.stepUp = { attempt, floor, reason, at: now, carry }
+  group.stepUp = { attempt, floor, reason, at: now, carry, ...startId ? { startId } : {} }
   let stopped: string | null = null
   if (assignment && activeWork(group)) {
     assignment.status = 'cancelled'
@@ -56,8 +58,7 @@ export function stepUp(state: SuperTabState, group: Conversation, reason: string
 export function stepUpRefusal(group: Conversation, target: RunTarget, policy: RoutingPolicy): string | null {
   const step = group.stepUp
   if (!step) return null
-  const quality = policyQuality(policy, target.engine, target.model, target.effort)
-  return target.gridModel || (quality !== null && quality < step.floor)
+  return target.gridModel || targetQuality(policy, target) < step.floor
     ? `This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality ${step.floor}.` : null
 }
 

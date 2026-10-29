@@ -55,7 +55,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
   it('makes two reviews the Swarm opens at once meet on the Reviewer both would take, and on the head that numbers them', () => {
     const f = swarm(), a = f.group('A')
     // On another engine than the Engineer's: a review never runs on the reviewed Builder's own (rules.ts reviewRefusal).
-    const reviewer = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'Reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude' }, lead: false },
+    const reviewer = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'Reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' }, lead: false },
       owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).effects.result.agentId as string
     f.state.agents.find(x => x.id === reviewer)!.role = 'reviewer'
     f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }

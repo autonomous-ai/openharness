@@ -110,9 +110,12 @@ const text = (value: unknown) => typeof value === 'string' ? value : null
  * does report is kept. */
 function withLaunchEffort(member: Json, starts: Json[]): Json {
   const configuration = object(member.configuration)
-  if (configuration.effort && configuration.effort !== 'auto') return member
-  const launched = object(starts.find(s => s.harnessId === member.harnessId)?.request).effort
-  return typeof launched === 'string' && launched !== 'default' ? { ...member, configuration: { ...configuration, effort: launched } } : member
+  const start = starts.find(s => s.harnessId === member.harnessId)
+  // Launched on the engine's own model: rated by the policy's `default` row, whatever slug it reports (route.ts rateFor).
+  const engineDefault = start && (object(start.request).model ?? 'default') === 'default' ? { engineDefault: true } : {}
+  if (configuration.effort && configuration.effort !== 'auto') return { ...member, ...engineDefault }
+  const launched = object(start?.request).effort
+  return typeof launched === 'string' && launched !== 'default' ? { ...member, ...engineDefault, configuration: { ...configuration, effort: launched } } : { ...member, ...engineDefault }
 }
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
@@ -456,7 +459,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'
     const model = typeof c.model === 'string' ? c.model : null, effort = typeof c.effort === 'string' ? c.effort : null
     return { kind: 'member', agentId: String(m.id), name: String(m.name ?? 'Member'), machineId, machineName, engine,
-      model: model ?? 'default', effort: effort ?? 'default', ...rateFor(policy, engine, model, effort),
+      model: model ?? 'default', effort: effort ?? 'default', ...rateFor(policy, engine, model, effort, m.engineDefault === true),
       quota, activity: 'idle', known: quota.known, refusals, frame, terminalUnverified }
   }
   const newProbe = (m: Policy['models'][number], refusals: string[], quota: Probe['quota'], known: boolean, load: Probe['load'] = UNKNOWN_LOAD): Probe => ({

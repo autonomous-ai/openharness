@@ -41,7 +41,9 @@ export interface SwarmRule {
 /** What would run: a start request, an agent's configuration, or a routed pick. Null when not known. `devices` are those its
  *  machine checked are connected: a start's, or the start that launched an agent; absent only for a new agent's pick, whose
  *  start is checked when it is made. `gridModel`: a model served on the Swarm's grid that its engine drives. */
-export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null; devices?: string[]; gridModel?: string }
+export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null; devices?: string[]; gridModel?: string
+  /** An agent its start launched on the engine's own model: rated by the policy's `default` row (targetQuality). */
+  launchedDefault?: true }
 
 const ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 /** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
@@ -100,18 +102,23 @@ export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
   const launched = start?.request.effort
   return { machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
     effort: reported && reported !== 'auto' ? reported : launched ?? reported, devices: start?.request.requirements?.devices ?? [],
-    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}) }
+    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(start && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}) }
 }
 
-/** The policy's strength of a subscription model, as the CLI's route rates it (cli superTabs/route.ts rateFor): a Claude id by
- *  its family, a model with no row by the engine's `default` row. Null for a Claude model of no known family, or no row. */
-export function policyQuality(policy: RoutingPolicy, engine: string, model: string | null, effort: string | null): number | null {
-  const name = engine === 'claude' ? FAMILY.exec((model ?? '').toLowerCase())?.[0] : model ?? 'default'
-  if (!name) return null
-  const rows = policy.models.filter(m => m.engine === engine)
-  return (rows.find(m => m.model === name && m.effort === (effort ?? 'default')) ?? rows.find(m => m.model === name)
-    ?? rows.find(m => m.model === 'default'))?.quality ?? null
+/** The policy's strength of a subscription model, as the CLI's route rates it (cli superTabs/route.ts rateFor): its named row
+ *  (a Claude id by its family), else the engine's `default` row for the engine's own model ([engineDefault]: launched on it),
+ *  else 1: a model the policy does not name, a small Codex variant among them, is never taken for a strong one (review of
+ *  #2137). */
+export function policyQuality(policy: RoutingPolicy, engine: string, model: string | null, effort: string | null, engineDefault = false): number {
+  const name = model === null ? 'default' : engine === 'claude' ? FAMILY.exec(model.toLowerCase())?.[0] ?? model : model
+  const rowOf = (named: string) => {
+    const rows = policy.models.filter(m => m.engine === engine && m.model === named)
+    return rows.find(m => m.effort === (effort ?? 'default')) ?? rows[0]
+  }
+  return (rowOf(name) ?? (engineDefault ? rowOf('default') : undefined))?.quality ?? 1
 }
+/** A target's strength: an agent launched on the engine's own model falls back to the `default` row (Codex reports its slug). */
+export const targetQuality = (policy: RoutingPolicy, t: RunTarget) => policyQuality(policy, t.engine, t.model, t.effort, !!t.launchedDefault)
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 
@@ -129,9 +136,9 @@ function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gri
 function judgeReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): { refusal: string } | { note: string } | null {
   if (!reviewed) return null
   if (target.gridModel) return { refusal: 'A review never runs on a model served on the Swarm\'s grid.' }
-  const quality = policyQuality(policy, target.engine, target.model, target.effort)
+  const quality = targetQuality(policy, target)
   const engine = ENGINE[target.engine] ?? target.engine
-  if (quality !== null && quality < 2) return { refusal: `A review needs a model of quality 2 or more, and ${engine} ${target.model} is ${quality}.` }
+  if (quality < 2) return { refusal: `A review needs a model of quality 2 or more, and ${engine} ${target.model} is ${quality}.` }
   const assignment = state.conversations.find(c => c.id === reviewed)?.assignment
   const worker = assignment && state.agents.find(a => a.id === assignment.agentId)
   const builder = worker ? agentTarget(state, worker) : assignment ? { engine: assignment.configuration.engine } : null

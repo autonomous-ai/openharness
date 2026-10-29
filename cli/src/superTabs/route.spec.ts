@@ -58,6 +58,12 @@ describe('quota and rates', () => {
     expect(rateFor(policy, 'claude', 'opus', 'high')).toEqual({ quality: 3, cost: 3 })
     expect(rateFor(policy, 'claude', 'opus', 'max')).toEqual({ quality: 3, cost: 3 })
     expect(rateFor(policy, 'claude', null, null)).toEqual({ quality: 1, cost: 1 })
+    // A model the policy does not name, a small Codex variant among them, is rated 1 (review of #2137); one launched on the
+    // engine's own model takes the `default` row, whatever slug it reports.
+    expect(rateFor(policy, 'codex', 'gpt-5.5-mini', 'high')).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-6.1-sol', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'claude', 'claude-opus-4-7', 'high', true)).toEqual({ quality: 3, cost: 3 })
   })
 })
 
@@ -276,7 +282,8 @@ describe('edges', () => {
   it('rates default models, unknown models and unknown engines', () => {
     expect(rateFor(policy, 'codex', null, null)).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'claude', 'sonnet', null)).toEqual({ quality: 2, cost: 2 })
-    expect(rateFor(policy, 'codex', 'gpt-x', 'high')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-x', 'high', true)).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'other', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
   })
   it('rates a working member by the model its engine reported, not only by the catalog alias', () => {
@@ -285,8 +292,9 @@ describe('edges', () => {
     expect(rateFor(policy, 'claude', 'claude-sonnet-4-5[1m]', 'medium')).toEqual({ quality: 2, cost: 2 })
     expect(rateFor(policy, 'claude', 'sonnet[1m]', null)).toEqual({ quality: 2, cost: 2 })
     expect(rateFor(policy, 'claude', 'claude-haiku-4-5', 'auto')).toEqual({ quality: 1, cost: 1 })
-    // Codex reports a real slug; its catalog row is `default`.
-    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high')).toEqual({ quality: 3, cost: 2 })
+    // Codex reports a real slug; its catalog row is `default`, for an agent launched on the engine's own model.
+    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high')).toEqual({ quality: 1, cost: 1 })
     // A model that matches nothing and an engine without a default row stay at the floor.
     expect(rateFor(policy, 'claude', 'claude-mystery-1', 'high')).toEqual({ quality: 1, cost: 1 })
   })

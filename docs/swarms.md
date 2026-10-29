@@ -373,12 +373,16 @@ server both keep to the new floor. The next attempt's brief carries the pull
 request, the last result and the review's findings, and the step (attempt
 number and why) is kept on the attempt and its route decision.
 
-**Reviews.** A review never runs on a grid model, on a model the policy rates
-below 2, or on the reviewed Builder's own engine (a Builder on a grid model
-counts as that model's family). The server refuses such a start, assignment or
-pick from an agent, whatever the soft rules say, and lets a person through with
-a warning. A Claude model the policy cannot name is not refused for its
-strength.
+**Reviews.** A review never runs on a grid model or on a model the policy rates
+below 2. A model the policy does not name, a small Codex variant such as a mini
+or nano among them, is rated 1; an agent launched on its engine's own model is
+rated by that engine's `default` row. A review runs on another engine than the
+reviewed Builder's while a strong Reviewer of another engine can run in the
+Swarm (a Builder on a grid model counts as that model's family). A Swarm with
+one engine keeps its automatic reviews: the Builder's own engine reviews at its
+top tier (quality 3) only, and the route decision records why. The server
+refuses such a start, assignment or pick from an agent, whatever the soft rules
+say, and lets a person through with a warning.
 
 Design:
 
