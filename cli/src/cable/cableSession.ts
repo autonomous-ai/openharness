@@ -396,7 +396,7 @@ export interface CableHost {
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
    *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
    *  spoken to, the only one they may be posted in. */
-  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string): Promise<SaidOnCard>
+  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean): Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
@@ -1721,10 +1721,12 @@ export class CableSession {
         // The dial can still name the previous pane while a focus frame is in flight, or after the
         // devices process restarted. Ordinary dictation belongs to the window's selection at capture
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
-        const focused = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
-          !carryVoice && !('selectionId' in msg) ? this.host.appFocus?.() : undefined
+        // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
+        const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
+        const dialFace = plain ? this.swarmFaceOf(str('agentId')!) : undefined
+        const focused = plain && !dialFace ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        const swarmFace = agentId ? this.swarmFaceOf(agentId) : undefined
+        const swarmFace = dialFace ?? (agentId ? this.swarmFaceOf(agentId) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2336,12 +2338,14 @@ export class CableSession {
       return
     }
     // Reviewed on a Swarm face: Send posts the words in the chat that was on the face, as the person, and never in a terminal.
-    if (review && turn.swarmFace && this.host.swarmSay && !carried && !selection?.ok) {
+    if (review && turn.swarmFace && !carried && !selection?.ok) {
+      if (!this.host.swarmSay) { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
       const face = turn.swarmFace, say = this.host.swarmSay.bind(this.host), recipient = agentId
       const state = this.voiceDraft.create({ agentId: recipient, name: `${face.project} · ${face.name}`, text: transcript,
         context: 'Swarm chat',
         submit: async words => {
-          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, ...this.sayArgs(face))
+          const [chat] = this.sayArgs(face)
+          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true)
             .catch((): SaidOnCard => ({ said: false }))
           if (said.said) return { ok: true }
           return { ok: false, error: said.refused?.message ?? (face.kind === 'buddy' ? 'Could not reach your Buddy. Try again.' : 'Could not reach the Swarm. Try again.') }

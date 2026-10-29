@@ -264,7 +264,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
     swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat, chatId) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat), ...(chatId ? { chatId } : {}) })),
+    swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
+      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),

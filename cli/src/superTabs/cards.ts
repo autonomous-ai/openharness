@@ -550,16 +550,20 @@ export class SwarmCards {
    *  PM, Buddies off, a Buddy chat not the reader's), whose words must never become a terminal turn instead (spec 2026-10-29
    *  Voice). Any other failure (the network, a 5xx) throws as before. `chatId`: the chat on the dial's face when the words
    *  were spoken; they go there or nowhere, so words for the reader's Buddy never land in the project's chat because the
-   *  window moved on while they were said (review of #2146). */
-  async say(harnessId: string, text: string, chat: CardChat = false, chatId?: string): Promise<SaidOnCard> {
+   *  window moved on while they were said (review of #2146). `reviewed`: the person saw that chat named and pressed Send,
+   *  so the words go there even if the face moved since, while it is still a chat of the Lead's project this reader may
+   *  see (docs/device-voice-swarm-chat.md); the backend checks the post as for typing. */
+  async say(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
     for (const [tabId, { state }] of this.tabs) {
       const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
       const found = agent && cardId(agent.id) ? this.target(tabId, agent.id, chat) : null
       if (!found) continue
-      if (chatId !== undefined && found.id !== chatId) return { said: false, refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } }
+      const to = chatId === undefined || found.id === chatId ? found.id
+        : reviewed && this.chatOfLead(state, agent!.id as string, chatId) ? chatId : null
+      if (!to) return { said: false, refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } }
       try {
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
-          command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
+          command: { type: 'message.send', conversationId: to, text, replyTo: null, recipientIds: [] } })
       } catch (error) {
         if (error instanceof SuperTabHostError && error.status >= 400 && error.status < 500) return { said: false, refused: { code: error.code, message: error.message } }
         throw error
@@ -567,6 +571,16 @@ export class SwarmCards {
       return { said: true }
     }
     return { said: false }
+  }
+
+  /** Whether `chatId` is, as last read, a chat that could be on this Lead's face: its Lead conversation, or an open chat of its
+   *  project that is not another person's Buddy chat. */
+  private chatOfLead(state: Json, leadId: string, chatId: string): boolean {
+    const found = leadProjects(state).find(p => p.leadId === leadId)
+    if (!found) return false
+    if (found.lead.id === chatId) return true
+    const c = list(state.conversations).find(c => c.id === chatId)
+    return !!c && cardId(c.id) && inProject(c, projectKey(found.project)) && c.archived !== true && (!isBuddyChat(c) || isReadersBuddyChat(c, this.me))
   }
 
   /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it is on the face. */

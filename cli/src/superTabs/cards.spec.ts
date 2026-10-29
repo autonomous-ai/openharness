@@ -1055,6 +1055,24 @@ describe('SwarmCards Buddy side', () => {
     expect(posts).toEqual(['pm-web'])
     t.cards.want(false)
   })
+
+  it('reviewed words go to the chat they were reviewed for after the face moved, and never to a chat outside the Lead\'s project', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    // The person reviewed the words for their Buddy chat; the window opened the Lead before they pressed Send.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(await t.cards.say('h-a1', 'reviewed for my Buddy', 'buddy', 'pm-web', true)).toEqual({ said: true })
+    // Another project's chat, or one this reader cannot see, is not where this Lead's words go.
+    for (const chatId of ['lead-mobile', 'gone']) {
+      expect(await t.cards.say('h-a1', 'not here', 'buddy', chatId, true)).toEqual({ said: false,
+        refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } })
+    }
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string } }).command.conversationId)
+    expect(posts).toEqual(['pm-web'])
+    t.cards.want(false)
+  })
 })
 
 // Privacy edges reviews keep finding (Lead, 10-29): an answer read for one reader, or while access lasted, is never given

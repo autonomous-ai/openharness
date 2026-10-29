@@ -25,6 +25,10 @@ shows the words first (device owner's choice 2a, 2026-10-27).
 
 - A dial asks for review on a Swarm face only from a daemon that lists `swarm.review`. An older daemon would type the
   reviewed draft into the Lead's terminal, so with one the face posts at once, as before, and a hold does not offer review.
+- Words begun on a Swarm face keep the face's Lead as their recipient: a pane focused in the window never takes them.
+- Send passes `reviewed` with the chat: `SwarmCards.say` posts there while it is still the Lead conversation or an open chat
+  of that Lead's project this reader may see, even if the face moved since. Unreviewed words keep today's rule (refused
+  once the face moved).
 - A daemon that saw `swarmReview` refuses unreviewed words for a Swarm face before they are transcribed:
   `Review the words before they are posted.`
 

@@ -4663,8 +4663,9 @@ describe('swarm cards', () => {
     // ── Review before posting (device voice in the Swarm chat): words for a chat everyone in the Swarm reads are shown with
     // the chat's name, then Send or Discard. Without this, a held recording on a Swarm face was a draft typed into the
     // Lead's terminal.
-    const reviewed = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay'], op: 'send' | 'discard') => {
-      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+    const reviewed = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay'], op: 'send' | 'discard',
+      over: Partial<CableHost> = {}) => {
+      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay, ...over })
       const { session, port } = await connect(host)
       try {
         port.say(hello)
@@ -4673,7 +4674,7 @@ describe('swarm cards', () => {
         port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-h1', review: true })
         await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' || m.t === 'voice.error')).toBe(true))
         const draft = ofType(port, 'voice.draft')[0]
-        const calledBefore = vi.mocked(swarmSay!).mock.calls.length
+        const calledBefore = swarmSay ? vi.mocked(swarmSay).mock.calls.length : 0
         if (draft) port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op })
         if (draft) await vi.waitFor(() => expect(port.sent.some(m => m.t === 'draft.state' && m.requestId === 'r1')).toBe(true))
         return { draft, calledBefore, state: ofType(port, 'draft.state')[0], turns: vi.mocked(host.sendTurn).mock.calls }
@@ -4685,8 +4686,23 @@ describe('swarm cards', () => {
       const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], swarmSay, 'send')
       expect(r.draft).toMatchObject({ t: 'voice.draft', active: true, name: "Project 1 · diego's Buddy", context: 'Swarm chat', text: 'ship it' })
       expect(r.calledBefore).toBe(0)
-      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+      // Reviewed: the chat it was reviewed for, even if the window moved since (SwarmCards.say checks it is still the Lead's).
+      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1', true]])
       expect(r.state).toMatchObject({ ok: true, sent: true })
+      expect(r.turns).toEqual([])
+    })
+
+    it('a pane focused in the window at capture does not take Swarm-face words: they are reviewed for the face\'s chat', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], swarmSay, 'send', { appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      expect(r.draft).toMatchObject({ name: "Project 1 · diego's Buddy", agentId: 'h1' })
+      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1', true]])
+      expect(r.turns).toEqual([])
+    })
+
+    it('reviewed Swarm-face words with no way to post them in a Swarm are refused, never drafted for a terminal', async () => {
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], undefined, 'send')
+      expect(r.draft).toBeUndefined()
       expect(r.turns).toEqual([])
     })
 
