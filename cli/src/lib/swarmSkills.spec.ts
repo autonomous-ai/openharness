@@ -103,7 +103,7 @@ describe('built-in Swarm skills', () => {
   ]
   // Fail fast on a missing tool (Tony 10-29: a device build sat an hour on his Mac's Team account, which had no Flutter and no
   // iPhone): the Builder's and the Reviewer's check, in both modes, and the Lead's move, in both modes.
-  const toolCheck = '- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once (see Blocked).\n'
+  const toolCheck = '- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).\n'
   // The stop lives in the Builder's Blocked section, the only place its skill lets it stop (review of #2096).
   const missingStop = '- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner\'s or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.\n'
   // The Reviewer's, at the end of its first paragraph.
@@ -255,7 +255,7 @@ describe('built-in Swarm skills', () => {
   it('has each Builder check its tools first, and stop from its Blocked section when one is missing', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`and rule on mismatches.\n${toolCheck}- If something you need is missing,`)
-    expect(orchestration).toContain(`- Can't go on: mark blocked with why, and what would unblock you.\n${missingStop}- Post a "Needs:" line`)
+    expect(orchestration).toContain(`- Post a "Needs:" line, continue the independent parts, and mark working again once it moves.\n${missingStop}- Stop for a decision only`)
     expect(orchestration).not.toContain('check it is reachable and usable before you start')
     expect(orchestration).not.toContain('A missing machine, test data')
     expect(orchestration).toContain('Another machine the work needs, test data, or a person\'s hands is still a "Needs:" line; continue the independent parts.')
