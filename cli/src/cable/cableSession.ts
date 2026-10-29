@@ -383,8 +383,8 @@ export interface CableHost {
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
-  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); empty until it has. */
-  swarmCards?(): SwarmCard[]
+  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); null until it has, which is not "no Swarms". */
+  swarmCards?(): SwarmCard[] | null
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void
   /** One Lead's last message, read on request; null when it could not be read. */
@@ -2773,7 +2773,12 @@ export class CableSession {
   private async pushSwarmCards(force: boolean): Promise<void> {
     if (!this.swarmCard) return
     if (force) { this.cardKeys.clear(); this.cardIdsKey = ''; this.focusedKey = '' }
-    const cards = (this.host.swarmCards?.() ?? []).slice(0, SWARM_CARDS_MAX)
+    // Nothing until the core has read them: an empty list on a daemon that had just started sent the dial off the Swarm on
+    // its face, onto TABS, 2 s before the real list came (Diego, 2026-10-29). Empty only ever means no Swarms, as it does for
+    // a host with no cards at all.
+    const read = this.host.swarmCards ? this.host.swarmCards() : []
+    if (!read) return
+    const cards = read.slice(0, SWARM_CARDS_MAX)
     const desk = this.host.listSwarms().swarms
     const ids = JSON.stringify(cards.map((c) => c.id))
     if (ids !== this.cardIdsKey) {
@@ -2862,7 +2867,7 @@ export class CableSession {
       return
     }
     // Not in the list yet: asked again when it arrives.
-    const card = this.host.swarmCards?.().find((c) => c.id === open.superTabId)
+    const card = this.host.swarmCards?.()?.find((c) => c.id === open.superTabId)
     if (!card) { this.logFocus(`cable: swarm focus ${named} · held: no such Swarm in the list`); return }
     const lead = open.projectId ? card.leads.find((l) => l.projectId === open.projectId) : undefined
     if (open.projectId && !lead) { this.logFocus(`cable: swarm focus ${named} · held: no Lead for that project`); return }
@@ -2903,7 +2908,7 @@ export class CableSession {
       return
     }
     if (type === 'supertab.select') {
-      const projectId = this.host.swarmCards?.().find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
+      const projectId = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
       if (!projectId) { this.log(`cable: ignored pick of unknown Lead ${lead}`); return }
       // Remembered before the window answers, so its announce of this very project is not sent back as a focus.
       this.focusedKey = `${tab}/${projectId}`
