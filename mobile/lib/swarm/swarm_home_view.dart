@@ -11,8 +11,9 @@ typedef SwarmHomeSwarm = ({
 });
 
 /// [snapshot] thinned to what Home draws: its projects, its agents by name,
-/// engine and status, each conversation's title, project, people and work
-/// status, and the built-in pictures people and agents wear. Nothing a chat
+/// engine and status, each conversation's title, project, people, work
+/// status and when it last changed, and the built-in pictures people and
+/// agents wear. Nothing a chat
 /// holds — no message, brief, check, task, question or email, no photo or
 /// status — nor machines, starts or what waits on the person, which come
 /// with the next read. [buddies] marks the Buddy chats and Buddies, so none
@@ -110,6 +111,7 @@ Map<String, dynamic> _conversation(SuperTabConversation c) => {
   'agentIds': c.agentIds,
   'archived': c.archived,
   'dormant': c.dormant,
+  'changedAt': ?c.changedAt?.millisecondsSinceEpoch,
   if (c.audience case final people?)
     'audience': {
       'people': [

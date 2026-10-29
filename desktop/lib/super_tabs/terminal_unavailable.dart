@@ -22,7 +22,7 @@ String superTabTerminalUnavailable({
   final ownerId = agent.machineOwnerId;
   if (snapshot == null || ownerId == accountId) return superTabTerminalOffline;
   final owner =
-      snapshot.people.where((p) => p.id == ownerId).firstOrNull?.email ??
+      snapshot.people.where((p) => p.id == ownerId).firstOrNull?.username ??
       'its owner';
   final row = snapshot.machines
       .where((m) => m['machineId'] == agent.machineId)

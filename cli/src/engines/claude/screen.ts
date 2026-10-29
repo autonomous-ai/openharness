@@ -56,3 +56,23 @@ function claudeRewindMenuOpen(capture: string): boolean {
     && !lines.slice(index + 1).some((next) => /[─━]{8,}/u.test(next)))
 }
 
+
+/**
+ * The key that closes one of Claude Code's own feedback popups without sending anything, or null unless the capture shows
+ * exactly one of them. Only for the Swarm's agents (superTabs/terminal.ts), whom nobody watches: a "Bug report drafted"
+ * popup about the Lead's own slip covered its prompt, and every message to it came back undelivered (`prompt_hidden`,
+ * Nova in the Swarm autonomous-harness, 2026-10-29). As measured there (Claude Code 2.1, 2026-10-29):
+ * - "Bug report drafted: …" with "1 to review · 2 to send · 0 to dismiss": `0` dismisses the draft; nothing is sent.
+ * - Then "Turn off Claude-drafted feedback? 0 to turn off · Esc to keep": Esc, so the person's setting stays as it was.
+ * - "How is Claude doing this session?" with "0: Dismiss": `0`, no rating given.
+ * A popup that reads otherwise, or two at once, gets nothing and stays the Lead's to see.
+ */
+export function feedbackDismissKeys(capture: string): string[] | null {
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map(line => line.replace(/^[\s│|]+|[\s│|]+$/g, ''))
+  const count = (pattern: RegExp) => lines.filter(line => pattern.test(line)).length
+  const draft = count(/^✻?\s*Bug report drafted:/) === 1 && count(/^1 to review · 2 to send · 0 to dismiss$/) === 1
+  const turnOff = count(/^Turn off Claude-drafted feedback\? 0 to turn off · Esc to keep$/) === 1
+  const survey = count(/How is Claude doing this session\?/) === 1 && count(/^1: Bad\s+2: Fine\s+3: Good\s+0: Dismiss$/) === 1
+  if (Number(draft) + Number(turnOff) + Number(survey) !== 1) return null
+  return turnOff ? ['Escape'] : ['0']
+}

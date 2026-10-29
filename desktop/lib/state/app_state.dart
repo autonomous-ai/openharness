@@ -99,6 +99,7 @@ import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/join_machine.dart';
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
@@ -1702,10 +1703,12 @@ class AppNotifier extends ChangeNotifier {
       final target = sharedTabsTarget;
       if (target == null) {
         return Future.error(
-          const WsRequestFailure(
+          WsRequestFailure(
             responseType: 'agent_messages_result',
             code: 'MACHINE_AWAY',
-            detail: 'No computer of yours is online.',
+            detail: _teamComputer
+                ? teamComputerSwarmMessage
+                : 'No computer of yours is online.',
           ),
         );
       }
@@ -1731,6 +1734,19 @@ class AppNotifier extends ChangeNotifier {
   /// `tab_activity` on the computer [sharedTabs] asks: every harness of a desk
   /// tab with its state and summary.
   late final tabActivity = TabActivityReader(request: sharedTabs.request);
+
+  /// Natively, this computer switched to a Harness Team account (`harness team
+  /// on`): its daemon signs in as the team, which the server never lets act as
+  /// the person, so none of the person's Swarm requests, files or profile
+  /// pictures go out here.
+  bool get _teamComputer =>
+      viewer == null && localMachineState?.machine.isTeamAccount == true;
+
+  /// What the person is told when [_teamComputer] stops a Swarm request.
+  static const teamComputerSwarmMessage =
+      'This computer runs Swarm agents for a Harness Team account, so it '
+      'cannot send your own Swarm messages. Open Swarm on another of your '
+      'machines.';
 
   /// The machine [sharedTabs] asks: this computer natively; on the web one of
   /// the account's own online machines, never a shared one. Never a Harness
@@ -1768,8 +1784,39 @@ class AppNotifier extends ChangeNotifier {
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     viewStorage: swarmViewStore(beside: localStore),
-    upload: uploadWith(() => api),
-    avatarUpload: uploadAvatarWith(() => api),
+    upload:
+        ({
+          required tabId,
+          required conversationId,
+          required name,
+          required mime,
+          required bytes,
+          required cancel,
+          required onProgress,
+        }) => _teamComputer
+        ? Future.error(
+            const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              teamComputerSwarmMessage,
+            ),
+          )
+        : uploadWith(() => api)(
+            tabId: tabId,
+            conversationId: conversationId,
+            name: name,
+            mime: mime,
+            bytes: bytes,
+            cancel: cancel,
+            onProgress: onProgress,
+          ),
+    avatarUpload: ({required tabId, required png}) => _teamComputer
+        ? Future.error(
+            const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              teamComputerSwarmMessage,
+            ),
+          )
+        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
@@ -1854,13 +1901,10 @@ class AppNotifier extends ChangeNotifier {
     transport: (method, path, {body}) async {
       final target = sharedTabsTarget;
       if (target == null) {
-        if (viewer == null &&
-            localMachineState?.machine.isTeamAccount == true) {
+        if (_teamComputer) {
           throw const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
-            'This computer runs Swarm agents for a Harness Team account, so '
-                'it cannot send your own Swarm messages. Open Swarm on another '
-                'of your machines.',
+            teamComputerSwarmMessage,
           );
         }
         throw const SuperTabFailure(
@@ -1894,6 +1938,12 @@ class AppNotifier extends ChangeNotifier {
   /// Closing a Swarm only hides it here, which looks like losing it. Each
   /// closure announces its history id so the screen can offer to reopen it.
   Stream<String> get superTabClosures => _superTabClosures.stream;
+
+  /// The name of Swarm [tabId] if this account belongs to it, open here or
+  /// not; null for one it is not in.
+  String? superTabName(String tabId) =>
+      swarms.where((s) => s.superTabId == tabId).firstOrNull?.name ??
+      _superTabNames[tabId];
 
   /// Swarms hidden on this computer that the account still belongs to,
   /// by name. Saved with the hidden set, so a restart keeps them.
@@ -2166,6 +2216,79 @@ class AppNotifier extends ChangeNotifier {
       await superTabMachineRequest(here, {'action': 'teamSetupDecline'});
     } catch (error) {
       appLog.debug('super-tabs', 'team account decline not saved: $error');
+    }
+  }
+
+  /// Why this Mac has no Harness Team account, as its own daemon remembers
+  /// it (cli/src/team/autoSetup.ts `status`): `{state: declined}` after a
+  /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null
+  /// when it cannot say: not this Mac's to set up, or a daemon too old.
+  Future<({String state, String? detail})?> teamSetupStatus() async {
+    final here = _teamAccountHere();
+    if (here == null) return null;
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetupStatus',
+      });
+      final state = answer['state'];
+      if (state is! String) return null;
+      final detail = answer['detail'];
+      return (state: state, detail: detail is String ? detail : null);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final StreamController<SwarmJoinedMachine> _joinedMachines =
+      StreamController<SwarmJoinedMachine>.broadcast();
+
+  /// This computer, added to a Swarm as its person joined it
+  /// ([addMachineOnJoin]): the screen shows a note, with Pause and Remove.
+  Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
+  final _joinAdding = <String>{};
+
+  /// A Swarm [tabId] just joined at this computer, as [role]: adds this
+  /// computer to it with Add machine's defaults (super_tabs/join_machine.dart),
+  /// then offers the Harness Team account, the one step macOS asks a password
+  /// for. A viewer, someone who was already a member, and a computer that
+  /// cannot make a Team account here are left as they are.
+  Future<void> addMachineOnJoin(
+    String tabId, {
+    required String role,
+    bool alreadyMember = false,
+  }) async {
+    if (alreadyMember || role != 'collaborator') return;
+    final here = _teamAccountHere();
+    final accountId = currentUser?.id;
+    if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
+    bool current() =>
+        !_disposed &&
+        status == AppStatus.authenticated &&
+        currentUser?.id == accountId;
+    try {
+      final c = await superTabs.open(tabId);
+      if (!current()) return;
+      await c.refresh();
+      final note =
+          await SwarmJoinMachine(
+            machineRequest: superTabMachineRequest,
+            readResources: readMachineResources,
+            wake: wakeSuperTabHost,
+          ).add(
+            c,
+            machineId: here,
+            machineName: stateOf(here)?.machine.displayName ?? 'This computer',
+            current: current,
+          );
+      if (note == null || !current()) return;
+      _joinedMachines.add(note);
+      // Joined by the person at this computer: the system asks once for the
+      // Harness Team account (cli/src/team/autoSetup.ts).
+      if (note.added) await offerTeamAccount('join', tabId: tabId);
+    } catch (error) {
+      appLog.info('super-tabs', 'machine not added on join: $error');
+    } finally {
+      _joinAdding.remove(tabId);
     }
   }
 
@@ -21974,6 +22097,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
     unawaited(_teamSetupAsks.close());
+    unawaited(_joinedMachines.close());
     super.dispose();
   }
 }

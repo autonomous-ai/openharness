@@ -5,6 +5,7 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/measurement/product_measurement.dart';
+import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/pane_preset.dart';
@@ -41,6 +42,7 @@ class _PreparingApp extends AppNotifier {
     super.connectionForTest,
     super.localCliDiscovery,
     super.productMeasurement,
+    super.systemNotifications,
     super.paneLayoutStore,
   });
   final Future<String> Function(ProjectFolderRequest request) prepare;
@@ -60,6 +62,7 @@ AppNotifier createApp({
   ProductMeasurement? productMeasurement,
   LocalCliDiscovery? localCliDiscovery,
   Future<String> Function(ProjectFolderRequest request)? prepareFolder,
+  SystemNotifications? systemNotifications,
 }) {
   final app =
       (prepareFolder == null
@@ -70,6 +73,7 @@ AppNotifier createApp({
                 connectionForTest: connectionForTest,
                 localCliDiscovery: localCliDiscovery,
                 productMeasurement: productMeasurement,
+                systemNotifications: systemNotifications,
                 paneLayoutStore: store == null
                     ? null
                     : PaneLayoutStore(storage: store),
@@ -82,6 +86,7 @@ AppNotifier createApp({
                 connectionForTest: connectionForTest,
                 localCliDiscovery: localCliDiscovery,
                 productMeasurement: productMeasurement,
+                systemNotifications: systemNotifications,
                 paneLayoutStore: store == null
                     ? null
                     : PaneLayoutStore(storage: store),

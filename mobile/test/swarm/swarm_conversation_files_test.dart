@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
@@ -10,68 +9,6 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import 'swarm_fixture.dart';
 
-/// One upload the chat asked for: what it sent, and how to answer it.
-class _Upload {
-  _Upload(this.name, this.mime, this.bytes, this.conversationId, this.tabId,
-      this.cancel, this.onProgress);
-  final String name, mime, conversationId, tabId;
-  final Uint8List bytes;
-  final CancelToken cancel;
-  final void Function(double sent) onProgress;
-  final answer = Completer<Map<String, dynamic>>();
-}
-
-/// The backend's attachment upload, answered by the test.
-class _Uploads {
-  final asked = <_Upload>[];
-
-  /// Answers each upload at once with an id made from its name, unless off.
-  bool answersAtOnce = true;
-
-  /// Refuses uploads of these names.
-  final refuse = <String, SuperTabFailure>{};
-
-  List<String> get names => [for (final u in asked) u.name];
-
-  SwarmUpload get upload =>
-      ({
-        required tabId,
-        required conversationId,
-        required name,
-        required mime,
-        required bytes,
-        required cancel,
-        required onProgress,
-      }) {
-        final u = _Upload(
-          name,
-          mime,
-          bytes,
-          conversationId,
-          tabId,
-          cancel,
-          onProgress,
-        );
-        asked.add(u);
-        if (refuse[name] case final failure?) {
-          u.answer.completeError(failure);
-        } else if (answersAtOnce) {
-          u.answer.complete(attachment('id-$name'));
-        }
-        return u.answer.future;
-      };
-
-  static Map<String, dynamic> attachment(String id) => {
-    'attachment': {
-      'id': id,
-      'name': 'x',
-      'mime': 'image/jpeg',
-      'size': 1,
-      'url': 'https://cdn.harness.autonomous.ai/x',
-    },
-  };
-}
-
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -79,12 +16,12 @@ void main() {
   SwarmOutgoingFile file(String name, [int size = 3]) =>
       SwarmOutgoingFile(name, Uint8List.fromList(List.filled(size, 7)));
 
-  ({FakeSwarm swarm, SwarmReader reader, _Uploads uploads}) rig({
+  ({FakeSwarm swarm, SwarmReader reader, FakeUploads uploads}) rig({
     String role = 'owner',
     bool uploads = true,
   }) {
     final swarm = FakeSwarm();
-    final fake = _Uploads();
+    final fake = FakeUploads();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
         groups: [
@@ -265,11 +202,11 @@ void main() {
     expect(c.uploadProgress(a), 0.5);
     expect(c.uploadProgress(b), isNull);
 
-    r.uploads.asked.single.answer.complete(_Uploads.attachment('id-a'));
+    r.uploads.asked.single.answer.complete(FakeUploads.attachment('id-a'));
     await settle();
     expect(c.isUploading(a), isFalse, reason: 'it is up');
     expect(c.isUploading(b), isTrue);
-    r.uploads.asked.last.answer.complete(_Uploads.attachment('id-b'));
+    r.uploads.asked.last.answer.complete(FakeUploads.attachment('id-b'));
 
     expect(await sending, isTrue);
     expect(c.uploading, isFalse);
@@ -369,27 +306,32 @@ void main() {
     expect(r.swarm.commands.last['attachmentIds'], ['id-a.jpg']);
   });
 
-  test('a post whose answer was lost is sent again with the same files',
-      () async {
-    final r = rig();
-    var lost = true;
-    r.swarm.routes[commands] = (_) => lost
-        ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
-        : {'result': <String, dynamic>{}};
-    final c = await open(r.reader);
-    c.files.add([file('a.jpg')]);
+  test(
+    'a post whose answer was lost is sent again with the same files',
+    () async {
+      final r = rig();
+      var lost = true;
+      r.swarm.routes[commands] = (_) => lost
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : {'result': <String, dynamic>{}};
+      final c = await open(r.reader);
+      c.files.add([file('a.jpg')]);
 
-    expect(await c.send(), isFalse);
-    expect(c.unconfirmed, isTrue);
-    lost = false;
-    expect(await c.send(), isTrue);
+      expect(await c.send(), isFalse);
+      expect(c.unconfirmed, isTrue);
+      lost = false;
+      expect(await c.send(), isTrue);
 
-    expect(r.uploads.names, ['a.jpg']);
-    expect([for (final s in r.swarm.commands) s['attachmentIds']], [
-      ['id-a.jpg'],
-      ['id-a.jpg'],
-    ]);
-  });
+      expect(r.uploads.names, ['a.jpg']);
+      expect(
+        [for (final s in r.swarm.commands) s['attachmentIds']],
+        [
+          ['id-a.jpg'],
+          ['id-a.jpg'],
+        ],
+      );
+    },
+  );
 
   test('files added while a post goes stay for the next one', () async {
     final r = rig();
