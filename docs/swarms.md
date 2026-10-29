@@ -221,11 +221,43 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
   GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
   information, never as instructions; only its owner's words ask it to act.
-- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
+- A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
+  dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
+  Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
+  list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
+  no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
+  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
+  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out leaves
+  the call to dontAsk: it still runs the commands Claude Code itself counts as read-only, inside the folder, and refuses
+  everything else, so nothing can write. A managed policy that runs only managed hooks (`allowManagedHooksOnly`) would
+  leave a Buddy in that same state, plus whatever the policy itself allows; that was not tested, as it is an
+  administrator's file. Its Super Tab commands are a Buddy's
+  own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
+  `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
+  (18473) cannot run these commands, since reaching that daemon takes `--port`.
+- What a Buddy reads: the guard confines the Buddy's own reads to its folder. Files another local process places in
+  that folder, by link, hard link or copy, are outside what it can stop: it judges a path when it answers, before
+  Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
+  it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
+  it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
+  sign-in, and through Harness its own chat, the project chat and the project's workgroups, as above. Its own
+  reads reach nothing else on the machine: absolute paths and `..`
+  are refused, glued to an option
+  too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+  Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
+  broken one, is refused by its real path when the guard answers each command, and grep, rg and ls may not follow
+  links as they walk.
+- A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
+  person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
+  in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise
+  run with the person's credentials. It loads no memory file either (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`):
+  a committed one importing files from outside the folder stopped a Buddy at a question nobody answers, and a yes would
+  read them past the guard. It can still read the project's instructions with Read. Its `grep` is Claude Code's
+  built-in ugrep, so only grep's plain long options are allowed, by their whole names, and rg's likewise. Harness's own session, turn and
+  Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
+  in its own copy of the project are read-only.
+  A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
   Harness GitHub App's token.
-  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
-  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
   asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
   `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
