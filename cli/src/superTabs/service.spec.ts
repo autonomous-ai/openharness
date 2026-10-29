@@ -1133,12 +1133,20 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID [--also-in-chat]] [--attach PATH]... ${mention}:`)
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // A former Lead still named on an older work group is not one, as in status.
     swarm(t, 'new-lead')
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+  })
+  it('tells every agent that --also-in-chat shows a thread reply in the chat too', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    for (const each of [await help(t, { tabId: 'tab', agentId: t.agentId }), await help(t, {})]) {
+      expect(each.post).toContain('post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID [--also-in-chat]] [--attach PATH]...')
+      expect(each.post).toContain('A reply goes in that message\'s thread; --also-in-chat shows it in the chat too.')
+    }
   })
   it('offers plan in help to a project\'s Lead only', async () => {
     const t = setup()
