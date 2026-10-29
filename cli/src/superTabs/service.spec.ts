@@ -1077,6 +1077,9 @@ describe('a Buddy\'s status', () => {
     const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
     expect(value.state).toBeDefined()
     expect(value.summary).toBeUndefined()
+  })
+})
+
 // Review of #2106: an attempt ends with every token its session used, read as it finishes, not the last machine report's.
 describe('finishing your own work', () => {
   const opus = { 'claude-opus-5-5': { input: 7000, output: 1200, cacheRead: 0, cacheWrite: 0 } }

@@ -323,6 +323,8 @@ it('parses archived status pages and older message pages', () => {
     ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
     expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
   }
+})
+
 // Cost records (Dee, 2026-10-29): what routed attempts cost and how they went, over the last days.
 it('reads the cost summary of the last 7 days, or of --days N up to 90', () => {
   expect(parseSuperTabArgs([...prefix, 'costs'], where).payload).toMatchObject({ action: 'costs', days: 7 })
