@@ -366,6 +366,15 @@ class ReuseTests(ReuseFixture):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["scripts/ui-style-allowlist/website.json"])
         self.assertRerunsAll(self.plan(head, main), "scripts/ui-style-allowlist/website.json")
 
+    def test_the_os_suite_reruns_when_main_changes_the_dial_ids_it_checks(self):
+        # os/tests/test_lock_and_screenshot.py reads cli/src/cable/serial.ts from the repository root.
+        _, main, head = self.scenario(["os/root/usr/lib/udev/rules.d/70-harness-device.rules"], ["cli/src/cable/serial.ts"])
+        plan = self.plan(head, main)
+        self.assertEqual(plan["suites"], ["os"])
+        self.assertEqual(plan["reused"], {})
+        self.assertIn("cli/src/cable/serial.ts", plan["reuse"]["rerun"]["os"])
+        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["os"]))
+
     def test_a_file_another_component_reads_reruns_the_reader(self):
         # mobile's measurement tests read the backend's product usage types.
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/types/productUsage.ts"])
@@ -597,6 +606,20 @@ class VerifyReuseTests(ReuseFixture):
                 else:
                     planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
 
+    def test_an_undeclared_read_from_the_repository_root_is_refused(self):
+        _, main, head, receipt = self.reusing(pr_paths=("mobile/lib/app.dart", "mobile/test/root_test.dart"))
+        self.git("checkout", "-q", "--detach", head)
+        (self.root / "mobile/test/root_test.dart").write_text("File(p.join(repo, 'backend/src/app.ts')).readAsStringSync();")
+        self.git("commit", "-qam", "reads the backend from the root")
+        reader = self.git("rev-parse", "HEAD")
+        self.evidence.add(self.root, reader, {"mobile"}, run_id=41)
+        later = self.branch(main, ["backend/src/app.ts"], "main-root")
+        head = self.update(reader, later)
+        plan = self.plan(head, later)
+        self.assertEqual(list(plan["reused"]), ["mobile"])
+        with self.assertRaisesRegex(ValueError, "mobile/test/root_test.dart reads backend/src/app.ts"):
+            planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
+
     def test_mismatched_parents_run_tree_or_link_are_refused(self):
         passed, main, head, receipt = self.reusing()
         record = receipt["reused"]["mobile"]
@@ -702,6 +725,36 @@ class CrossReadTests(unittest.TestCase):
             ("tui/src/a.rs", "backend/src/"), ("tui/src/a.rs", "backend/src/types/productUsage.ts")])
         self.write("mobile/test/a_test.dart", "File('../backend/src/$name');")
         self.assertEqual(planner.undeclared_reads(self.root, "mobile"), [("mobile/test/a_test.dart", "backend/src/")])
+
+    def test_a_path_named_from_the_repository_root_is_a_read(self):
+        # As os/tests/test_lock_and_screenshot.py reads the dial ids: (ROOT.parents[1] / 'cli/src/cable/serial.ts').read_text()
+        self.write("website/src/dial.ts", "DIAL_VENDOR_ID = 0x303a")
+        self.write("os/tests/session_vm.py", "pass")
+        self.write("tests/fixture.ts", "data")  # a top-level tests/ too: the internal path must not resolve there
+        self.write("os/tests/test_a.py", "\n".join([
+            "serial = (ROOT.parents[1] / 'website/src/dial.ts').read_text()",
+            'usage = Path(REPO, "backend/src/types/productUsage.ts")',
+            "# a comment naming 'backend/src/app.ts' is not a read",
+            "vm = (OS / 'tests/session_vm.py').read_text()  # os/tests/session_vm.py: inside its own directory",
+            "url = 'https://example.test/backend/src/app.ts'",
+            "missing = ROOT / 'backend/src/nothing.ts'",
+            "from './backend/src/app.ts' import x  # relative imports are the other scan's",
+        ]))
+        self.assertEqual(planner.undeclared_reads(self.root, "os"), [
+            ("os/tests/test_a.py", "backend/src/"), ("os/tests/test_a.py", "backend/src/types/productUsage.ts"),
+            ("os/tests/test_a.py", "website/src/dial.ts")])
+
+    def test_strings_that_are_only_data_are_listed_with_a_reason(self):
+        for source, (reason, targets) in planner.NOT_READS.items():
+            with self.subTest(source=source):
+                self.assertTrue(reason.strip() and targets)
+                self.assertTrue(all(isinstance(target, str) and target for target in targets))
+        self.write("backend/src/fixture.test.ts", "work('lead', 'Own', ['cli/src/lib'])")
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [("backend/src/fixture.test.ts", "cli/src/lib/")])
+        original = dict(planner.NOT_READS)
+        self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
+        planner.NOT_READS["backend/src/fixture.test.ts"] = ("owned-code strings in a fixture", {"cli/src/lib/"})
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [])
 
     def test_every_cross_read_in_this_repository_is_declared(self):
         repository = Path(__file__).resolve().parents[2]

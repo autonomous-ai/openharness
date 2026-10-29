@@ -84,7 +84,10 @@ tested commit and tree, and the reason. The run summary also says why each other
 component ran again. `make merge-pr` loads the planner from main's tree, the reviewed
 base, and uses it to re-derive every reuse from Git and from the runs it names. In the
 reviewed checkout it also scans the reused component's sources for reads `DEPENDS` is
-missing. It refuses to merge on any mismatch, or when main's copy cannot verify reuse.
+missing: relative paths (`../backend/...`) and quoted paths from the repository root
+(`ROOT / 'cli/src/cable/serial.ts'`). Strings that only look like paths (test data, scripts
+run by hand) are listed with a reason in `NOT_READS`; a path built from parts must be
+declared by hand. It refuses to merge on any mismatch, or when main's copy cannot verify reuse.
 To run everything again, push a commit to the PR.
 
 `make merge-pr` itself runs from the PR checkout. Any change to the merge helper or the

@@ -67,22 +67,62 @@ DEPENDS = {
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
-    "companions": ("cli/",),
+    "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
+                   "docs/research/2026-09-30-memory-extraction-cases.json"),
+    # Its generators write (and its checks may compare) these outputs.
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "cli/src/", "desktop/assets/daemon-art/",
+                "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
+                "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
+    "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
+                 "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
     # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
+    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages.
+    "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
-    "tui": ("cli/package.json", "tests/fixtures/shared-pane-layouts.json"),
-    "website": ("backend/src/", "cli/packages/harness-mcp/", "desktop/lib/core/phone_app_links.dart",
+    "tui": ("cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
+            "tests/fixtures/shared-pane-layouts.json"),
+    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+                "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
 }
 # Folders inside a suite's own component that its PR jobs never read: the backend unit suite
 # runs src/**/*.test.ts, and the CLI's typecheck and unit tests cover src/ (end to end runs elsewhere).
 # CrossReadTests fails when a file outside the folder refers into it.
 NOT_READ = {"backend": ("backend/integration/",), "cli": ("cli/e2e/",)}
+# Strings in a suite's files that name another directory's path but are not read by its PR jobs:
+# test data, or a script run only by hand. {source: (why, {path the scan reports})}.
+NOT_READS = {
+    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
+                                                                "desktop/lib/super_tabs/roster.dart"})
+       for source in ("backend/src/superTabs/commands.test.ts",)},
+    # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
+    **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
+       for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
+                      "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
+    "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
+    "cli/src/lib/buddyGuard.claude.spec.ts": ("test data: files in a temporary repository", {"docs/"}),
+    "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
+    "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
+    "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
+    "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
+    "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
+    "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
+    "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
+    "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
+    "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
+    "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
+    "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
+    # tui-test runs cargo test only (tui/tests/ holds no Rust tests); these read build output and installed packages.
+    "tui/tests/local-first.py": ("a script run by hand against the built CLI (cli/dist)", {"cli/"}),
+    "tui/tests/viewer-live.mjs": ("a script run by hand with the backend's installed prisma", {"backend/"}),
+    "website/src/app/download/page.spec.tsx": ("test data: text the page must not show", {"desktop/"}),
+    "website/src/app/hub/publish/page.spec.tsx": ("test data: a file in an upload", {"docs/"}),
+}
 # Inputs every suite shares: a change here reruns everything, and a PR that changes them
 # never reuses (PR CI runs the PR's own planner and workflow; the merge helper is in scripts/).
 SHARED_PREFIXES = (".github/", "scripts/")
@@ -254,6 +294,9 @@ def plan_reuse(root, head, base, suites, evidence):
 SOURCE_FILE = re.compile(r"\.(ts|tsx|mts|cts|js|mjs|cjs|dart|rs|py|sh|go|c|h|cc|cpp|kt|swift|toml|yaml|yml|json|gradle|cmake)$"
                          r"|(^|/)(Makefile|CMakeLists\.txt|Dockerfile)$")
 RELATIVE_READ = re.compile(r"(?<![\w/.-])((?:\.\./)+)([A-Za-z0-9_.-]+(?:/[^'\"`\s$(){}<>,;]*)?)")
+# A quoted path from the repository root ("ROOT / 'cli/src/cable/serial.ts'", "join(repo, 'backend/src/')").
+QUOTED_PATH = re.compile(r"""(?<![\w/.-])['"](?!\.\.?/)([A-Za-z0-9_.-]+/[^'"`\s$(){}<>,;*]*)""")
+COMMENT_LINE = ("//", "#", "*", "/*", "<!--")
 
 
 def undeclared_reads(root, suite):
@@ -265,6 +308,7 @@ def undeclared_reads(root, suite):
     tracked = {path for path in listed if path}
     folders = {str(PurePosixPath(path).parent) for path in tracked}
     folders |= {str(parent) for folder in list(folders) for parent in PurePosixPath(folder).parents}
+    tops = {path.split("/", 1)[0] for path in tracked if "/" in path}
     found = []
     for source in sorted(tracked):
         if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in select([source])[0]:
@@ -313,6 +357,24 @@ def undeclared_reads(root, suite):
                 if not shared_input(probe) and not reads(suite, probe):
                     found.append((source, known))
                 break
+
+        # Paths named from the repository root, on lines that are not comments.
+        data = NOT_READS.get(source, ("", set()))[1]
+        code = "\n".join("" if line.lstrip().startswith(COMMENT_LINE) else line for line in text.splitlines())
+        for match in QUOTED_PATH.finditer(code):
+            target = os.path.normpath(match.group(1)).replace(os.sep, "/")
+            if target.split("/", 1)[0] not in tops or target.split("/", 1)[0] == top:
+                continue
+            # The same path inside its own directory or beside the file ("OS / 'tests/x.py'"): internal.
+            if any(f"{start}/{target}" in tracked or f"{start}/{target}" in folders
+                   for start in (top, str(PurePosixPath(source).parent))):
+                continue
+            known = existing(target)
+            if known is None or known in data:
+                continue
+            probe = known + "x" if known.endswith("/") else known
+            if not shared_input(probe) and not reads(suite, probe):
+                found.append((source, known))
     return sorted(set(found))
 
 
