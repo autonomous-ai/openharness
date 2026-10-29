@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -37,10 +37,12 @@ const hasClaude = claudeBin !== null
 interface Call { name: string; input: Record<string, unknown> }
 interface Result { is_error?: boolean; content: string }
 
-/** Answers Claude Code's requests in the Messages API's streaming shape: each tool call in turn, then "done". */
-function fakeModel(calls: Call[]) {
+/** Answers Claude Code's requests in the Messages API's streaming shape: each tool call in turn, then "done". [started]
+ *  runs once, at the conversation's first request: Claude Code is up by then, and has run nothing yet. */
+function fakeModel(calls: Call[], started: () => void = () => {}) {
   const results = new Map<string, Result>()
   const bodies: string[] = []
+  const startedAt: string[][] = []
   let step = 0
   const server = createServer((request, response) => {
     let body = ''
@@ -52,6 +54,7 @@ function fakeModel(calls: Call[]) {
       bodies.push(body)
       const json = JSON.parse(body || '{}')
       const last = json.messages?.at(-1)
+      if (!startedAt.length && Array.isArray(json.tools) && json.tools.length > 0) { startedAt.push([]); started() }
       for (const block of Array.isArray(last?.content) ? last.content : []) {
         if (block.type !== 'tool_result') continue
         const content = typeof block.content === 'string' ? block.content
@@ -80,7 +83,7 @@ function fakeModel(calls: Call[]) {
       response.end()
     })
   })
-  return { server, results, bodies, id: (call: Call) => `toolu_${calls.indexOf(call) + 1}` }
+  return { server, results, bodies, started: () => startedAt.length > 0, id: (call: Call) => `toolu_${calls.indexOf(call) + 1}` }
 }
 
 const hasTmux = (() => { try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); return true } catch { return false } })()
@@ -182,9 +185,6 @@ describe.skipIf(!hasClaude).each([
     try { prepareSwarmSkill(folder, { role: 'buddy', key: 'session' }) } finally {
       if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before
     }
-    // After launch: the guard judges these by their real paths as each command runs.
-    symlinkSync(join(root, 'elsewhere', 'secret.txt'), join(folder, 'late-link'))
-    symlinkSync(join(root, 'elsewhere'), join(folder, 'late-dir'))
     refused.lateRead.input.file_path = join(folder, 'late-link')
     refused.committedRead.input.file_path = join(folder, 'committed-link')
     allowed.read.input.file_path = join(folder, 'notes.txt')
@@ -199,7 +199,12 @@ describe.skipIf(!hasClaude).each([
     refused.curlPost.input.command = `curl -sS -X POST -d x http://127.0.0.1:${(sink.address() as AddressInfo).port}${sinkPath}`
     refused.webFetch.input.url = `http://127.0.0.1:${(sink.address() as AddressInfo).port}${sinkPath}`
 
-    api = fakeModel([...Object.values(allowed), ...Object.values(refused)])
+    // After launch, as another process (a pull) could add them: once Claude Code asks for its first turn, before any tool
+    // call. The guard judges them by their real paths as each command runs.
+    api = fakeModel([...Object.values(allowed), ...Object.values(refused)], () => {
+      symlinkSync(join(root, 'elsewhere', 'secret.txt'), join(folder, 'late-link'))
+      symlinkSync(join(root, 'elsewhere'), join(folder, 'late-dir'))
+    })
     await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
     const env: NodeJS.ProcessEnv = {
       PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, HOME: join(root, 'home'), SHELL: '/bin/bash',
@@ -281,6 +286,11 @@ describe.skipIf(!hasClaude).each([
   })
   it.skipIf(skip)('POSTed nothing and fetched nothing', () => {
     expect(posts.filter((post) => post.includes(sinkPath))).toEqual([])
+  })
+
+  it.skipIf(skip)('added the late links only once Claude Code was running, as the PR says', () => {
+    expect(api.started()).toBe(true)
+    expect(lstatSync(join(folder, 'late-link')).isSymbolicLink()).toBe(true)
   })
 
   it.skipIf(skip)('never lets a file elsewhere on the machine reach the model, through a link committed or added later', () => {

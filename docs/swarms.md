@@ -215,12 +215,17 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
   `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
   (18473) cannot run these commands, since reaching that daemon takes `--port`.
-- What a Buddy reads: the files in its own copy of the project (by real path, so a link out of it is out), the
-  project's git history, the project's GitHub issues and pull requests through the person's own `gh` sign-in, its
-  own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, glued to an option
+- What a Buddy reads: the guard confines the Buddy's own reads to its folder. Files another local process places in
+  that folder, by link, hard link or copy, are outside what it can stop: it judges a path when it answers, before
+  Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
+  it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
+  it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
+  sign-in, its own chat and the project chat. Its own reads reach nothing else on the machine: absolute paths and `..`
+  are refused, glued to an option
   too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
   Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
-  broken one, is refused by its real path as each command runs, and grep, rg and ls may not follow links as they walk.
+  broken one, is refused by its real path when the guard answers each command, and grep, rg and ls may not follow
+  links as they walk.
 - A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
   person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
   in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise

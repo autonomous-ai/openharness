@@ -15,7 +15,11 @@
  * `--open-files-in-pager` and `--ext-diff` (git takes any unique prefix of a long option, so prefixes too), gh's `--web`,
  * and rg's `--pre`, `--pre-glob`, `-z` and `--hostname-bin`, which runs a program (rg 14.1.1, tried).
  *
- * What it reads stays in its folder (security review 2 of #2092): the machine is its person's, the folder is the project.
+ * It confines the Buddy's own reads to its folder (security review 2 of #2092): the machine is its person's, the folder is
+ * the project. That is the whole claim. Files another local process places in the folder, by link, hard link or copy, are
+ * outside it: the guard judges a path when it answers and Claude Code opens it afterwards, so a link swapped in between,
+ * or a hard link (whose real path is its name in the folder), reads what that process put there (review 4 of #2092, the
+ * Lead's ruling). The Buddy itself has no command that writes, so it can place none of them.
  * Read, Grep, Glob and LS take paths there only, by real path, so a link out is out. Each part of a Bash word that could
  * be a path (itself, after "=" or ":", and after each letter of a short option, as -S/x or -fout/x glue a value on) is
  * refused when it is absolute, has a ".." part, or by its real path as the command runs leaves the folder: a link a pull
@@ -95,7 +99,8 @@ function inside(path) {
 }
 
 // Whether [part], read as a path from the folder, leaves it: absolute (the machine's files, /dev), a ".." part, or, by its
-// real path as the command runs, a link out (one a pull brought after launch too), a broken link, or a path under one.
+// real path when the guard answers, a link out (one a pull brought after launch too), a broken link, or a path under one.
+// What another process changes after that answer is outside the guard (see the top of this file).
 // A word that names nothing there (a pattern, a revision) is judged by the folder it would be in.
 function escapes(part) {
   if (!part) return false
