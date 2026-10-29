@@ -304,6 +304,11 @@ Each attempt keeps:
   writes) when it started and when it ended. Its tokens are the difference. A
   session counts up to 15 models apart; any more are counted together as
   `other`, which has no price;
+- its end reading: an agent finishing its own work (Done or Stopped) sends its
+  session's totals read at that moment. Finished by someone else, or by a host
+  from before cost records, its tokens are unknown rather than taken from an
+  older report. A lost, cancelled or host-stopped attempt ends with its
+  machine's last report;
 - how it ended: done, stopped, cancelled, lost, or superseded when its group went
   while it was still active. A task lost to a usage limit and taken back by the
   same session is the same attempt, still going. Handing a lost task to another
