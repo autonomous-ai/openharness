@@ -611,6 +611,9 @@ static EXT_RAM_BSS_ATTR struct {
     struct { char tab[ID_MAX]; bool buddy; } side[HT_SUPERTABS_MAX];
     // A Buddy's word not yet seen on the dial, per Lead, and the chat it came in: the PM side's quiet badge.
     struct { char lead[ID_MAX], chat[ID_MAX]; } heard[SWARM_SAID];
+    // The voice turn on the face was started on the Buddy side: its ring and "Sending to your Buddy", pinned at the start as
+    // its chat and engine are, so a side change while it records or sends never says another chat (batch check, #2207).
+    bool voice_buddy;
 } sw;
 static bool swarm_mode(void)
 {
@@ -2371,8 +2374,9 @@ static void render_voice(ht_scene_t *f)
         .carrying = s.voice_carry, .voice = true};
     f_.focus = f_.detail && *f_.detail;
     ht_character_face(f, &character, &f_, ACCENT, NULL);
-    // Speaking to the Buddy side: the ring stays, and sending says to whom (spec 2026-10-29 Voice).
-    if (swarm_mode() && (s.voice_return == HOME || s.voice_return == AGENT) && swarm_on_buddy(swarm_lead())) {
+    // Speaking to the Buddy side: the ring stays, and sending says to whom (spec 2026-10-29 Voice). The turn's side, not the
+    // Swarm's now: the words go where the turn started.
+    if (sw.voice_buddy) {
         face_buddy_ring(f);
         if (s.voice_waiting) ht_arc_status_face(f, color(BUDDY_LILAC), "Sending to your Buddy", &ht_arc_inter_lower);
         else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
@@ -3101,6 +3105,7 @@ static void dispatch(action_t a)
             else if (a.value == 7) COPY(s.voice_target, "Find in output");
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
             else COPY(s.voice_target, lead ? lead->project : target >= 0 ? s.agents[target].name : "harness");
+            sw.voice_buddy = lead && swarm_on_buddy(lead) && lead->buddy.has;
             COPY(s.voice_engine, lead ? swarm_voice_engine(lead) : target >= 0 && a.value != 2 && a.value != 5 && a.value != 6 && a.value != 7 ?
                 s.agents[target].engine : "");
             s.voice_started = ms();

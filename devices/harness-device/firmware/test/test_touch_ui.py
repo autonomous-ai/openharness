@@ -282,6 +282,7 @@ static void dispatch(action_t a) {
         for (int i=0;i<s.count;i++) if (a.value!=2 && a.value!=5 && a.value!=6 && a.value!=7 && !strcmp(s.agents[i].id,a.id)) COPY(s.voice_engine,s.agents[i].engine);
         const ht_lead_t *lead = voice_lead(a.id, a.value);   // and a Swarm's Lead's, by its harness
         if (lead) { COPY(s.voice_engine, swarm_voice_engine(lead)); COPY(s.voice_target, lead->project); }
+        sw.voice_buddy = lead && swarm_on_buddy(lead) && lead->buddy.has;   // as the real dispatch: pinned at the start
         s.voice_carry=a.value==3; s.voice_search=a.value==7; COPY(voice_context,a.text);
         s.voice_return=s.view; s.voice_open = recording = true; view(VOICE);
     } else if (a.kind == A_VOICE_STOP) { stops++; if(a.value==1)reviews++; recording = false; }
@@ -2230,6 +2231,28 @@ static void swarm_buddy_checks(const char *dir) {
     assert(s.view == VOICE && !strcmp(target, "h1") && !strcmp(s.voice_engine, "claude") && !lilac_ring());
     s.voice_waiting = true; recording = false; scene_take(); assert(!scene_says("Sending to your Buddy"));
     dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false;
+    // The ring and "Sending to your Buddy" belong to the turn: pinned when it starts, as its chat is (the batch's check of
+    // #2218 with #2207). The side changing under a recording, or while it is sent, moves neither, either way.
+    for (int waiting = 0; waiting < 2; waiting++) {
+        // Started on the PM side; the desktop then opens the Buddy chat.
+        buddy_setup(); tap(fake_ms + 2000, 233, 260);
+        assert(s.view == VOICE && !lilac_ring());
+        if (waiting) { s.voice_waiting = true; recording = false; }
+        buddy_card("buddy"); scene_take();
+        assert(swarm_side_buddy("s1") && s.view == VOICE && !lilac_ring() && !scene_says("Sending to your Buddy"));
+        s.voice_waiting = true; recording = false; scene_take();
+        assert(!lilac_ring() && !scene_says("Sending to your Buddy"));
+        dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false;
+        // Started on the Buddy side; the desktop then opens another conversation.
+        buddy_setup(); swipe_up(); buddy_card("buddy"); scene_take(); tap(fake_ms + 2000, 233, 260);
+        assert(s.view == VOICE && lilac_ring());
+        if (waiting) { s.voice_waiting = true; recording = false; }
+        buddy_card("lead"); scene_take();
+        assert(!swarm_side_buddy("s1") && s.view == VOICE && lilac_ring());
+        s.voice_waiting = true; recording = false; scene_take();
+        assert(lilac_ring() && scene_says("Sending to your Buddy"));
+        dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false;
+    }
     puts("Swarm Buddies: swipe up for the Buddy (ring, avatar, dots, its recap), down for the PM, side kept across projects and following the daemon, the empty state, Buddies off unchanged, the quiet badge, voice with the Buddy's engine PASS");
 }
 int main(int argc, char **argv) {
