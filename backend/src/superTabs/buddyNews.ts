@@ -32,7 +32,7 @@ function newsFor(message: MessageDraft, threadSource: Record<string, unknown> | 
  *  never a routing row, as a Buddy reads none (buddies.ts). */
 export function buddiesTold(state: SuperTabState, message: MessageDraft, threadSource: Record<string, unknown> | null): string[] {
   const group = state.conversations.find(c => c.id === message.conversationId)
-  if (!group || isLeads(group) || agentOnly(message.source) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
+  if (!group || isLeads(group) || agentOnly(message.source, message.recipients) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
   return newsFor(message, threadSource).flatMap(id => listeningBuddy(state, id, group)?.id ?? [])
 }
 

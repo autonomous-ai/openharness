@@ -1047,6 +1047,160 @@ void main() {
     });
   });
 
+  // Chat threads (backend threads.ts, the desktop's main stream): a reply
+  // only in its thread is read with the chat and listed in its thread alone;
+  // each page names the threads its rows are in.
+  group('threads', () {
+    Map<String, dynamic> line(String root, int replies, int last) => {
+      'id': root,
+      'replies': replies,
+      'lastSequence': last,
+      'lastAt': '2026-10-27T01:05:00.000Z',
+      'authors': [
+        {'kind': 'agent', 'id': 'agent-builder', 'name': 'Builder'},
+      ],
+      'people': [me],
+    };
+    Map<String, dynamic> reply(
+      String id,
+      int sequence, {
+      String root = 'm1',
+      bool also = false,
+    }) => {
+      ...message(id, sequence),
+      'thread': root,
+      if (also) 'alsoInChat': true,
+    };
+
+    test('a reply only in its thread leaves the chat\'s list, one also sent '
+        'stays, and the root keeps its thread line', () async {
+      final r = rig(sequence: 4);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m1', 1), 'thread': 'm1'},
+          reply('m2', 2),
+          reply('m3', 3, also: true),
+          {...message('m4', 4), 'thread': 'm4'},
+        ],
+        'next': null,
+        'threads': [line('m1', 2, 3)],
+      };
+
+      final c = await open(r.reader);
+
+      expect([for (final m in c.messages) m.id], ['m1', 'm2', 'm3', 'm4']);
+      expect([for (final m in c.stream) m.id], ['m1', 'm3', 'm4']);
+      expect(c.stream, same(c.stream), reason: 'made once per read');
+      expect(c.thread('m1')?.replies, 2);
+      expect(c.thread('m4'), isNull);
+    });
+
+    test('a read that brings only a thread reply moves its root\'s line and '
+        'tells the chat, with its list as it was', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m1', 1), 'thread': 'm1'},
+          reply('m2', 2),
+        ],
+        'next': null,
+        'threads': [line('m1', 1, 2)],
+      };
+      final c = await open(r.reader);
+      var told = 0;
+      c.addListener(() => told++);
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [reply('m3', 3)],
+        'next': null,
+        'threads': [line('m1', 2, 3)],
+      };
+
+      await c.load();
+
+      expect(told, greaterThan(0));
+      expect([for (final m in c.stream) m.id], ['m1']);
+      expect(c.thread('m1')?.replies, 2);
+    });
+
+    test('an older thread line never replaces a newer one, and the same line '
+        'again tells no one', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+        'threads': [line('m1', 3, 5)],
+      };
+      final c = await open(r.reader);
+      var told = 0;
+      c.addListener(() => told++);
+
+      c.keepThreads([line('m1', 2, 3)]);
+      c.keepThreads([line('m1', 3, 5)]);
+
+      expect(c.thread('m1')?.replies, 3);
+      expect(told, 0);
+      c.keepThreads([line('m1', 4, 6)]);
+      expect(c.thread('m1')?.replies, 4);
+      expect(told, 1);
+    });
+
+    test('a chat the person can no longer read forgets its thread lines and '
+        'thread drafts', () async {
+      final r = rig();
+      var allowed = true;
+      r.swarm.routes[messages] = (_) => allowed
+          ? {
+              'messages': [
+                {...message('m1', 1), 'thread': 'm1'},
+                reply('m2', 2),
+              ],
+              'next': null,
+              'threads': [line('m1', 1, 2)],
+            }
+          : throw const SuperTabFailure(
+              'FORBIDDEN',
+              'Not yours.',
+              statusCode: 403,
+            );
+      final c = await open(r.reader);
+      c.setThreadDraft('m1', 'Half a reply');
+      expect(c.threadDraft('m1'), 'Half a reply');
+
+      allowed = false;
+      await c.load();
+
+      expect(c.thread('m1'), isNull);
+      expect(c.threadDraft('m1'), isEmpty);
+      expect(c.stream, isEmpty);
+    });
+
+    test('opened again, a kept chat shows its roots\' lines at once, and only '
+        'theirs', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m1', 1), 'thread': 'm1'},
+          reply('m2', 2),
+        ],
+        'next': null,
+        'threads': [line('m1', 1, 2), line('gone', 4, 1)],
+      };
+      await r.reader.refresh();
+      final first = SwarmConversation(r.reader, 'g1');
+      await first.load();
+      first.dispose();
+
+      final c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+
+      expect(c.thread('m1')?.replies, 1);
+      expect(c.thread('gone'), isNull);
+      expect([for (final m in c.stream) m.id], ['m1']);
+    });
+  });
+
   group('read marks', () {
     const read = '/api/super-tabs/$tab/conversations/g1/read';
 

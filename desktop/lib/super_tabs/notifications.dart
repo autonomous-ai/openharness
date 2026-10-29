@@ -47,17 +47,19 @@ bool get superTabNoticesInMenuBar =>
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
 /// decision 6). The Settings switch for system notifications still applies.
-void Function(SuperTabMention)? superTabMentionNotice(
+/// A click on it opens the tag in its Swarm [tabId], at its message.
+void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
   SystemNotifications system, {
   bool web = kIsWeb,
 }) => web
     ? null
-    : (mention) => system.postNotice(
+    : (tabId, mention) => system.postNotice(
         id: 'harness-mention:${mention.id}',
         title: '${mention.leadName} tagged you',
         body:
             '${mention.projectName} · ${mention.conversationTitle}: '
             '${mention.text}',
+        mention: (tabId: tabId, mentionId: mention.id),
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
@@ -90,6 +92,9 @@ class SuperTabMentions extends ChangeNotifier {
   Future<void>? _loading;
   // Something changed while a read was under way: read once more after it.
   bool _dirty = false;
+  // Reads in the order they were asked, and the latest one shown: an older
+  // answer arriving late never replaces a newer one (review of #2088).
+  int _asked = 0, _shown = 0;
 
   /// Starts from tags already announced elsewhere, so they are not news here.
   void seen(Set<String>? ids) {
@@ -155,6 +160,33 @@ class SuperTabMentions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
+  /// Whether the server lists [mentionId] among the reader's waiting tags
+  /// now. A read that fails or is refused answers false: what was read before
+  /// never stands in for it. A yes shows that same read as [waiting], so what
+  /// opens the tag reads it from the answer that confirmed it, with no second
+  /// read to decide otherwise.
+  Future<bool> waitingNow(String mentionId) async {
+    final epoch = _epoch, asked = ++_asked;
+    final List<SuperTabMention> fresh;
+    try {
+      fresh = await _list('waiting');
+    } catch (_) {
+      return false;
+    }
+    // Who may read what changed while it was on its way: it says nothing now.
+    // A Swarm just loaded learns its first epoch meanwhile; that is no change.
+    final moved = epoch != null && epoch != _epoch;
+    if (moved || !fresh.any((m) => m.id == mentionId)) return false;
+    // A read asked after this one already shows what is newer.
+    if (asked < _shown) return true;
+    _shown = asked;
+    if (!_sameMentions(waiting, fresh)) {
+      waiting = fresh;
+      notifyListeners();
+    }
+    return true;
+  }
+
   Future<List<SuperTabMention>> _list(String state) async {
     final Map<String, dynamic> answer;
     try {
@@ -171,7 +203,7 @@ class SuperTabMentions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
-    final epoch = _epoch;
+    final epoch = _epoch, asked = ++_asked;
     try {
       final [nextWaiting, nextEarlier] = await Future.wait([
         _list('waiting'),
@@ -180,6 +212,13 @@ class SuperTabMentions extends ChangeNotifier {
       // Read before who may read what changed: the read asked again since
       // replaces it.
       if (epoch != _epoch) return;
+      // Asked before a read already shown: older news. Read once more, so
+      // both lists and what arrived come from one answer after it.
+      if (asked < _shown) {
+        _dirty = true;
+        return;
+      }
+      _shown = asked;
       final same =
           error == null &&
           _sameMentions(waiting, nextWaiting) &&
@@ -197,7 +236,7 @@ class SuperTabMentions extends ChangeNotifier {
       // The same lists again: nothing to show, so nobody is told.
       if (same) return;
     } catch (_) {
-      if (epoch != _epoch) return;
+      if (epoch != _epoch || asked < _shown) return;
       error = 'Could not load notifications. Try again.';
     }
     notifyListeners();
@@ -303,6 +342,22 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     final place = hidden == null || !c.hiddenByBuddies(hidden)
         ? mention.conversationTitle
         : '#${c.snapshot?.projects.where((p) => p.id == mention.projectId).firstOrNull?.name ?? mention.projectName}';
+    // A person who tagged the reader is named as they are now.
+    final person = c.snapshot?.people
+        .where((p) => p.id == mention.leadId)
+        .firstOrNull;
+    final author = person?.username ?? mention.leadName;
+    // Who tagged, a person or a Lead: one face, in one place.
+    final Widget? face = person != null
+        ? SuperTabAvatar.person(person, size: 24)
+        : switch (c.snapshot?.agent(mention.leadId ?? '')) {
+            final lead? => SuperTabAvatar.agent(
+              lead,
+              name: mention.leadName,
+              size: 24,
+            ),
+            null => null,
+          };
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -319,17 +374,10 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (widget.mentions.controller.snapshot?.agent(
-                      mention.leadId ?? '',
-                    )
-                    case final lead?)
+                if (face != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 10, top: 2),
-                    child: SuperTabAvatar.agent(
-                      lead,
-                      name: mention.leadName,
-                      size: 24,
-                    ),
+                    child: face,
                   ),
                 Expanded(
                   child: Column(
@@ -339,7 +387,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         children: [
                           Flexible(
                             child: Text(
-                              mention.leadName,
+                              author,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: DesktopChrome.control(medium: waiting),

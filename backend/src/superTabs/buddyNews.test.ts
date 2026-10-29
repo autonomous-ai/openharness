@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type Conversation, type MessageDraft } from './model.js'
+import { createSuperTab, forRecipients, type Actor, type Conversation, type MessageDraft } from './model.js'
 import { buddyChatId } from './buddies.js'
 import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
@@ -83,6 +83,14 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
     const row = (kind: string): MessageDraft => ({ id: kind, conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm, name: 'pm',
       membershipGeneration: 'first' }, text: 'Rule set.', replyTo: null, recipients: [], mentions: ['peer'], source: { kind } })
     for (const kind of ['route', 'route-override', 'rule']) expect(buddiesTold(f.state, row(kind), null)).toEqual([])
+  })
+
+  it('is nobody for a notice only its recipients read, by kind or marked so (review of #2177)', () => {
+    const f = setup()
+    const notice = (source: Record<string, unknown>): MessageDraft => ({ id: 'notice', conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm,
+      name: 'pm', membershipGeneration: 'first' }, text: '@peer #12 stalled.', replyTo: null, recipients: [f.pm], mentions: ['peer'], source })
+    expect(buddiesTold(f.state, notice({ kind: 'work-stalled' }), null)).toEqual([])
+    expect(buddiesTold(f.state, notice(forRecipients({ kind: 'work-cancelled' })), null)).toEqual([])
   })
 
   it('is nobody for the person\'s own words: they know what they wrote', () => {

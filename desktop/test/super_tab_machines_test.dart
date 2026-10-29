@@ -3635,6 +3635,139 @@ void main() {
       await tester.pump();
     },
   );
+
+  // Ken, 2026-10-28: work kept landing on engines that could not run on a machine. The only visible change: an engine that
+  // is out of quota or suspended there has its name struck through in the machine's Subscriptions, with why on hover.
+  testWidgets(
+    'strikes through an engine out of quota or suspended on a machine, with why on hover',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      const suspended =
+          'Claude Code is suspended on this machine for new work: its last 2 starts there failed. It is offered again within 6 hours, or once its owner resumes it.';
+      server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Studio',
+          'contributorId': 'owner',
+          'suspendedEngines': {'claude': suspended},
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 10},
+            'quotas': [
+              {'engine': 'claude', 'known': false, 'windows': []},
+              {
+                'engine': 'codex',
+                'known': true,
+                'windows': [
+                  {'name': 'weekly', 'usedPercent': 100},
+                ],
+              },
+            ],
+          },
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      c.toggleMachineExpanded('m');
+      await tester.pumpWidget(
+        MaterialApp(
+          // As the sidebar does: the section is rebuilt whenever the Swarm changes.
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) => SuperTabMachines(
+                controller: c,
+                embedded: true,
+                onAddAgent: (_) {},
+                onOpenAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      TextDecoration? decoration(String engine, String name) => tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
+              matching: find.text(name),
+            ),
+          )
+          .style
+          ?.decoration;
+      String tip(String engine) => tester
+          .widget<Tooltip>(
+            find
+                .ancestor(
+                  of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
+                  matching: find.byType(Tooltip),
+                )
+                .first,
+          )
+          .message!;
+      // Suspended with its allowance unknown: a card all the same, with a dash for the figure.
+      expect(decoration('claude', 'Claude Code'), TextDecoration.lineThrough);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-machine-allowance-m-claude')),
+          matching: find.text('—'),
+        ),
+        findsOneWidget,
+      );
+      expect(tip('claude'), startsWith(suspended));
+      // Out of quota: struck, its figure kept.
+      expect(decoration('codex', 'Codex'), TextDecoration.lineThrough);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
+          matching: find.text('0%'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tip('codex'),
+        startsWith(
+          'Not used for new work here: no quota left until it resets.',
+        ),
+      );
+      expect(tester.takeException(), isNull);
+
+      // Once neither holds, nothing is struck.
+      server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Studio',
+          'contributorId': 'owner',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 10},
+            'quotas': [
+              for (final engine in ['claude', 'codex'])
+                {
+                  'engine': engine,
+                  'known': true,
+                  'windows': [
+                    {'name': 'weekly', 'usedPercent': 40},
+                  ],
+                },
+            ],
+          },
+        },
+      ];
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(
+        decoration('claude', 'Claude Code'),
+        isNot(TextDecoration.lineThrough),
+      );
+      expect(decoration('codex', 'Codex'), isNot(TextDecoration.lineThrough));
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
 }
 
 /// A hardware reading's value in a machine's expanded readings.
