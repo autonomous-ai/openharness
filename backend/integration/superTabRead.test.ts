@@ -297,11 +297,15 @@ describe('dormant groups on demand (design 4.5)', () => {
     })
     await writeGroup(s.tabId, s.buddyId, NOW, g => { g.dormant = true; g.lastActivityAt = new Date(NOW).toISOString() })
     const first = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, outsider)).body.data
-    expect(first.groups).toHaveLength(49)
+    // A group the reader may not see never shortens a page, and the cursor names the last group it got, never a hidden
+    // one (security review 2 of #2115).
+    expect(first.groups).toHaveLength(50)
     expect(first.groups.every((g: { data: { dormant: boolean } }) => g.data.dormant)).toBe(true)
     expect(keys(first.groups)).not.toContain(s.buddyId)
+    expect(JSON.parse(Buffer.from(first.next, 'base64url').toString()).k).toBe(keys(first.groups).at(-1))
     const second = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1&before=${first.next}`, outsider)).body.data
     expect(second).toMatchObject({ next: null })
+    expect(second.groups).toHaveLength(3)
     expect(new Set([...keys(first.groups), ...keys(second.groups)]).size).toBe(53)
     expect(keys((await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, peer)).body.data.groups)[0]).toBe(s.buddyId)
   })

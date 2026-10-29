@@ -453,7 +453,8 @@ export function removalEnded(state: SuperTabState, pool: ContributedMachine, how
   return projectsOf(state).filter(p => canReadProject(state, reader, p) && state.conversations.some(c => c.id === p.leadConversationId)).map(p => ({
     id: stableId('machine-removal-ended', pool.removal!.id, pool.machineId, p.leadConversationId), conversationId: p.leadConversationId,
     author: { kind: 'person', id: writer.id, name: writer.email, membershipGeneration: writer.generation },
-    text: `${pool.name} left the Swarm: ${why}`, replyTo: null, recipients: [], source: { kind: 'system' } }))
+    // Its own kind, naming the machine, so a Buddy reads it without the name (store.ts withoutMachineNames).
+    text: `${pool.name} left the Swarm: ${why}`, replyTo: null, recipients: [], source: { kind: 'machine-left', machine: pool.name } }))
 }
 
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account
