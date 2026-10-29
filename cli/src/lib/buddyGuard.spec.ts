@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
+import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
   truncateSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -646,6 +646,22 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
     forgetBuddyReads('harness-1', lists)
     expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json', 'unreadable.json'])
+  })
+
+  // Re-check 2 of #2248: a list the host cannot delete must still allow nothing, and the failure must reach the host, which
+  // tries again before it acknowledges the end of the session.
+  it('empties a list it cannot delete, so the guard allows nothing, fails so it is tried again, and deletes it then', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: ['https://claude.ai/artifact/a'] })
+    expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
+    chmodSync(lists, 0o500)
+    try {
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(mine.file)).toBe(true)
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+      expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/a' }, guard)).toBe('deny')
+    } finally { chmodSync(lists, 0o700) }
+    forgetBuddyReads('harness-1', lists)
+    expect(existsSync(mine.file)).toBe(false)
   })
 
   it('forgets nothing, and fails nothing, where no list was ever written', () => {

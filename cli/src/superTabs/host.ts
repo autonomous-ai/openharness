@@ -285,7 +285,8 @@ export class SuperTabHost {
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
-  private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number; forgotten?: boolean }>()
+  private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number
+    forgotten?: boolean; unforgotten?: string }>()
   /** Deliveries withheld from an agent that leads nothing, each said once. */
   private readonly unreadable = new Set<string>()
   /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
@@ -843,11 +844,17 @@ export class SuperTabHost {
     const state = this.endings.get(key) ?? { running: false, closed: false, acked: false, failures: 0, retryAt: 0 }
     this.endings.set(key, state)
     // What a Buddy's person sent it stays listed no longer than its session (Lead, 10-30): its Buddy removed, its person gone
-    // from the Swarm, or its chat purged with its project all end it here. Before the close, which may wait or fail; a list
-    // that cannot be deleted is said and tried again at the next roster.
+    // from the Swarm, or its chat purged with its project all end it here. Before the close, which may wait or fail. A list
+    // that cannot be deleted is emptied where it can be, and the end is not acknowledged until it is gone (below): the backend
+    // keeps the row until then, so it is tried again at each roster, after a restart too. Re-check 2 of #2248: a failure was
+    // only logged, the end acknowledged, and nothing tried again.
     if (!state.forgotten) {
-      try { forgetBuddyReads(agent.harnessId); state.forgotten = true } catch (error) {
-        this.log(`Could not delete what session ${agent.harnessId.slice(0, 8)}'s person sent it: ${error instanceof Error ? error.message : String(error)}`)
+      try { forgetBuddyReads(agent.harnessId); state.forgotten = true; delete state.unforgotten } catch (error) {
+        const why = error instanceof Error ? error.message : String(error)
+        if (why !== state.unforgotten) {
+          this.log(`Could not delete what session ${agent.harnessId.slice(0, 8)}'s person sent it, so its end is not acknowledged yet: ${why}`)
+        }
+        state.unforgotten = why
       }
     }
     const close = this.core.agents.closeMember
@@ -865,7 +872,7 @@ export class SuperTabHost {
         if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
         state.closed = true
       }
-      if (this.stopped) return
+      if (this.stopped || !state.forgotten) return
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `session-closed-${agent.id}-${agent.harnessId}`,
         command: { type: 'agent.sessionClosed', agentId: agent.id, harnessId: agent.harnessId } })
       state.acked = true

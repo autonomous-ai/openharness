@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { allowBuddyReads, buddyReadsOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyGuardSource, buddyReadsOf } from '../lib/buddyGuard.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
@@ -996,6 +996,13 @@ describe('Super Tab attachments in delivered input', () => {
   })
 })
 
+/** What a Buddy's guard at [guard], for its folder [folder], answers a Read of [path]: the hook as Claude Code runs it. */
+function guardReads(guard: string, folder: string, path: string): string {
+  const run = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 10_000,
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: path }, cwd: folder }) })
+  return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+}
+
 // Tony, 10-30: his Buddy could open neither the screenshot he sent it in their Buddy chat nor the Artifact he linked there.
 // What its own person sends it there is listed for its guard (lib/buddyGuard.ts); what anybody else sends, never.
 describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
@@ -1119,11 +1126,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     prepareSwarmSkill(folder, { role: 'buddy', key })
     const other = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
     writeFileSync(other, 'png')
-    const read = (path: string) => {
-      const run = spawnSync(process.execPath, [join(folder, '.claude', 'buddy-guard.mjs')], { encoding: 'utf8', timeout: 10_000,
-        input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: path }, cwd: folder }) })
-      return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
-    }
+    const read = (path: string) => guardReads(join(folder, '.claude', 'buddy-guard.mjs'), folder, path)
     expect(read(shot)).toBe('deny')
     await host.tick()
     expect(delivered).toHaveLength(1)
@@ -2485,6 +2488,41 @@ describe('closing the sessions the backend ends', () => {
     expect(existsSync(buddyReadsOf('ended-buddy').file)).toBe(false)
     expect(existsSync(buddyReadsOf('other-buddy').file)).toBe(true)
     for (const file of [buddyReadsOf('other-buddy').file, shot]) rmSync(file)
+  })
+
+  // Re-check 2 of #2248: a list the host could not delete was only logged; the end was acknowledged, the backend dropped the
+  // row, and nothing tried again, so the list kept allowing its file for the rest of the day.
+  it('acknowledges a Buddy session\'s end only once its list is deleted, and its guard allows nothing meanwhile', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(shot, 'png')
+    const reads = buddyReadsOf('removed-buddy')
+    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    const guard = join(folder, 'buddy-guard.mjs')
+    writeFileSync(guard, buddyGuardSource(folder, reads))
+    expect(guardReads(guard, folder, shot)).toBe('allow')
+    await t.poll()
+    // The folder of lists cannot be written to for a while: the list cannot be deleted.
+    chmodSync(dirname(reads.file), 0o500)
+    try {
+      t.rows.splice(0, 1, ended())
+      await t.poll()
+      await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(t.commands).toEqual([])
+      expect(existsSync(reads.file)).toBe(true)
+      expect(guardReads(guard, folder, shot)).toBe('deny')
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
+    } finally { chmodSync(dirname(reads.file), 0o700) }
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.commands[0]).toMatchObject({ command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
+    expect(existsSync(reads.file)).toBe(false)
+    expect(guardReads(guard, folder, shot)).toBe('deny')
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    rmSync(shot)
   })
 
   it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {

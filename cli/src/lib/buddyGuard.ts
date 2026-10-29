@@ -432,6 +432,9 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
  * Deletes the lists of [session], once the Swarm has ended it: its Buddy removed, its person gone from the Swarm, or its
  * chat purged with its project (Lead, 10-30). Each list names its session, so a session no longer running here is found
  * too. A list that cannot be read is left: it allows nothing (the guard refuses it), and the day's sweep takes it.
+ * One that cannot be deleted (a folder it cannot write to, say) is emptied in place, which needs only the file, so the
+ * guard allows nothing meanwhile; it still throws, and the host tries again before it acknowledges the end (re-check 2
+ * of #2248). The emptied list keeps its session, so the next try finds it.
  */
 export function forgetBuddyReads(session: string, dir = listsDir()): void {
   let names: string[]
@@ -439,12 +442,20 @@ export function forgetBuddyReads(session: string, dir = listsDir()): void {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
+  let failed: unknown
   for (const name of names) {
     if (!name.endsWith('.json')) continue
+    const file = join(dir, name)
     let named: unknown
-    try { named = (JSON.parse(readFileSync(join(dir, name), 'utf8')) as { session?: unknown }).session } catch { continue }
-    if (named === session) rmSync(join(dir, name), { force: true })
+    try { named = (JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown }).session } catch { continue }
+    if (named !== session) continue
+    try { rmSync(file, { force: true }) } catch (error) {
+      const empty: List = { version: 1, session, files: [], links: [] }
+      try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }
+      failed ??= error
+    }
   }
+  if (failed) throw failed
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
