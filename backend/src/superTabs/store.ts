@@ -215,6 +215,10 @@ const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
 const pollMemoryFailed = (error: unknown): void => {
   logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
 }
+/** The same for the quiet messages poll (quietMessages.ts): the messages poll then reads in full. */
+const messagesMemoryFailed = (error: unknown): void => {
+  logger.warn('[super-tab] messages poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
+}
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
@@ -1800,7 +1804,7 @@ export class SuperTabStore {
       await this.messagePolls!.set(quiet, { at: this.now(), stamp, reactionSeq: answer.reactionSeq,
         swarm: { workspaceId: state.workspaceId, environment: state.environment },
         ...target ? { grant: { contributorId: target.contributorId, machineId: target.machineId, machineOwnerId: target.machineOwnerId,
-          hostGrant: target.hostGrant ?? null } } : {} }).catch(pollMemoryFailed)
+          hostGrant: target.hostGrant ?? null } } : {} }).catch(messagesMemoryFailed)
     }
     return answer
   }
@@ -1814,7 +1818,7 @@ export class SuperTabStore {
    * outside the Swarm is checked again; anything else, or any refusal, and the poll reads in full, which refuses as it always did.
    */
   private async quietMessages(user: AuthUser, tabId: string, conversationId: string, after: number, afterId: string | undefined, key: string) {
-    const last = await this.messagePolls!.get(key).catch(error => { pollMemoryFailed(error); return undefined })
+    const last = await this.messagePolls!.get(key).catch(error => { messagesMemoryFailed(error); return undefined })
     const now = this.now()
     if (!last || now < last.at || now - last.at >= SWEEP_EVERY_MS) return undefined
     if ((await this.view([tabId])).mainStamp(tabId) !== last.stamp) return undefined
