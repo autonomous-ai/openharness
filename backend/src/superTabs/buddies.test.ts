@@ -531,7 +531,8 @@ describe('a Buddy is never a worker', () => {
     group(f, f.chat).agentIds.push('builder')
     Object.assign(f.state.machines![0]!.observation!, { receivedAt: now, runningHarnessIds: ['buddy-harness', 'builder-harness'],
       harnessUncommitted: { 'buddy-harness': false, 'builder-harness': false } })
-    expect(stopIdleWorkers(f.state, f.app.projectId, now, new Set()).map(row => row.source)).toEqual([{ kind: 'idle-stop', agentId: 'builder' }])
+    // Its line, and the Lead's copy in its own chat (tidy.ts), name only the Engineer.
+    expect([...new Set(stopIdleWorkers(f.state, f.app.projectId, now, new Set()).map(row => row.source?.agentId))]).toEqual(['builder'])
     expect(buddy.workDecision).toBeUndefined()
   })
 })

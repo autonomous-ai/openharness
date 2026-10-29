@@ -3,6 +3,12 @@
  * `in: []` into `$or: []`, which no index serves: a scan of the whole collection that returns nothing, seen in the slow log on
  * machines, users and SuperTab. A read of one of those models (or a raw `$in`) that names a list held in a variable must test
  * that list's `.length` or `.size` first in the same function (an `if`, a `?:` or `&&`), or pass a literal list or a constant.
+ * A filter given by name (`where`, a spread, the whole arguments) is read where it is built; one the check cannot see into (a
+ * parameter, a call's result, one declared after the read) is flagged rather than passed. Known limits: a list inside a
+ * function's result, an array of filters (`AND: [filter]`), a spread of an import, and a `const` built by a conditional are not
+ * followed; the check guards our own code against reintroducing an empty list by accident, not against someone working round it.
+ * The test must tell empty from not empty: the length alone, negated, or compared with 0 (or 1); a filter built in its own
+ * variable and passed to the read is read like one written in the call.
  * A `.map` or a `new Set` of a list is empty exactly when that list is, so a test of the source list counts; a `.filter` is
  * not: name the filtered list and test that.
  */
@@ -15,7 +21,37 @@ export interface Unguarded { file: string; line: number; list: string }
 
 const isCondition = (node: ts.Node): boolean => ts.isIfStatement(node) || ts.isConditionalExpression(node)
   || (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken))
-const conditionText = (node: ts.Node): string => ts.isIfStatement(node) || ts.isConditionalExpression(node) ? node.getChildAt(ts.isIfStatement(node) ? 2 : 0).getText() : node.getText()
+const conditionOf = (node: ts.Node): ts.Expression => ts.isIfStatement(node) ? node.expression : ts.isConditionalExpression(node) ? node.condition : node as ts.Expression
+
+const isLengthOf = (node: ts.Node, list: string): boolean => ts.isPropertyAccessExpression(node) && ['length', 'size'].includes(node.name.text) && node.expression.getText() === list
+const numberOf = (node: ts.Node): number | null => ts.isNumericLiteral(node) ? Number(node.text) : null
+const SIGNS = ts.SyntaxKind
+/** The comparison with its two sides swapped. */
+const MIRROR: Partial<Record<ts.SyntaxKind, ts.SyntaxKind>> = { [SIGNS.EqualsEqualsToken]: SIGNS.EqualsEqualsToken, [SIGNS.EqualsEqualsEqualsToken]: SIGNS.EqualsEqualsEqualsToken,
+  [SIGNS.ExclamationEqualsToken]: SIGNS.ExclamationEqualsToken, [SIGNS.ExclamationEqualsEqualsToken]: SIGNS.ExclamationEqualsEqualsToken,
+  [SIGNS.GreaterThanToken]: SIGNS.LessThanToken, [SIGNS.GreaterThanEqualsToken]: SIGNS.LessThanEqualsToken,
+  [SIGNS.LessThanToken]: SIGNS.GreaterThanToken, [SIGNS.LessThanEqualsToken]: SIGNS.GreaterThanEqualsToken }
+/** `length <sign> number` for the comparisons that split the empty list from every other: nothing else says whether it is empty. */
+const EMPTY_OR_NOT: Array<[ts.SyntaxKind, number]> = [[SIGNS.EqualsEqualsToken, 0], [SIGNS.EqualsEqualsEqualsToken, 0], [SIGNS.ExclamationEqualsToken, 0],
+  [SIGNS.ExclamationEqualsEqualsToken, 0], [SIGNS.GreaterThanToken, 0], [SIGNS.LessThanEqualsToken, 0], [SIGNS.LessThanToken, 1], [SIGNS.GreaterThanEqualsToken, 1]]
+/** Whether `condition` tells an empty `list` from one that is not: its length alone (or `!`), or its length against 0 or 1. */
+function tellsEmpty(condition: ts.Node, list: string): boolean {
+  if (ts.isParenthesizedExpression(condition)) return tellsEmpty(condition.expression, list)
+  if (isLengthOf(condition, list)) return true
+  if (ts.isPrefixUnaryExpression(condition) && condition.operator === SIGNS.ExclamationToken) return tellsEmpty(condition.operand, list)
+  if (ts.isBinaryExpression(condition)) {
+    const op = condition.operatorToken.kind
+    if (op === SIGNS.AmpersandAmpersandToken || op === SIGNS.BarBarToken) return tellsEmpty(condition.left, list) || tellsEmpty(condition.right, list)
+    const [left, right] = [numberOf(condition.left), numberOf(condition.right)]
+    // Written with the length on the left: `0 < ids.length` is `ids.length > 0`.
+    const lengthFirst = isLengthOf(condition.left, list)
+    const bound = lengthFirst ? right : isLengthOf(condition.right, list) ? left : null
+    if (bound === null) return false
+    const sign = lengthFirst ? op : MIRROR[op]
+    return sign !== undefined && EMPTY_OR_NOT.some(([kind, number]) => kind === sign && number === bound)
+  }
+  return false
+}
 const isListName = (node: ts.Expression): boolean => ts.isIdentifier(node) || (ts.isPropertyAccessExpression(node) && isListName(node.expression))
 const CONSTANT = /^[A-Z][A-Z0-9_]*$/
 
@@ -50,7 +86,7 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
     let scope: ts.Node | undefined = call.parent
     while (scope && !ts.isFunctionLike(scope)) scope = scope.parent
     const names = sameAs(scope ?? sf, expression)
-    const tests = (node: ts.Node) => names.some(list => [`${list}.length`, `${list}.size`].some(text => conditionText(node).includes(text)))
+    const tests = (node: ts.Node) => names.some(list => tellsEmpty(conditionOf(node), list))
     let ok = false
     const visit = (node: ts.Node) => {
       if (node.getStart() >= call.getStart()) return
@@ -65,7 +101,54 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
   const visitCall = (node: ts.Node) => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isPropertyAccessExpression(node.expression.expression)
       && GUARDED_MODELS.has(node.expression.expression.name.text)) {
-      const lookFor = (inner: ts.Node) => {
+      const seen = new Set<ts.Node>()
+      /** What the identifier names where it is used: the nearest `const` or `let` before it in its own block or an enclosing one (an
+       *  earlier declarator of its own statement counts), and nothing when a parameter of a nearer function has that name (it holds
+       *  whatever its caller passes). */
+      const builtBefore = (id: ts.Identifier): ts.Expression | undefined => {
+        const named = new RegExp(`\\b${id.text}\\b`)
+        for (let scope: ts.Node | undefined = id.parent; scope; scope = scope.parent) {
+          if (ts.isFunctionLike(scope) && scope.parameters.some(p => named.test(p.name.getText()))) return undefined
+          const statements = ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseClause(scope) || ts.isDefaultClause(scope) ? scope.statements : null
+          let found: ts.VariableDeclaration | undefined
+          for (const statement of statements ?? []) {
+            if (statement.getStart() >= id.getStart()) break
+            if (ts.isVariableStatement(statement)) {
+              for (const declaration of statement.declarationList.declarations) if (declaration.end <= id.getStart() && declaration.name.getText() === id.text) found = declaration
+            }
+          }
+          if (found) return found.initializer
+        }
+        return undefined
+      }
+      /** An import is a value fixed when the module loads: it holds no list of this call. */
+      const imported = (id: ts.Identifier) => sf.statements.some(statement => ts.isImportDeclaration(statement) && statement.importClause?.getText().match(new RegExp(`\\b${id.text}\\b`)))
+      const unwrap = (expression: ts.Expression): ts.Expression => ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression)
+        ? unwrap(expression.expression) : expression
+      /** A value used as a filter is read as if it were written in the call: an object, both branches of a conditional, or the
+       *  value of a name. A `where` or the whole arguments the check cannot see into (a parameter, one declared after the read, a
+       *  call's result) is flagged: it may carry an empty list. A spread of one is not (known limit: it is a part of a filter). */
+      const visitValue = (expression: ts.Expression, at: ts.Node, strict: boolean) => {
+        const value = unwrap(expression)
+        if (ts.isObjectLiteralExpression(value)) {
+          if (!seen.has(value)) { seen.add(value); lookFor(value) }
+        } else if (ts.isConditionalExpression(value)) {
+          visitValue(value.whenTrue, value.whenTrue, strict)
+          visitValue(value.whenFalse, value.whenFalse, strict)
+        } else if (ts.isIdentifier(value)) follow(value, strict)
+        else if (strict) found.push({ file, line: sf.getLineAndCharacterOfPosition(at.getStart()).line + 1, list: at.getText() })
+      }
+      const follow = (id: ts.Identifier, strict: boolean) => {
+        if (CONSTANT.test(id.text) || imported(id)) return
+        const built = builtBefore(id)
+        if (built) visitValue(built, id, strict)
+        else if (strict) found.push({ file, line: sf.getLineAndCharacterOfPosition(id.getStart()).line + 1, list: id.text })
+      }
+      function lookFor(inner: ts.Node) {
+        // Whatever stands as the filter, or is spread into one, is read where it is built: a name, a conditional, a call's result.
+        if (ts.isPropertyAssignment(inner) && inner.name.getText() === 'where') visitValue(inner.initializer, inner.initializer, true)
+        else if (ts.isShorthandPropertyAssignment(inner) && inner.name.text === 'where') follow(inner.name, true)
+        else if (ts.isSpreadAssignment(inner)) visitValue(inner.expression, inner.expression, false)
         if (ts.isPropertyAssignment(inner) && ['in', '$in'].includes(inner.name.getText().replaceAll(/['"]/g, ''))
           && !ts.isArrayLiteralExpression(inner.initializer) && !(ts.isIdentifier(inner.initializer) && CONSTANT.test(inner.initializer.text))) {
           const list = inner.initializer.getText()
@@ -75,10 +158,12 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
         }
         ts.forEachChild(inner, lookFor)
       }
-      node.arguments.forEach(lookFor)
+      for (const argument of node.arguments) visitValue(argument, argument, true)
     }
     ts.forEachChild(node, visitCall)
   }
   visitCall(sf)
-  return found
+  // A list reached by several routes (both branches of a conditional, a name and its object) is one finding.
+  const once = new Set<string>()
+  return found.filter(f => !once.has(`${f.line}:${f.list}`) && !!once.add(`${f.line}:${f.list}`))
 }
