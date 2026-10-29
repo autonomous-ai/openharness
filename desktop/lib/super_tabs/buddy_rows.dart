@@ -14,10 +14,10 @@ class SuperTabCountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     constraints: const BoxConstraints(minWidth: 18),
-    padding: const EdgeInsets.symmetric(horizontal: 5),
-    decoration: BoxDecoration(
+    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.badgeInset),
+    decoration: ShapeDecoration(
       color: grid.AppPalette.warn.withValues(alpha: .16),
-      borderRadius: BorderRadius.circular(9),
+      shape: const StadiumBorder(),
     ),
     child: Text(
       countText(count),
@@ -64,12 +64,11 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final strong = selected || unread;
     final color = onTap == null
         ? DesktopChrome.muted
         : DesktopChrome.foreground;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+      padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
       child: Material(
         color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -103,7 +102,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: grid.AppDesktop.controlGap,
+                        ),
                         child: Row(
                           children: [
                             Flexible(
@@ -111,10 +112,16 @@ class SuperTabBuddyRow extends StatelessWidget {
                                 name,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.control(
-                                  medium: strong,
-                                  color: color,
-                                ),
+                                // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                style:
+                                    DesktopChrome.control(
+                                      medium: selected,
+                                      color: color,
+                                    ).copyWith(
+                                      fontWeight: unread
+                                          ? grid.AppFont.semibold
+                                          : null,
+                                    ),
                               ),
                             ),
                             if (project case final project?) ...[
@@ -145,7 +152,11 @@ class SuperTabBuddyRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: _column),
+                  SizedBox(
+                    width: _column,
+                    // Unread is drawn as a bold name and heard in words.
+                    child: Semantics(label: unread ? 'Unread messages' : null),
+                  ),
                   const SizedBox(width: _column),
                 ],
               ),

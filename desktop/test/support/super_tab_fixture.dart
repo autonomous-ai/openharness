@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/super_tabs/attachment_upload.dart';
+import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
 
@@ -662,12 +663,35 @@ class ConversationServer {
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
+      } else if (command['type'] == 'machine.contribute') {
+        // As the backend: the reader's machine is in the Swarm, whole.
+        state['machines'] = <dynamic>[
+          ...state['machines'] as List? ?? const [],
+          {
+            'machineId': command['machineId'],
+            'name': command['name'],
+            'contributorId': reader ?? 'owner',
+            'scope': command['scope'],
+            'engines': command['engines'],
+            'maxAgents': command['maxAgents'],
+            'availableSlots': command['maxAgents'],
+          },
+        ];
+        revision++;
       } else if (command['type'] == 'buddy.create') {
         // As the backend's Buddy create: a start for the reader's Buddy and
         // its chat, fixed per person and project. The fixture's host starts it
         // at once.
         final person = reader ?? 'owner';
         final projectId = command['projectId'] as String;
+        // As the backend: no Codex Buddy for now (security review 1 of #2087).
+        if (command['engine'] == 'codex') {
+          throw SuperTabFailure(
+            'BUDDY_ENGINE',
+            kBuddyEngineRefusals['codex']!,
+            statusCode: 403,
+          );
+        }
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&

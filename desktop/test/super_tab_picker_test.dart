@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -16,6 +15,7 @@ import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
@@ -222,7 +222,15 @@ void main() {
       final shared = f.app.activeSwarm;
       expect(find.text('Add agent to Pilot'), findsOneWidget);
       expect(find.text('Starts in Offline editing.'), findsOneWidget);
-      expect(find.text('Models'), findsNothing);
+      // The picker has no Models scope (the leaderboard's Models list sits
+      // behind it, outside the picker).
+      expect(
+        find.descendant(
+          of: find.byType(DesktopDialogSurface),
+          matching: find.text('Models'),
+        ),
+        findsNothing,
+      );
       expect(find.text('Store'), findsNothing);
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

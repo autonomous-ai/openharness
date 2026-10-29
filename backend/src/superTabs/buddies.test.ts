@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
@@ -142,16 +145,29 @@ function fresh() {
 }
 
 describe('adding a Buddy', () => {
+  it('is refused on Codex for now, saying why, and leaves the chat and starts as they were (security review 1 of #2087)', () => {
+    const f = fresh()
+    const starts = f.state.starts?.length ?? 0, groups = f.state.conversations.length
+    expect(() => addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')).toThrow('A Codex Buddy is not available yet')
+    expect([f.state.starts?.length ?? 0, f.state.conversations.length]).toEqual([starts, groups])
+  })
+
+  it('words its Codex refusal as Desktop does beside a disabled Codex (security re-check of #2087)', () => {
+    // Desktop holds the same pair to this constant (desktop test/buddy_refusal_parity_test.dart).
+    const desktop = readFileSync(fileURLToPath(new URL('../../../desktop/lib/super_tabs/buddies.dart', import.meta.url)), 'utf8')
+    expect(/kBuddyEngineRefusals = \{\s*'codex':\s*'([^']*)'/.exec(desktop)?.[1]).toBe(CODEX_BUDDY_REFUSAL)
+  })
+
   it('opens the person\'s Buddy chat, read by them alone, and starts the Buddy on the machine they chose', () => {
     const f = fresh()
-    const added = addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')
+    const added = addBuddy(f, peer, f.app.projectId, 'peer-mac')
     const chat = group(f, added.result.conversationId as string)
     expect(chat).toMatchObject({ kind: 'buddy', projectId: f.app.projectId, leadId: null, agentIds: [], archived: false,
       audience: { people: [{ id: 'peer', generation: 'first' }] } })
     expect(added.messages).toEqual([])
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
     expect(start).toMatchObject({ contributorId: 'peer', machineOwnerId: 'peer', poolGeneration: 'g1', dispatched: false, error: null })
-    expect(start.request).toMatchObject({ conversationId: chat.id, machineId: 'peer-mac', engine: 'codex', cwd: `/swarm/${f.app.projectId}`,
+    expect(start.request).toMatchObject({ conversationId: chat.id, machineId: 'peer-mac', engine: 'claude', cwd: `/swarm/${f.app.projectId}`,
       worktree: true, name: 'peer\'s Buddy', buddyOf: { personId: 'peer', generation: 'first' } })
     expect(start.request.role).toBeUndefined()
   })
@@ -187,6 +203,18 @@ describe('adding a Buddy', () => {
     f.state.starts!.find(s => s.id === first.result.startId)!.error = 'Stopped.'
     expect(addBuddy(f, peer, f.app.projectId).result.conversationId).toBe(first.result.conversationId)
     expect(f.state.conversations.filter(c => c.kind === 'buddy')).toHaveLength(1)
+  })
+
+  // Security review of #2093 (Lead's ruling): Harness cannot yet tell a Buddy's window from another agent's on Windows, so a
+  // Buddy there made every agent's Swarm command on that PC refuse. None is added there until a real caller check exists.
+  it('is refused on a Windows machine, with the reason, and allowed on a Mac or Linux one', () => {
+    const f = fresh()
+    const os = (name: string | null) => { f.state.machines!.find(m => m.machineId === 'peer-mac')!.observation!.resources.os = name }
+    os('Windows')
+    expect(() => addBuddy(f, peer, f.app.projectId)).toThrow('A Buddy cannot run on a Windows machine yet')
+    expect(f.state.starts ?? []).toEqual([])
+    os('Linux')
+    expect(addBuddy(f, peer, f.app.projectId).result.startId).toBeTruthy()
   })
 
   it('is refused to an agent, a viewer, and on a machine that is not in the Swarm', () => {
@@ -334,6 +362,36 @@ describe('a Buddy\'s proposal to the PM', () => {
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(1)
   })
 
+  it('carries the files the store found it may send, on the proposal message in the project chat', () => {
+    const { f, propose } = asked()
+    const files = [{ id: 'plan', name: 'plan.md', mime: 'text/markdown', size: 120, url: 'https://cdn.example.test/t/k1/plan.md' },
+      { id: 'shot', name: 'shot.png', mime: 'image/png', size: 2048, url: 'https://cdn.example.test/t/k2/shot.png' }]
+    const posted = f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['plan', 'shot', 'plan'] }, buddy,
+      { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
+        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }, attachments: files }).messages
+    expect(posted).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, attachments: files,
+      source: { kind: 'buddy-proposal', personId: 'peer', ownerMessageId: 'ask' } })])
+    expect(propose('ask2').messages[0]).not.toHaveProperty('attachments')
+  })
+
+  it('refuses a file the store did not find it may send, and more than five', () => {
+    const { f } = asked()
+    const context = { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
+      author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } } }
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['elsewhere'] }, buddy, context))
+      .toThrow('Upload this file again')
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['a', 'b', 'c', 'd', 'e', 'f'] }, buddy, context))
+      .toThrow('at most 5 files')
+    expect(group(f, f.chat).proposals).toBeUndefined()
+  })
+
+  it('never posts a file in the project chat outside a proposal', () => {
+    const { f } = asked()
+    expect(() => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: '', replyTo: null, recipientIds: [], attachmentIds: ['plan'] }, buddy,
+      { attachments: [{ id: 'plan', name: 'plan.md', mime: 'text/markdown', size: 120, url: 'https://cdn.example.test/t/k1/plan.md' }] }))
+      .toThrow('A Buddy posts only in its own chat')
+  })
+
   it('is a Buddy\'s alone', () => {
     const { f } = asked()
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, agentActor(f.pm))).toThrow('Only a Buddy')
@@ -419,6 +477,19 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     // A Lead on a skill text from before is told how it tells one person something privately now.
     expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId }, agentActor(f.pm))).toThrow('person.tell')
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
+  })
+
+  it('is refused as closed before anything checks what a private chat may carry: work, a review, a requester or a proposal (merge review of #2090)', () => {
+    const f = setup()
+    const before = f.state.conversations.length
+    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { reviewOf: f.group }, { requesterId: 'peer' },
+      { proposalMessageId: 'proposal' }]
+    for (const extra of carrying) {
+      for (const actor of [peer, agentActor(f.pm)]) {
+        expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId, ...extra } as Command, actor)).toThrow('Chat with PM is closed')
+      }
+    }
+    expect(f.state.conversations.length).toBe(before)
   })
 
   it('is hidden from everyone, its person and the PM included, and stays stored', () => {
@@ -622,13 +693,11 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
   const add = (f: ReturnType<typeof setup>, machineId: string, owner: string, engine: 'claude' | 'codex' = 'claude', projectId = f.app.projectId) =>
     f.run({ type: 'buddy.create', projectId, machineId, engine }, peer, contribution(f, machineId, owner))
 
-  it('is only its owner\'s own machine, for Claude and Codex alike: never one shared with them', () => {
+  it('is only its owner\'s own machine: never one shared with them', () => {
     const f = fresh()
     machine(f, 'owner-mac', 'owner')
-    for (const engine of ['claude', 'codex'] as const) {
-      expect(() => add(f, 'owner-mac', 'owner', engine)).toThrow('A Buddy runs only on your own machine')
-    }
-    expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
+    expect(() => add(f, 'owner-mac', 'owner')).toThrow('A Buddy runs only on your own machine')
+    expect(add(f, 'peer-mac', 'peer').result.startId).toBeTruthy()
   })
 
   it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {

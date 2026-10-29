@@ -12,12 +12,14 @@ import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'identity.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
 import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
+import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 
@@ -72,7 +74,6 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
-  static const _dotSize = 6.0;
 
   Widget _navigationRow({
     required String key,
@@ -184,6 +185,28 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// A workgroup's row from what its project's reading already asked.
+  /// A task row's status, kept current by its own clock, for its line and
+  /// its tooltip alike; any other row is built without one.
+  Widget _withTaskStatus(
+    SuperTabConversation group,
+    Widget Function(SuperTabTaskStatus? status) build, {
+    required bool task,
+  }) => task
+      ? SuperTabTaskClock(
+          group: group,
+          personName: _personName,
+          builder: (_, status) => build(status),
+        )
+      : build(null);
+
+  /// A member as the Humans list names them, for a task's "Waiting on …".
+  String? _personName(String personId) => switch (controller.snapshot?.people
+      .where((p) => p.id == personId)
+      .firstOrNull) {
+    final person? => superTabPersonName(person.email),
+    null => null,
+  };
+
   Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
       _drawRow(
         group,
@@ -218,12 +241,13 @@ class ProjectSidebar extends StatelessWidget {
             !notificationsSelected &&
             selectedProjectId == project.id &&
             controller.selectedId != buddyChat?.id);
+    // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
-      medium: unread || highlighted,
+      medium: highlighted,
       color: highlighted || unread || project != null || label != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
-    );
+    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -259,58 +283,83 @@ class ProjectSidebar extends StatelessWidget {
                               ? 'Private project'
                               : null,
                           selected: selected,
-                          child: Tooltip(
-                            message:
-                                label ??
-                                project?.name ??
-                                SuperTabWorkgroupName.plain(group),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 36),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
+                          child: _withTaskStatus(
+                            group,
+                            task: label == null && project == null,
+                            (status) => Tooltip(
+                              message:
+                                  label ??
+                                  project?.name ??
+                                  [
+                                    SuperTabWorkgroupName.plain(group),
+                                    if (status != null)
+                                      superTabTaskStatusText(status),
+                                  ].join('\n'),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  minHeight: 36,
                                 ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: label == null && project == null
-                                          ? SuperTabWorkgroupName(
-                                              group,
-                                              style: style,
-                                            )
-                                          : Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  label ?? project!.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: style,
-                                                ),
-                                                // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                                if (project != null)
-                                                  ProjectGitHubLine(
-                                                    controller: controller,
-                                                    project: project,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: label == null && project == null
+                                            ? Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  SuperTabWorkgroupName(
+                                                    group,
+                                                    style: style,
                                                   ),
-                                              ],
-                                            ),
-                                    ),
-                                    if (project?.isPrivate == true) ...[
-                                      const SizedBox(width: 8),
-                                      Tooltip(
-                                        message: 'Private project',
-                                        child: Icon(
-                                          AppIcons.lock,
-                                          size: 14,
-                                          color: DesktopChrome.muted,
-                                        ),
+                                                  // Moving, waiting and on what, or stuck (#957).
+                                                  if (status != null)
+                                                    SuperTabTaskLineView(
+                                                      status,
+                                                      key: ValueKey(
+                                                        'super-task-line-${group.id}',
+                                                      ),
+                                                    ),
+                                                ],
+                                              )
+                                            : Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    label ?? project!.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: style,
+                                                  ),
+                                                  // Teammates' agents cannot push to its repository yet (project_github.dart).
+                                                  if (project != null)
+                                                    ProjectGitHubLine(
+                                                      controller: controller,
+                                                      project: project,
+                                                    ),
+                                                ],
+                                              ),
                                       ),
+                                      if (project?.isPrivate == true) ...[
+                                        const SizedBox(width: 8),
+                                        Tooltip(
+                                          message: 'Private project',
+                                          child: Icon(
+                                            AppIcons.lock,
+                                            size: 14,
+                                            color: DesktopChrome.muted,
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -319,31 +368,26 @@ class ProjectSidebar extends StatelessWidget {
                       ),
                       SizedBox(
                         width: _iconColumn,
-                        child: Center(
-                          child: waiting
-                              ? Tooltip(
-                                  message: 'Needs a human',
-                                  child: Text(
-                                    '?',
-                                    style: DesktopChrome.control(
-                                      color: grid.AppPalette.warn,
-                                      medium: true,
+                        // Unread is drawn as a bold name; a screen reader
+                        // hears it said, as it heard the dot it replaces.
+                        child: Semantics(
+                          label: unread ? 'Unread messages' : null,
+                          child: Center(
+                            child: waiting
+                                ? Tooltip(
+                                    message: 'Needs a human',
+                                    child: Text(
+                                      '?',
+                                      style: DesktopChrome.control(
+                                        color: grid.AppPalette.warn,
+                                        medium: true,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : unread
-                              ? Semantics(
-                                  label: 'Unread messages',
-                                  child: Container(
-                                    width: _dotSize,
-                                    height: _dotSize,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: DesktopChrome.accent,
-                                    ),
-                                  ),
-                                )
-                              : null,
+                                  )
+                                : label == null && project == null
+                                ? SuperTabTaskMark(group)
+                                : null,
+                          ),
                         ),
                       ),
                     ],
@@ -351,7 +395,7 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            // At the far right edge, since it is always there and the dot
+            // At the far right edge, since it is always there and the mark
             // beside it comes and goes (Dee, 2026-10-28).
             if (project != null) _toggle(project, expanded: expanded),
           ],
@@ -762,7 +806,7 @@ class ProjectSidebar extends StatelessWidget {
                       !controller.saving &&
                       !controller.hasPendingAction &&
                       buddyProjects(controller).isNotEmpty
-                  ? () => unawaited(showAddBuddy(context, controller))
+                  ? () => unawaited(showAddBuddy(context, controller, app: app))
                   : null,
               addTooltip: 'Add a Buddy',
               endInset: 0,

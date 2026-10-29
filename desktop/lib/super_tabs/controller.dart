@@ -236,6 +236,15 @@ class SuperTabController extends ChangeNotifier {
   int? get visibilityEpoch => _parts?.epoch;
   String? error, operationError, operationErrorCode;
 
+  /// Why the files of each conversation's last send did not go up. Kept apart
+  /// from [operationError] so it shows only under its own conversation.
+  final _uploadErrors = <String, String>{};
+
+  /// What the composer of [conversationId] says went wrong: the last action's
+  /// [operationError], else its own upload failure.
+  String? composerError(String conversationId) =>
+      operationError ?? _uploadErrors[conversationId];
+
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
   String? operationNotice;
@@ -486,8 +495,10 @@ class SuperTabController extends ChangeNotifier {
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
     );
-    // Taking a chip off while its files go up gives the upload up.
     files.addListener(() {
+      // Changing the files answers a refused upload.
+      if (_uploadErrors.remove(id) != null) _changed();
+      // Taking a chip off while its files go up gives the upload up.
       if (uploading &&
           _sending?.conversationId == id &&
           !files.files.toSet().containsAll(_sending!.files)) {
@@ -2446,6 +2457,8 @@ class SuperTabController extends ChangeNotifier {
     String conversationId,
     List<HarnessAttachment> files,
   ) async {
+    // Any send of this conversation answers its last refused upload.
+    _uploadErrors.remove(conversationId);
     if (files.isEmpty) return const [];
     final run = ++_uploadRun;
     uploading = true;
@@ -2468,12 +2481,12 @@ class SuperTabController extends ChangeNotifier {
       return ids;
     } catch (failure) {
       if (!_disposed && run == _uploadRun) {
-        operationError = failure is SuperTabFailure
+        // Into the conversation the files were for, whichever is shown now.
+        _uploadErrors[conversationId] = failure is SuperTabFailure
             ? failure.message
             : failure is TimeoutException
             ? 'The upload stopped moving. Try again.'
             : 'Could not upload ${files.length == 1 ? 'the file' : 'the files'}. Try again.';
-        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
       }
       return null;
     } finally {

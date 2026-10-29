@@ -421,10 +421,14 @@ export function decide(choice: Choice): Verdict {
     : { pick, via: 'order', p: null, why: "First by the owner's rules and the policy order." }
 }
 
-/** `v1` leaves out size and fit, for a backend from before phase 1, whose strict schema refuses them. */
-export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, v1 = false): Record<string, unknown> {
+/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
+ *  `unkinded` for a backend from before kinds, and `v1` without size and fit too, for one from before phase 1. Each refuses the
+ *  newer fields with its strict schema. */
+export type RecordShape = 'current' | 'unkinded' | 'v1'
+export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, shape: RecordShape = 'current'): Record<string, unknown> {
+  const v1 = shape === 'v1'
   return {
-    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }) },
+    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),

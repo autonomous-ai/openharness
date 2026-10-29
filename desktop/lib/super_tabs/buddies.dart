@@ -2,17 +2,37 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/model_search_catalog.dart' show thisComputerName;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'machines.dart';
 import 'model.dart';
 
 /// The engines a Buddy runs on (spec: Buddies, 10-28).
 const kBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
+
+/// Engines a Buddy cannot run on yet, and why, in the backend's own words
+/// (`CODEX_BUDDY_REFUSAL`, backend superTabs/commands.ts): the dialog offers
+/// them turned off, with this beside them (security review 1 of #2087).
+const kBuddyEngineRefusals = {
+  'codex': 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.',
+};
+
+/// The engine Start again asks for: the Buddy's own, or Claude Code in place
+/// of one the server refuses, which it would refuse again (review 2 of #2087).
+String buddyRestartEngine(String engine) =>
+    kBuddyEngineRefusals.containsKey(engine) ? 'claude' : engine;
+
+/// Start again's label: "Start with Claude Code" where it changes the engine.
+String buddyRestartLabel(String engine) => buddyRestartEngine(engine) == engine
+    ? 'Start again'
+    : 'Start with Claude Code';
 
 /// An engine as people read it: "Claude", "Codex".
 String buddyEngineName(String engine) =>
@@ -64,23 +84,27 @@ String buddyMachineName(SuperTabController c, String machineId) {
       : 'another machine';
 }
 
-/// Add a Buddy: project, one of the reader's own machines, and engine.
+/// Add a Buddy: project, one of the reader's own machines, and engine. With
+/// [app], a reader with no machine in the Swarm can add this computer from
+/// the dialog.
 Future<void> showAddBuddy(
   BuildContext context,
   SuperTabController c, {
   String? projectId,
+  AppNotifier? app,
 }) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(
     controller: c,
-    child: _AddBuddyDialog(controller: c, projectId: projectId),
+    child: _AddBuddyDialog(controller: c, projectId: projectId, app: app),
   ),
 );
 
 class _AddBuddyDialog extends StatefulWidget {
-  const _AddBuddyDialog({required this.controller, this.projectId});
+  const _AddBuddyDialog({required this.controller, this.projectId, this.app});
   final SuperTabController controller;
   final String? projectId;
+  final AppNotifier? app;
 
   @override
   State<_AddBuddyDialog> createState() => _AddBuddyDialogState();
@@ -94,6 +118,8 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
   String? _project, _machine;
   String _engine = 'claude';
   bool _busy = false;
+
+  /// This computer's Add machine form is open over the dialog.
   String? _error;
 
   @override
@@ -151,6 +177,15 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
     });
   }
 
+  /// The Machine field when none of the reader's machines is in the Swarm:
+  /// this computer can be added from here.
+  Widget _noMachine() => BuddyNoMachine(
+    controller: c,
+    app: widget.app,
+    enabled: !_busy,
+    onAdded: (id) => setState(() => _machine = id),
+  );
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -203,15 +238,15 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
               ),
               const SizedBox(height: 12),
               Row(
+                // With no machine the label sits on the line it names.
+                crossAxisAlignment: machines.isEmpty
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   label('Machine'),
                   Expanded(
                     child: machines.isEmpty
-                        ? Text(
-                            'A Buddy runs on one of your own machines. Add '
-                            'one of yours to this Swarm first.',
-                            style: DesktopChrome.metadata(),
-                          )
+                        ? _noMachine()
                         : AppSelectField<String>(
                             key: const ValueKey('super-buddy-machine'),
                             value: _listedMachine ?? '',
@@ -247,7 +282,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             Flexible(
                               child: RadioListTile<String>(
                                 value: key,
-                                enabled: !_busy,
+                                enabled:
+                                    !_busy &&
+                                    !kBuddyEngineRefusals.containsKey(key),
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(value),
@@ -259,6 +296,16 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
+              for (final refusal in kBuddyEngineRefusals.values) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: _labelWidth),
+                  child: Text(
+                    refusal,
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                ),
+              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(error, style: DesktopChrome.control()),
@@ -454,9 +501,13 @@ class SuperTabBuddyBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.chat,
+    this.app,
   });
   final SuperTabController controller;
   final SuperTabConversation chat;
+
+  /// For the Start bar's Add this Mac, as Add a Buddy has it (#2105).
+  final AppNotifier? app;
 
   EdgeInsets get _padding => const EdgeInsets.fromLTRB(
     grid.AppDesktop.panelPadding,
@@ -475,6 +526,7 @@ class SuperTabBuddyBar extends StatelessWidget {
         controller: c,
         projectId: chat.projectId,
         padding: _padding,
+        app: app,
       );
     }
     final request = superTabMap(start['request']);
@@ -503,10 +555,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                       c.addBuddy(
                         projectId: chat.projectId,
                         machineId: machineId,
-                        engine: engine,
+                        engine: buddyRestartEngine(engine),
                       ),
                     ),
-              child: const Text('Start again'),
+              child: Text(buddyRestartLabel(engine)),
             ),
         ],
       ),
@@ -556,10 +608,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                           c.addBuddy(
                             projectId: chat.projectId,
                             machineId: agent.machineId,
-                            engine: agent.engine,
+                            engine: buddyRestartEngine(agent.engine),
                           ),
                         ),
-                  child: const Text('Start again'),
+                  child: Text(buddyRestartLabel(agent.engine)),
                 ),
               ],
             ),
@@ -577,10 +629,12 @@ class _BuddyStart extends StatefulWidget {
     required this.controller,
     required this.projectId,
     required this.padding,
+    required this.app,
   });
   final SuperTabController controller;
   final String projectId;
   final EdgeInsets padding;
+  final AppNotifier? app;
 
   @override
   State<_BuddyStart> createState() => _BuddyStartState();
@@ -612,10 +666,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           ),
           const SizedBox(height: 8),
           if (machine == null)
-            Text(
-              'A Buddy runs on one of your own machines. Add one of yours to '
-              'this Swarm first.',
-              style: DesktopChrome.metadata(),
+            BuddyNoMachine(
+              controller: c,
+              app: widget.app,
+              enabled: !busy,
+              onAdded: (id) => setState(() => _machine = id),
             )
           else
             Row(
@@ -643,10 +698,13 @@ class _BuddyStartState extends State<_BuddyStart> {
                     value: _engine,
                     semanticLabel: 'Agent',
                     textStyle: DesktopChrome.control(),
+                    // Only engines the server takes; the refused ones say why
+                    // below, as Add a Buddy does (#2087).
                     options: [
                       for (final MapEntry(:key, :value)
                           in kBuddyEngines.entries)
-                        SelectOption(value: key, label: value),
+                        if (!kBuddyEngineRefusals.containsKey(key))
+                          SelectOption(value: key, label: value),
                     ],
                     onChanged: (value) {
                       if (!busy) setState(() => _engine = value);
@@ -668,8 +726,91 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
               ],
             ),
+          if (machine != null)
+            for (final refusal in kBuddyEngineRefusals.values) ...[
+              const SizedBox(height: 4),
+              Text(
+                refusal,
+                style: DesktopChrome.control(color: DesktopChrome.muted),
+              ),
+            ],
         ],
       ),
+    );
+  }
+}
+
+/// What Add a Buddy and the Buddy chat's Start bar show when none of the
+/// reader's machines is in the Swarm: with [app], this computer can be added
+/// through the Add machine flow (#2105), and [onAdded] gets the machine it
+/// added; without, where to add one.
+class BuddyNoMachine extends StatefulWidget {
+  const BuddyNoMachine({
+    super.key,
+    required this.controller,
+    required this.app,
+    required this.enabled,
+    required this.onAdded,
+  });
+  final SuperTabController controller;
+  final AppNotifier? app;
+  final bool enabled;
+  final ValueChanged<String> onAdded;
+
+  @override
+  State<BuddyNoMachine> createState() => _BuddyNoMachineState();
+}
+
+class _BuddyNoMachineState extends State<BuddyNoMachine> {
+  SuperTabController get c => widget.controller;
+  bool _adding = false;
+
+  /// Runs the Add machine form for this computer, then passes on what it added.
+  Future<void> _addThisComputer(AppNotifier app) async {
+    if (!widget.enabled || _adding) return;
+    setState(() => _adding = true);
+    String? added;
+    try {
+      added = await showAddMachine(context, c, app);
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+    if (added != null && mounted) widget.onAdded(added);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    if (app == null) {
+      return Text(
+        'A Buddy runs on one of your own machines. Add one of yours to this '
+        'Swarm first.',
+        style: DesktopChrome.metadata(),
+      );
+    }
+    return ListenableBuilder(
+      listenable: app,
+      builder: (context, _) {
+        final refusal = thisComputerRefusal(app, c);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'None of your machines is in this Swarm yet.',
+              style: DesktopChrome.metadata(),
+            ),
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed:
+                  !widget.enabled || _adding || !c.canWrite || refusal != null
+                  ? null
+                  : () => unawaited(_addThisComputer(app)),
+              child: Text('Add ${thisComputerName()}'),
+            ),
+            if (refusal != null) Text(refusal, style: DesktopChrome.metadata()),
+          ],
+        );
+      },
     );
   }
 }
