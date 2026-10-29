@@ -52,6 +52,10 @@ const envSchema = z.object({
   // does (agent:{machineId}:appinst), so the data path is a direct backpressured socket, not Redis relay.
   // Off by default (single-instance/dev needs nothing — it's always co-located). Enable in multi-instance.
   MESH_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // The quiet messages poll (superTabs/quietMessages.ts, WebSocket roadmap Phase 2 item 3): a forward messages poll with
+  // nothing new, after the same caller's full read within 30 s and with the Swarm unchanged, answers without loading the
+  // Swarm. Off by default; turn on one pod first and compare the Phase 0 route timings (docs in the PR that added it).
+  SWARM_QUIET_MESSAGES: z.string().default('false').transform((v) => v === 'true'),
   // Host the mesh endpoint is reachable at from OTHER instances: 127.0.0.1 for a single-host pm2 cluster,
   // the VM's routable IP for multi-VM. Advertised verbatim in Redis.
   MESH_HOST: z.string().default('127.0.0.1'),

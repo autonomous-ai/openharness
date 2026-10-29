@@ -10,6 +10,7 @@ import { operationSchema } from '../superTabs/commands.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
+import { redisMessagesPollMemory } from '../superTabs/quietMessages.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
@@ -144,6 +145,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
+      // The same for a messages poll with nothing new, only while the server's switch is on (config/env.ts).
+      ...env.SWARM_QUIET_MESSAGES ? { messagePolls: redisMessagesPollMemory(bus.pub) } : {},
       deliveriesWaiting: announceSwarmDeliveries,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
