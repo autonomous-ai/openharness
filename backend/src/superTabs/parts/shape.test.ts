@@ -58,6 +58,13 @@ describe('splitting a Swarm into parts', () => {
     expect(machines[3]!.data!.cleanups).toEqual([{ removalId: 'r1', machineOwnerId: 'u1' }])
   })
 
+  it('keeps a removed confidential session\'s hold on its Team account through a save and a load (review of #2142)', () => {
+    // Dropped here, the account was free for another project's work on the next read, before its data was deleted.
+    const held = { agentId: 'pm', machineId: 'team-mac', harnessId: 'h-pm', machineOwnerId: 'u2', heldFor: 'p1', since: 900, noticed: true as const }
+    const state = { ...legacy(), closingSessions: [held, { agentId: 'gone', machineId: 'third', harnessId: 'h-gone', machineOwnerId: 'u1' }] }
+    expect(reassemble(split(state, { tabId: 'tab1', version: 500, now: 1000 })).closingSessions).toEqual(state.closingSessions)
+  })
+
   it('keeps the progress out of the head and turns it into a watermark: every group carries its report sequence', () => {
     const parts = split(legacy(), { tabId: 'tab1', version: 500, now: 1000 })
     expect((parts.head.data!.projects![0] as Record<string, unknown>).progress).toBeUndefined()
