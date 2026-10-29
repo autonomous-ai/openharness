@@ -167,6 +167,18 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
 })
 
 describe('a Buddy-only machine\'s end', () => {
+  it('comes when the Swarm owner\'s host adds that machine by itself, as for the machine its Lead runs on', () => {
+    const f = setup()
+    f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'owner-laptop', engine: 'claude', setup: { ...setupOf, name: 'Owner Laptop' } }, owner)
+    const started = f.state.starts!.find(s => s.request.machineId === 'owner-laptop')!
+    f.run({ type: 'agent.started', startId: started.id, harnessId: 'native', configuration }, owner)
+    f.run({ type: 'agent.startSettled', startId: started.id, warning: null }, owner)
+    f.run({ type: 'machine.contribute', machineId: 'owner-laptop', name: 'Owner Laptop', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true } as Command)
+    expect(buddyOnly(f, 'owner-laptop')).toMatchObject({ maxAgents: 2, cwd: '/swarm' })
+    expect(buddyOnly(f, 'owner-laptop')!.buddyOnly).toBeUndefined()
+  })
+
   it('comes when its last Buddy is removed: its host cleans up, and no chat hears of it', () => {
     const f = setup()
     running(f, f.app.projectId)
