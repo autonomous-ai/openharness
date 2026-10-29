@@ -4856,6 +4856,71 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // Diego's dial, 2026-10-29: the openharness Lead runs on another Mac, so its card had no local harness and a tap on its
+    // face did nothing. Such a Lead is spoken to by its Swarm id, and its words still go only to its chat.
+    it('a Lead on another machine is spoken to by its Swarm id: reviewed words post in its chat and nothing is typed', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: '', id: 'lead1' })])] },
+        { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay, appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ ...BUDDY, swarmReview: 'v1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        expect(ofType(port, 'welcome')[0].features).toContain('swarm.remote')
+        port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: 'lead1' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-l1', review: true })
+        await vi.waitFor(() => expect(ofType(port, 'voice.draft')).toHaveLength(1))
+        const draft = ofType(port, 'voice.draft')[0]
+        expect(draft).toMatchObject({ name: "Project 1 · diego's Buddy", context: 'Swarm chat', agentId: 'lead1' })
+        port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+        await vi.waitFor(() => expect(ofType(port, 'draft.state')).toHaveLength(1))
+        expect(swarmSay.mock.calls).toEqual([['lead1', 'ship it', 'buddy', 'pm1', true]])
+        expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    // Review of #2232: a dial still on a remote Lead's face names its Swarm id to a daemon whose cards are not read yet (the
+    // devices process just restarted) or no longer hold it. The window's focused pane must not take the words.
+    it('a Swarm id with no card here is an error, never the focused pane\'s turn', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))
+      const host = cardHost({ cards: [] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay,
+        appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY); await settle()
+        port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+        expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        // Held to review, the same: no draft whose Send would say sent while the words went nowhere.
+        port.say({ t: 'voice.begin', uploadId: 'u-l2', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-l2', review: true })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(2))
+        expect(ofType(port, 'voice.error')[1].message).toBe('Could not reach the Swarm. Try again.')
+        expect(ofType(port, 'voice.draft')).toEqual([])
+      } finally { await session.stop() }
+    })
+
+    it('words for a Lead on another machine that the Swarm cannot take are an error, never a terminal turn', async () => {
+      const chat = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      for (const swarmSay of [vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') }), vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))]) {
+        const host = cardHost({ cards: [card('st1', [withBuddy({ local: '', id: 'lead1', chat })])] },
+          { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(ROUND)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: 'lead1' })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+          expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
+          expect(swarmSay).toHaveBeenCalledWith('lead1', 'ship it', true, 'lead-c1')
+          expect(host.sendTurn).not.toHaveBeenCalled()
+        } finally { await session.stop() }
+      }
+    })
+
     /** 13 Leads (12 are sent), every name at its 48-byte cut, each working in a group with a Buddy; `id(kind, l)` names the ids. */
     const fullCards = (id: (kind: string, l: number) => string) => {
       const wide = 'é'.repeat(24)   // 48 bytes
