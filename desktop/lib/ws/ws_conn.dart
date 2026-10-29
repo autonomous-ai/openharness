@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
@@ -47,6 +48,42 @@ Duration reconnectDelay(int attempt, Random random) {
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
 const connectionStableAfter = Duration(minutes: 1);
+
+/// This build's version, which every backend socket it dials says (`?v=`), read once at start-up
+/// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
+String? declaredAppVersion;
+
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
+/// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
+}
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
+
+/// The backend's refusals of a `machine_select` that no redial can change: the machine left the
+/// account or was never shared with it, it belongs to another environment, or its subscription stops
+/// it (`backend/src/lib/webWs.ts`). Through this computer's daemon they arrive as the relay's close,
+/// with the code for its reason (`cli/src/localWsServer.ts`). Prod, 2026-10-28: a laptop removed in
+/// September was still selected every few seconds.
+const finalSelectRefusals = {
+  'NOT_YOUR_MACHINE',
+  'MACHINE_ENV_MISMATCH',
+  'MACHINE_PAYMENT_PENDING',
+  'MACHINE_SUBSCRIPTION_REQUIRED',
+};
 
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
@@ -200,6 +237,56 @@ class WsConn {
 
   bool get isReady => _ready && _channel != null;
 
+  /// Waiting for its machine, which the daemon's relay said is off ([_park]).
+  bool get isParked => _parked;
+  bool _parked = false;
+
+  /// The rechecks dialled in a row on their own, each parked again: what doubles the next wait.
+  int _parkedRechecks = 0;
+  static const _recheck = 'recheck';
+
+  /// The wait before a parked connection dials again on its own after [rechecks] of them in a
+  /// row: 30 s, then a minute, 2, 4, 8, and 15 at most. Anything that says the machine is back
+  /// [wake]s it. The first is the relay's own retry-after for an offline machine (backend
+  /// `OFFLINE_RETRY_AFTER_MS`): a wake that reaches the daemon while it still answers from that
+  /// refusal parks again, and a machine back online must not then wait a minute more.
+  static Duration parkedRecheckAfter(int rechecks) {
+    final wait = const Duration(seconds: 30) * (1 << min(max(rechecks, 0), 5));
+    return wait > const Duration(minutes: 15)
+        ? const Duration(minutes: 15)
+        : wait;
+  }
+
+  /// The daemon's relay refused this machine as off (`MACHINE_OFFLINE`): wait for it.
+  ///
+  /// ⚠️ **Why (prod, 2026-10-28).** Daemon relays made 2,304 of 2,308 backend socket opens in 15
+  /// minutes, living a median 0.4 s. A relayed machine that was off was redialled on the 15–30 s
+  /// backoff for as long as the app ran, and each dial cost the daemon a backend socket refused at
+  /// once: about 2.7 a minute for every machine that was off, in every window.
+  void _park() {
+    _parked = true;
+    _reconnectTimer?.cancel();
+    final wait = parkedRecheckAfter(_parkedRechecks);
+    _reconnectTimer = Timer(wait, () => wake(_recheck));
+    onStatus(ConnectionStatus.reconnecting);
+    appLog.info(
+      'ws',
+      'parked $machineId · the relay says it is off; recheck in ${wait.inSeconds}s',
+    );
+  }
+
+  /// Dial a parked connection now: the machine is reported back, or somebody asks for it. Its own
+  /// recheck makes the next wait longer; anything else starts the waits over.
+  void wake(String reason) {
+    if (!_parked || _closing) return;
+    _parked = false;
+    _parkedRechecks = reason == _recheck ? _parkedRechecks + 1 : 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _attempt = 0;
+    unawaited(connect());
+  }
+
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
   Future<void> waitUntilReady({required Duration timeout}) {
@@ -338,6 +425,12 @@ class WsConn {
 
   Future<void> connect() async {
     if (_closing || _connecting) return;
+    // A dial asked for while parked (a forced redial) is the recheck's too.
+    if (_parked) {
+      _parked = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    }
     _connecting = true;
     _ready = false;
     onStatus(
@@ -385,6 +478,17 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );
@@ -395,8 +499,10 @@ class WsConn {
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
             // The browser counts its person as on the web today (backend
-            // user_daily_client_presence). Not other viewer builds: they are not the web.
-            if (!_directObserver && kIsWeb) 'client': 'web',
+            // user_daily_client_presence). Other viewer builds say they are the desktop app,
+            // which counts no presence. Both say which build (WebSocket roadmap Phase 0).
+            'client': kIsWeb ? 'web' : 'desktop',
+            'v': ?declaredAppVersion,
           },
         );
       }
@@ -491,6 +597,7 @@ class WsConn {
     } catch (_) {
       return;
     }
+    if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
           .then((_) => _onRelayFrame(codec, message))
@@ -525,6 +632,7 @@ class WsConn {
 
   void _markReady() {
     _observerHandshakeTimer?.cancel();
+    _parkedRechecks = 0;
     _ready = true;
     _refreshedToken = null;
     _stableTimer?.cancel();
@@ -998,6 +1106,17 @@ class WsConn {
     }
     final code = channel.closeCode;
     if (isLocal) {
+      if (channel.closeReason == 'MACHINE_OFFLINE') {
+        _park();
+        return;
+      }
+      if (finalSelectRefusals.contains(channel.closeReason)) {
+        // The relay could not select the machine, for good: told as a 4404 is, never redialled.
+        _closing = true;
+        onLocalFailure?.call(code ?? 1011, channel.closeReason!);
+        onStatus(ConnectionStatus.disconnected);
+        return;
+      }
       if (code == 4404 || (observerShareId != null && code == 4403)) {
         _closing = true;
         // needsLink first: AppNotifier's onStatus handler reads machine.needsLink
@@ -1043,6 +1162,24 @@ class WsConn {
       return;
     }
     _scheduleReconnect();
+  }
+
+  /// The backend refused this socket's select. The app still hears it ([onEvent]); a refusal no
+  /// redial can change also ends the connection, which would otherwise sit open and unselected.
+  void _selectRefused(Map<String, dynamic> message) {
+    final payload = message['payload'];
+    if (payload is! Map || payload['machineId'] != machineId) return;
+    if (_closing || _ready || !finalSelectRefusals.contains(payload['error'])) {
+      return;
+    }
+    _closing = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disposePlugin();
+    onStatus(ConnectionStatus.disconnected);
+    final channel = _channel;
+    _channel = null;
+    unawaited(channel?.sink.close().catchError((Object _) {}));
   }
 
   Future<void> _refreshAndReconnect() async {

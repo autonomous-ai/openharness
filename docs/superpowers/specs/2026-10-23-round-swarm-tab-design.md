@@ -160,6 +160,10 @@ Hold on the face still opens TABS (`tabs_open`); the carousel opens on the curre
 
 ### 4. Inside a Swarm tab (screens 2a–2h, 3a–3c)
 
+> A dial whose hello says `swarmChat: "v1"` (round firmware after 0.0.94) follows the chat instead: each Lead's face is
+> the chat the desktop has open in its project (Lead, Chat with PM or a group, named on an inner arc under the project),
+> its recap is that chat's, and it works only for a working group. See [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2–§3.
+
 While the dial is in a Swarm tab, its panes are that Swarm's Leads in `order`, not the desk roster (`s.agents`). A
 desk roster that arrives for the linked desk tab (the Lead's terminal pane) does not replace them. Decision 6: one
 pane per project, no workers.
@@ -206,6 +210,10 @@ to TABS.
 
 ### 5. Needs you / stuck: beep and inbox (screens 4a–4f, 2e′)
 
+> With `swarmChat: "v1"` no Lead reads `ask` or `stuck`: the dial alerts only on the Lead's new messages in its Lead
+> conversation or Chat with PM (`supertab.notice`, read with `supertab.notice.read`), and a Lead's own terminal wait
+> still alerts as below. See [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2–§3.
+
 There is no toast. A Lead entering `ask` or `stuck` gets the existing alert path: a beep (`audio_notify_done`, at most
 one per 30 s), a display wake, and one inbox entry. The face changes only as it does today: the green bell pill at
 y 400 with the unread count, or the pet's bell bubble while the pet is working (4a, 4b). Pull down from the face, or tap
@@ -237,6 +245,9 @@ Swipe pages through entries as today. Tapping the entry enters that Swarm at tha
 shows 2c / 2d / 2e′ instead of the agent open path. 4f "No notification" is the existing empty inbox.
 
 ### 6. Talk (screens 5a–5e)
+
+> With `swarmChat: "v1"` the words go to the chat on the face, not always the Lead conversation. See
+> [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2.
 
 A tap on the face of a Lead with `local` talks to it exactly as to any pane: the existing listening, sending and back
 flow, with `cable_client_voice_begin(local, …)` (5a–5d). An engine without a listening scene uses the seven bars (5e).

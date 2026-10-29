@@ -2,11 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'model.dart';
+
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
 
 /// Whether teammates' agents can push and open pull requests on a Swarm project's repository: the Harness GitHub App is
 /// installed there (backend github/projectAccess.ts, docs/plans/2026-10-28-swarm-project-github-access.md). Before this,
@@ -20,17 +26,25 @@ class SuperTabProjectGitHub {
       installUrl = row['installUrl'] is String
           ? row['installUrl'] as String
           : null,
-      canApprove = row['canApprove'] == true;
+      canApprove = row['canApprove'] == true,
+      approvedFor = [
+        for (final name in row['approvedFor'] as List? ?? const [])
+          if (name is String) name,
+      ];
 
   /// `covered`, `not-installed`, `not-approved` (installed, but nobody who can push to it approved it for this project:
-  /// backend github/approvals.ts), `not-github`, `no-repository`, `unknown` (GitHub did not answer), or `unavailable`
-  /// (the server has no GitHub App: nothing is shown).
+  /// backend github/approvals.ts), `not-github`, `no-repository`, `unknown` (GitHub did not answer), `unread` (this
+  /// app could not ask the server), or `unavailable` (the server has no GitHub App: nothing is shown).
   final String state;
   final String? repository;
   final String? installUrl;
 
   /// This server has the app's GitHub sign-in to approve a repository with.
   final bool canApprove;
+
+  /// The reader's other projects the repository is approved for, when it is not approved for this one (backend
+  /// github/projectAccess.ts): approving is per project, so a second one asks again.
+  final List<String> approvedFor;
 
   /// What stops teammates' agents here, in the sidebar's one line; null when nothing does or it cannot be said.
   String? get problem => switch (state) {
@@ -40,6 +54,11 @@ class SuperTabProjectGitHub {
   };
 }
 
+/// Names in a sentence: "Notes", "Notes and Docs", "Notes, Docs and Site".
+String _names(List<String> names) => names.length < 2
+    ? names.join()
+    : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+
 /// The project's GitHub access in full, with what to do about it: Project details, and the dialog the sidebar line
 /// opens. Read when shown; [SuperTabController.readGitHubAccess] keeps it at most 5 minutes.
 class ProjectGitHubAccess extends StatefulWidget {
@@ -47,10 +66,14 @@ class ProjectGitHubAccess extends StatefulWidget {
     super.key,
     required this.controller,
     required this.projectId,
+    this.detailRow = false,
   });
 
   final SuperTabController controller;
   final String projectId;
+
+  /// As a row of Project details: its label in the dialog's label column, rather than a heading above it.
+  final bool detailRow;
 
   @override
   State<ProjectGitHubAccess> createState() => _ProjectGitHubAccessState();
@@ -62,6 +85,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   bool _copied = false;
   bool _busy = false;
   String? _error;
+
+  /// GitHub's page is open in the browser: said here until the person is back and it is read again.
+  bool _inBrowser = false;
 
   @override
   void initState() {
@@ -99,7 +125,12 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   Future<void> _check() async {
     setState(() => _checking = true);
     await widget.controller.readGitHubAccess(widget.projectId, refresh: true);
-    if (mounted) setState(() => _checking = false);
+    if (mounted) {
+      setState(() {
+        _checking = false;
+        _inBrowser = false;
+      });
+    }
   }
 
   @override
@@ -108,100 +139,159 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
       listenable: widget.controller,
       builder: (context, _) {
         final access = widget.controller.githubAccessOf(widget.projectId);
-        if (access == null || access.state == 'unavailable') {
-          return const SizedBox.shrink();
+        if (access?.state == 'unavailable') return const SizedBox.shrink();
+        // Read as the dialog opens: said, so the section does not appear from nothing a moment later.
+        if (access == null) {
+          return _framed(
+            Text(
+              'Checking…',
+              key: ValueKey('super-project-github-text-${widget.projectId}'),
+              style: DesktopChrome.text().copyWith(color: DesktopChrome.muted),
+            ),
+          );
         }
         final repository = access.repository ?? 'its repository';
         final text = switch (access.state) {
           'covered' =>
-            "GitHub ✓ Teammates' agents can push and open pull requests on $repository.",
+            "Teammates' agents can push and open pull requests on $repository.",
           'not-installed' =>
             "Teammates' agents can't push to $repository yet. Install Harness on GitHub there: "
                 "an owner of ${repository.split('/').first}, or the repository's owner, can.",
           'not-approved' =>
-            access.canApprove
+            access.canApprove && access.approvedFor.isNotEmpty
+                // Approving is per project: one approved for the reader's other projects says so (group #646, item 8).
+                ? "Teammates' agents can't use $repository in this project yet. It's approved for "
+                      '${_names(access.approvedFor)}. Approve it here too?'
+                : access.canApprove
                 ? "Teammates' agents can't use $repository in this project yet. Someone who can push to it "
                       'approves it, signing in to GitHub.'
                 : "Teammates' agents can't use $repository in this project yet. This Harness server can't approve "
                       'repositories yet.',
           'not-github' => "Teammates' agents can't work on this project: its repository isn't on GitHub.",
           'no-repository' => 'This project has no repository address yet. Its owner or Lead sets it.',
+          'unread' => "Couldn't check GitHub access just now.",
           _ => "Couldn't reach GitHub to check $repository.",
         };
+        final waiting =
+            _inBrowser &&
+            (access.state == 'not-installed' || access.state == 'not-approved');
         final install = access.installUrl;
         final approve = access.state == 'not-approved' && access.canApprove;
-        return Column(
-          key: ValueKey('super-project-github-${widget.projectId}'),
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('GitHub access', style: DesktopChrome.control(medium: true)),
-            const SizedBox(height: 4),
-            Text(
-              text,
-              key: ValueKey('super-project-github-text-${widget.projectId}'),
-              style: DesktopChrome.text(),
-            ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  _error!,
-                  key: const Key('super-project-github-error'),
-                  style: DesktopChrome.text().copyWith(
-                    color: grid.AppPalette.warn,
+        final sentence = Text(
+          text,
+          key: ValueKey('super-project-github-text-${widget.projectId}'),
+          style: DesktopChrome.text(),
+        );
+        return _framed(
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (access.state == 'covered')
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: _halfGap / 2),
+                      child: Icon(
+                        AppIcons.check,
+                        size: grid.AppControl.iconSize,
+                        color: grid.AppPalette.online,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(child: sentence),
+                  ],
+                )
+              else
+                sentence,
+              if (waiting)
+                Padding(
+                  padding: const EdgeInsets.only(top: _halfGap),
+                  child: Text(
+                    'Finish on GitHub in your browser. This updates when you come back.',
+                    key: const Key('super-project-github-waiting'),
+                    style: DesktopChrome.text().copyWith(
+                      color: DesktopChrome.muted,
+                    ),
                   ),
                 ),
-              ),
-            if (access.state == 'not-installed' ||
-                access.state == 'not-approved' ||
-                access.state == 'unknown')
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    if (install != null && access.state == 'not-installed') ...[
-                      FilledButton(
-                        key: const Key('super-project-github-install'),
-                        onPressed: _busy ? null : () => _install(install),
-                        child: const Text('Install on GitHub'),
-                      ),
-                      TextButton(
-                        key: const Key('super-project-github-copy'),
-                        onPressed: () async {
-                          await Clipboard.setData(ClipboardData(text: install));
-                          if (mounted) setState(() => _copied = true);
-                        },
-                        child: Text(_copied ? 'Link copied' : 'Copy link'),
-                      ),
-                    ],
-                    if (approve) ...[
-                      FilledButton(
-                        key: const Key('super-project-github-approve'),
-                        onPressed: _busy ? null : () => _approve('project'),
-                        child: const Text('Approve for this project'),
-                      ),
-                      TextButton(
-                        key: const Key('super-project-github-approve-swarm'),
-                        onPressed: _busy ? null : () => _approve('swarm'),
-                        child: const Text('Approve for every project here'),
-                      ),
-                    ],
-                    TextButton(
-                      key: const Key('super-project-github-check'),
-                      onPressed: _checking ? null : _check,
-                      child: Text(_checking ? 'Checking…' : 'Check again'),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: _halfGap),
+                  child: Text(
+                    _error!,
+                    key: const Key('super-project-github-error'),
+                    style: DesktopChrome.text().copyWith(
+                      color: grid.AppPalette.warn,
                     ),
-                  ],
+                  ),
                 ),
-              ),
-          ],
+              if (access.state == 'not-installed' ||
+                  access.state == 'not-approved' ||
+                  access.state == 'unknown' ||
+                  access.state == 'unread')
+                Padding(
+                  padding: const EdgeInsets.only(top: _gap),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if (install != null &&
+                          access.state == 'not-installed') ...[
+                        FilledButton(
+                          key: const Key('super-project-github-install'),
+                          onPressed: _busy ? null : () => _install(install),
+                          child: const Text('Install on GitHub'),
+                        ),
+                        TextButton(
+                          key: const Key('super-project-github-copy'),
+                          onPressed: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: install),
+                            );
+                            if (mounted) setState(() => _copied = true);
+                          },
+                          child: Text(_copied ? 'Link copied' : 'Copy link'),
+                        ),
+                      ],
+                      if (approve) ...[
+                        FilledButton(
+                          key: const Key('super-project-github-approve'),
+                          onPressed: _busy ? null : () => _approve('project'),
+                          child: const Text('Approve for this project'),
+                        ),
+                      ],
+                      TextButton(
+                        key: const Key('super-project-github-check'),
+                        onPressed: _checking ? null : _check,
+                        child: Text(_checking ? 'Checking…' : 'Check again'),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
   }
+
+  /// Under its heading, or as Project details' row.
+  Widget _framed(Widget content) => KeyedSubtree(
+    key: ValueKey('super-project-github-${widget.projectId}'),
+    child: widget.detailRow
+        ? SuperTabDetailRow(label: 'GitHub access', child: content)
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('GitHub access', style: DesktopChrome.control(medium: true)),
+              const SizedBox(height: 4),
+              content,
+            ],
+          ),
+  );
 
   /// Installs Harness on GitHub with a link that also approves the repository for this project once installed (GitHub
   /// signs the installer in and sends them back); an older server's plain link otherwise.
@@ -219,7 +309,12 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
       // The plain link still installs; approving is then a step of its own.
     }
     await launchUrl(Uri.parse(link), mode: LaunchMode.externalApplication);
-    if (mounted) setState(() => _busy = false);
+    if (mounted) {
+      setState(() {
+        _busy = false;
+        _inBrowser = true;
+      });
+    }
   }
 
   /// Signs the person in to GitHub through the app, which approves the repository if they can push to it.
@@ -237,6 +332,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         Uri.parse(links.authorizeUrl),
         mode: LaunchMode.externalApplication,
       );
+      if (mounted) setState(() => _inBrowser = true);
     } on SuperTabFailure catch (failure) {
       if (mounted) setState(() => _error = failure.message);
     } catch (_) {
@@ -264,12 +360,32 @@ class ProjectGitHubLine extends StatefulWidget {
   State<ProjectGitHubLine> createState() => _ProjectGitHubLineState();
 }
 
-class _ProjectGitHubLineState extends State<ProjectGitHubLine> {
+class _ProjectGitHubLineState extends State<ProjectGitHubLine>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.controller.snapshot?.hasTeammates == true) {
       widget.controller.readGitHubAccess(widget.project.id);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Back from GitHub, where the person installed or approved: the line asks again at once. It kept saying
+  // "Teammates can't push here yet" for up to 5 minutes after an approval (2026-10-28).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final c = widget.controller;
+    if (state == AppLifecycleState.resumed &&
+        c.snapshot?.hasTeammates == true &&
+        c.githubAccessOf(widget.project.id)?.problem != null) {
+      c.readGitHubAccess(widget.project.id, refresh: true);
     }
   }
 
@@ -288,7 +404,7 @@ class _ProjectGitHubLineState extends State<ProjectGitHubLine> {
           key: ValueKey('super-project-github-line-${widget.project.id}'),
           onTap: () => showProjectGitHubAccess(context, c, widget.project),
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.only(bottom: _halfGap),
             child: Text(
               problem,
               maxLines: 1,

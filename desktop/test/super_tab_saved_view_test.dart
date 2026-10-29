@@ -39,7 +39,8 @@ Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
 }
 
 /// A view as a controller hands it over, for other tests.
-Map<String, dynamic> savedViewForTest() => _view();
+Map<String, dynamic> savedViewForTest({String tab = 'tab', int pad = 0}) =>
+    _view(tab: tab, pad: pad);
 
 void main() {
   group('a controller', _controllerTests);

@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
+import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -165,6 +166,70 @@ describe('a worker left idle', () => {
     expect((await reviewerOf()).workDecision).toBe('stop')
   })
 
+  it('is kept, as a Reviewer, while it was active in the last 15 minutes in a review group now asleep: a message, its progress or its loss', async () => {
+    // The Lead's poll reads asleep review groups only when they can still keep a Reviewer (store.ts fullDeliveries): each
+    // way of being active there must still count, and stop counting 15 minutes later.
+    const cases: Array<[string, (data: Record<string, unknown>, at: number) => Record<string, unknown>]> = [
+      ['a message', (data, at) => ({ ...data, lastActivityAt: new Date(at).toISOString() })],
+      ['its progress', (data, at) => ({ ...data, assignment: { ...data.assignment as object, progressAt: at } })],
+      ['its loss', (data, at) => ({ ...data, assignment: { ...data.assignment as object, lost: { reason: 'no progress', at } } })],
+    ]
+    for (const [name, active] of cases) {
+      const f = await swarm()
+      // It reviews the parser, whose work is already cancelled: no re-check can come.
+      const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
+        checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+      const reviewerHarness = randomUUID()
+      const reviewer = await f.add(review, 'test-host', reviewerHarness, 'Reviewer')
+      await f.started(reviewer, { role: 'reviewer' })
+      const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+      await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
+      await f.execute({ type: 'conversation.archive', conversationId: review, archived: true })
+      await f.delivered()
+      // Quiet for an hour by its messages, then active 10 minutes ago the way this case says, and asleep.
+      const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
+      const quiet = { ...part.data as Record<string, unknown>, dormant: true, lastActivityAt: new Date(f.clock.now - 60 * MINUTE).toISOString() }
+      f.clock.now += 20 * MINUTE
+      const data = active(quiet, f.clock.now - 10 * MINUTE)
+      await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: new Date(String(data.lastActivityAt)), data: data as object } })
+      const reviewerOf = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
+      const poll = async () => {
+        await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
+        await f.timed.deliveries(host, f.tab, f.lead)
+      }
+      await poll()
+      expect((await reviewerOf()).workDecision, name).not.toBe('stop')
+      f.clock.now += 5 * MINUTE
+      await poll()
+      expect((await reviewerOf()).workDecision, name).toBe('stop')
+    }
+  })
+
+  it('is stopped, as a Reviewer whose newest group is asleep, with its line in the Lead conversation and the poll intact (review of #2073)', async () => {
+    const f = await swarm()
+    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
+      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+    const reviewerHarness = randomUUID()
+    const reviewer = await f.add(review, 'test-host', reviewerHarness, 'Reviewer')
+    await f.started(reviewer, { role: 'reviewer' })
+    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
+    await f.delivered()
+    // Asleep but not archived, quiet for an hour, and read by the Lead's poll all the same: the review went on to another
+    // Reviewer whose attempt made progress 10 minutes ago. A post into it finds nothing.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
+    const quiet = new Date(f.clock.now - 60 * MINUTE)
+    f.clock.now += 20 * MINUTE
+    const data = part.data as Record<string, unknown>
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: quiet, data: { ...data, dormant: true,
+      lastActivityAt: quiet.toISOString(), assignment: { ...data.assignment as object, agentId: 'another-reviewer', progressAt: f.clock.now - 10 * MINUTE } } } })
+    await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!.workDecision).toBe('stop')
+    expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer))
+      .toEqual([expect.objectContaining({ conversationId: 'lead', text: 'Reviewer stopped: no work for 15 minutes.' })])
+  })
+
   it('is kept once the owner turned tidying off', async () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })
@@ -172,6 +237,37 @@ describe('a worker left idle', () => {
     await f.observe('test-host', [f.harness.worker], { harnessUncommitted: { [f.harness.worker]: false } })
     await f.timed.deliveries(host, f.tab, f.lead)
     expect((await f.member()).workDecision).toBe('awaiting')
+  })
+})
+
+describe('a review the Swarm opens by itself', () => {
+  it('opens on a Ready for review with a project pull request, reaches its free Reviewer, and the Lead can cancel and archive it', async () => {
+    const f = await swarm()
+    // The project's repository, as its Lead's start in the repository records it (agent.add with a project).
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
+    const data = head.data as { projects: Array<Record<string, unknown>> }
+    data.projects[0]!.repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/example/parser' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as object } })
+    const reviewed = String((await f.execute({ type: 'conversation.create', title: 'Parser v2', brief: 'More parsing',
+      checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
+    const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
+    const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
+    await f.started(reviewer, { role: 'reviewer' })
+    await f.delivered()
+    await f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review',
+      result: 'Ready: yes, revision abc..def. https://github.com/example/parser/pull/9' }, host, builder)
+    const state = (await f.timed.read(owner, f.tab)).state
+    const review = state.conversations.find(c => c.reviewOf === reviewed)!
+    expect(review).toMatchObject({ title: 'Review: Parser v2', assignment: { agentId: reviewer, status: 'working' } })
+    expect(state.conversations.find(c => c.id === reviewed)!.agentIds).toContain(reviewer)
+    const queued = await db.superTabDelivery.findMany({ where: { tabId: f.tab, agentId: reviewer, status: 'queued' } })
+    expect(queued.map(d => d.conversationId)).toContain(review.id)
+    const leadLine = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: review.id, text: { startsWith: 'Review opened by itself' } } })
+    expect(leadLine.text).toBe('Review opened by itself for #2: Reviewer reviews it. Cancel it here if it is not needed.')
+    await f.execute({ type: 'work.cancel', conversationId: review.id, assignmentId: review.assignment!.id, reason: 'Not needed' })
+    await f.execute({ type: 'conversation.archive', conversationId: review.id, archived: true })
+    expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review.id)?.archived ?? true).toBe(true)
   })
 })
 
@@ -262,5 +358,147 @@ describe('the archive pass', () => {
     expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
     await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
     expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(true)
+  })
+})
+
+// Prod watch, 2026-10-28: 9 deliveries had waited for days (uncertain since Oct 20, claimed for 71 hours, queued in archived
+// groups). None belonged to a task, so nothing ended them. Each now ends as cancelled, which its sender sees as Not sent.
+describe('a delivery that cannot move', () => {
+  const HOUR = 60 * MINUTE
+  type Fixture = Awaited<ReturnType<typeof swarm>>
+  const status = async (id: string) => (await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).status
+  /** A person's message to the Lead in the project chat, waiting for the Lead's host. */
+  const toLead = async (f: Fixture, text: string) => {
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+    return (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: sent.result.messageId as string, agentId: f.lead } })).id
+  }
+  /** The Lead's message to its worker in the worker's group. */
+  const toWorker = async (f: Fixture, text: string) => {
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: null, recipientIds: [f.worker] }, host, f.lead)
+    return (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: sent.result.messageId as string, agentId: f.worker } })).id
+  }
+  /** The pass at [after] past the row's last write: a host's own writes are stamped by the database clock, not the store's. */
+  const settleAfter = async (f: Fixture, id: string, after: number) =>
+    settleStuckDeliveries(db, f.timed, (await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).updatedAt.getTime() + after)
+
+  it('ends as Not sent when the tidy pass archives its group', async () => {
+    const f = await swarm()
+    const waiting = await toWorker(f, 'One more thing.')
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, { state: async () => null, done: async () => {} }, f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })).archived).toBe(true)
+    expect(await status(waiting)).toBe('cancelled')
+  })
+
+  it('is ended by the delivery pass once its group is archived, even asleep, while one its recipient can read waits', async () => {
+    const f = await swarm()
+    const old = await toWorker(f, 'Left over.')
+    const readable = await toLead(f, 'Still for you.')
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    // As a backend from before this pass left it: archived and asleep with its delivery still queued.
+    await db.superTabDelivery.update({ where: { id: old }, data: { status: 'queued' } })
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, data: { ...part.data as object, dormant: true } } })
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect(await status(old)).toBe('cancelled')
+    expect(await status(readable)).toBe('queued')
+  })
+
+  it('ends a claim its host has not touched for 10 minutes, and keeps one its host touched since', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Claimed, then the host went away.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await settleAfter(f, id, 9 * MINUTE)
+    expect(await status(id)).toBe('claimed')
+    await settleAfter(f, id, 10 * MINUTE + 1_000)
+    expect(await status(id)).toBe('cancelled')
+  })
+
+  it('ends a hold after an hour, or after a day while a person owes the agent an answer, and keeps why', async () => {
+    const f = await swarm()
+    const busy = await toLead(f, 'Held while the Lead works.')
+    const asking = await toLead(f, 'Held while the Lead waits on a person.')
+    for (const id of [busy, asking]) await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: `claim-${id}` })
+    await f.timed.delivery(host, f.tab, f.lead, busy, { type: 'hold', claimId: `claim-${busy}`, reason: 'team_waiting_idle' })
+    await f.timed.delivery(host, f.tab, f.lead, asking, { type: 'hold', claimId: `claim-${asking}`, reason: 'team_waiting_user' })
+    const heldAt = f.clock.now
+    await settleStuckDeliveries(db, f.timed, heldAt + 59 * MINUTE)
+    expect([await status(busy), await status(asking)]).toEqual(['claimed', 'claimed'])
+    await settleStuckDeliveries(db, f.timed, heldAt + HOUR + MINUTE)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: busy } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
+    expect(await status(asking)).toBe('claimed')
+    await settleStuckDeliveries(db, f.timed, heldAt + 23 * HOUR)
+    expect(await status(asking)).toBe('claimed')
+    await settleStuckDeliveries(db, f.timed, heldAt + 24 * HOUR + MINUTE)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: asking } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_user' })
+  })
+
+  it('counts a hold the pass ended as delivered once its host confirms it typed it', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held, then typed as the pass ends it.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    // An hour on, the terminal frees: the host claims it again and types it, and the pass ends it before the host confirms.
+    f.clock.now += HOUR + MINUTE
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect(await status(id)).toBe('cancelled')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'delivered', receipt: 'Typed.',
+      deliveredAt: new Date(f.clock.now), holdReason: null })
+  })
+
+  it('never types a hold the pass ended: claiming it again is refused', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held and ended, never typed.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    await settleStuckDeliveries(db, f.timed, f.clock.now + HOUR + MINUTE)
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'another', receipt: 'Typed.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(await status(id)).toBe('cancelled')
+  })
+
+  it('ends an uncertain delivery nobody resolved within an hour', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Maybe typed.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Native paste was ambiguous.', uncertain: true })
+    await settleAfter(f, id, 59 * MINUTE)
+    expect(await status(id)).toBe('uncertain')
+    await settleAfter(f, id, HOUR + MINUTE)
+    expect(await status(id)).toBe('cancelled')
+    // Ended for good: only a hold the pass ended comes back on its host's confirmation.
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed after all.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(await status(id)).toBe('cancelled')
+  })
+
+  it('leaves a delivery its host typed or claimed again after the pass read it', async () => {
+    const f = await swarm()
+    const typed = await toLead(f, 'Typed as the pass reads it.')
+    const reclaimed = await toLead(f, 'Claimed again as the pass reads it.')
+    for (const id of [typed, reclaimed]) await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    const read = await db.superTabDelivery.findMany({ where: { id: { in: [typed, reclaimed] } }, orderBy: { id: 'asc' } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await f.timed.delivery(host, f.tab, f.lead, typed, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    // A live host claims a claim it still holds again: that is what tells it from a claim nobody will type.
+    await f.timed.delivery(host, f.tab, f.lead, reclaimed, { type: 'claim', claimId: 'claim' })
+    expect(await f.timed.settleDeliveries(f.tab, read, Math.max(...read.map(r => r.updatedAt.getTime())) + HOUR)).toBe(0)
+    expect([await status(typed), await status(reclaimed)]).toEqual(['delivered', 'claimed'])
+  })
+
+  it('ends a hold that is over even though its live host claimed it again after the pass read it', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held while the Lead works.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    const read = await db.superTabDelivery.findUniqueOrThrow({ where: { id } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    // Its core refused the write while the terminal was busy, so the host claims it again on each poll (cli superTabs/host.ts).
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    expect(await f.timed.settleDeliveries(f.tab, [read], f.clock.now + HOUR + MINUTE)).toBe(1)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
   })
 })

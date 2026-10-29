@@ -13,23 +13,25 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
-import 'leaderboard/goal_line.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
+import 'leaderboard/tabs.dart';
 import 'leaderboard/waiting_line.dart';
+import 'leaderboard/worker_rows.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
-import 'team_glance.dart';
-import 'team_glance_panel.dart';
+import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
 /// leaderboard of the open conversation's project, and agents from the
@@ -69,6 +71,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     every: const Duration(minutes: 5),
   );
   String? _boardProject;
+
+  /// Which of the board's lists shows: people, agents or models.
+  var _tab = LeaderboardTab.humans;
 
   /// The project of the open conversation, whose board Humans show.
   String get _projectId => c.snapshot?.projectFor(c.selectedId)?.id ?? 'lead';
@@ -246,20 +251,27 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
       showAppDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(leaderboardName(person, score)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${person.email}\n${person.role}'),
-              if (score != null) ...[
-                const SizedBox(height: 12),
-                LeaderboardPersonWeek(score: score),
-              ],
-            ],
-          ),
+        builder: (context) => SuperTabDetailDialog(
+          title: leaderboardName(person, score),
+          // Who they are on one line under the name (Ken, 2026-10-28).
+          detail:
+              '${person.email} · ${switch (person.role) {
+                'owner' => 'Owner',
+                'viewer' => 'Can view',
+                _ => 'Can collaborate',
+              }}',
+          leading: SuperTabAvatar.person(person, size: 40),
+          body: score == null
+              ? const SizedBox.shrink()
+              : LeaderboardPersonWeek(score: score),
           actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                widget.onInvite();
+              },
+              child: const Text('Manage people'),
+            ),
             if (person.id == c.accountId && c.canWrite)
               TextButton(
                 key: const ValueKey('super-profile-edit'),
@@ -269,17 +281,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 },
                 child: const Text('Edit profile'),
               ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                widget.onInvite();
-              },
-              child: const Text('Manage people'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
           ],
         ),
       );
@@ -438,7 +439,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               SuperTabAvatar.agent(
                 agent,
                 name: name,
-                size: 24,
+                size: SuperTabAvatar.rowSize,
                 engineBadge: false,
               ),
               const SizedBox(width: 8),
@@ -494,7 +495,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     // agents in it, the project's Lead.
     final audience = c.selected?.audience;
     final members =
-        state?.agents
+        state?.teamAgents
             .where(
               (agent) =>
                   (projectId == null || _agentProjectId(agent) == projectId) &&
@@ -523,11 +524,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       ...people.where((p) => !scores.containsKey(p.id)),
     ];
     final current = leaderboardWeekOf(widget.now());
+    // One set of numeric columns for every row.
+    final columns = board == null || board.people.isEmpty
+        ? null
+        : LeaderboardColumns.of(context, board.people);
+    final week = weekName(_board.week, current);
     return [
-      SuperTabSectionHeading(
-        'Humans',
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
+      LeaderboardHeader(
+        selected: _tab,
+        onSelect: (tab) => setState(() => _tab = tab),
         actions: [
           if (board != null || _board.week != null)
             AppSelectField<int>(
@@ -548,37 +553,56 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               onChanged: (week) =>
                   unawaited(_board.showWeek(week == current ? null : week)),
             ),
+          if (c.isOwner && _tab == LeaderboardTab.humans)
+            // A phone's add action is a finger's size, as the headings' is.
+            fingerTarget(
+              enabled: workspaceIsCompact(context),
+              AppIconButton(
+                icon: AppIcons.plus,
+                tooltip: 'Invite people',
+                onPressed: widget.onInvite,
+              ),
+            ),
         ],
       ),
-      if (board != null)
-        LeaderboardGoalLine(
-          goal: board.goal,
-          weekName: weekName(_board.week, current),
-        ),
       if (_board.error case final error?)
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            DesktopChrome.groupGap,
+            0,
+            DesktopChrome.groupGap,
+            DesktopChrome.controlGap / 2,
+          ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
-      for (final person in ranked)
-        LeaderboardPersonRow(
-          person: person,
-          score: scores[person.id],
-          onTap: () => _person(person, scores[person.id]),
-        ),
-      if (board != null && board.waiting.total > 0)
-        LeaderboardWaitingLine(
-          waiting: board.waiting,
-          viewerId: c.accountId,
-          nameOf: (id) {
-            final person = state?.people.where((p) => p.id == id).firstOrNull;
-            return person == null
-                ? 'Former member'
-                : leaderboardName(person, scores[id]);
-          },
-          onAnswer: widget.onAnswer,
-        ),
-      const SizedBox(height: 16),
+      if (_tab == LeaderboardTab.agents)
+        ..._agentScores(board, week)
+      else if (_tab == LeaderboardTab.models)
+        ..._modelScores(board, week)
+      else ...[
+        for (final person in ranked)
+          LeaderboardPersonRow(
+            person: person,
+            score: scores[person.id],
+            columns: columns,
+            own: person.id == c.accountId,
+            weekName: week,
+            onTap: () => _person(person, scores[person.id]),
+          ),
+        if (board != null && board.waiting.total > 0)
+          LeaderboardWaitingLine(
+            waiting: board.waiting,
+            viewerId: c.accountId,
+            nameOf: (id) {
+              final person = state?.people.where((p) => p.id == id).firstOrNull;
+              return person == null
+                  ? 'Former member'
+                  : leaderboardName(person, scores[id]);
+            },
+            onAnswer: widget.onAnswer,
+          ),
+      ],
+      const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
         // An agent joins the Product Managers' conversation by leading a project,
@@ -591,16 +615,60 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
-        actions: [
-          AppIconButton(
-            icon: AppIcons.layoutGrid,
-            tooltip: 'Team at a glance',
-            onPressed: () =>
-                unawaited(showSuperTabTeamGlance(context, c, widget.app)),
-          ),
-        ],
       ),
       for (final agent in [...leads, ...agents]) _agent(agent),
+    ];
+  }
+
+  /// The project's PM and Buddies, ranked like people (Dee, 2026-10-29).
+  List<Widget> _agentScores(SuperTabLeaderboard? board, String week) {
+    final scores = board?.agents ?? const <SuperTabAgentScore>[];
+    if (board == null) return const [];
+    if (scores.isEmpty) {
+      return const [LeaderboardEmpty('No PM or Buddy in this project yet')];
+    }
+    final snapshot = c.snapshot;
+    final columns = LeaderboardColumns.measure(
+      context,
+      ranks: scores.map((s) => s.rank),
+      points: scores.map((s) => s.points),
+    );
+    return [
+      for (final score in scores)
+        LeaderboardAgentRow(
+          score: score,
+          agent: snapshot?.agents
+              .where((a) => a.id == score.agentId)
+              .firstOrNull,
+          columns: columns,
+          weekName: week,
+          projectName: snapshot?.projects
+              .where((p) => p.id == board.projectId)
+              .firstOrNull
+              ?.name,
+          ownerName: switch (snapshot?.people
+              .where((p) => p.id == score.personId)
+              .firstOrNull) {
+            final person? => superTabPersonName(person.email),
+            null => null,
+          },
+        ),
+    ];
+  }
+
+  /// The models the Builders and Reviewers ran on, never the agents.
+  List<Widget> _modelScores(SuperTabLeaderboard? board, String week) {
+    final scores = board?.byModel ?? const <SuperTabModelScore>[];
+    if (board == null) return const [];
+    if (scores.isEmpty) return [LeaderboardEmpty('No model worked $week')];
+    final columns = LeaderboardColumns.measure(
+      context,
+      ranks: scores.map((s) => s.rank),
+      points: scores.map((s) => s.points),
+    );
+    return [
+      for (final score in scores)
+        LeaderboardModelRow(score: score, columns: columns, weekName: week),
     ];
   }
 

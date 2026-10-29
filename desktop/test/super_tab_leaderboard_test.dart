@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
+import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
 
 // Monday 2026-10-26 00:00 UTC.
@@ -117,9 +118,6 @@ void main() {
     test('parses every number the column shows', () {
       final board = SuperTabLeaderboard.fromJson(answer());
       expect(board.week, week);
-      expect(board.goal.openRequests, 7);
-      expect(board.goal.thisWeek.medianAskToShipMs, 3 * hour);
-      expect(board.goal.lastWeek.shipped, 12);
       final ken = board.people.first;
       expect(
         [ken.personId, ken.points, ken.rank, ken.medal],
@@ -232,6 +230,21 @@ void main() {
       ]);
       expect(ken.details!.unblocked, isEmpty);
       expect(ken.details!.lent, isEmpty);
+    });
+
+    test('writes the numbers in words, lent in hours, zeros left out', () {
+      final board = SuperTabLeaderboard.fromJson(answer());
+      expect(leaderboardNumbers(board.people[0]), [
+        '9 shipped',
+        '14 unblocked',
+        '31 hours lent',
+      ]);
+      expect(leaderboardNumbers(board.people[1]), ['6 shipped', '5 unblocked']);
+      expect(leaderboardNumbers(board.people[3]), isEmpty);
+      final one = SuperTabPersonScore.fromJson(
+        score('a', points: 1, rank: 1, lentMs: hour),
+      );
+      expect(leaderboardNumbers(one), ['1 hour lent']);
     });
 
     test('asks for the project and, once chosen, the week', () async {

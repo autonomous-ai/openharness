@@ -1,15 +1,18 @@
 /** A person's decisions (design: decisions in one place). The Lead, or a worker on its own task through needs_human, asks
  *  one person a batch of questions, each with options, a recommendation and what it unblocks; the person answers each
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
- *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
- *  through Chat with PM. Called inside SuperTabStore's transactions. */
+ *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
+ *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
+import { openBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
-import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { agentDisplayName } from './agentNames.js'
+import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
+import { canReadGroup, groupProject, isClosedPmChat, ledProject, projectOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
+import { groupsBy } from './parts/indexed.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
@@ -30,11 +33,14 @@ export interface DecisionDraft extends Question {
 }
 /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
 export interface DecisionTarget {
-  id: string; personId: string; conversationId: string; askerAgentId: string; question: string; options: string[]; answeredAt: number | null
+  id: string; personId: string; conversationId: string; projectId: string; askerAgentId: string; question: string; options: string[]
+  /** The option Let PM decide takes; a row whose index is not one of its options has none. */
+  recommended: number; answeredAt: number | null
   /** When it was asked, and the task whose needs_human asked it: the leaderboard credits the answer (leaderboard/record.ts). */
   createdAt: number; assignmentId: string | null
 }
-export interface DecisionAnswer { id: string; choice: number; note: string | null }
+/** `delegated`: the person asked left it to the PM, who took the recommended option. */
+export interface DecisionAnswer { id: string; choice: number; note: string | null; delegated?: true }
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
 export function askDecisions(state: SuperTabState, group: Conversation, personId: string, questions: Question[],
@@ -58,27 +64,66 @@ export function checkAsker(state: SuperTabState, actor: Actor, group: Conversati
   return (actor as Extract<Actor, { kind: 'agent' }>).agentId
 }
 
-/** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it: checked on
- *  every answer and on every retry of one (review of #1753). Anyone else is told it does not exist. */
+/** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it, or read it
+ *  before it closed as a Chat with PM: checked on every answer and on every retry of one (review of #1753). Anyone else is
+ *  told it does not exist. */
 export function answerable(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined): Conversation {
   const asked = actor.kind === 'person' && decision?.personId === actor.userId && state.people.some(p => p.id === actor.userId)
   const group = asked ? state.conversations.find(c => c.id === decision.conversationId) : undefined
-  if (!group || !canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This decision is unavailable.', 404)
+  if (!group || !readsRecordsIn(state, actor, group)) fail('NOT_FOUND', 'This decision is unavailable.', 404)
   return group
 }
 
 /** What tells the asking agent and the Lead, whichever of them is still in the conversation. A notice only they read, with
  *  none of the answer in it: the decisions read, which checks who reads it, has the answer (review of #1753). */
 export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered. Read the answer with: harness super-tab decisions --answered'
+/** The same notice for a decision the person left to the PM, with none of the answer either. */
+export const DELEGATED_NOTICE = 'A decision asked in this conversation was left to the Product Manager, who took its recommended option. '
+  + 'Read it with: harness super-tab decisions --answered'
+/** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
+export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
+export const CLOSED_CHAT_DELEGATED_NOTICE = 'A decision you asked in a closed Chat with PM was left to the Product Manager, who took its recommended option. '
+  + 'Read it with: harness super-tab decisions --answered'
 
-/** The asked person's one answer, and the notice for the asking agent and the Lead. */
-export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined, choice: number, note: string | null) {
+/** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
+const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
+
+/** The asked person's one answer, or their leaving it to the PM (`delegate`), which takes the recommended option; the notice
+ *  for the asking agent and the Lead, in the conversation it was asked in or, for a closed Chat with PM nobody reads, in
+ *  the project chat (`noticeIn`); and for a delegated one, the Lead's line in the person's Buddy chat. */
+export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
+  given: { choice?: number; note: string | null; delegate: boolean }) {
+  if ((given.choice === undefined) === !given.delegate) fail('INVALID_DECISION', 'Choose one of its options, or leave it to the PM.', 400)
   const group = answerable(state, actor, decision)
-  if (decision!.answeredAt !== null) fail('DECISION_ANSWERED', 'This decision is already answered.')
-  if (choice >= decision!.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
-  const lead = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
-  const recipients = [...new Set([decision!.askerAgentId, ...lead ? [lead] : []])].filter(id => group.agentIds.includes(id))
-  return { answer: { id: decision!.id, choice, note }, recipients, source: { ...AGENT_ONLY, decisionId: decision!.id } }
+  const asked = decision!
+  if (asked.answeredAt !== null) fail('DECISION_ANSWERED', 'This decision is already answered.')
+  if (given.delegate && !(asked.recommended >= 0 && asked.recommended < asked.options.length)) {
+    fail('INVALID_DECISION', 'This decision has no recommended option to leave to the PM.', 400)
+  }
+  const choice = given.delegate ? asked.recommended : given.choice!
+  if (choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
+  const project = groupProject(state, group)
+  const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+  const closed = isClosedPmChat(group)
+  const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const notice = given.delegate ? closed ? CLOSED_CHAT_DELEGATED_NOTICE : DELEGATED_NOTICE : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
+  const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
+  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
+  const line = given.delegate && lead ? delegatedLine(state, project.id, lead, asked, choice) : null
+  return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
+}
+
+/** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
+ *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
+ *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
+function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
+  const lead = state.agents.find(a => a.id === leadId)
+  if (!lead) return null
+  const chat = openBuddyChat(state, projectId, person(state, asked.personId))
+  const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
+  const question = asked.question.replace(/\s+/g, ' ')
+  return { conversationId: chat.id, author, text: `${answerText(asked.options[choice]!, true)} — ${question}`,
+    source: { kind: 'decision-delegated', decisionId: asked.id } }
 }
 
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
@@ -117,28 +162,33 @@ export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraf
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
 
+/** The open decision an ask exactly repeats, which writeDecisions keeps as that decision again. Read before a worker's
+ *  needs_human that asks, so its wait names the decision it is waiting on (leaderboard/record.ts recordStatus). */
+export async function repeatOf(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<string | undefined> {
+  const same = await tx.superTabDecision.findMany({ where: { tabId, personId: ask.personId, askerAgentId: ask.askerAgentId,
+    conversationId: ask.conversationId, question: ask.question, ...waiting } })
+  return same.find(o => repeatKey(o) === repeatKey(ask))?.id
+}
+
 /** How many decisions this asker has open for this person when one more question would pass MAX_OPEN_DECISIONS, or null when
- *  it fits: an exact repeat of an open one is that decision again and always fits. Read before a worker's needs_human, which
- *  at the cap still records its status and only skips the question (review of #1859). */
-export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<number | null> {
-  const { personId, askerAgentId } = ask
-  const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
-  if (asked < MAX_OPEN_DECISIONS) return null
-  const same = await tx.superTabDecision.findMany({ where: { tabId, personId, askerAgentId, conversationId: ask.conversationId, question: ask.question, ...waiting } })
-  return same.some(o => repeatKey(o) === repeatKey(ask)) ? null : asked
+ *  it fits. Read before a worker's needs_human asks something new (an exact repeat of an open one, repeatOf, always fits),
+ *  which at the cap still records its status and only skips the question (review of #1859). */
+export async function fullFor(tx: Tx, tabId: string, ask: { personId: string; askerAgentId: string }): Promise<number | null> {
+  const asked = await tx.superTabDecision.count({ where: { tabId, personId: ask.personId, askerAgentId: ask.askerAgentId, ...waiting } })
+  return asked < MAX_OPEN_DECISIONS ? null : asked
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
-    select: { id: true, personId: true, conversationId: true, askerAgentId: true, question: true, options: true, answeredAt: true, createdAt: true,
-      assignmentId: true } })
+    select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
+      answeredAt: true, createdAt: true, assignmentId: true } })
   return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null } : undefined
 }
 
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */
 export async function recordAnswer(tx: Tx, tabId: string, answer: DecisionAnswer, now: number): Promise<void> {
   const taken = await tx.superTabDecision.updateMany({ where: { id: answer.id, tabId, ...waiting },
-    data: { choice: answer.choice, note: answer.note, answeredAt: new Date(now) } })
+    data: { choice: answer.choice, note: answer.note, answeredAt: new Date(now), ...answer.delegated ? { delegated: true } : {} } })
   if (!taken.count) fail('DECISION_ANSWERED', 'This decision is already answered.')
 }
 
@@ -161,29 +211,41 @@ async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids:
   const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
   const missing = [...named].filter(id => !found.has(id))
   if (!missing.length) return found
-  const rows = only
-    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
-      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
-    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  // By id through its index (parts/indexed.ts): a person's read counts these on each poll.
+  const rows = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+    { $project: { _id: 0, key: 1, ...only ? Object.fromEntries(only.map(field => [`data.${field}`, 1])) : { data: 1 } } }]) as unknown as Array<{ key: string; data: unknown }>
   for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
 }
 
-/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions. */
+/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions.
+ *  One asked in a closed Chat with PM stays its person's and the PM's (projects.ts readsRecordsIn). */
 const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conversation>, conversationId: string) => {
   const group = groups.get(conversationId)
-  return group && canReadGroup(state, actor, group) ? group : undefined
+  return group && readsRecordsIn(state, actor, group) ? group : undefined
 }
 
-/** ponytail: capped at 200 per state, newest first; page it if a reader ever has more. */
-async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {
-  const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), open ? waiting : { answeredAt: { not: null } }] },
-    orderBy: { createdAt: 'desc' }, take: 200 })
+/** Answered by the person themself: as `waiting`, a row written before `delegated` has no such field. */
+const yours: Prisma.SuperTabDecisionWhereInput = { OR: [{ delegated: { isSet: false } }, { delegated: null }, { delegated: false }] }
+
+/** Which decisions a list holds: those still open, or those answered. `settled` is every answered one, those left to the
+ *  PM included; `answered` is what an older Desktop reads and labels each "You chose", so for a person it leaves out those
+ *  the PM decided (their Chat with PM has the PM's line). An agent's `answered` holds them all, saying who decided. */
+export type DecisionList = 'open' | 'answered' | 'settled'
+const LIST_PAGE = 200
+
+/** ponytail: the newest LIST_PAGE per list; `more` says when there are others. Page it if a reader ever has more. */
+async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, list: DecisionList) {
+  const which = list === 'open' ? [waiting] : list === 'answered' && actor.kind === 'person'
+    ? [{ answeredAt: { not: null } }, yours] : [{ answeredAt: { not: null } }]
+  const read = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), ...which] },
+    orderBy: { createdAt: 'desc' }, take: LIST_PAGE + 1 })
+  const rows = read.slice(0, LIST_PAGE)
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
-  return rows.flatMap(row => {
+  return { more: read.length > LIST_PAGE, rows: rows.flatMap(row => {
     const group = readableIn(state, actor, groups, row.conversationId)
     return group ? [{ row, group }] : []
-  })
+  }) }
 }
 
 /** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
@@ -214,14 +276,19 @@ export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabSta
   return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 
-export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {
-  return (await readable(tx, tabId, state, actor, open)).map(({ row, group }) => {
+/** One list of the reader's decisions, newest first, and whether it leaves older ones out (`more`): a client may take a
+ *  decision missing from it as answered or gone only when it does not. */
+export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, list: DecisionList) {
+  const { more, rows } = await readable(tx, tabId, state, actor, list)
+  return { more, decisions: rows.map(({ row, group }) => {
     const asker = state.agents.find(a => a.id === row.askerAgentId)
     return { id: row.id, batchId: row.batchId, projectId: row.projectId, projectName: projectOf(state, row.projectId).name,
       conversationId: row.conversationId, conversationTitle: group.title, assignmentId: row.assignmentId ?? null,
       personId: row.personId, personEmail: state.people.find(p => p.id === row.personId)?.email ?? null,
       askerAgentId: row.askerAgentId, askerName: asker?.displayName ?? asker?.name ?? 'Agent',
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
-      createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null }
-  })
+      createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
+      delegated: row.delegated === true,
+      answer: row.choice == null || row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
+  }) }
 }

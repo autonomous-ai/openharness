@@ -222,7 +222,7 @@ describe('what the devices tell the core', () => {
 })
 
 describe('the devices\' Swarm card requests to the Super Tab service', () => {
-  it('hands the core only the fields of the three card requests (the core allows those and no other action)', async () => {
+  it('hands the core only the fields of the card requests (the core allows those and no other action)', async () => {
     const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
     const core = fakeCore()
     core.superTabRequest = superTabRequest
@@ -232,8 +232,24 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect(await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })).toMatchObject({ echoed: { action: 'cardRecap', tabId: 't1', leadId: 'l1' } })
     expect(await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null })).toMatchObject({ echoed: { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null } })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', tabId: 't1' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+    expect((await devices.answer('super_tabs', { action: 'cardWorker', machineId: 'm2', harnessId: 'h1', text: 'x', tabId: 't1' })).echoed).toEqual({ action: 'cardWorker', machineId: 'm2', harnessId: 'h1' })
     // A core with no way to the service says so.
     const bare = createDevicesLink({ core: fakeCore(), notify: () => true, call: vi.fn(), state: () => STATE })
     expect(await bare.answer('super_tabs', { action: 'cardsWanted', on: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  })
+
+  it('passes the window\'s focus with the wish and a swarmChat dial\'s chat flag, and only when they are there', async () => {
+    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
+    const core = fakeCore()
+    core.superTabRequest = superTabRequest
+    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
+    const focus = { tabId: 't1', conversationId: 'g1' }
+    expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: ['t1'], focus })).echoed).toEqual({ action: 'cardsWanted', on: true, include: ['t1'], focus })
+    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })
+    expect((await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: 'l1', chat: true })).echoed).toEqual({ action: 'cardOpen', session: 'c1', tabId: 't1', leadId: 'l1', chat: true })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
+    // Anything but a literal true is no chat, and a missing focus is none: today's requests exactly.
+    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1' })
+    expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: [] })).echoed).toEqual({ action: 'cardsWanted', on: true, include: [] })
   })
 })

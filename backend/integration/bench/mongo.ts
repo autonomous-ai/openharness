@@ -5,9 +5,12 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
+import { POOL_DEFAULTS, withPoolDefaults } from '../../src/lib/databaseUrl.js'
 
 export interface LocalDatabase {
   db: PrismaClient
+  /** Its loopback address, for a backend process the bench starts itself (resilience.ts). */
+  uri: string
   /** The MongoDB server version the run measured. */
   version: string
   stop(): Promise<void>
@@ -24,6 +27,7 @@ export async function localDatabase(): Promise<LocalDatabase> {
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
-  const db = new PrismaClient({ datasources: { db: { url: uri } } })
-  return { db, version, async stop() { await db.$disconnect(); await replica.stop() } }
+  // The backend's own pool options (src/lib/prisma.ts), so the run measures the pool production has.
+  const db = new PrismaClient({ datasources: { db: { url: withPoolDefaults(uri, POOL_DEFAULTS) } } })
+  return { db, uri, version, async stop() { await db.$disconnect(); await replica.stop() } }
 }

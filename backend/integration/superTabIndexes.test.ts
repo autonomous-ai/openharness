@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { costRows } from '../src/superTabs/costs/read.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
+import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { outsider, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -128,6 +130,67 @@ describe('message page reads', () => {
   })
 })
 
+describe('the delivery poll order', () => {
+  const at = new Date(T0), later = new Date(T0 + 1000)
+  const row = (messageId: string, conversationId: string, createdAt = at) => ({ messageId, conversationId, createdAt })
+  beforeAll(async () => {
+    await db.superTabMessage.createMany({ data: [['O-c1-1', 'c1', 1], ['O-c1-2', 'c1', 2], ['O-c1-3', 'c1', 3], ['O-c1-4', 'c1', 4],
+      ['O-c2-7', 'c2', 7], ['O-c2-8', 'c2', 8]].map(([id, conversationId, sequence]) => ({ id: id as string, tabId: 'O',
+      conversationId: conversationId as string, sequence: sequence as number, author: { kind: 'person', id: 'owner' }, text: 'm', recipientIds: ['agent-0'] })) })
+  })
+
+  it('puts each conversation\'s tied rows in sequence order in that conversation\'s places, reading only the tied messages by id', async () => {
+    const read = [row('O-c1-3', 'c1'), row('O-c2-8', 'c2'), row('O-c1-1', 'c1'), row('O-c1-4', 'c1', later), row('O-c2-7', 'c2'), row('O-c1-2', 'c1')]
+    const [rows, profile] = await profiled('SuperTabMessage', () => inConversationOrder(db, 'O', read))
+    expect(rows.map(r => r.messageId)).toEqual(['O-c1-1', 'O-c2-7', 'O-c1-2', 'O-c1-4', 'O-c2-8', 'O-c1-3'])
+    expect(profile).toEqual({ plans: ['IXSCAN { _id: 1 }'], docsExamined: 5, returned: 5 })
+  })
+
+  it('reads nothing when no conversation has two rows at one time', async () => {
+    const read = [row('O-c1-2', 'c1'), row('O-c2-7', 'c2'), row('O-c1-1', 'c1', later)]
+    const [rows, profile] = await profiled('SuperTabMessage', () => inConversationOrder(db, 'O', read))
+    expect(rows).toEqual(read)
+    expect(profile).toEqual({ plans: [], docsExamined: 0, returned: 0 })
+  })
+
+  it('never orders by another Swarm\'s messages: rows whose messages it does not find keep their places', async () => {
+    const read = [row('O-c1-2', 'c1'), row('O-c1-1', 'c1')]
+    expect((await inConversationOrder(db, 'B', read)).map(r => r.messageId)).toEqual(['O-c1-2', 'O-c1-1'])
+  })
+})
+
+describe('the delivery pass', () => {
+  it('reads the open deliveries through the status index, examining only those it judges, with their dates as Dates', async () => {
+    const open = ['queued', 'claimed', 'uncertain'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
+      agentId: `agent-${i}`, machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen', status,
+      ...status === 'claimed' ? { claimId: 'claim', holdReason: 'team_waiting_user', holdSince: { $date: new Date(T0 + 1000).toISOString() } } : {},
+      createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 2000).toISOString() } }))
+    await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
+    const judged: Array<{ tabId: string; rows: unknown[] }> = []
+    const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
+    const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
+    await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
+    // One scan of the index per open status, merged in id order.
+    expect(profile).toEqual({ plans: [Array(3).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 3, returned: 3 })
+    expect(judged).toEqual([{ tabId: 'A', rows: [
+      expect.objectContaining({ id: 'A-open-0', status: 'queued', holdSince: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 2000) }),
+      expect.objectContaining({ id: 'A-open-1', status: 'claimed', holdReason: 'team_waiting_user', holdSince: new Date(T0 + 1000) }),
+      expect.objectContaining({ id: 'A-open-2', status: 'uncertain', conversationId: 'g1', agentId: 'agent-2' }),
+    ] }])
+  })
+})
+
+describe('cost summary', () => {
+  // The Swarm's cost read (superTabs/costs/read.ts) takes the decisions routed in a period. Never a collection scan, and never
+  // more documents than the period holds, however many the Swarm keeps.
+  it('reads the decisions of a period with one index scan, examining only those', async () => {
+    const [found, profile] = await profiled('SuperTabRouteDecision', () => costRows(db, 'A', T0 + 1500 * 1000))
+    // The fixture's decisions carry no runs, so none is an attempt to summarize; what matters is what Mongo read.
+    expect(found).toEqual({ rows: [], truncated: false })
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 500, returned: 500 })
+  })
+})
+
 describe('route decision list', () => {
   const prismaRead = (tabId: string, conversationIds: string[]) => db.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: conversationIds } },
     orderBy: { createdAt: 'desc' }, take: 100 })
@@ -152,11 +215,11 @@ describe('route decision list', () => {
     expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
       final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
-      outcomeAt: new Date(T0 + 1_800_500), createdAt: new Date(T0 + 1_800_000) })
+      outcomeAt: new Date(T0 + 1_800_500), run: null, createdAt: new Date(T0 + 1_800_000) })
     // Written as an older record: none of the optional fields exist.
     expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
-      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, createdAt: new Date(T0 + 721_000) })
+      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, createdAt: new Date(T0 + 721_000) })
     expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
     expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
     expect(await recentDecisions(db, 'B', [])).toEqual([])
@@ -208,6 +271,27 @@ describe('terminal context revoke', () => {
     await revokeNativeContexts(db, before, s.state)
     expect(await revoked()).toEqual(['outsider-open', 'owner-done', 'peer-open'])
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: 'turn' } })).status).toBe('cancelled')
+  })
+
+  // A session in a private conversation reads it (projects.ts confidentialSession): only its machine's owner may watch or drive it
+  // from then on. A command can no longer put a Builder there; a session marked before that rule, or made so by the shared
+  // rule's next change, is revoked through the same watchersLost comparison.
+  it('revokes at once everyone\'s terminals on an agent that joins a private conversation, but its machine\'s owner\'s', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    const { s, open } = scene()
+    const worker = s.add('builder-harness', open, false, peer, 'host', peer.userId)
+    await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
+      { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
+    const before = structuredClone(s.state) as SuperTabState
+    // A private conversation now is a Buddy chat (buddies.ts), which only its owner's Buddy joins: written here as that join leaves it.
+    s.edit(state => {
+      const generation = state.people.find(p => p.id === peer.userId)!.generation
+      state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: state.conversations.find(c => c.id === open)!.projectId, title: 'Peer\'s Buddy',
+        leadId: null, agentIds: [worker], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+        audience: { people: [{ id: peer.userId, generation }] } })
+    })
+    await revokeNativeContexts(db, before, s.state)
+    expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
   })
 
   it('revokes the contexts of a person made a viewer', async () => {

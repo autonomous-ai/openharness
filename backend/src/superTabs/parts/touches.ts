@@ -60,6 +60,12 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'project.report': case 'project.repository': case 'project.skills':
       leadCheck(command.projectId)
       break
+    case 'person.tell':
+      // The line reads that its person still reads the Lead's project: their own part guards it, as a revoke touches the
+      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
+      member(command.personId)
+      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
+      break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
       for (const person of before.people) {
@@ -146,6 +152,17 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       // Finished work puts its worker's decision before the Lead (finishWorker): the Lead's next start, assignment or
       // route touches the same part, so it cannot pass over that decision on a stale read (design ruling R5).
       if (command.status === 'done' || command.status === 'stopped') progress(projectOfGroup(command.conversationId)?.id)
+      if (command.status === 'review') {
+        // A review the Swarm opened by itself (autoReview.ts) reads whether its Reviewer is free and numbers the new group,
+        // as conversation.create and work.assign do: two opened at once meet on that Reviewer and on the head.
+        const opened = effects.state.conversations.find(c => c.reviewOf === command.conversationId && !before.conversations.some(b => b.id === c.id))
+        if (opened) {
+          head()
+          group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
+          agent(opened.assignment?.agentId)
+          progress(projectOfGroup(command.conversationId)?.id)
+        }
+      }
       break
     case 'work.define':
       if (before.conversations.find(c => c.id === command.conversationId)?.assignment) progress(projectOfGroup(command.conversationId)?.id)
@@ -166,13 +183,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'route.modelResult':
       group(context.routeDecision?.conversationId)
       break
-    case 'conversation.audience': {
-      // Rule (b): everyone the change removes sees it through their own part (design section 1.2).
-      const kept = new Set(effects.state.conversations.find(c => c.id === command.conversationId)?.audience?.people.map(p => p.id))
-      for (const person of before.conversations.find(c => c.id === command.conversationId)?.audience?.people ?? []) if (!kept.has(person.id)) member(person.id)
-      group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
-      break
-    }
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))
       break

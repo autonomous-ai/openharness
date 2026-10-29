@@ -67,12 +67,14 @@ SuperTabClient _client(
   _Backend backend, {
   SuperTabReading? reading,
   void Function(SuperTabMention)? onMention,
+  void Function(SuperTabController)? onSnapshot,
 }) {
   final client = SuperTabClient(
     transport: backend.call,
     storage: MemoryStore(),
     onTabs: (_, _) {},
     onMention: onMention,
+    onSnapshot: onSnapshot,
     discoveryInterval: const Duration(seconds: 15),
   );
   if (reading != null) client.reading = reading;
@@ -252,6 +254,55 @@ void main() {
       async.elapse(const Duration(seconds: 30));
       expect(backend.states('tab'), 10);
       expect(backend.states('other'), 10);
+      client.dispose();
+    });
+  });
+
+  test('Desktop: a released Swarm reads and rebuilds nothing; opening it '
+      'again reads afresh', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      var snapshots = 0;
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        onSnapshot: (_) => snapshots++,
+      )..bind('owner');
+      SuperTabController? first;
+      client.open('tab').then((c) => first = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(snapshots, greaterThan(0));
+      client.release('tab');
+      async.flushMicrotasks();
+      backend.servers['tab']!.append('Said after the tab closed');
+      backend.paths.clear();
+      snapshots = 0;
+      async.elapse(const Duration(seconds: 10));
+      expect(backend.paths, isEmpty);
+      expect(snapshots, 0);
+      expect(client.peek('tab'), isNull);
+      SuperTabController? second;
+      client.open('tab').then((c) => second = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(second, isNot(same(first)));
+      expect(backend.states('tab'), greaterThan(0));
+      expect(snapshots, greaterThan(0));
+      client.dispose();
+    });
+  });
+
+  test('a Swarm released while it opens stops once it has opened', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final client = _client(backend, reading: SuperTabReading.desktop)
+        ..bind('owner');
+      client.open('tab');
+      client.release('tab');
+      async.elapse(const Duration(seconds: 1));
+      backend.paths.clear();
+      async.elapse(const Duration(seconds: 10));
+      expect(backend.paths, isEmpty);
+      expect(client.peek('tab'), isNull);
       client.dispose();
     });
   });

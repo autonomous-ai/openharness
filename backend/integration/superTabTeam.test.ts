@@ -461,7 +461,8 @@ describe('a teammate\'s work and the machines that take it', () => {
 describe('a project\'s repository, for its GitHub access', () => {
   it('is read by those who may open the project, and by nobody else', async () => {
     const f = await fixture()
-    expect(await store.projectRepository(owner, f.tab, 'lead')).toEqual({ repositoryUrl: null, approvalRequired: false })
+    expect(await store.projectRepository(owner, f.tab, 'lead')).toEqual({ repositoryUrl: null, approvalRequired: false, name: expect.any(String),
+      others: [{ id: expect.any(String), name: 'Own' }] })
     await run(f.tab, { type: 'tab.project', machineId: 'owner-host', project: { cwd: '/work', repositoryUrl: 'https://github.com/acme/app' } })
     expect(await store.projectRepository(owner, f.tab, 'lead')).toMatchObject({ repositoryUrl: 'https://github.com/acme/app' })
     expect(await store.projectRepository(person, f.tab, 'lead')).toMatchObject({ repositoryUrl: 'https://github.com/acme/app' })
@@ -542,5 +543,149 @@ describe('one machine: a Mac and its Harness Team account', () => {
     } finally {
       await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
     }
+  })
+
+  // Diego's Mac, 2026-10-28: the Mac and its team account leave under one removal, and each host confirms its own cleanup
+  // as the same person with the same operation (cli/src/superTabs/machines.ts runCleanup). The Mac's confirmation, second,
+  // was refused as a reused operation on every retry, so the Mac stayed 'Cleaning up' for the day-long fallback.
+  it('leaves with its team account once both hosts confirmed their cleanup, the team account first', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
+    onTestFinished(() => db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } }).then(() => undefined))
+    const tab = (await store.create(owner, randomUUID(), 'Removed')).id
+    const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
+    await run(tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'],
+      maxAgents: 1, ifMissing: true }, person)
+    // Both online, so both stay listed while their hosts clean up.
+    for (const [user, machineId] of [[person, 'personal-mac'], [team, 'team-mac']] as const) {
+      await store.observeMachine(user, tab, machineId, reading((await poolRows(store, user, machineId)).find(p => p.tabId === tab)!.machine.generation))
+    }
+    const removalId = String((await run(tab, { type: 'machine.remove', machineId: 'personal-mac' }, person)).result.removalId)
+    const listed = async () => (await store.read(person, tab)).state.machines!.filter(m => ['personal-mac', 'team-mac'].includes(m.machineId))
+      .map(m => [m.machineId, m.removal?.state])
+    expect(await listed()).toEqual([['personal-mac', 'cleaning'], ['team-mac', 'cleaning']])
+    const cleaned = (user: AuthUser, machineId: string) => store.execute(user, tab, { operationId: `machine-cleaned-${removalId}`,
+      command: { type: 'machine.cleaned', machineId, removalId } })
+    await cleaned(team, 'team-mac')
+    expect(await listed()).toEqual([['personal-mac', 'cleaning']])
+    await cleaned(person, 'personal-mac')
+    expect(await listed()).toEqual([])
+    // A host repeating its confirmation gets its own receipt back.
+    await expect(cleaned(person, 'personal-mac')).resolves.toBeDefined()
+    await expect(cleaned(team, 'team-mac')).resolves.toBeDefined()
+    expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text))
+      .toEqual(['MacBook Pro left the Swarm: its host confirmed its cleanup.'])
+  })
+
+  it('leaves 30 minutes after its removal while its host keeps reporting without confirming, and the project\'s chat says why', async () => {
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    const tab = (await timed.create(owner, randomUUID(), 'Silent host')).id
+    const invitation = await timed.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } })
+    await timed.execute(person, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
+    await timed.execute(person, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work',
+      scope: 'swarm', engines: ['codex'], maxAgents: 3 } })
+    const generation = (await poolRows(timed, person, 'personal-mac')).find(p => p.tabId === tab)!.machine.generation
+    const report = () => timed.observeMachine(person, tab, 'personal-mac', reading(generation))
+    await report()
+    const removalId = String((await timed.execute(person, tab, { operationId: randomUUID(), command: { type: 'machine.remove', machineId: 'personal-mac' } })).result.removalId)
+    const listed = async () => (await storedState(tab)).machines?.map(m => m.machineId) ?? []
+    const said = async () => (await timed.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text)
+    // It keeps reporting, fresh each time; nothing ends the removal until half an hour has passed.
+    const removedAt = now
+    for (let at = removedAt + 40_000; at < removedAt + 30 * 60_000; at += 40_000) {
+      now = at
+      await report()
+    }
+    now = removedAt + 30 * 60_000 - 1
+    await report()
+    expect(await listed()).toEqual(['personal-mac'])
+    now = removedAt + 30 * 60_000
+    await report()
+    expect(await listed()).toEqual([])
+    expect(await said()).toEqual(['MacBook Pro left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.'])
+    // Its cleanup still reaches its host, whose late confirmation closes it without another line.
+    expect((await rosterRows(timed, person, 'personal-mac')).filter(r => r.tabId === tab && 'cleanup' in r)).toEqual([{ tabId: tab, cleanup: { machineId: 'personal-mac', removalId } }])
+    await timed.execute(person, tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'personal-mac', removalId } })
+    expect((await storedState(tab)).machineCleanups).toBeUndefined()
+    expect(await said()).toHaveLength(1)
+  })
+
+  // Diego's Mac, 2026-10-28, after #1955: the Mac and its team account were removed together and went past the fallback
+  // while their hosts kept reporting. Adding the Mac back said it was still cleaning up, and nothing finished it.
+  it('a Mac and its team account past the fallback: each host is told its cleanup, both confirm, and the Mac is added again', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
+    onTestFinished(() => db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } }).then(() => undefined))
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    const exec = (user: AuthUser, tab: string, command: Command, operationId: string = randomUUID()) => timed.execute(user, tab, { operationId, command })
+    const tab = (await timed.create(owner, randomUUID(), 'Removed together')).id
+    const invitation = await exec(owner, tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+    await exec(person, tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string })
+    const addMac = () => exec(person, tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 })
+    await addMac()
+    await exec(person, tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'],
+      maxAgents: 1, ifMissing: true })
+    const hosts = [[person, 'personal-mac'], [team, 'team-mac']] as const
+    const generations = new Map<string, string>()
+    for (const [user, machineId] of hosts) generations.set(machineId, (await poolRows(timed, user, machineId)).find(p => p.tabId === tab)!.machine.generation)
+    const report = async () => { for (const [user, machineId] of hosts) await timed.observeMachine(user, tab, machineId, reading(generations.get(machineId)!)).catch(() => null) }
+    await report()
+    await exec(person, tab, { type: 'machine.remove', machineId: 'personal-mac' })
+    // Both hosts keep reporting and neither confirms, past the fallback.
+    const removedAt = now
+    for (let at = removedAt + 40_000; at <= removedAt + 31 * 60_000; at += 40_000) { now = at; await report() }
+    expect((await storedState(tab)).machines?.map(m => m.machineId) ?? []).toEqual([])
+    // Each host's feed names its own cleanup, and its confirmation, as cli/src/superTabs/machines.ts runCleanup sends it, clears it.
+    for (const [user, machineId] of hosts) {
+      const rows = (await rosterRows(timed, user, machineId)).filter(r => r.tabId === tab && 'cleanup' in r) as Array<{ cleanup: { machineId: string; removalId: string } }>
+      expect(rows.map(r => r.cleanup.machineId)).toEqual([machineId])
+      const { removalId } = rows[0]!.cleanup
+      await exec(user, tab, { type: 'machine.cleaned', machineId, removalId }, `machine-cleaned-${removalId}`)
+    }
+    expect((await storedState(tab)).machineCleanups).toBeUndefined()
+    await addMac()
+    expect((await storedState(tab)).machines?.map(m => m.machineId)).toEqual(['personal-mac'])
+  })
+
+  // A cleanup's time is kept with it: lost, a fresh cleanup would read as overdue and let the add delete-race its host.
+  it('keeps a fresh cleanup holding its owner\'s add until 30 minutes after the removal', async () => {
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    const exec = (user: AuthUser, tab: string, command: Command) => timed.execute(user, tab, { operationId: randomUUID(), command })
+    const tab = (await timed.create(owner, randomUUID(), 'Fresh cleanup')).id
+    const invitation = await exec(owner, tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+    await exec(person, tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string })
+    const add = () => exec(person, tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 })
+    await add()
+    // Never reported, so offline: its records go at once and its cleanup waits for its host.
+    await exec(person, tab, { type: 'machine.remove', machineId: 'personal-mac' })
+    expect((await storedState(tab)).machineCleanups?.map(c => c.machineId)).toEqual(['personal-mac'])
+    now += 30 * 60_000 - 1
+    await expect(add()).rejects.toMatchObject({ code: 'MACHINE_CLEANING' })
+    now += 1
+    await add()
+    expect((await storedState(tab)).machineCleanups).toBeUndefined()
+  })
+
+  // Ken's remote-deepseek and WIN-DELL, 2026-10-28: removed while offline, then their machine accounts were deleted. Their
+  // cleanups waited for a host that could never come back, and kept the Swarm in every host's cleanup lookup.
+  it('drops the cleanup of a machine whose account is deleted on the Swarm\'s next change, and keeps a live machine\'s', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Retired machines')).id
+    for (const [machineId, computerId] of [['retired-pc', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'], ['kept-pc', 'ffffffffffffffffffffffffffffffff']]) {
+      await db.machine.create({ data: { machineId, userId: owner.sub, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`,
+        managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+      onTestFinished(() => db.machine.delete({ where: { machineId } }).then(() => undefined))
+      await run(tab, { type: 'machine.contribute', machineId, name: machineId, cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 1 })
+      // Never reported, so offline: its records go at once and its cleanup waits for its host.
+      await run(tab, { type: 'machine.remove', machineId })
+    }
+    const pending = async () => ({ cleanups: (await storedState(tab)).machineCleanups?.map(c => c.machineId).sort() ?? [],
+      indexed: (await db.superTab.findUnique({ where: { id: tab } }))!.cleanupMachineIds.sort() })
+    expect(await pending()).toEqual({ cleanups: ['kept-pc', 'retired-pc'], indexed: ['kept-pc', 'retired-pc'] })
+    await db.machine.update({ where: { machineId: 'retired-pc' }, data: { deletedAt: new Date() } })
+    await run(tab, { type: 'tab.rename', name: 'Next change' })
+    expect(await pending()).toEqual({ cleanups: ['kept-pc'], indexed: ['kept-pc'] })
   })
 })

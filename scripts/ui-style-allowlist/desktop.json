@@ -1,0 +1,98 @@
+{
+  "desktop/lib/super_tabs/agent_details.dart": {
+    "edge-insets": 2
+  },
+  "desktop/lib/super_tabs/agent_group_picker.dart": {
+    "edge-insets": 2
+  },
+  "desktop/lib/super_tabs/attachment_chips.dart": {
+    "edge-insets": 2,
+    "border-radius": 2
+  },
+  "desktop/lib/super_tabs/attachment_text_viewer.dart": {
+    "edge-insets": 1
+  },
+  "desktop/lib/super_tabs/confetti.dart": {
+    "hex-color": 6
+  },
+  "desktop/lib/super_tabs/decisions_view.dart": {
+    "edge-insets": 6
+  },
+  "desktop/lib/super_tabs/local_models.dart": {
+    "edge-insets": 7,
+    "border-radius": 3
+  },
+  "desktop/lib/super_tabs/machine_status.dart": {
+    "font-size": 1,
+    "edge-insets": 2
+  },
+  "desktop/lib/super_tabs/machines.dart": {
+    "edge-insets": 16,
+    "border-radius": 5
+  },
+  "desktop/lib/super_tabs/message_receipt.dart": {
+    "font-size": 2,
+    "edge-insets": 5,
+    "border-radius": 1
+  },
+  "desktop/lib/super_tabs/message_row.dart": {
+    "edge-insets": 5
+  },
+  "desktop/lib/super_tabs/message_text.dart": {
+    "edge-insets": 1
+  },
+  "desktop/lib/super_tabs/notifications.dart": {
+    "edge-insets": 8
+  },
+  "desktop/lib/super_tabs/profile_sheet.dart": {
+    "font-size": 1
+  },
+  "desktop/lib/super_tabs/project_sidebar.dart": {
+    "edge-insets": 9
+  },
+  "desktop/lib/super_tabs/pull_requests.dart": {
+    "edge-insets": 12,
+    "border-radius": 2
+  },
+  "desktop/lib/super_tabs/reactions.dart": {
+    "font-size": 2,
+    "edge-insets": 3,
+    "border-radius": 1
+  },
+  "desktop/lib/super_tabs/recording_notice.dart": {
+    "edge-insets": 3
+  },
+  "desktop/lib/super_tabs/roles_editor.dart": {
+    "edge-insets": 1
+  },
+  "desktop/lib/super_tabs/roster.dart": {
+    "edge-insets": 4,
+    "border-radius": 1
+  },
+  "desktop/lib/super_tabs/route_row.dart": {
+    "edge-insets": 6
+  },
+  "desktop/lib/super_tabs/routing_policy_form.dart": {
+    "edge-insets": 3
+  },
+  "desktop/lib/super_tabs/saved_session.dart": {
+    "edge-insets": 4
+  },
+  "desktop/lib/super_tabs/section_heading.dart": {
+    "edge-insets": 1
+  },
+  "desktop/lib/super_tabs/sharing.dart": {
+    "edge-insets": 4
+  },
+  "desktop/lib/super_tabs/ship_row.dart": {
+    "font-size": 1,
+    "edge-insets": 2
+  },
+  "desktop/lib/super_tabs/terminal_row.dart": {
+    "edge-insets": 2
+  },
+  "desktop/lib/super_tabs/view.dart": {
+    "edge-insets": 23,
+    "border-radius": 1
+  }
+}

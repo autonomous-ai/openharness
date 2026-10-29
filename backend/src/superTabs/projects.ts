@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
+import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -116,14 +117,27 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a private
- *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. */
+/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat. Nobody opens
+ *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
+
+/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a Buddy
+ *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
+}
+
+/** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
+ *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
+export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
+  const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
+  if (buddy) return buddyReads(buddy, group, project.leadConversationId)
   if (!group.audience) return true
-  if (actor.kind === 'agent') return ledProject(state, actor.agentId)?.id === project.id
+  // A Buddy chat has no private channel to the PM: only its owner and its Buddy read it (buddies.ts).
+  if (actor.kind === 'agent') return !isBuddyChat(group) && ledProject(state, actor.agentId)?.id === project.id
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
@@ -183,34 +197,52 @@ export function markConfidential(state: SuperTabState): void {
   for (const target of state.agents) if (!target.confidential && confidentialSession(state, target)) target.confidential = true
 }
 
-/** Who may watch an agent's terminal: observe it, hold a share of it, read or type in it. A confidential session's screen and
- *  scrollback hold people's private chats, so only the person whose machine runs it may, owners included. `elsewhere`: the
- *  same session is confidential in another Swarm (confidential.ts). Any other agent: every reader of its project, as before. */
+/** Whether a session's terminal is closed to watching in this Swarm. A confidential session's screen and scrollback hold
+ *  people's private chats, so only the person whose machine runs it watches it, owners included. The project's current Lead is
+ *  the exception, view only (Ken, 2026-10-28): every reader of its project watches it, the private chats it is in included.
+ *  It stays marked, so a former Lead, another Swarm and an ordinary share still find it closed. `elsewhere`: the session is
+ *  confidential in another Swarm (confidential.ts), whose chats are not this Swarm's to read. */
+export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
+  elsewhere || (isConfidential(state, target) && !ledProject(state, target.id))
+
+/** Who may watch an agent's terminal: observe it or hold a share of it. Reading or typing in it on request is closed by
+ *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
-  return canReadAgent(state, actor, target) && (!isConfidential(state, target, elsewhere) || ownSession(actor, target))
+  return canReadAgent(state, actor, target) && (!watchClosed(state, target, elsewhere) || ownSession(actor, target))
 }
 
-/** Whether someone who could watch an agent's terminal before a commit cannot after it (canWatchAgent, by the session the
- *  observer relay watches: machine, harness and machine owner): a person left, the agent left, its project stopped being
- *  shared with them, or the session turned confidential, by whatever command. Its observer sockets then check again. */
-export function watchingNarrowed(before: SuperTabState, after: SuperTabState): boolean {
+/** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
+ *  watches: machine, harness and machine owner): a person left, the agent left, its project stopped being shared with them,
+ *  or the session turned confidential, by whatever command. Each such agent, with the people who lost it. Its observer
+ *  sockets then check again (store.ts accessChanged), and those people's terminals on it are revoked (native.ts). */
+export function watchersLost(before: SuperTabState, after: SuperTabState): Array<{ agentId: string; personIds: string[] }> {
   const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
   const now = new Map(after.agents.map(a => [session(a), a]))
-  // canWatchAgent per person, with the agent's confidentiality read once per state.
+  // canWatchAgent per person, with whether the agent is closed read once per state.
   const watchers = (state: SuperTabState, target: Agent) => {
-    const confidential = isConfidential(state, target)
+    const closed = watchClosed(state, target)
     return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
-      .filter(actor => canReadAgent(state, actor, target) && (!confidential || ownSession(actor, target)))
+      .filter(actor => canReadAgent(state, actor, target) && (!closed || ownSession(actor, target)))
   }
-  return before.agents.some(target => {
+  return before.agents.flatMap(target => {
     const was = watchers(before, target)
-    if (!was.length) return false
+    if (!was.length) return []
     const still = now.get(session(target))
-    if (!still) return true
-    const is = new Set(watchers(after, still).map(actor => actor.userId))
-    return was.some(actor => !is.has(actor.userId))
+    const is = new Set(still ? watchers(after, still).map(actor => actor.userId) : [])
+    const lost = was.filter(actor => !is.has(actor.userId)).map(actor => actor.userId)
+    return lost.length ? [{ agentId: target.id, personIds: lost }] : []
   })
 }
+
+/** Everything that decides who reads a conversation and who watches a terminal (canReadGroup, canWatchAgent and the
+ *  terminals native.ts revokes): when two states give the same text, no access changed between them. Messages, statuses and
+ *  checks, most commands, change none of it. The Swarm's owner counts only once PRIVATE_VISIBLE_TO_OWNERS is true; it is
+ *  kept so that turning it on cannot skip a revocation. */
+export const accessInputs = (state: SuperTabState): string => JSON.stringify([state.ownerId,
+  state.people.map(p => [p.id, p.generation, p.role]),
+  projectsOf(state).map(p => [p.id, p.visibility, p.ownerId, p.members, p.leadConversationId]),
+  state.agents.map(a => [a.id, a.machineId, a.harnessId, a.machineOwnerId, a.projectId, a.confidential]),
+  state.conversations.map(c => [c.id, c.kind, c.projectId, c.leadId, c.archived, c.agentIds, c.audience])])
 
 /** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
 export const ownSession = (actor: Actor, target: Agent): boolean =>

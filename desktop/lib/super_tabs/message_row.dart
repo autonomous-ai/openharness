@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,9 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
+import 'message_link.dart';
+import 'message_link_preview.dart';
+import 'message_more_menu.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
@@ -38,9 +43,17 @@ class SuperTabMessageRow extends StatefulWidget {
     this.readerId = '',
     this.reactorName,
     this.onReact,
+    this.proposalOwner,
+    this.link,
+    this.linkTarget,
+    this.onOpenLink,
   });
 
   final SuperTabMessage message;
+
+  /// The person a Buddy's proposal speaks for, by name, from the server's tag
+  /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
+  final String? proposalOwner;
 
   /// The names of the people [message] tags.
   final List<String> mentions;
@@ -71,6 +84,15 @@ class SuperTabMessageRow extends StatefulWidget {
   final String readerId;
   final SuperTabReactorName? reactorName;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+
+  /// This message's link, for the More menu's Copy link to message. Without
+  /// it the menu is not offered.
+  final SwarmMessageLink? link;
+
+  /// What a message link in the text points at for the reader, and how to
+  /// open it. Without them a link stays plain text.
+  final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
+  final ValueChanged<SwarmMessageLink>? onOpenLink;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -144,6 +166,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(
         content: Text('Message copied'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _copyLink(SwarmMessageLink link) async {
+    await Clipboard.setData(ClipboardData(text: link.url));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Link copied'),
         duration: Duration(seconds: 2),
       ),
     );
@@ -338,6 +371,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         : () => widget.onOpenReply!(context),
                                   ),
                                 ),
+                              if (widget.proposalOwner case final owner?)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: Container(
+                                    key: const ValueKey('super-proposal-label'),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: grid.AppDesktop.controlGap,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: DesktopChrome.rim,
+                                      ),
+                                      borderRadius: BorderRadius.circular(
+                                        DesktopChrome.rowRadius,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      "Proposal · on $owner's behalf",
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
                               if (message.terminalNote case final note?)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 6),
@@ -368,6 +425,13 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
+                              if (widget.linkTarget case final resolve?)
+                                if (widget.onOpenLink case final open?)
+                                  SuperTabMessageLinkPreviews(
+                                    message.text,
+                                    resolve: resolve,
+                                    onOpen: open,
+                                  ),
                               SuperTabReactionBar(
                                 message: message,
                                 readerId: widget.readerId,
@@ -418,6 +482,23 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 onPressed: _copy,
                               ),
                             ),
+                            if (widget.link case final link?)
+                              fingerTarget(
+                                enabled: phone,
+                                SuperTabMessageMoreMenu(
+                                  key: ValueKey(
+                                    'super-message-more-${message.id}',
+                                  ),
+                                  actions: [
+                                    (
+                                      label: 'Copy link to message',
+                                      icon: AppIcons.link2,
+                                      onPressed: () =>
+                                          unawaited(_copyLink(link)),
+                                    ),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       ),

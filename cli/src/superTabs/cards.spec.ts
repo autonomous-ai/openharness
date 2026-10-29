@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { lastLeadMessage, leadsOf, SwarmCards, type SwarmCard } from './cards.js'
+import { lastAgentMessage, leadsOf, SwarmCards, type SwarmCard } from './cards.js'
 import { swarmReply } from './fixtures/read/index.js'
 
 const agent = (id: string, over: Record<string, unknown> = {}) =>
@@ -125,18 +125,83 @@ describe('leadsOf', () => {
   })
 })
 
-describe('lastLeadMessage', () => {
-  const row = (sequence: number, over: Record<string, unknown> = {}) => ({ sequence, text: `t${sequence}`, author: { kind: 'agent', id: 'a1' }, createdAt: '2026-10-22T00:00:00.000Z', ...over })
+/** `web`'s three kinds of chat: its Lead conversation, the reader's Buddy chat (where the PM's private lines land since
+ *  Buddies replaced Chat with PM, 10-29), and a group. The backend sends a Buddy chat to its owner alone. */
+const pm = (over: Record<string, unknown> = {}) => conv('pm-web', null, { projectId: 'web', kind: 'buddy', buddyOwnerId: 'me', agentIds: [], ...over })
+const group = (over: Record<string, unknown> = {}) => conv('g-web', null, { projectId: 'web', title: 'Fix login', agentIds: ['b1'], assignment: { status: 'working' }, ...over })
+const chats = (over: Record<string, unknown> = {}) => swarm({
+  agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })],
+  conversations: [...swarm().conversations, pm(), group()],
+  ...over,
+})
+
+describe('leadsOf chats', () => {
+  const chatOf = (state: Record<string, unknown>, focus?: string, live: Parameters<typeof leadsOf>[2] = idle) =>
+    leadsOf(state, 'm1', live, 'me', focus).leads.find(l => l.projectId === 'web')!.chat
+
+  it('opens each project on its Lead chat', () => {
+    expect(leadsOf(chats(), 'm1', idle).leads.map(l => l.chat)).toEqual([
+      { kind: 'lead', id: 'lead-web', name: 'Lead', working: false }, { kind: 'lead', id: 'lead-mobile', name: 'Lead', working: false }])
+  })
+
+  it('follows the window to the reader\'s Buddy chat in the project', () => {
+    expect(chatOf(chats(), 'pm-web')).toEqual({ kind: 'pm', id: 'pm-web', name: 'PM', working: false })
+    // The other project keeps its Lead chat.
+    expect(leadsOf(chats(), 'm1', idle, 'me', 'pm-web').leads.find(l => l.projectId === 'mobile')!.chat).toMatchObject({ kind: 'lead', id: 'lead-mobile' })
+  })
+
+  it('follows the window to a group', () => {
+    expect(chatOf(chats(), 'g-web')).toEqual({ kind: 'group', id: 'g-web', name: 'Fix login', working: true })
+    const long = chats({ conversations: [...swarm().conversations, group({ title: `${'g'.repeat(47)}éé` })] })
+    expect(chatOf(long, 'g-web')!.name).toBe('g'.repeat(47))
+    for (const status of ['review', 'needs_human', 'blocked', 'done']) {
+      const other = chats({ conversations: [...swarm().conversations, group({ assignment: { status } })] })
+      expect(chatOf(other, 'g-web')).toMatchObject({ kind: 'group', working: false })
+    }
+    // `since` comes from a live turn of one of the group's agents here, and only while the group works.
+    const turn = (h: string) => h === 'h-b1' ? { inTurn: true, since: 42 } : { inTurn: false }
+    expect(chatOf(chats(), 'g-web', turn)).toEqual({ kind: 'group', id: 'g-web', name: 'Fix login', working: true, since: 42 })
+    expect(chatOf(chats(), 'g-web', h => h === 'h-a1' ? { inTurn: true, since: 9 } : { inTurn: false })).not.toHaveProperty('since')
+    const done = chats({ conversations: [...swarm().conversations, group({ assignment: { status: 'done' } })] })
+    expect(chatOf(done, 'g-web', turn)).not.toHaveProperty('since')
+  })
+
+  it('ignores a focus outside the project', () => {
+    const lead = { kind: 'lead', id: 'lead-web', name: 'Lead', working: false }
+    // another project's conversation, an unknown id, an archived group
+    const mobileGroup = conv('g-mobile', null, { projectId: 'mobile', title: 'App', agentIds: [], assignment: { status: 'working' } })
+    const state = chats({ conversations: [...swarm().conversations, pm(), group(), mobileGroup] })
+    expect(chatOf(state, 'g-mobile')).toEqual(lead)
+    expect(chatOf(state, 'nope')).toEqual(lead)
+    expect(chatOf(chats({ conversations: [...swarm().conversations, group({ archived: true })] }), 'g-web')).toEqual(lead)
+    // and the Lead's own conversation is the Lead chat
+    expect(chatOf(state, 'lead-web')).toEqual(lead)
+  })
+
+  it('keeps today\'s state for old devices whatever the chat', () => {
+    const asks = chats({ conversations: [...swarm().conversations, pm(), group({ assignment: { status: 'needs_human' } })] })
+    expect(leadsOf(asks, 'm1', idle, 'me', 'pm-web').leads[0]).toMatchObject({ projectId: 'web', state: 'ask', chat: { kind: 'pm' } })
+  })
+})
+
+describe('lastAgentMessage', () => {
+  const row = (sequence: number, over: Record<string, unknown> = {}) => ({ id: `m${sequence}`, sequence, text: `t${sequence}`, author: { kind: 'agent', id: 'a1' }, createdAt: '2026-10-22T00:00:00.000Z', ...over })
+  const lead = new Set(['a1'])
   it('takes the newest row the Lead wrote, skipping system rows and other authors', () => {
     const rows = [row(1), row(2, { source: { kind: 'native' } }), row(3, { author: { id: 'a2' } }), row(4, { text: 7 })]
-    expect(lastLeadMessage(rows, 'a1')).toEqual({ text: 't1', at: Date.parse('2026-10-22T00:00:00.000Z') / 1000 })
-    expect(lastLeadMessage([row(5), row(1)], 'a1')?.text).toBe('t5')
-    expect(lastLeadMessage([row(1, { createdAt: 1_000_500 })], 'a1')?.at).toBe(1000)
-    expect(lastLeadMessage([row(1, { createdAt: 'x' })], 'a1')?.at).toBe(0)
+    expect(lastAgentMessage(rows, lead)).toEqual({ text: 't1', at: Date.parse('2026-10-22T00:00:00.000Z') / 1000, id: 'm1', sequence: 1 })
+    expect(lastAgentMessage([row(5), row(1)], lead)?.text).toBe('t5')
+    expect(lastAgentMessage([row(1, { createdAt: 1_000_500 })], lead)?.at).toBe(1000)
+    expect(lastAgentMessage([row(1, { createdAt: 'x' })], lead)?.at).toBe(0)
   })
-  it('is null when the Lead has said nothing', () => {
-    expect(lastLeadMessage([], 'a1')).toBeNull()
-    expect(lastLeadMessage([row(1, { author: { id: 'a2' } })], 'a1')).toBeNull()
+  it('takes the newest row by any of the chat\'s agents, skipping the person and source rows', () => {
+    const group = new Set(['b1', 'b2'])
+    const rows = [row(1, { author: { id: 'b1' } }), row(2, { author: { id: 'b2' } }), row(3, { author: { kind: 'person', id: 'me' } }), row(4, { author: { id: 'b1' }, source: { kind: 'system' } }), row(5)]
+    expect(lastAgentMessage(rows, group)).toMatchObject({ text: 't2', id: 'm2', sequence: 2 })
+  })
+  it('is null when the chat\'s agents have said nothing', () => {
+    expect(lastAgentMessage([], lead)).toBeNull()
+    expect(lastAgentMessage([row(1, { author: { id: 'a2' } })], lead)).toBeNull()
   })
 })
 
@@ -176,10 +241,11 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
       activitySnapshot: vi.fn(async () => ({ text: '', elapsedSeconds: extra.elapsed })) },
   })
   let clock = 1_000_000
-  const cards = new SwarmCards(core, 'm1', { now: () => clock, intervalMs: 5000 })
+  const log = vi.fn()
+  const cards = new SwarmCards(core, 'm1', { now: () => clock, intervalMs: 5000, log })
   const seen: SwarmCard[][] = []
   cards.onCards = c => seen.push(c)
-  return { cards, calls, seen, call, core, failing, tabs, paginate: (p: typeof pages) => { pages = p }, pageBy: (n: number) => { pageSize = n }, breakList: (v = true) => { listFails = v }, advance: (ms: number) => { clock += ms } }
+  return { cards, calls, seen, call, core, failing, tabs, log, paginate: (p: typeof pages) => { pages = p }, pageBy: (n: number) => { pageSize = n }, breakList: (v = true) => { listFails = v }, advance: (ms: number) => { clock += ms } }
 }
 /** Each read of a tab, named by the tab: a changes read, or a first load that no changes read of it asked for. */
 function detailReads(calls: string[]): string[] {
@@ -528,5 +594,252 @@ describe('SwarmCards open recaps and recap reads', () => {
     await t.cards.tick()
     await t.cards.recap('t1', 'a1')
     expect(t.calls.filter(c => c.includes('/messages'))).toHaveLength(1)
+  })
+})
+
+/** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders). */
+function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>) {
+  const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({ conversations: [
+    conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: lead }), conv('lead-mobile', 'a2', { projectId: 'mobile' }),
+    pm({ lastMessageSequence: pmSeq }), group({ lastMessageSequence: groupSeq })] })
+  const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
+    const page = pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? []
+    return { messages: typeof page === 'function' ? page() : page, next: null }
+  } })
+  const move = async (lead: number, pmSeq = 1, groupSeq = 1) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(lead, pmSeq, groupSeq); await t.cards.tick() }
+  const webLead = (cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === 'a1')
+  const reads = (conversation: string) => t.calls.filter(c => c.includes(`/conversations/${conversation}/messages`)).length
+  return { ...t, move, webLead, reads }
+}
+const said = (sequence: number, who: string, over: Record<string, unknown> = {}) =>
+  ({ id: `x${sequence}`, sequence, text: `m${sequence}`, author: { kind: 'agent', id: who }, source: null, createdAt: '2026-10-22T00:00:00.000Z', ...over })
+const saidAt = Date.parse('2026-10-22T00:00:00.000Z') / 1000
+
+describe('SwarmCards notices', () => {
+  it('records a baseline on the first read and sends no notice', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1')], 'pm-web': [said(1, 'a1')] })
+    await t.cards.tick()
+    await t.cards.tick()
+    expect(t.webLead()).not.toHaveProperty('notice')
+    expect(t.reads('lead-web') + t.reads('pm-web')).toBe(0)
+  })
+
+  it('notices a new Lead message in the Lead conversation', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1'), said(2, 'a1')] })
+    await t.cards.tick()
+    await t.move(2)
+    expect(t.webLead()?.notice).toEqual({ chat: 'lead', chatId: 'lead-web', id: 'x2', text: 'm2', at: saidAt })
+    expect(t.reads('lead-web')).toBe(1)
+    // Nothing moved: no read and the same notice.
+    await t.cards.tick()
+    expect(t.reads('lead-web')).toBe(1)
+  })
+
+  it('notices a new private line from the Lead in the reader\'s Buddy chat', async () => {
+    const t = chatSwarm({ 'pm-web': [said(2, 'a1', { text: `${'p'.repeat(1499)}éé` })] })
+    await t.cards.tick()
+    await t.move(1, 2)
+    expect(t.webLead()?.notice).toEqual({ chat: 'pm', chatId: 'pm-web', id: 'x2', text: 'p'.repeat(1499), at: saidAt })
+  })
+
+  it('never notices a group message, the person\'s message or a system row', async () => {
+    const t = chatSwarm({
+      'lead-web': [said(2, 'me', { author: { kind: 'person', id: 'me' } }), said(3, 'a1', { source: { kind: 'system' } }), said(4, 'b1')],
+      'g-web': [said(2, 'b1')],
+    })
+    await t.cards.tick()
+    await t.move(4, 1, 2)
+    expect(t.webLead()).not.toHaveProperty('notice')
+    // Groups are never watched: their pages are not read for alerts.
+    expect(t.reads('g-web')).toBe(0)
+  })
+
+  it('one notice for the newest of two messages', async () => {
+    const t = chatSwarm({ 'lead-web': [said(3, 'a1'), said(2, 'a1')] })
+    await t.cards.tick()
+    await t.move(3)
+    const notices = t.seen.map(c => t.webLead(c)?.notice?.id).filter(Boolean)
+    expect(notices).toEqual(['x3'])
+  })
+
+  it('takes the newer of a Lead and a PM message that land in one read', async () => {
+    const t = chatSwarm({ 'lead-web': [said(2, 'a1', { createdAt: '2026-10-22T00:05:00.000Z' })], 'pm-web': [said(2, 'a1', { createdAt: '2026-10-22T00:01:00.000Z' })] })
+    await t.cards.tick()
+    await t.move(2, 2)
+    expect(t.webLead()?.notice).toMatchObject({ chat: 'lead', chatId: 'lead-web' })
+  })
+
+  it('drops a held notice when its Swarm leaves the cards', async () => {
+    const t = chatSwarm({ 'lead-web': [said(2, 'a1')] })
+    await t.cards.tick()
+    await t.move(2)
+    expect(t.webLead()?.notice).toMatchObject({ id: 'x2' })
+    const gone = t.tabs.t1
+    delete t.tabs.t1
+    await t.cards.tick()
+    t.tabs.t1 = gone
+    await t.cards.tick()
+    expect(t.webLead()).not.toHaveProperty('notice')
+  })
+
+  it('a failed read keeps the baseline', async () => {
+    let fail = true
+    const t = chatSwarm({ 'lead-web': () => { if (fail) throw new Error('offline'); return [said(2, 'a1')] } })
+    await t.cards.tick()
+    await t.move(2)
+    await t.cards.tick()
+    expect(t.webLead()).not.toHaveProperty('notice')
+    // Logged once for the run of failures, not every 5 s.
+    expect(t.log).toHaveBeenCalledOnce()
+    fail = false
+    await t.cards.tick()
+    expect(t.webLead()?.notice).toMatchObject({ chat: 'lead', id: 'x2' })
+  })
+
+  it('reads a page only for a message after the baseline, and takes none from before it', async () => {
+    // The page still holds the Lead's older message; only the person wrote since.
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1'), said(2, 'me', { author: { kind: 'person', id: 'me' } })] })
+    await t.cards.tick()
+    await t.move(2)
+    expect(t.webLead()).not.toHaveProperty('notice')
+  })
+
+  it('starts a fresh baseline after the devices go, and forgets a tab that leaves the cards', async () => {
+    const t = chatSwarm({ 'lead-web': [said(2, 'a1')] })
+    await t.cards.tick()
+    t.cards.want(false)
+    await t.move(2)
+    expect(t.webLead()).not.toHaveProperty('notice')
+    const gone = t.tabs.t1
+    delete t.tabs.t1
+    await t.cards.tick()
+    t.tabs.t1 = gone
+    await t.move(3)
+    expect(t.webLead()).not.toHaveProperty('notice')
+  })
+})
+
+describe('SwarmCards chats', () => {
+  const groupSays = [said(1, 'b1'), said(2, 'me', { author: { kind: 'person', id: 'me' } })]
+
+  it('follows a focus change at once, without reading the backend again', async () => {
+    const t = chatSwarm({})
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.calls.length = 0
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.webLead()?.chat).toMatchObject({ kind: 'group', id: 'g-web' })
+    expect(t.calls).toEqual([])
+    // A focus on another Swarm leaves this one on its Lead chat; a bad id is no focus.
+    t.cards.want(true, [], { tabId: 't2', conversationId: 'g-web' })
+    expect(t.webLead()?.chat).toMatchObject({ kind: 'lead' })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'bad id' })
+    expect(t.webLead()?.chat).toMatchObject({ kind: 'lead' })
+    t.cards.want(false)
+  })
+
+  it('recap with chat reads the face chat and names its chatId', async () => {
+    const t = chatSwarm({ 'g-web': groupSays, 'pm-web': [said(1, 'a1', { text: 'from the PM' })] })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.recap('t1', 'a1', true)).toEqual({ tabId: 't1', leadId: 'a1', text: 'm1', at: saidAt, none: false, chatId: 'g-web' })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'from the PM', chatId: 'pm-web' })
+    t.cards.want(false)
+  })
+
+  it('recap without chat is today\'s Lead recap', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'lead says' })], 'g-web': groupSays })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    const recap = await t.cards.recap('t1', 'a1')
+    expect(recap).toEqual({ tabId: 't1', leadId: 'a1', text: 'lead says', at: saidAt, none: false })
+    expect(t.reads('g-web')).toBe(0)
+    t.cards.want(false)
+  })
+
+  it('pushes the new chat\'s recap to a dial that has the Lead open with chat when the face changes', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'lead says' })], 'g-web': groupSays })
+    const pushed: Array<{ text: string; chatId?: string }> = []
+    t.cards.onRecap = r => pushed.push({ text: r.text, ...(r.chatId ? { chatId: r.chatId } : {}) })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.open('s1', 't1', 'a1', true)
+    t.cards.open('s2', 't1', 'a1')
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    await vi.waitFor(() => expect(pushed).toEqual([{ text: 'm1', chatId: 'g-web' }]))
+    // The group moves on: the chat session is told; the Lead conversation did not move, so the Pro is not.
+    groupSays.push(said(3, 'b1', { text: 'done' }))
+    await t.move(1, 1, 3)
+    expect(pushed).toEqual([{ text: 'm1', chatId: 'g-web' }, { text: 'done', chatId: 'g-web' }])
+    t.cards.want(false)
+  })
+
+  it('say with chat posts message.send to the face chat', async () => {
+    const t = chatSwarm({})
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.say('h-a1', 'to the PM', true)).toBe(true)
+    expect(await t.cards.say('h-a1', 'to the Lead')).toBe(true)
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; text: string } }).command)
+    expect(posts.map(p => [p.conversationId, p.text])).toEqual([['pm-web', 'to the PM'], ['lead-web', 'to the Lead']])
+    t.cards.want(false)
+  })
+})
+
+// A Swarm Reviewer on another computer failing every turn took over the round dial with the engine's raw error (2026-10-28):
+// the devices ask whether the agent a card names is one of a Swarm's workers, and are answered from the Swarms read last.
+describe('SwarmCards.worker', () => {
+  /** The Swarm's record of starting a harness on a machine, as the backend keeps it. */
+  const started = (id: string, harnessId: string, machineId: string, over: Record<string, unknown> = {}) =>
+    ({ id, creationId: `super-${id}`, harnessId, request: { machineId, name: 'Builder' }, error: null, ...over })
+  // h1 is a session the person opened by hand and added as an Engineer: no start of the Swarm's names it.
+  type Rows = Record<'agents' | 'conversations' | 'starts', Array<Record<string, unknown>>>
+  const roster = (more: Partial<Rows> = {}) => swarm({
+    agents: [agent('a1'), agent('b1', { machineId: 'm2' }), agent('r1', { machineId: 'm2', role: 'reviewer' }), agent('b2', { machineId: 'm1' }),
+      agent('h1', { machineId: 'm2' }), ...more.agents ?? []],
+    conversations: [conv('lead-web', 'a1', { projectId: 'web' }), conv('w-web', null, { projectId: 'web', agentIds: ['b1', 'r1', 'h1'] }),
+      ...more.conversations ?? []],
+    starts: [started('s1', 'h-b1', 'm2'), started('s2', 'h-r1', 'm2'), started('s3', 'h-b2', 'm1'),
+      // Not proof that the Swarm started h1: a start that failed, one on another machine, one under another creation id.
+      started('s4', 'h-h1', 'm2', { error: 'Its machine did not start it within 3 minutes.' }), started('s5', 'h-h1', 'm1'),
+      started('s6', 'h-h1', 'm2', { creationId: 'other' }), ...more.starts ?? []],
+  })
+
+  it('says yes for a Builder or Reviewer on the machine the card came from, and no for its Lead', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-b1')).toBe(true)
+    expect(t.cards.worker('m2', 'h-r1')).toBe(true)
+    expect(t.cards.worker('m1', 'h-a1')).toBe(false)
+  })
+
+  it('says no for a member the person started by hand and added, the rule this computer\'s own workers follow', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-h1')).toBe(false)
+    expect(t.cards.worker('m1', 'h-b2')).toBe(true)
+  })
+
+  // A Buddy is started by the Swarm and leads nothing, yet it is its owner's own agent (combination review of batch #2043).
+  it('says no for a Buddy, whose failures on another of its owner\'s computers stay on the owner\'s dial', async () => {
+    const owner = { personId: 'p1', generation: 'g1' }
+    const state = roster({
+      agents: [agent('y1', { machineId: 'm2', buddyOf: owner })],
+      conversations: [conv('buddy-p1', null, { projectId: 'web', kind: 'buddy', agentIds: ['y1'] })],
+      starts: [started('s7', 'h-y1', 'm2', { request: { machineId: 'm2', name: 'Buddy', buddyOf: owner } })],
+    })
+    const t = setup({ t1: { lastChangedAt: 1, state } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-y1')).toBe(false)
+    expect(t.cards.worker('m2', 'h-b1')).toBe(true)
+  })
+
+  it('matches the machine as well as the harness, and knows nothing before a read or of an agent no Swarm lists', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    expect(t.cards.worker('m2', 'h-b1')).toBe(false)
+    await t.cards.tick()
+    expect(t.cards.worker('m1', 'h-b1')).toBe(false)
+    expect(t.cards.worker('m2', 'h-nobody')).toBe(false)
   })
 })

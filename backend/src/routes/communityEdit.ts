@@ -9,13 +9,13 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { acceptGzipJson } from '../lib/gzipJson.js'
-import { createWindowLimiter } from '../lib/windowLimiter.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { environment, publicationEditSchema } from './community.js'
 
 const params = z.object({ id: z.string().uuid() })
-const limiter = createWindowLimiter(10 * 60_000, 20)
+const limiter = createRateLimiter('community-edit', 10 * 60_000, 20)
 export const resetEditRateLimits = (): void => limiter.reset()
 
 export async function communityEditRoutes(app: FastifyInstance): Promise<void> {
@@ -25,7 +25,7 @@ export async function communityEditRoutes(app: FastifyInstance): Promise<void> {
     const post = await prisma.communityHarness.findFirst({ where: { id: req.params.id, autonomousEnv, deletedAt: null }, select: { authorId: true } })
     if (!post) return sendError(reply, 'This harness is unavailable.', 'NOT_FOUND', 404)
     if (post.authorId !== userId) return sendError(reply, 'Only its author can edit this harness.', 'FORBIDDEN', 403)
-    if (!limiter.allows(userId)) return sendError(reply, 'Please wait before saving again.', 'RATE_LIMITED', 429)
+    if (!(await limiter.allows(userId))) return sendError(reply, 'Please wait before saving again.', 'RATE_LIMITED', 429)
     const { confirmed: _confirmed, license: _license, cover, harnessId, ...snapshot } = req.body
     await prisma.communityHarness.updateMany({
       where: { id: req.params.id, autonomousEnv, authorId: userId, deletedAt: null },

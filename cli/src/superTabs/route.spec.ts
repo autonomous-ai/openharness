@@ -246,10 +246,12 @@ describe('verdict and record', () => {
     expect(recordOf(c, v, a(), policy)).toEqual({ ...v1, assessment: { ...v1.assessment, size: 'medium' },
       candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude' } })) })
     // For a backend from before sizes and fit.
-    expect(recordOf(c, v, a(), policy, true)).toEqual(v1)
-    // The task's kind is not recorded, so the record's schema is unchanged.
-    expect(recordOf(c, v, a({ kind: 'ui' }), policy)).toMatchObject({ assessment: { difficulty: 'medium', risk: 'low', why: 'API change.', size: 'medium' } })
-    expect(object(recordOf(c, v, a({ kind: 'ui' }), policy).assessment)).not.toHaveProperty('kind')
+    expect(recordOf(c, v, a(), policy, 'v1')).toEqual(v1)
+    // The task's kind is recorded, so attempts can be compared by the kind of job they were (backend costs/read.ts).
+    expect(recordOf(c, v, a({ kind: 'ui' }), policy).assessment).toEqual({ difficulty: 'medium', risk: 'low', why: 'API change.', size: 'medium', kind: 'ui' })
+    // A backend from before kinds gets everything else; one from before phase 1 gets neither.
+    expect(recordOf(c, v, a({ kind: 'ui' }), policy, 'unkinded').assessment).toEqual({ difficulty: 'medium', risk: 'low', why: 'API change.', size: 'medium' })
+    expect(object(recordOf(c, v, a({ kind: 'ui' }), policy, 'v1').assessment)).not.toHaveProperty('kind')
   })
 })
 
