@@ -249,7 +249,7 @@ export class SwarmReads {
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
-      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions,
+      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
         ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
           decisionsDigest: counts[1].digest } : {}) }, state) }
   }

@@ -20,7 +20,6 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
-import { placeWaitingLeads } from './leadStart.js'
 import { buddyChatId } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -384,6 +383,10 @@ export class SuperTabStore {
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
   get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
+  /** No Harness GitHub App on this server: Team accounts take no teammates' work (SuperTabStoreHooks.teamAccountsIdle). Reads
+   *  decide New Project's Product Manager host as its start does (read/views.ts). */
+  get teamAccountsIdle(): boolean { return this.hooks.teamAccountsIdle === true }
+
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.polls = hooks.polls ?? localPollMemory(now)
@@ -2214,12 +2217,6 @@ export class SuperTabStore {
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
-      // A Product Manager waiting for a machine starts on the first free one (leadStart.ts). The Team machines are read only
-      // while one waits.
-      if (projectsOf(state).some(p => p.lead?.status === 'waiting')) {
-        placeWaitingLeads(state, { now, teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state),
-          ...(this.hooks.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
-      }
       return saved(checked)
     })
   }

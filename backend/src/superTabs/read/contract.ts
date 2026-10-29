@@ -61,7 +61,10 @@ export interface Derived {
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
-    suspendedEngines?: Record<string, string> }>
+    suspendedEngines?: Record<string, string>
+    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
+     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
+    lead?: Record<string, { machineId: string } | { refused: string }> }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */

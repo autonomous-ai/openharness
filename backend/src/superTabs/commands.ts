@@ -35,7 +35,7 @@ import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema,
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, requestLead, WAITING_TEXT } from './leadStart.js'
+import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -943,9 +943,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (leadStarting(state, project.id)) fail('LEAD_STARTING', `This project's ${LEAD_NAME} is already starting.`)
       if (!project.repository?.repositoryUrl && !command.repositoryUrl) fail('REPOSITORY_REQUIRED', 'Choose the repository this project works in.', 400)
       const { type: _type, projectId: _projectId, machineId, ...request } = command
-      const placed = requestLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
-      Object.assign(result, placed)
-      if ('waiting' in placed) message(home.id, WAITING_TEXT, [], null, SYSTEM_ROW)
+      // Only its person knows which machine stays on (Ken, 10-29): a Desktop from before asked for the first free one.
+      if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${LEAD_NAME} runs on.`, 400)
+      const start = placeLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
+      Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
     case 'project.skills': {
@@ -1614,9 +1615,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const counted = !start.error
         start.error = command.error
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
-        // A Product Manager's start says so in its project's conversation only when it stops trying (leadStart.ts).
+        // A Product Manager's start says so in its project's conversation (leadStart.ts).
         if (start.request.leadFor) {
-          const ended = leadStartFailed(state, start, command.error, context.now)
+          const ended = leadStartFailed(state, start, command.error)
           if (ended) message(start.request.conversationId, ended, [], null, SYSTEM_ROW)
           break
         }
