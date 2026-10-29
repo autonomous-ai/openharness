@@ -126,7 +126,7 @@ describe('a machine the backend refuses', () => {
   })
 })
 
-// Roadmap Phase 1.3: with WEB_WS_AUTH_HTTP_401 on, the backend refuses a bad token with HTTP 401 before the upgrade, to the
+// Roadmap Phase 1.3: the backend refuses a bad token with HTTP 401 before the upgrade, to the
 // sockets that say they read it. The relay says so, and reads that 401 as it reads a 4401: one refresh, then the backoff.
 describe('a bad token refused before the upgrade', () => {
   it('is refreshed once and dialled again', async () => {
