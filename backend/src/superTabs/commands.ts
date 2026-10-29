@@ -21,7 +21,7 @@ import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
+import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
@@ -132,8 +132,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
+  // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
-    mergedAt: z.iso.datetime().optional() }).strict(),
+    mergedAt: z.iso.datetime().optional(), fixes: z.string().max(400).regex(PULL_REQUEST_URL).optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
@@ -1269,10 +1270,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {
         fail('MERGE_TIME', 'Record a merge from the last four weeks, not one still to come.', 400)
       }
+      // One refusal for every link it cannot take, so a link never tells what another project or a private chat holds.
+      const original = command.fixes === undefined ? undefined : fixedOriginal(state, group, command.fixes, mergedAt)
+        ?? fail('FIX_LINK', 'No merged pull request in this project matches that link within the last 14 days.', 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
-      if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
+      const fixed = original ? recordFix(original, group, mergedAt) : false
+      if (!linked || group.ledger!.shippedAt !== shippedAt || fixed) {
+        message(group.id, `Merged ${command.pullRequestUrl}${original ? `, a fix of ${command.fixes}` : ''}`, [], null, SYSTEM_ROW)
+      }
       break
     }
     case 'conversation.archive': {

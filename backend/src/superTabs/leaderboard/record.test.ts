@@ -226,6 +226,80 @@ describe('when the Lead records a merge', () => {
     expect(f.group(id).pullRequestUrls).toBeUndefined()
   })
 
+  // Evidence routing (Ken, 2026-10-29): a merged PR whose code a follow-up fix PR changes within 14 days, the follow-up linking it.
+  describe('a fix after merge', () => {
+    const FIX = 'https://github.com/o/r/pull/43', REFUSED = 'No merged pull request in this project matches that link within the last 14 days.'
+    const fixes = (conversationId: string, extra: Record<string, unknown> = {}) =>
+      commandSchema.parse({ type: 'conversation.merged', conversationId, pullRequestUrl: FIX, fixes: PR, ...extra })
+    /** The original merged at NOW, and a follow-up group for its fix. */
+    const original = () => {
+      const s = setup()
+      s.f.run(merged(s.id), s.lead)
+      const fix = s.f.create(s.lead)
+      return { ...s, fix }
+    }
+
+    it('marks the original merged request as fixed after merge, once, at the fix\'s merge', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 3 * DAY_MS)
+      const effects = f.run(fixes(fix), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+      expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
+      expect(f.group(fix).pullRequestUrls).toEqual([FIX])
+      expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      // Recorded again, or by a second fix later: the first fix stays the one counted.
+      f.at(NOW + 5 * DAY_MS)
+      f.run(fixes(fix), lead)
+      const second = f.create(lead)
+      f.run(fixes(second, { pullRequestUrl: 'https://github.com/o/r/pull/44' }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+    })
+
+    it('takes a backfilled fix merge time, and refuses one over 14 days after the original merge or before it', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 20 * DAY_MS)
+      expect(() => f.run(fixes(fix), lead)).toThrow(REFUSED)
+      expect(() => f.run(fixes(fix, { mergedAt: new Date(NOW - 60_000).toISOString() }), lead)).toThrow(REFUSED)
+      f.run(fixes(fix, { mergedAt: new Date(NOW + 14 * DAY_MS).toISOString() }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 14 * DAY_MS)
+    })
+
+    it('refuses alike a link to no group, an unmerged one, the same group, a review, another project or a private chat, changing nothing', () => {
+      const { f, lead, id, fix } = original()
+      const refused = (conversationId: string, link: string) => {
+        expect(() => f.run(fixes(conversationId, { fixes: link }), lead)).toThrow(REFUSED)
+        expect(f.group(id).ledger?.fixedAfterMergeAt).toBeUndefined()
+      }
+      refused(fix, 'https://github.com/o/r/pull/99')
+      const open = f.create(lead)
+      f.group(open).pullRequestUrls = ['https://github.com/o/r/pull/50']
+      refused(fix, 'https://github.com/o/r/pull/50')
+      Object.assign(f.group(open), { reviewOf: id, ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/50')
+      refused(id, PR)
+      const other = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+      const elsewhere = f.run(commandSchema.parse({ type: 'conversation.create', projectId: other.projectId, title: 'Other', brief: 'x', checks })).result.conversationId as string
+      f.run(merged(elsewhere, { pullRequestUrl: 'https://github.com/o/r/pull/60' }))
+      refused(fix, 'https://github.com/o/r/pull/60')
+      const chat = f.buddyChat()
+      Object.assign(f.group(chat), { pullRequestUrls: ['https://github.com/o/r/pull/70'], ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/70')
+      expect(f.group(fix).ledger?.shippedAt).toBeUndefined()
+      expect(f.group(fix).pullRequestUrls).toBeUndefined()
+    })
+
+    it('keeps the fix record to the Lead and owners, as the merge record', () => {
+      const { f, fix } = original()
+      f.invitePeer()
+      expect(() => f.run(fixes(fix), peer)).toThrow('Lead or an owner')
+    })
+
+    it('takes only a GitHub pull request link as the original', () => {
+      expect(() => fixes('g', { fixes: 'https://example.com/o/r/pull/1' })).toThrow()
+      expect(() => fixes('g')).not.toThrow()
+    })
+  })
+
   it('takes the record from the Swarm and project owner', () => {
     const { f, id } = setup()
     f.run(merged(id), owner)

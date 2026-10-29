@@ -43,6 +43,11 @@ export interface GroupLedger {
   shippedAt?: number
   /** The earliest merge the Lead recorded (recordMerged); once there is one, it is the ship time. */
   mergedAt?: number
+  /** When the first follow-up fix of its merged PR merged, within FIX_WINDOW_MS of its merge (recordFix): it needed a fix
+   *  after merge (evidence routing, Ken 2026-10-29). */
+  fixedAfterMergeAt?: number
+  /** The group whose merged PR this group's merge fixed. */
+  fixOf?: string
   /** The item waiting on a person: the attempt, since when, the "Needs a human" row it posted, the decision it asked with it
    *  (the same one again when the worker repeats an open question), and once a person answered it, when. An answered item no
    *  longer waits, though its worker has not moved on yet. A wait recorded before decisions were named has none. */
@@ -125,6 +130,29 @@ export function recordMerged(group: Conversation, mergedAt: number): void {
   // takes the attempt running then; the lead stays, as no history of leads is kept (Lead, 2026-10-29).
   if (ledger.shippedLeadId !== undefined && before != null && ledger.shippedAt < before) shipAttempt(ledger)
   else shipOn(group)
+}
+
+/** How long after a merge a follow-up fix still counts against it (evidence routing spec, PM call 10). */
+export const FIX_WINDOW_MS = 14 * 86_400_000
+
+/** The merged group a fix PR merged at [mergedAt] fixes: a shared group of the same project, not [fix] itself nor a review,
+ *  that links [url] and merged at most FIX_WINDOW_MS before. Undefined for anything else, which its caller refuses alike, so
+ *  a link names nothing outside the project. */
+export function fixedOriginal(state: SuperTabState, fix: Conversation, url: string, mergedAt: number): Conversation | undefined {
+  const project = groupProject(state, fix).id
+  return state.conversations.find(g => g.id !== fix.id && !g.reviewOf && !g.audience && !isLeads(g) && g.pullRequestUrls?.includes(url)
+    && g.ledger?.mergedAt !== undefined && mergedAt >= g.ledger.mergedAt && mergedAt - g.ledger.mergedAt <= FIX_WINDOW_MS
+    && groupProject(state, g).id === project)
+}
+
+/** Records that [fix]'s merge at [mergedAt] fixed [original]'s merged PR. Only the first fix counts against it; true when this
+ *  one is that first. */
+export function recordFix(original: Conversation, fix: Conversation, mergedAt: number): boolean {
+  const ledger = original.ledger!
+  ;(fix.ledger ??= {}).fixOf = original.id
+  if (ledger.fixedAfterMergeAt !== undefined && ledger.fixedAfterMergeAt <= mergedAt) return false
+  ledger.fixedAfterMergeAt = mergedAt
+  return true
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
