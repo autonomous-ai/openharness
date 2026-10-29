@@ -35,6 +35,13 @@ export const NAMED_INDEX = {
     /** A member's Swarms in id order: Swarm lists and Workspace removals. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
   },
+  /** Each part kind's changes since a cursor; machines also by when they were last read. */
+  SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmMember: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmAgent: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 } },
+  SwarmStart: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

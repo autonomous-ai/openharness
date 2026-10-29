@@ -8,6 +8,7 @@ import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
 import { agentOpenDeliveries } from '../src/superTabs/pageReads.js'
+import { loadChanged } from '../src/superTabs/parts/index.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Roadmap Phase 3 (database optimization, 2026-10-29): Prisma sends `in` and `has` as $expr, which the planner bounds by an
@@ -161,5 +162,40 @@ describe('an agent\'s open deliveries', () => {
     const old = prisma.find(d => d.id === `${tabId}-old`)!
     expect(old.nativeContextId).toBeNull()
     expect(old.holdSince).toBeNull()
+  })
+})
+
+describe('what changed in a set of Swarms since a cursor', () => {
+  const OLD = new Date(NOW - 3_600_000), SINCE = new Date(NOW - 1_800_000), LATER = new Date(NOW - 60_000)
+  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'] as const
+  let ids: string[]
+  beforeAll(async () => {
+    const maker = await signedIn('changer')
+    ids = []
+    for (let i = 0; i < 3; i++) ids.push((await store.create(maker, randomUUID(), `Changed ${i}`)).id)
+    for (const model of SWARM_PARTS) await (db[model] as unknown as { updateMany(args: unknown): Promise<unknown> }).updateMany({ where: { tabId: { in: ids } }, data: { changedAt: OLD } })
+    const machine = (key: string, changedAt: Date, readAt: Date | null) => ({ id: `${ids[0]}:${key}`, tabId: ids[0]!, key, version: 1, changedAt, ordinal: 1,
+      data: { machineId: key }, machineId: key, cleanupOwnerIds: [], readAt })
+    // Quiet machines of the first Swarm: a read bounded by the Swarm alone examines these too.
+    await db.swarmMachine.createMany({ data: [...Array.from({ length: 6 }, (_, i) => machine(`machine:quiet-${i}`, OLD, OLD)),
+      machine('machine:read', OLD, LATER), machine('machine:changed', LATER, null), machine('machine:both', LATER, LATER)] })
+    await db.swarmMember.updateMany({ where: { tabId: ids[0]! }, data: { changedAt: LATER } })
+  })
+
+  it('reads each kind by its changes index, and machines also by when they were read, examining only what changed', async () => {
+    let changed = new Map<string, Array<{ kind: string; key: string; readAt?: number }>>()
+    const entries = await profiled(db, async () => { changed = await db.$transaction(tx => loadChanged(tx, ids, SINCE)) })
+    const keys = (tabId: string) => changed.get(tabId)!.map(p => `${p.kind}:${p.key}`).sort()
+    const members = (await db.swarmMember.findMany({ where: { tabId: ids[0]! } })).map(m => `member:${m.key}`)
+    expect(keys(ids[0]!)).toEqual([...members, 'machine:machine:both', 'machine:machine:changed', 'machine:machine:read'].sort())
+    expect(keys(ids[1]!)).toEqual([])
+    expect(keys(ids[2]!)).toEqual([])
+    expect(changed.get(ids[0]!)!.find(p => p.key === 'machine:read')!.readAt).toBe(LATER.getTime())
+    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.ns))
+    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(8)
+    for (const read of swarmReads) {
+      expect(read.docsExamined, `${read.ns} ${JSON.stringify(plan([read]))}`).toBeLessThanOrEqual(read.nreturned!)
+      expect(read.command?.hint, `${read.ns} names its index: ${JSON.stringify(plan([read]))}`).toBeTruthy()
+    }
   })
 })
