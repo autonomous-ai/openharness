@@ -293,6 +293,30 @@ describe('Super Tab collaboration policy', () => {
     expect(post(as(worker))).toEqual([lead])
   })
 
+  // 10-29: a moved agent's alarm and answers reached no one, and the backend worker stayed down 4 h 50 min.
+  it('delivers a post by the agent whose task here ended to the Lead, with the agents it names, and nobody else\'s', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (actor: Actor, recipientIds: string[] = [], agentOnly?: boolean) => f.run({ type: 'message.send', conversationId: group,
+      text: 'Severe: the worker is down.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}) }, actor).messages[0]!.recipients
+    const assignment = () => f.state.conversations.find(c => c.id === group)!.assignment!
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: assignment().id, reason: 'Duplicate of another task' })
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker), [other])).toEqual([other, lead])
+    expect(post(as(worker), [lead])).toEqual([lead])
+    // A note to itself stays its own.
+    expect(post(as(worker), [worker], true)).toEqual([worker])
+    expect(post(as(other))).toEqual([])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: other })
+    f.run({ type: 'work.status', conversationId: group, assignmentId: assignment().id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    expect(post(as(other))).toEqual([lead])
+    expect(() => post(as(other), ['not-an-agent'])).toThrow()
+  })
+
   describe('a Lead\'s message to the assigned worker (#1549)', () => {
     const setup = () => {
       const f = fixture()
