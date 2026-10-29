@@ -226,6 +226,82 @@ describe('when the Lead records a merge', () => {
     expect(f.group(id).pullRequestUrls).toBeUndefined()
   })
 
+  // Evidence routing (Ken, 2026-10-29): a merged PR whose code a follow-up fix PR changes within 14 days, the follow-up linking it.
+  describe('a fix after merge', () => {
+    const FIX = 'https://github.com/o/r/pull/43', REFUSED = 'No merged pull request in this project matches that link within the last 14 days.'
+    const fixes = (conversationId: string, extra: Record<string, unknown> = {}) =>
+      commandSchema.parse({ type: 'conversation.merged', conversationId, pullRequestUrl: FIX, fixes: PR, ...extra })
+    /** The original merged at NOW, and a follow-up group for its fix. */
+    const original = () => {
+      const s = setup()
+      s.f.run(merged(s.id), s.lead)
+      const fix = s.f.create(s.lead)
+      return { ...s, fix }
+    }
+
+    it('marks the original merged request as fixed after merge, once, at the fix\'s merge', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 3 * DAY_MS)
+      const effects = f.run(fixes(fix), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+      expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
+      expect(f.group(fix).pullRequestUrls).toEqual([FIX])
+      expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      // The line is the fix's card (cards.ts: a main-chat line's links become cards, the original's too).
+      expect(f.group(fix).cards?.pullRequests?.[0]).toMatchObject({ url: FIX, messageId: effects.messages[0]!.id, mergedAt: NOW + 3 * DAY_MS })
+      // Recorded again, or by a second fix later: the first fix stays the one counted.
+      f.at(NOW + 5 * DAY_MS)
+      f.run(fixes(fix), lead)
+      const second = f.create(lead)
+      f.run(fixes(second, { pullRequestUrl: 'https://github.com/o/r/pull/44' }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+    })
+
+    it('takes a backfilled fix merge time, and refuses one over 14 days after the original merge or before it', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 20 * DAY_MS)
+      expect(() => f.run(fixes(fix), lead)).toThrow(REFUSED)
+      expect(() => f.run(fixes(fix, { mergedAt: new Date(NOW - 60_000).toISOString() }), lead)).toThrow(REFUSED)
+      f.run(fixes(fix, { mergedAt: new Date(NOW + 14 * DAY_MS).toISOString() }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 14 * DAY_MS)
+    })
+
+    it('refuses alike a link to no group, an unmerged one, the same group, a review, another project or a private chat, changing nothing', () => {
+      const { f, lead, id, fix } = original()
+      const refused = (conversationId: string, link: string) => {
+        expect(() => f.run(fixes(conversationId, { fixes: link }), lead)).toThrow(REFUSED)
+        expect(f.group(id).ledger?.fixedAfterMergeAt).toBeUndefined()
+      }
+      refused(fix, 'https://github.com/o/r/pull/99')
+      const open = f.create(lead)
+      f.group(open).pullRequestUrls = ['https://github.com/o/r/pull/50']
+      refused(fix, 'https://github.com/o/r/pull/50')
+      Object.assign(f.group(open), { reviewOf: id, ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/50')
+      refused(id, PR)
+      const other = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+      const elsewhere = f.run(commandSchema.parse({ type: 'conversation.create', projectId: other.projectId, title: 'Other', brief: 'x', checks })).result.conversationId as string
+      f.run(merged(elsewhere, { pullRequestUrl: 'https://github.com/o/r/pull/60' }))
+      refused(fix, 'https://github.com/o/r/pull/60')
+      const chat = f.buddyChat()
+      Object.assign(f.group(chat), { pullRequestUrls: ['https://github.com/o/r/pull/70'], ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/70')
+      expect(f.group(fix).ledger?.shippedAt).toBeUndefined()
+      expect(f.group(fix).pullRequestUrls).toBeUndefined()
+    })
+
+    it('keeps the fix record to the Lead and owners, as the merge record', () => {
+      const { f, fix } = original()
+      f.invitePeer()
+      expect(() => f.run(fixes(fix), peer)).toThrow('Lead or an owner')
+    })
+
+    it('takes only a GitHub pull request link as the original', () => {
+      expect(() => fixes('g', { fixes: 'https://example.com/o/r/pull/1' })).toThrow()
+      expect(() => fixes('g')).not.toThrow()
+    })
+  })
+
   it('takes the record from the Swarm and project owner', () => {
     const { f, id } = setup()
     f.run(merged(id), owner)
@@ -597,6 +673,41 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const attempt = g.assign(both).assignmentId
     for (const c of g.group(both).checks) g.run({ type: 'work.check', conversationId: both, assignmentId: attempt, checkId: c.id, passed: true, evidence: 'rev abc' })
     expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
+  })
+
+  // Evidence routing (Ken, 2026-10-29): a rework round is a re-review after a failed review in the same attempt.
+  it('counts each re-review after a failed verdict as a rework round of the attempt, a review of several checks once', () => {
+    const two = [{ description: 'Code review', independent: true }, { description: 'Security review', independent: true }, { description: 'Builder', independent: false }]
+    const f = fixture()
+    const id = f.create(owner, { checks: two })
+    const { assignmentId } = f.assign(id)
+    const [code, security, own] = f.group(id).checks
+    const run = () => f.group(id).ledger!.runs![0]!
+    const check = (checkId: string, passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' })
+    check(code!.id, true)
+    check(own!.id, false)
+    check(own!.id, true)
+    expect(run().reworkRounds).toBeUndefined()
+    // Both reviews fail, then both pass: one round, not two.
+    check(code!.id, false)
+    check(security!.id, false)
+    expect(run().reworkRounds).toBe(0)
+    check(code!.id, true)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    // A verdict after a pass is not a re-review of a failure.
+    check(code!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    check(security!.id, false)
+    check(security!.id, false)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(3)
+    // A new attempt starts from none.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    f.run({ type: 'work.check', conversationId: id, assignmentId: second.assignmentId, checkId: code!.id, passed: true, evidence: 'rev def' })
+    expect(f.group(id).ledger!.runs![1]).toMatchObject({ assignmentId: second.assignmentId })
+    expect(f.group(id).ledger!.runs![1]!.reworkRounds).toBeUndefined()
   })
 
   it('records each finished review verdict an agent gives, with the model it ran on, for the reviewer models\' points', () => {

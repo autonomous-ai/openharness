@@ -146,10 +146,13 @@ export interface CommandReply {
   legacyRevision?: number
 }
 
-/** GET /api/super-tabs/list[?after=] */
+/** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
   /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null }>
+  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+    /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
+     *  Swarm whose count cannot be told here has neither). */
+    mentionsWaiting?: number; mentionsDigest?: string }>
   next: string | null
 }
 

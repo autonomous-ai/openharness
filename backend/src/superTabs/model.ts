@@ -166,6 +166,9 @@ export interface Assignment {
   progressAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
+  /** When a review last found problems in its hand-off: the hand-off no longer pauses its quiet time (liveness.ts
+   *  waitingForReview). Its next status clears it. */
+  reviewFoundAt?: number
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
@@ -380,20 +383,39 @@ export interface MessageDraft {
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
-/** Notices written for the Lead or an agent, read only by their recipients like an agent-only notice, under their own kind
- *  so their recipients receive them as before: the Lead's wake for a stalled, lost or resumed task, the old agent's moved
- *  notice, and the Lead's scheduled report and digest requests. People read the task's state on its status line (Ken,
- *  2026-10-29: shown under the Lead's name in the project chat, they read as requests to act). By kind, so the ones already
- *  stored are hidden as well; but only one that reaches an agent: with no Lead to hear it, a person is the only one who can
- *  act, so people read it (review of #2177). */
-const RECIPIENT_NOTICES = new Set<unknown>(['work-stalled', 'work-lost', 'work-resumed', 'update-request', 'digest-request'])
+/** Who reads each kind of notice the Swarm writes into a chat: every kind the code writes has its line (notices.test.ts).
+ *  `people`: everyone in the chat, its record of what happened or of what someone must act on. `recipients`: written for the
+ *  Lead or an agent, so only the ones it reaches read it, like an agent-only notice, under its own kind so they receive it as
+ *  before; a notice that reaches none is for people, the only ones left who can act (review of #2177). `agent`: only its
+ *  recipients, always. Ken, 2026-10-29: shown under the Lead's name in the project chat, the Lead's wakes read as requests to
+ *  act; people read a task's state on its status line. By kind, so the ones already stored are hidden as well. A kind people
+ *  read can still be one row's recipients' alone (forRecipients): a cancel told to its worker, a routing line in the project
+ *  chat. A kind no code here knows, stored by a newer server, reads as `people`. */
+export const NOTICE_READERS = {
+  // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
+  'agent-only': 'agent',
+  // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
+  // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
+  'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
+  system: 'people',
+  rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people', 'auto-review': 'people',
+  'auto-archive': 'people', native: 'people',
+  // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
+} as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
+const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
+  typeof kind === 'string' && Object.hasOwn(NOTICE_READERS, kind) ? NOTICE_READERS[kind as keyof typeof NOTICE_READERS] : 'people'
 /** Marks a notice of a kind people also read (a cancel to its worker), or a copy for no one of a notice its recipient hears
  *  elsewhere, as its recipients' alone. */
 export const forRecipients = (source: Record<string, unknown>) => ({ ...source, recipientsOnly: true as const })
 /** Whether only the message's recipients read it: never people, nor other agents. */
 export const agentOnly = (source: unknown, recipients: readonly string[]): boolean => {
   const notice = source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
-  return notice?.kind === AGENT_ONLY.kind || notice?.recipientsOnly === true || (RECIPIENT_NOTICES.has(notice?.kind) && recipients.length > 0)
+  const readers = readersOf(notice?.kind)
+  return readers === 'agent' || notice?.recipientsOnly === true || (readers === 'recipients' && recipients.length > 0)
 }
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */

@@ -83,6 +83,7 @@ describe('what each action reads of the Swarm', () => {
     const builder = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.builderId }, owner)
     expect(String(object(lead.help).post)).toContain('--mention')
     expect(String(object(builder.help).post)).not.toContain('--mention')
+    for (const help of [lead.help, builder.help]) expect(String(object(help).react)).toMatch(/^react GROUP MESSAGE_ID EMOJI OPERATION_ID \[--off\]: .*eyes.*check.*rocket/)
     expect(s.reads()).toEqual([])
   })
   it('reads the roster as it is now for every call, so an agent started a moment ago is known at once', async () => {

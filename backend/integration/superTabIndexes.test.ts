@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from '../src/superTabs/pageReads.js'
 import { costRows } from '../src/superTabs/costs/read.js'
+import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
@@ -117,7 +118,7 @@ describe('message page reads', () => {
     expect(threads).toHaveLength(130)
     expect(threads.filter(row => row.id !== row.thread).map(row => row.id).slice(0, 3)).toEqual(['t0-m100-r1', 't0-m100-r2', 't0-m100-r3'])
     expect(threads[0]).toEqual({ thread: 't0-m100', id: 't0-m100', author: expect.objectContaining({ id: 'owner' }), mentions: [],
-      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false })
+      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, routing: false })
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 130 })
   })
 
@@ -213,6 +214,26 @@ describe('cost summary', () => {
   })
 })
 
+describe('model evidence', () => {
+  // Routing and the weekly report read a Swarm's evidence (superTabs/evidence/store.ts): only the weeks asked for, by index.
+  it('reads the weeks of a period and the last-ten rows with one index scan each, examining only that Swarm\'s rows', async () => {
+    const WEEK = 7 * 86_400_000, MONDAY = Date.UTC(2026, 9, 26)
+    const rows = ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].flatMap(model => Array.from({ length: 26 }, (_, w) => ({
+      _id: `${tabId}-${model}-${w}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', week: { $date: new Date(MONDAY - w * WEEK).toISOString() },
+      attempts: 1, updatedAt: { $date: new Date(MONDAY).toISOString() } }))))
+    await db.$runCommandRaw({ insert: 'SuperTabModelEvidence', documents: rows as never })
+    await db.$runCommandRaw({ insert: 'SuperTabModelRecent', documents: ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].map(model => ({
+      _id: `${tabId}-${model}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', results: [{ a: 'x', at: MONDAY, passed: true }],
+      updatedAt: { $date: new Date(MONDAY).toISOString() } }))) as never })
+    // The last four weeks: 3 models x 4 weeks.
+    const [read, profile] = await profiled('SuperTabModelEvidence', () => readEvidence(db, 'A', MONDAY - 3 * WEEK))
+    expect(read.models.map(m => [m.model, m.attempts, m.recent])).toEqual([['kimi', 4, [true]], ['opus', 4, [true]], ['sonnet', 4, [true]]])
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, week: 1 }'], docsExamined: 12, returned: 12 })
+    const [, recent] = await profiled('SuperTabModelRecent', () => readEvidence(db, 'A', MONDAY))
+    expect(recent).toEqual({ plans: ['IXSCAN { tabId: 1, updatedAt: 1 }'], docsExamined: 3, returned: 3 })
+  })
+})
+
 describe('route decision list', () => {
   const prismaRead = (tabId: string, conversationIds: string[]) => db.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: conversationIds } },
     orderBy: { createdAt: 'desc' }, take: 100 })
@@ -237,11 +258,11 @@ describe('route decision list', () => {
     expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
       final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
-      outcomeAt: new Date(T0 + 1_800_500), run: null, createdAt: new Date(T0 + 1_800_000) })
+      outcomeAt: new Date(T0 + 1_800_500), run: null, evidence: null, createdAt: new Date(T0 + 1_800_000) })
     // Written as an older record: none of the optional fields exist.
     expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
-      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, createdAt: new Date(T0 + 721_000) })
+      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, evidence: null, createdAt: new Date(T0 + 721_000) })
     expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
     expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
     expect(await recentDecisions(db, 'B', [])).toEqual([])

@@ -61,6 +61,37 @@ export function renewLease(assignment: Assignment, now: number): void {
   assignment.progressAt = now
 }
 
+/** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
+ *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
+ *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
+const READY_FOR_REVIEW = /\bready for review\b/i
+const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
+
+/** Work that waits for its review, whose quiet time therefore does not count (2026-10-29: five Engineers who had handed
+ *  over lost their tasks waiting for a Reviewer). In review, or working with a hand-off as its latest result, as Engineers
+ *  report while done is refused until the review passes, until a review finds problems in it. */
+export function waitingForReview(assignment: Assignment): boolean {
+  if (assignment.status === 'review') return true
+  return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
+    && READY_FOR_REVIEW.test(assignment.result) && REVISION.test(assignment.result)
+}
+
+/** Work that stopped waiting for its review counts its quiet time from now: its agent keeps it QUIET_RUNNING_MS without
+ *  progress, as after its last screen change, though its screen stayed still while it waited. */
+export function restartQuietTime(assignment: Assignment, now: number): void {
+  assignment.progressAt = now
+  assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
+}
+
+/** A review found problems in work waiting for it: the work is its Engineer's to fix again, and its quiet time counts. */
+export function reviewFoundProblems(assignment: Assignment, now: number): boolean {
+  if (!waitingForReview(assignment)) return false
+  assignment.status = 'working'
+  assignment.reviewFoundAt = now
+  restartQuietTime(assignment, now)
+  return true
+}
+
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
 function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignment: Assignment; worker: Agent }> {
   return state.conversations.filter(activeWork).flatMap(group => {
@@ -120,6 +151,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
+  if (waitingForReview(assignment)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)

@@ -51,7 +51,12 @@ ConversationServer cardServer({int? mergedAt}) {
     'agentIds': ['kai', 'ivy'],
     'brief': 'Add avatars.',
     'checks': [
-      {'id': 'a', 'description': 'Tests pass', 'evidence': 'ok'},
+      {
+        'id': 'a',
+        'description': 'Tests pass',
+        'evidence': 'ok',
+        'passedBy': 'agent:kai',
+      },
       {'id': 'b', 'description': 'Screens', 'evidence': null},
     ],
     'assignment': {'id': 'w', 'agentId': 'kai', 'status': 'working'},
@@ -183,6 +188,26 @@ void main() {
       find.text('Reviewer: Ivy · Ready: yes on 1a2b3c4d5'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('a failed check keeps its evidence and is not counted passed', (
+    tester,
+  ) async {
+    final server = cardServer();
+    final group = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == 'work');
+    // As the server records a failed check: its evidence, nobody passing it.
+    (group['checks'] as List)[1] = {
+      'id': 'b',
+      'description': 'Screens',
+      'evidence': 'Two screens cut off',
+      'passedBy': null,
+    };
+    final facts = SuperTabPullRequestFacts(null);
+    addTearDown(facts.dispose);
+    await show(tester, server, facts, 'message-1');
+    expect(find.text('1 of 2 checks passed'), findsOneWidget);
   });
 
   testWidgets('the card updates in place as the PR changes', (tester) async {

@@ -19,7 +19,7 @@ import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
-import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mentions.js'
+import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
@@ -2136,9 +2136,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const first = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
     const second = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
     expect((await store.routeDecision(owner, tab, first)).outcome).toBe('superseded')
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' }, orderBy: { sequence: 'asc' } })
     expect(rows.at(-1)).toMatchObject({ text: expect.stringContaining('"A small API change."'),
       source: { kind: 'route', decisionId: second, via: 'order', fallback: 'unsure', why: 'A small API change.' } })
+    // The Lead's ruling, 2026-10-29: routing in the project chat is agent bookkeeping, read by no one there (commands.ts).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.id)).not.toContain(rows.at(-1)!.id)
     await expect(run(tab, { type: 'route.override', decisionId: first, candidateId: 'c1', reason: 'Needs Opus.' } as Command))
       .rejects.toMatchObject({ code: 'ROUTE_CLOSED' })
     await run(tab, { type: 'route.override', decisionId: second, candidateId: 'c1', reason: 'Needs Opus.' } as Command)
@@ -3035,10 +3037,13 @@ describe('Leads conversation', () => {
       host, lead)).result.conversationId)
     await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
     const leads = (await store.read(owner, tab)).state.leadsConversationId!
-    const alerts = (await store.messages(owner, tab, leads, {})).messages
+    const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: leads } })
     expect(alerts).toEqual([expect.objectContaining({ source: { kind: 'overlap', conversationIds: [filter, roster] }, recipientIds: [docsLead],
       text: expect.stringContaining('"Agents filter" (Pilot') })])
     expect((await store.deliveries(host, tab, docsLead)).filter(d => d.conversationId === leads)).toHaveLength(1)
+    // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the Leads chat do not.
+    expect((await store.messages(host, tab, leads, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
+    expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
   })
 })
 
@@ -3225,6 +3230,51 @@ describe('Lead mentions', () => {
     expect((await waiting(tab, owner)).mentionsWaiting).toBe(0)
     expect((await store.read(host, tab, lead)).state).not.toHaveProperty('mentionsWaiting')
     expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+  })
+
+  // Desktop's list (?mentions=1) carries each Swarm's waiting tags, so it makes no mentions call per Swarm.
+  const listed = async (user: AuthUser, tab: string, query = '?mentions=1') => {
+    let after: string | undefined
+    do {
+      const response = await app.inject({ method: 'GET', url: `/api/super-tabs/list${query}${after ? `${query ? '&' : '?'}after=${after}` : ''}`,
+        headers: { authorization: `Bearer ${user.sub}` } })
+      expect(response.statusCode, response.body).toBe(200)
+      const page = response.json().data as { tabs: Array<Record<string, unknown>>; next: string | null }
+      const row = page.tabs.find(t => t.id === tab)
+      if (row) return row
+      after = page.next ?? undefined
+    } while (after)
+    throw new Error('Swarm not listed')
+  }
+
+  it('counts each listed Swarm’s waiting tags in the list when asked, as its own state does', async () => {
+    const { tab } = await tagged()
+    const own = (await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } }))
+      .json().data.derived as { mentionsWaiting: number; mentionsDigest: string }
+    expect(own).toMatchObject({ mentionsWaiting: 1, mentionsDigest: expect.any(String) })
+    expect(await listed(peer, tab)).toMatchObject({ id: tab, mentionsWaiting: 1, mentionsDigest: own.mentionsDigest })
+    expect(await listed(owner, tab)).toMatchObject({ id: tab, mentionsWaiting: 0 })
+    expect(await listed(peer, tab, '')).not.toHaveProperty('mentionsWaiting')
+    // A Swarm with no tags has the digest the Swarm's own state gives it.
+    const ownerDerived = (await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } }))
+      .json().data.derived as { mentionsDigest: string }
+    expect(await listed(owner, tab)).toMatchObject({ mentionsDigest: ownerDerived.mentionsDigest })
+  })
+
+  it('finds the Swarms holding a tag by the tag index, never a scan of every tag', async () => {
+    const { tab } = await tagged()
+    const plan = JSON.stringify(await db.$runCommandRaw({ explain: { aggregate: 'SuperTabMention', pipeline: swarmsWithTags([tab], peer.sub, Date.now()),
+      cursor: {} }, verbosity: 'queryPlanner' }))
+    expect(plan).toContain('IXSCAN')
+    expect(plan).not.toContain('COLLSCAN')
+  })
+
+  it('leaves a tag out of the list’s count once the person can no longer read its conversation', async () => {
+    const { tab } = await tagged()
+    expect(await listed(peer, tab)).toMatchObject({ mentionsWaiting: 1 })
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await listed(peer, tab)).toMatchObject({ mentionsWaiting: 0 })
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
   })
 
   it('lists a person’s tag of another person under the author’s username, never their email', async () => {

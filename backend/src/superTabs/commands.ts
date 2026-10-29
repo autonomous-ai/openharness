@@ -8,6 +8,7 @@ import {
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, forRecipients,
   type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
+import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
@@ -15,14 +16,14 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
+import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
+import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
@@ -135,8 +136,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
+  // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
-    mergedAt: z.iso.datetime().optional() }).strict(),
+    mergedAt: z.iso.datetime().optional(), fixes: z.string().max(400).regex(PULL_REQUEST_URL).optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
@@ -628,6 +630,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat or the Leads chat, which
+   *  carry only what people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
+  const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
+    conversationId === state.leadsConversationId || projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
@@ -674,8 +680,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const steppedUp = (group: Conversation, reason: string, startId?: string) => {
     const stepped = stepUp(state, group, reason, context.now, startId)
     if (!stepped) return
+    // Each its recipient's alone (Ken, 2026-10-29): people read the step on the task's status line. With no Lead here to
+    // hear it, the people do (review of #2177).
     const row = (key: string, text: string, recipients: string[]) => effects.messages.push({ id: stableId(operationId, 'step-up', key),
-      conversationId: group.id, author: sender, text, replyTo: null, recipients, source: SYSTEM_ROW })
+      conversationId: group.id, author: sender, text, replyTo: null, recipients, source: recipients.length ? forRecipients(SYSTEM_ROW) : SYSTEM_ROW })
     if (stepped.stopped) row('worker', `The Swarm stepped this task up to a stronger model: ${reason.replace(/^./, c => c.toLowerCase()).replace(/\.$/, '')}. Stop working on it.`, [stepped.stopped])
     const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
     row('lead', stepped.notice, lead ? [lead] : [])
@@ -970,7 +978,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const group = state.conversations.find(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id)) ?? conversation(state, project.leadConversationId)
         effects.messages.push({ id: stableId(operationId, 'role-gone', target.id), conversationId: group.id, author: sender, recipients: [target.id], replyTo: null,
           text: `Custom has no ${agentKind(state, target) === 'reviewer' ? 'Reviewer' : 'Engineer'} role for ${target.displayName ?? target.name}. `
-            + 'Finish your current work; you take no new work.', source: SYSTEM_ROW })
+            + 'Finish your current work; you take no new work.', source: forRecipients(SYSTEM_ROW) })
       }
       break
     }
@@ -1303,16 +1311,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {
         fail('MERGE_TIME', 'Record a merge from the last four weeks, not one still to come.', 400)
       }
+      // One refusal for every link it cannot take, so a link never tells what another project or a private chat holds.
+      const original = command.fixes === undefined ? undefined : fixedOriginal(state, group, command.fixes, mergedAt)
+        ?? fail('FIX_LINK', 'No merged pull request in this project matches that link within the last 14 days.', 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
       // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
-      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card.
+      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card. A fix of an
+      // earlier merge says so once more.
+      const fixed = original ? recordFix(original, group, mergedAt) : false
       const card = pullRequestCard(group, command.pullRequestUrl)
-      if (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt) {
-        message(group.id, `Merged ${command.pullRequestUrl}`, [], card?.messageId ?? null, SYSTEM_ROW)
-        if (card) effects.messages.at(-1)!.thread = card.messageId
-        else bindPullRequestCards(group, effects.messages.at(-1)!)
+      if (fixed || (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt)) {
+        message(group.id, `Merged ${command.pullRequestUrl}${original ? `, a fix of ${command.fixes}` : ''}`, [], card?.messageId ?? null, SYSTEM_ROW)
+        const posted = effects.messages.at(-1)!
+        if (card) posted.thread = card.messageId
+        else bindPullRequestCards(group, posted)
       }
       recordCardMerged(group, command.pullRequestUrl, mergedAt)
       break
@@ -1449,7 +1463,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort,
             ...(r.gridModel && r.gridName ? { gridModel: r.gridModel, gridName: r.gridName } : {}) }), command.overrideReason)
         if (override) message(r.conversationId, `Lead started ${r.name} instead of ${expected.title}. Reason: ${override.reason}`, [], null,
-          { kind: 'route-override', decisionId: decision.id, by: 'lead' })
+          bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
@@ -1587,9 +1601,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
         // A Product Manager is never assigned work: its conversation already said where it started.
+        // A warning is the people's to read (a start that went wrong); being ready is bookkeeping.
         if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
-          : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
+          : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null,
+          command.warning ? SYSTEM_ROW : bookkeeping(start.request.conversationId, SYSTEM_ROW))
         start.poolSettled = true
         break
       }
@@ -1641,12 +1657,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (start.request.leadFor) {
         // Taking over from a Lead that left, as agent.add does.
         if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+        // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
         message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       else if (!start.request.buddyOf) message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
-        : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
+        : `${start.request.name} joined. Ready for an assignment.`, [], null, bookkeeping(group.id, SYSTEM_ROW))
       break
     }
     case 'agent.configuration': {
@@ -1960,18 +1977,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // the server's own judgement (rules.ts).
       const step = conversation(state, command.conversationId).stepUp
       const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true))
-      const { stepUp: _sent, sameEngine: _said, ...made } = decision
+      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
+      const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
-        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {} } })
+        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {}, jobKind } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
         alternatives: decision.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })),
-      })
+      }))
       leadActed(command.conversationId, 'route')
       break
     }
@@ -2080,7 +2098,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
       message(group.id, `${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
-        text: routeNote.text, replyTo: null, recipients: [], source: { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' } })
+        text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' }) })
       break
     }
     case 'work.status': {
@@ -2111,8 +2129,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
+      const waited = waitingForReview(assignment)
       assignment.status = command.status
       assignment.result = command.result
+      // A new status is a new hand-off, or the end of one: a review's earlier findings are answered.
+      delete assignment.reviewFoundAt
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
@@ -2146,6 +2167,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      // The time it waited for its review never counts, whoever moved it on.
+      if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)
       break
     }
     case 'work.cancel': {
@@ -2214,6 +2237,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       recordReview(group, check, command.passed)
       // A cheap attempt whose first review just said Ready no steps up a tier (stepUp.ts).
       if (reviewed === undefined && run?.firstReview === false && cheapAttempt(group, policy)) steppedUp(group, REVIEW_FAILED)
+      // Otherwise a review that found problems hands the work back to its Engineer, whose quiet time counts again (liveness.ts).
+      // A stepped-up attempt was cancelled just above, so it is not waiting for its review and its Engineer is told only to stop.
+      if (check.independent && !command.passed && reviewFoundProblems(group.assignment, context.now)) {
+        message(group.id, 'Working\n\nThe review found problems. Fix them, then hand it over for review again.', [group.assignment.agentId], null, SYSTEM_ROW)
+      }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
