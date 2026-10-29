@@ -30,6 +30,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
+import { swarmEngineArgs } from '../../lib/swarmEngineArgs.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
@@ -371,7 +372,7 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmSkill ? swarmEngineArgs(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt

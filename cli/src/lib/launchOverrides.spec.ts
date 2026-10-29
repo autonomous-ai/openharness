@@ -509,6 +509,15 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
     expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
   })
 
+  it('relaunches a Swarm Codex without its startup update check, and a Codex the Swarm never started with it', async () => {
+    const { d } = deps()
+    const swarm = await buildLaunchOverrides(d, 'codex', { cwd: workspace(), swarmSkill: { role: 'dev', key: 'harness-codex-plain' } }, 'agent-1', () => true)
+    const own = await buildLaunchOverrides(d, 'codex', { cwd: workspace() }, 'agent-1', () => true)
+    if (!swarm.ok || !own.ok) throw new Error('relaunch refused')
+    expect(swarm.overrides.extraArgs.join(' ')).toContain('-c check_for_update_on_startup=false')
+    expect(own.overrides.extraArgs.join(' ')).not.toContain('check_for_update_on_startup')
+  })
+
   // HARNESS_SWARM=off: the core hands in no Swarm, and a session the Swarm started is not relaunched without its role.
   it('refuses a Swarm session with the Swarm off, before it asks or writes anything', async () => {
     const native = vi.fn(), dshLaunch = vi.fn()
