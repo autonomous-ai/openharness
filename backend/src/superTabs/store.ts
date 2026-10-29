@@ -12,7 +12,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentOpenDeliveries, deliveredCopies, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { agentOpenDeliveries, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -1960,8 +1960,7 @@ export class SuperTabStore {
     const onPage = new Set(page.map(m => m.id))
     const pointed = [...new Set(page.flatMap(m => [m.thread, m.replyTo]).filter((id): id is string => !!id && !onPage.has(id)))]
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one (pageReads.ts deliveredCopies).
-    const pointedRows = pointed.length ? await tx.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: pointed } },
-      select: { id: true, source: true, recipientIds: true } }) : []
+    const pointedRows = await messagesById(tx, tabId, conversationId, pointed)
     const pointedCopies = pointedRows.length ? await deliveredCopies(tx, tabId, pointedRows) : new Set<string>()
     const hidden = new Set(pointedRows.filter(m => !readable(m) || pointedCopies.has(m.id)).map(m => m.id))
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
