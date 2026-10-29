@@ -11,8 +11,8 @@ Measure only: nothing here is fixed. The first fix groups are proposed at the en
 
 | Device | MAC | Hardware | Firmware seen | Last seen |
 |---|---|---|---|---|
-| Round dial (Diego's) | 28:84:85:90:63:E8 | cst9217 + axp2101 | 0.0.92 to 0.0.99 | 10-29 11:02 UTC |
-| Round dial | 28:84:85:55:1F:E4 | cst9217 + axp2101 | 0.0.91 to 0.0.99 | plugged in now |
+| Round dial (Diego's, the first one flashed) | 28:84:85:90:63:E8 | cst9217 + axp2101 | 0.0.92 to 0.0.99 | 10-29 11:02 UTC |
+| Round dial (also Diego's, confirmed 10-29) | 28:84:85:55:1F:E4 | cst9217 + axp2101 | 0.0.91 to 0.0.99, plus dev and test builds on 10-29 | plugged in now |
 | Round dial (older board) | 68:EE:8F:52:B0:2C | cst816s | 0.0.94 | 10-29 10:58 |
 | Harness Pro | E8:F6:0A:E7:64:61 | harness-pro | 0.0.87 to 0.1.13-swarmcard3 | 10-23 |
 | Harness Pro | E8:F6:0A:E7:63:7D | harness-pro | 0.0.86 to 0.1.9 | 10-16 |
@@ -35,7 +35,7 @@ Pro firmware that ran; numbers for them say so.
 | Ready after a USB reset | < 5 s | 6.2 to 7.1 s (90:63:E8). The 10.5 and 13.8 s resets of 55:1F:E4 on 10-29 were flashes, not plug-ins | 4.7 to 9.4 s (0.1.x) | Same, after a reset over USB (flasher or serial-line toggle). |
 | Reconnect, port back to ready | < 2 s | 30 ms median, 941 ms worst | 40 ms median, 1.6 s at p90, 8.9 s worst (all firmware) | Daemon "open on" to the device's "session up". The live unplug test will time the full replug. |
 | Reconnect after a daemon restart | < 2 s | about 2 s to first fresh data; 10 restarts on 10-29 on Diego's dial | (no Pro plugged in on 10-29) | Daemon reopened the port with no unplug; first frame after it. |
-| Longest run without a crash | 24 h | 13.7 h (55:1F:E4), 7.6 h (90:63:E8), both ended by a replug | 8.9 h (64:61) | Longest uptime in `alive` lines. Live 24 h run on 55:1F:E4 counts from its restart at 10-29 12:16 UTC (after a dev flash at 12:13). |
+| Longest run without a crash | 24 h | 13.7 h (55:1F:E4), 7.6 h (90:63:E8), both ended by a replug | 8.9 h (64:61) | Longest uptime in `alive` lines. The live 24 h run on 55:1F:E4 starts once the #2179 + #2189 test flash and the return to 0.0.98 are done (10-29), and it records the build that ran. |
 | Memory creep | none | none: internal heap flat (129,299 B over 13.7 h); PSRAM down 11 KB over 7.6 h on 90:63:E8 | none: heap flat over 8.9 h | Free heap and PSRAM in `alive` lines across the longest run. |
 | Crashes | 0 | 0 panics, 0 watchdog resets in 6 weeks | **8 watchdog resets on 0.1.7 to 0.1.13 (10-15 to 10-23, all 3 units)**; 64 panics and 20 watchdog resets on the 0.0.86, 0.0.98 and 0.0.99-pod dev builds (10-09 to 10-19) | Reset reason at boot. |
 | OTA time | (none set) | 13 to 15 s (3 updates) | 6 to 11 s (10 updates) | Daemon "offering firmware" to the device's "written and verified". |
@@ -61,14 +61,14 @@ Ranked by how much a buyer would notice it, then by how often it happens on curr
 ### 2. One round dial takes 9 to 14 s from power on to ready
 
 - **Seen:** 55:1F:E4 after a power-on: 8.7, 10.6 and 11.8 s (fw 0.0.91, 0.0.93, 0.0.94); once 2.5 s.
-  Diego's dial: 2.5 to 4.5 s.
+  The other round dial (90:63:E8): 2.5 to 4.5 s.
 - **User impact:** after plugging in, the dial shows its boot screen for 10 s or more. Target is < 5 s.
 - **Root cause:** not found. The dial is sending from about 0.5 s after boot (the daemon finds that
   boot text waiting in the port buffer), but the daemon only opens the port about 10 s later. Two Harness
   daemons run on this Mac (one per macOS user, `duynguyen` and `harnessteam`), and both watch USB
   ports, so the other one may hold the port first. Its logs are not readable from this account. A
   flasher holding the port gives the same picture. The two USB resets of 10-29 (11:49 and 11:55 UTC,
-  10.5 and 13.8 s) were dev flashes from a session outside the Swarm, which is why they are left out.
+  10.5 and 13.8 s) were dev flashes, which is why they are left out.
   Whether the three power-on cases were flashes too is not known.
 - **Repro:** power-cycle 55:1F:E4 and read the device uptime at "session up" in its log.
 
