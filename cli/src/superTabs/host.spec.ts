@@ -903,6 +903,16 @@ describe('the super-tab command in delivered input', () => {
     expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
   })
+  it('names a Buddy\'s commands without --agent: its pane says who it is, and its guard refuses any --agent (review 2 of #2092)', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand: vi.fn(async () => 'harness super-tab') }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
+    expect(text).not.toContain('--agent')
+  })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
     const agentCommand = vi.fn(async () => { throw new Error('no shell') })

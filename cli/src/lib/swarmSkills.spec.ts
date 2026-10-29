@@ -8,7 +8,7 @@ import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwar
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
 import { hookArgv } from '../engines/kit/notifyHooks.js'
@@ -584,7 +584,7 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
       disableAllHooks: false,
       hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
     })
-    expect(readFileSync(guard, 'utf8')).toBe(BUDDY_GUARD_SOURCE)
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
     for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json'), guard]) {
       expect(statSync(file).mode & 0o222, file).toBe(0)
     }
@@ -594,7 +594,7 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     // A relaunch prepares it again the same way, a guard someone changed put back.
     chmodSync(guard, 0o600); writeFileSync(guard, 'process.exit(0)\n')
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
-    expect(readFileSync(guard, 'utf8')).toBe(BUDDY_GUARD_SOURCE)
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
     expect(statSync(guard).mode & 0o222).toBe(0)
   })
 

@@ -1,16 +1,21 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
 
 // The guard Claude Code runs before each of a Buddy's tool calls, run here as it runs there: the script, with node, the
 // hook's input on stdin and its decision on stdout.
-const root = mkdtempSync(join(tmpdir(), 'buddy-guard-'))
+// The Buddy's folder, with a file, a folder, and a link out of it; and somewhere outside it.
+const parent = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-guard-')))
+const root = join(parent, 'folder'), outside = join(parent, 'outside')
+mkdirSync(join(root, 'src'), { recursive: true }); mkdirSync(outside)
+writeFileSync(join(root, 'a.txt'), 'a\n'); writeFileSync(join(outside, 'secret.txt'), 'secret\n')
+symlinkSync(outside, join(root, 'out'))
 const script = join(root, 'buddy-guard.mjs')
-writeFileSync(script, BUDDY_GUARD_SOURCE)
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+writeFileSync(script, buddyGuardSource(root))
+afterAll(() => rmSync(parent, { recursive: true, force: true }))
 
 function hook(stdin: string): { status: number | null; stdout: string } {
   const run = spawnSync(process.execPath, [script], { input: stdin, encoding: 'utf8', timeout: 10_000 })
@@ -27,8 +32,34 @@ function decide(tool: string, input: Record<string, unknown>): string {
 const bash = (command: string) => decide('Bash', { command, description: 'x' })
 
 describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everything else without one)', () => {
-  it.each(['Read', 'Grep', 'Glob'])('lets %s read', tool => {
-    expect(decide(tool, { file_path: join(root, 'a.txt'), pattern: 'x' })).toBe('allow')
+  it.each([
+    ['Read', { file_path: join(root, 'a.txt') }],
+    ['Read', { file_path: 'a.txt' }],
+    ['Read', { file_path: join(root, 'not-there-yet.txt') }],
+    ['Grep', { pattern: 'x' }],
+    ['Grep', { pattern: 'x', path: join(root, 'src') }],
+    ['Glob', { pattern: '**/*.ts' }],
+    ['Glob', { pattern: '*.md', path: 'src' }],
+    ['LS', { path: root }],
+  ])('lets %s read in its folder (%j)', (tool, input) => {
+    expect(decide(tool, input)).toBe('allow')
+  })
+
+  // Reads stay in the Buddy's folder (security review 2 of #2092): the machine is its person's, the folder is the project.
+  it.each([
+    ['Read', { file_path: '/etc/passwd' }],
+    ['Read', { file_path: join(outside, 'secret.txt') }],
+    ['Read', { file_path: join(root, '..', 'outside', 'secret.txt') }],
+    ['Read', { file_path: join(root, 'out', 'secret.txt') }],
+    ['Read', {}],
+    ['Grep', { pattern: 'x', path: '/' }],
+    ['Grep', { pattern: 'x', path: join(root, 'out') }],
+    ['Glob', { pattern: '/etc/*' }],
+    ['Glob', { pattern: '../**/*' }],
+    ['Glob', { pattern: '*', path: outside }],
+    ['LS', { path: '/' }],
+  ])('refuses %s outside its folder (%j)', (tool, input) => {
+    expect(decide(tool, input)).toBe('deny')
   })
 
   it.each([
@@ -51,6 +82,14 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'head -n 40 CHANGELOG.md',
     "harness super-tab --tab t post chat \"it's a plan: step 1; step 2 | done & more > less\" op-1",
     "harness super-tab --tab t propose op-2 '{\"conversationId\":\"c\",\"goal\":\"g\"}'",
+    // Its Super Tab commands, as the pane it runs in identifies it (superTabs/command.ts callerOf).
+    'harness super-tab --tab t status',
+    'harness super-tab --tab t messages chat',
+    'harness super-tab --tab t message chat m1',
+    'harness super-tab --tab t decisions --answered',
+    "harness super-tab --tab t post chat 'see /etc and ../up, as text' op-3 --reply-to m1",
+    'harness super-tab --tab t post chat note op-4 --attach notes/plan.md',
+    'harness super-tab help',
   ])('runs %s without asking', command => {
     expect(bash(command)).toBe('allow')
   })
@@ -101,6 +140,50 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'rg -z needle',
     'rg --hostname-bin /bin/echo --hyperlink-format default needle',
     'rg --hostname-bin=/bin/echo needle',
+    // Its Super Tab commands only as itself, on this machine, and only a Buddy's (security review 2 of #2092).
+    'harness super-tab --tab t --agent someone-else post chat hi op',
+    'harness super-tab --tab t --agent me status',
+    'harness super-tab --tab t --port 18474 status',
+    'harness super-tab --tab t --machine other status',
+    'harness super-tab --tab t command op {}',
+    'harness super-tab --tab t start op {}',
+    'harness super-tab --tab t resume start-1',
+    'harness super-tab --tab t route group {}',
+    'harness super-tab --tab t capacity m {}',
+    'harness super-tab --tab t screen agent',
+    'harness super-tab --tab t type agent hi',
+    'harness super-tab --tab t plan',
+    'harness super-tab --tab t remove-machine m --yes',
+    'harness super-tab --tab t set-agents m 1',
+    'harness super-tab --tab t post chat x op --attach /etc/passwd',
+    'harness super-tab --tab t post chat x op --attach ../secret.txt',
+    'harness super-tab --tab=t status',
+    'harness show agent',
+    'harness search needle',
+    'harness ps',
+    'harness wait agent',
+    // Reads stay in its folder.
+    'cat /etc/passwd',
+    'cat ../outside/secret.txt',
+    'cat out/../../outside/secret.txt',
+    'ls /dev',
+    'head -c 10 /dev/zero',
+    'rg -n needle /',
+    'grep -f /etc/passwd needle a.txt',
+    'wc --files0-from=/etc/passwd',
+    'git show HEAD:../x',
+    'git diff --no-index a.txt ../outside/secret.txt',
+    'git diff --no-index a.txt b.txt',
+    'gh issue view 1 -R other/private',
+    'gh issue view 1 --repo other/private',
+    'gh pr view 1 --repo=other/private',
+    'gh pr list -Rother/private',
+    // Nothing that runs on.
+    'tail -f a.txt',
+    'tail -F a.txt',
+    'tail -nf 5 a.txt',
+    'tail --follow a.txt',
+    'tail --follow=name a.txt',
     // Everything else.
     'git commit -m x',
     'git checkout main',
@@ -129,6 +212,11 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
       expect(decide(tool, { file_path: join(root, 'a.txt'), url: 'https://example.com' })).toBe('deny')
     })
 
+  it('refuses a read command run in the background (security review 2 of #2092)', () => {
+    expect(decide('Bash', { command: 'git log', run_in_background: true })).toBe('deny')
+    expect(decide('Bash', { command: 'git log', run_in_background: false })).toBe('allow')
+  })
+
   it('refuses a Bash call whose command is not a string', () => {
     expect(decide('Bash', { command: ['git', 'log'] })).toBe('deny')
   })
@@ -153,7 +241,7 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     writeFileSync(broken, 'process.exit(1)\n')
     expect(spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, broken)], { input: '{}', encoding: 'utf8' }).status).toBe(2)
     const working = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
-      { input: JSON.stringify({ tool_name: 'Read', tool_input: {} }), encoding: 'utf8' })
+      { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, 'a.txt') } }), encoding: 'utf8' })
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
   })
 })

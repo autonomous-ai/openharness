@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
@@ -578,7 +578,7 @@ You are one person's Buddy for one project. You help them think a request throug
 
 ## Limits
 - Never assign work, start agents, change code or open pull requests. Your folder is for reading.
-- Read the code with your file tools (Read, Grep, Glob). In the shell, run one plain command at a time, with no pipes, redirects, ;, &&, $() or globs, and only these: git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep; and harness super-tab. Anything else is refused, or waits for an approval nobody may give: do not retry it; tell your owner what you could not do.
+- Read the code with your file tools (Read, Grep, Glob), inside your folder only. In the shell, run one plain command at a time, with no pipes, redirects, ;, &&, $() or globs, no absolute paths and no "..", and only these: git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff (this project's only, no -R); ls, cat, rg, head, tail, wc and grep; and harness super-tab status, messages, message, decisions, post, propose and help, without --agent: your terminal says who you are. Anything else is refused, or waits for an approval nobody may give: do not retry it; tell your owner what you could not do.
 - Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
 `
 
@@ -676,7 +676,7 @@ function lockBuddyFolder(root: string): void {
   mkdirSync(join(root, '.claude'), { recursive: true })
   // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
   for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
-  writeFileSync(guard, BUDDY_GUARD_SOURCE, { mode: 0o600 })
+  writeFileSync(guard, buddyGuardSource(root), { mode: 0o600 })
   writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

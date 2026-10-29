@@ -15,17 +15,32 @@
  * `--open-files-in-pager` and `--ext-diff` (git takes any unique prefix of a long option, so prefixes too), gh's `--web`,
  * and rg's `--pre`, `--pre-glob`, `-z` and `--hostname-bin`, which runs a program (rg 14.1.1, tried).
  *
- * Plain JavaScript with no imports, written into the Buddy's folder and run by Harness's node: the tests run this exact
- * text (lib/buddyGuard.spec.ts, and Claude Code itself in lib/buddyGuard.claude.spec.ts).
+ * What it reads stays in its folder (security review 2 of #2092): the machine is its person's, the folder is the project.
+ * Read, Grep, Glob and LS take paths there only, by real path, so a link out is out; a Bash word that is an absolute path
+ * or has a ".." part is refused, and so are gh's -R/--repo (any repository its person can read) and git's --no-index.
+ * Its Super Tab commands are a Buddy's own (status, messages, message, decisions, post, propose, help) as the pane it runs
+ * in identifies it: never --agent, --port or --machine. Nothing runs on: no background shell, no tail -f.
+ *
+ * Plain JavaScript with node's own modules only, written into the Buddy's folder with that folder's real path and run by
+ * Harness's node: the tests run this exact text (lib/buddyGuard.spec.ts, and Claude Code itself in
+ * lib/buddyGuard.claude.spec.ts).
  */
-export const BUDDY_GUARD_SOURCE = String.raw`#!/usr/bin/env node
+export const buddyGuardSource = (root: string): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
-const TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'TodoWrite', 'ToolSearch'])
+import { realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+
+// The Buddy's folder, as its real path: what it reads stays in it.
+const ROOT = ${JSON.stringify(root)}
+const TOOLS = new Set(['TodoWrite', 'ToolSearch'])
 const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
 const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
 const GH = { issue: new Set(['view', 'list']), pr: new Set(['view', 'list', 'diff']) }
 const GIT_LONG = ['output', 'open-files-in-pager', 'ext-diff']
 const RG_LONG = ['pre', 'pre-glob', 'search-zip', 'hostname-bin']
+// A Buddy's own Super Tab commands: reading its chats and posting in its own, and its owner's proposal. The pane it runs in
+// says who it is (superTabs/command.ts), so it never names an agent, a port or a machine.
+const SUPER_TAB = new Set(['status', 'messages', 'message', 'decisions', 'post', 'propose', 'help'])
 const MAY = 'A Buddy only reads, so this was refused and nobody will be asked. Read the code with Read, Grep and Glob. ' +
   'In the shell, run one plain command at a time (no pipes, redirects, ;, &&, $() or globs): git grep, log, show, diff, ' +
   'blame or status; gh issue view or list; gh pr view, list or diff; ls, cat, rg, head, tail, wc or grep; or harness super-tab.'
@@ -59,6 +74,26 @@ function words(command) {
   return out
 }
 
+// Whether [path] is in the Buddy's folder: by the real path of the file, or of its nearest folder that exists, so a
+// link out of the folder, or a ".." out of it, is out.
+function inside(path) {
+  if (typeof path !== 'string' || !path || path.includes('\0')) return false
+  let at = resolve(ROOT, path), rest = ''
+  for (;;) {
+    try {
+      const real = join(realpathSync(at), rest)
+      return real === ROOT || real.startsWith(ROOT + sep)
+    } catch { /* not there: its folder decides */ }
+    if (dirname(at) === at) return false
+    rest = rest ? join(basename(at), rest) : basename(at)
+    at = dirname(at)
+  }
+}
+
+// A word that names a place out of the folder: an absolute path (the machine's files, /dev), or one with a ".." part,
+// alone or after "=" or ":" (--file=/x, HEAD:../x). A range such as main..HEAD has no ".." part.
+const outward = (word) => word.split(/[=:]/).some((part) => isAbsolute(part) || part.split('/').includes('..'))
+
 const short = (word) => /^-[^-]/.test(word)
 // A long option naming one of these, or a unique prefix of one: git takes either.
 const longNames = (word, names) => word.startsWith('--') && names.some((name) => {
@@ -66,20 +101,34 @@ const longNames = (word, names) => word.startsWith('--') && names.some((name) =>
   return given.length > 0 && name.startsWith(given)
 })
 
+// harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, and an --attach only from its folder.
+function superTabAllowed(rest) {
+  let i = 0
+  while (rest[i] === '--tab') i += 2
+  if (i > rest.length || !SUPER_TAB.has(rest[i])) return false
+  return !rest.slice(i + 1).some((word, at, after) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
+    || ['--agent', '--port', '--machine'].includes(word))
+}
+
 function bashAllowed(command) {
   if (typeof command !== 'string') return false
   const w = words(command)
   if (!w || w.length === 0) return false
   const [name, sub, verb] = w
   const rest = w.slice(1)
+  if (name === 'harness') return sub === 'super-tab' && superTabAllowed(w.slice(2))
+  if (rest.some(outward)) return false
+  // Nothing that runs on: a background shell, or tail following a file.
+  if (name === 'tail') return !rest.some((word) => longNames(word, ['follow']) || (short(word) && /[fF]/.test(word)))
   if (READERS.has(name)) return true
-  if (name === 'harness') return sub === 'super-tab'
   if (name === 'git') {
-    return GIT.has(sub) && !rest.some((word) => longNames(word, GIT_LONG) || (short(word) && word.includes('O')))
+    return GIT.has(sub) && !rest.some((word) => longNames(word, GIT_LONG) || word === '--no-index' || (short(word) && word.includes('O')))
   }
   if (name === 'gh') {
+    // Its own project's issues and pull requests only: -R/--repo would read any repository its person can.
     return Object.hasOwn(GH, sub) && GH[sub].has(verb)
-      && !rest.some((word) => word === '--web' || word.startsWith('--web=') || (short(word) && word.includes('w')))
+      && !rest.some((word) => word === '--web' || word.startsWith('--web=') || word === '--repo' || word.startsWith('--repo=')
+        || (short(word) && /[wR]/.test(word)))
   }
   if (name === 'rg') {
     return !rest.some((word) => longNames(word, RG_LONG) || (short(word) && word.includes('z')))
@@ -89,8 +138,17 @@ function bashAllowed(command) {
 
 function decide(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.tool_name !== 'string') return false
+  const tool = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : null
+  if (!tool) return false
   if (TOOLS.has(input.tool_name)) return true
-  return input.tool_name === 'Bash' && !!input.tool_input && bashAllowed(input.tool_input.command)
+  // Its read tools, in its folder: Read a file there, Grep and Glob there (their folder by default), LS a folder there.
+  if (input.tool_name === 'Read') return inside(tool.file_path)
+  if (input.tool_name === 'LS') return inside(tool.path)
+  if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path)
+  if (input.tool_name === 'Glob') {
+    return (tool.path === undefined || inside(tool.path)) && typeof tool.pattern === 'string' && !outward(tool.pattern)
+  }
+  return input.tool_name === 'Bash' && tool.run_in_background !== true && bashAllowed(tool.command)
 }
 
 let text = ''

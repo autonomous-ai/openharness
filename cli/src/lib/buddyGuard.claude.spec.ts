@@ -117,6 +117,8 @@ describe.skipIf(!hasClaude).each([
     curlPost: bash(''),
     joined: bash('git log && git push origin HEAD:main'),
     harnessNew: bash('harness new codex'),
+    webFetch: { name: 'WebFetch', input: { url: '', prompt: 'read it' } } as Call,
+    committedMcp: { name: 'mcp__committed__run', input: {} } as Call,
     write: { name: 'Write', input: { file_path: '', content: 'x' } } as Call,
     edit: { name: 'Edit', input: { file_path: '', old_string: 'first', new_string: 'changed' } } as Call,
   }
@@ -173,6 +175,7 @@ describe.skipIf(!hasClaude).each([
     // A path of this run's own: a request from an earlier run's Claude Code, outliving it, once reached a port reused here.
     sinkPath = `/write-${randomUUID()}`
     refused.curlPost.input.command = `curl -sS -X POST -d x http://127.0.0.1:${(sink.address() as AddressInfo).port}${sinkPath}`
+    refused.webFetch.input.url = `http://127.0.0.1:${(sink.address() as AddressInfo).port}${sinkPath}`
 
     api = fakeModel([...Object.values(allowed), ...Object.values(refused)])
     await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
@@ -254,7 +257,7 @@ describe.skipIf(!hasClaude).each([
     expect(existsSync(join(folder, 'created.txt'))).toBe(false)
     expect(readdirSync(folder).sort()).toEqual(['.claude', '.git', '.harness', '.mcp.json', 'notes.txt'])
   })
-  it.skipIf(skip)('POSTed nothing', () => {
+  it.skipIf(skip)('POSTed nothing and fetched nothing', () => {
     expect(posts.filter((post) => post.includes(sinkPath))).toEqual([])
   })
 
@@ -269,5 +272,74 @@ describe.skipIf(!hasClaude).each([
 
   it.skipIf(skip)('tells the agent why a Bash call was refused', () => {
     expect(api.results.get(api.id(refused.gitPush))?.content).toContain('A Buddy only reads')
+  })
+})
+
+/**
+ * When the guard cannot answer (security review 2 of #2092): one that outlasts its timeout, and managed settings that run
+ * only managed hooks, which skip it. Either way the call has to be refused, not handed to rules that might allow it, and
+ * the session must not stall. The timeout is 2 s here, not the folder's 30 s, so the test is quick: what Claude Code does
+ * when a hook times out does not depend on how long it waited.
+ */
+describe.skipIf(!hasClaude).each([
+  { when: 'the guard outlasts its timeout', managed: null as null | object, slow: true },
+  { when: 'managed settings run only managed hooks', managed: { allowManagedHooksOnly: true }, slow: false },
+])('a Buddy\'s folder when $when (real Claude Code)', ({ managed, slow }) => {
+  let root: string, folder: string, remote: string, api: ReturnType<typeof fakeModel>, stdout = ''
+  const bash = (command: string): Call => ({ name: 'Bash', input: { command, description: 'step' } })
+  const calls = { push: bash('git push origin HEAD:main'), write: bash('echo changed > notes.txt'), read: bash('git log --oneline') }
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'buddy-closed-'))
+    folder = join(root, 'buddy'); remote = join(root, 'remote.git')
+    for (const dir of [folder, join(root, 'home'), join(root, 'config')]) mkdirSync(dir)
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
+      GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' }
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: folder, env })
+    git('init', '-q', '-b', 'main'); writeFileSync(join(folder, 'notes.txt'), 'first\n'); git('add', 'notes.txt'); git('commit', '-qm', 'first')
+    execFileSync('git', ['init', '-q', '--bare', remote]); git('remote', 'add', 'origin', remote)
+    prepareSwarmSkill(folder, { role: 'buddy', key: 'session' })
+    const settings = join(folder, '.claude', 'settings.local.json')
+    if (slow) {
+      // The folder's own guard, made to sleep before it answers.
+      const local = JSON.parse(readFileSync(settings, 'utf8'))
+      const hook = local.hooks.PreToolUse[0].hooks[0]
+      local.hooks.PreToolUse[0].hooks[0] = { ...hook, command: `sleep 5; ${hook.command}`, timeout: 2 }
+      chmodSync(settings, 0o600); writeFileSync(settings, JSON.stringify(local))
+    }
+    if (managed) writeFileSync(join(root, 'managed-settings.json'), JSON.stringify(managed))
+    api = fakeModel(Object.values(calls))
+    await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
+    const claude = spawn(claudeBin!, ['-p', 'go', ...PERMISSION_MODES.claude!.buddy, '--model', 'claude-sonnet-4-5', '--output-format', 'json'], {
+      cwd: folder, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin', HOME: join(root, 'home'), SHELL: '/bin/bash',
+        CLAUDE_CONFIG_DIR: join(root, 'config'), ANTHROPIC_API_KEY: API_KEY, TMPDIR: root, DISABLE_AUTOUPDATER: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+        ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.server.address() as AddressInfo).port}`,
+        ...(managed ? { CLAUDE_CODE_MANAGED_SETTINGS_PATH: join(root, 'managed-settings.json') } : {}) },
+    })
+    claude.stdout.on('data', (chunk) => { stdout += chunk })
+    await new Promise<void>((resolve, reject) => { claude.on('error', reject); claude.on('close', () => resolve()) })
+  }, 180_000)
+  afterAll(async () => {
+    await new Promise<void>((resolve) => api?.server.close(() => resolve()))
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('answers every call and finishes: nothing waits on a prompt', () => {
+    expect(JSON.parse(stdout).result).toBe('done')
+    expect(api.results.size).toBe(Object.keys(calls).length)
+  })
+
+  it('refuses the push and the write: it fails closed', () => {
+    for (const call of [calls.push, calls.write]) expect(api.results.get(api.id(call))?.is_error, JSON.stringify(call.input)).toBe(true)
+  })
+
+  it('still runs a command Claude Code itself counts as read-only, as dontAsk does without any hook (2.1.312)', () => {
+    expect(api.results.get(api.id(calls.read))).toEqual({ is_error: false, content: expect.stringContaining('first') })
+  })
+
+  it('pushed nothing and wrote nothing', () => {
+    expect(execFileSync('git', ['--git-dir', remote, 'for-each-ref'], { encoding: 'utf8' })).toBe('')
+    expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('first\n')
   })
 })

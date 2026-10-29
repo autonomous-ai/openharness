@@ -206,9 +206,17 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
   list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
   no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
-  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`). The guard's refusal
-  outranks any allow rule in the machine owner's own settings or the project's checked-in ones, and a guard that
-  cannot run refuses the call. It reads only its own folder's settings and starts no MCP server, so nothing from the
+  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
+  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out, or that
+  managed settings skip (`allowManagedHooksOnly`), leaves the call to dontAsk: it still runs the commands Claude Code
+  itself counts as read-only and refuses everything else, so nothing can write. Its Super Tab commands are a Buddy's
+  own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
+  `--agent`, `--port` or `--machine`.
+- What a Buddy reads: the files in its own copy of the project (by real path, so a link out of it is out), the
+  project's git history, the project's GitHub issues and pull requests through the person's own `gh` sign-in, its
+  own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, and so are gh's
+  `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+- A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
   person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
   in it: a hook a teammate commits would otherwise run with the person's credentials. Harness's own session, turn and
   Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
