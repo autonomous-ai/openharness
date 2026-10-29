@@ -967,6 +967,9 @@ describe('Swarm cards', () => {
 
   it('keeps the list the core last handed it, and names a Swarm tab\'s Swarm on the desk row', () => {
     const host = new DaemonCableHost(wiring())
+    // Not read yet is not "no Swarms": a dial told so before the core had read them left the Swarm on its face.
+    expect(host.swarmCards()).toBeNull()
+    host.setSwarmCards([])
     expect(host.swarmCards()).toEqual([])
     host.setSwarmCards([card])
     expect(host.swarmCards()).toEqual([card])

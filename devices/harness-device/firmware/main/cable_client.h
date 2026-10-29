@@ -233,6 +233,9 @@ void cable_client_list_swarms(void);
 // A Lead id is not an agent id: it never goes into focus, agent.open or voice.begin. Only its `local` harness id does.
 // `t` is one of the three requests; `lead` is "" only for an open (the dial left the Swarm).
 void cable_client_supertab_send(const char *t, const char *tab, const char *lead);
+// `supertab.side` {tab, side}: the dial swiped that Swarm to its Buddy side (true) or its PM side (spec
+// 2026-10-29-round-dial-pm-buddy). A tab id it cannot hold sends nothing.
+void cable_client_supertab_side(const char *tab, bool buddy);
 
 // Send what the user asked for, into `agent_id`. Fire-and-forget: everything after this arrives back as
 // `turn.started` / `turn.done`, or as `turn.error` in words a person can act on.
