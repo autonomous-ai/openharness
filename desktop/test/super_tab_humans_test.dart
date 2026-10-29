@@ -16,7 +16,7 @@ import 'support/super_tab_fixture.dart';
 
 /// The leaderboard lives in the right pane's Humans section (Dee, 2026-10-27),
 /// built to the desktop design system (2026-10-28): a small week picker, then
-/// everyone, by display name (Dee, 2026-10-29: no ranks). Each row is the
+/// everyone, by the week's points, highest first (Dee, 2026-10-29: no ranks). Each row is the
 /// avatar, name, a quiet line of the non-zero numbers in words, and the points
 /// as the one number, right-aligned (one number per person, no team total
 /// line). Number one wears a crown beside their name (People are celebrated,
@@ -75,29 +75,93 @@ void main() {
     controller.dispose();
   }
 
+  /// The rows' ids, top to bottom.
+  List<String> order(WidgetTester tester, List<String> ids) => [...ids]
+    ..sort(
+      (a, b) => tester
+          .getTopLeft(person(a))
+          .dy
+          .compareTo(tester.getTopLeft(person(b)).dy),
+    );
+
   testWidgets(
-    'lists every person by name, whatever their points, with no cut-off',
+    "lists every person by the week's points, highest first, with no cut-off",
     (tester) async {
-      final controller = await show(tester, humansSwarm());
-      // Dee, diego, huy, Ken, maximilian…, scholes, Tony: letter case aside.
+      final server = humansSwarm();
+      // A tie, and a person the board has no row for.
+      final scores = server.leaderboard!['people'] as List;
+      (scores.firstWhere((s) => s['personId'] == 'scholes') as Map)['points'] =
+          6;
+      (server.state['people'] as List).add({
+        'id': 'ann',
+        'email': 'ann@example.com',
+        'role': 'collaborator',
+      });
+      final controller = await show(tester, server);
+      // Dee 21, Ken 13, then scholes and Tony tied at 6 by name, diego 2;
+      // without points last, by name: ann (no row), huy, maximilian (0).
       final ids = [
         'peer',
-        'diego',
-        'huy',
         'owner',
-        'maximilian.alexander.longname',
         'scholes',
         'tony',
+        'diego',
+        'ann',
+        'huy',
+        'maximilian.alexander.longname',
       ];
       for (final id in ids) {
         expect(person(id), findsOneWidget);
       }
       expect(find.textContaining('Show '), findsNothing);
-      final tops = [for (final id in ids) tester.getTopLeft(person(id)).dy];
-      expect(tops, [...tops]..sort());
+      expect(order(tester, ids), ids);
       await close(tester, controller);
     },
   );
+
+  testWidgets('switching the week sorts by that week\'s points', (
+    tester,
+  ) async {
+    final server = humansSwarm();
+    final controller = await show(tester, server);
+    final ids = [
+      'peer',
+      'owner',
+      'tony',
+      'scholes',
+      'diego',
+      'huy',
+      'maximilian.alexander.longname',
+    ];
+    expect(order(tester, ids), ids);
+    // Last week: diego led, Dee had nothing.
+    final week = Map<String, int>.from({
+      'diego': 30,
+      'huy': 9,
+      'tony': 9,
+      'owner': 1,
+      'peer': 0,
+      'scholes': 0,
+      'maximilian.alexander.longname': 0,
+    });
+    for (final score in server.leaderboard!['people'] as List) {
+      score['points'] = week[score['personId']];
+    }
+    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Last week').last);
+    await tester.pumpAndSettle();
+    expect(order(tester, ids), [
+      'diego',
+      'huy',
+      'tony',
+      'owner',
+      'peer',
+      'maximilian.alexander.longname',
+      'scholes',
+    ]);
+    await close(tester, controller);
+  });
 
   Finder within(String id, String text) =>
       find.descendant(of: person(id), matching: find.text(text));
@@ -462,7 +526,7 @@ void main() {
   });
 
   testWidgets(
-    'keeps a row with no points in name order, its 0 in the points style',
+    'keeps a row with no points after those with points, its 0 in the points style',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       final zero = styleOf(

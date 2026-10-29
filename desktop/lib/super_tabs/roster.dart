@@ -24,6 +24,7 @@ import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
+import 'machine_status.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
@@ -334,11 +335,68 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   /// The mark an agent's row shows, which also orders the list: its activity,
   /// except that lost work shows the tabs' Offline, since nothing runs it
-  /// (Dee, 2026-10-29).
-  HarnessActivity _shownActivity(SuperTabAgentInfo info) =>
-      info.taskGroup?.assignment?['status'] == 'lost'
-      ? HarnessActivity.offline
-      : info.activity ?? HarnessActivity.unknown;
+  /// (Dee, 2026-10-29). When this Mac cannot see the agent, the Swarm's own
+  /// state gives the mark ([_swarmActivity]).
+  HarnessActivity _shownActivity(SuperTabAgentInfo info) {
+    if (info.taskGroup?.assignment?['status'] == 'lost') {
+      return HarnessActivity.offline;
+    }
+    final app = widget.app;
+    final native = app == null
+        ? null
+        : harnessActivity(app, info.agent.machineId, info.agent.harnessId);
+    return native == null || native == HarnessActivity.unknown
+        ? _swarmActivity(info)
+        : info.activity ?? HarnessActivity.unknown;
+  }
+
+  /// An agent's mark from the Swarm's state, in the tabs' words (Dee,
+  /// 2026-10-29): agents on other computers showed only the hollow mark. Its
+  /// computer silent: offline; its session stopped: stopped; its start
+  /// failed: failed; a question or stuck work: needs input; finished and in
+  /// review: done; a task under way: working; nothing held: idle. While the
+  /// Swarm cannot be read, its computers are not called offline.
+  HarnessActivity _swarmActivity(SuperTabAgentInfo info) {
+    final agent = info.agent, snapshot = c.snapshot;
+    final machine = snapshot?.pool(snapshot.placeOf(agent.machineId));
+    final at = switch (machine?['observation']) {
+      {'receivedAt': final num at} => at.toInt(),
+      _ => null,
+    };
+    if (machine != null &&
+        !c.backendUnreachable &&
+        superTabMachineStatus(
+              age: at == null
+                  ? null
+                  : widget.now().difference(
+                      DateTime.fromMillisecondsSinceEpoch(at),
+                    ),
+            ) ==
+            SuperTabMachineStatus.offline) {
+      return HarnessActivity.offline;
+    }
+    if (agent.downSince != null) return HarnessActivity.paused;
+    final liveness = info.taskGroup?.liveness;
+    if (liveness?['state'] == 'orphaned' &&
+        liveness?['why'] == 'start-failed') {
+      return HarnessActivity.failed;
+    }
+    if (agent.alerting.contains('prompt') ||
+        snapshot?.conversations.any(
+              (group) =>
+                  !group.closed &&
+                  group.assignment?['agentId'] == agent.id &&
+                  superTabWorkWaits(group.assignment?['status']),
+            ) ==
+            true) {
+      return HarnessActivity.needsInput;
+    }
+    return switch (info.taskGroup?.assignment?['status']) {
+      'review' => HarnessActivity.done,
+      'working' || 'planned' => HarnessActivity.working,
+      _ => HarnessActivity.idle,
+    };
+  }
 
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
@@ -488,11 +546,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final scores = {
       for (final score in board?.people ?? const []) score.personId: score,
     };
-    // By name, letter case aside (Dee, 2026-10-29): the points say who leads.
+    // The selected week's points, highest first; equal points, and no points
+    // at all, by name, letter case aside (Dee, 2026-10-29).
+    int points(SuperTabPerson p) => scores[p.id]?.points ?? 0;
     String sortName(SuperTabPerson p) =>
         leaderboardName(p, scores[p.id]).toLowerCase();
     final sorted = [...people]
       ..sort((a, b) {
+        final byPoints = points(b).compareTo(points(a));
+        if (byPoints != 0) return byPoints;
         final byName = sortName(a).compareTo(sortName(b));
         return byName != 0 ? byName : a.id.compareTo(b.id);
       });
@@ -519,8 +581,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           );
     final week = weekName(_board.week, current);
     return [
+      // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
       SuperTabSectionHeading(
-        'People',
+        'Humans',
         actions: [
           if (board != null || _board.week != null)
             AppSelectField<int>(
