@@ -24,6 +24,7 @@ import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
+import 'machine_status.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
@@ -196,11 +197,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     );
   }
 
-  HarnessActivity _activity(SuperTabAgent agent) {
+  /// This Mac's reading of the agent; null when it cannot see it, or reads
+  /// its status as unknown.
+  HarnessActivity? _native(SuperTabAgent agent) {
     final app = widget.app;
     final native = app == null
         ? null
         : harnessActivity(app, agent.machineId, agent.harnessId);
+    return native == HarnessActivity.unknown ? null : native;
+  }
+
+  HarnessActivity _activity(SuperTabAgent agent) {
+    final native = _native(agent);
     // Keep the shared lifecycle precedence. A retained workgroup question must
     // not make a stopped or disconnected harness look available for input.
     if (native == HarnessActivity.offline ||
@@ -209,6 +217,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         native == HarnessActivity.failed ||
         native == HarnessActivity.needsInput) {
       return native!;
+    }
+    if (native == null) {
+      if (_swarmDown(agent) case final down?) return down;
     }
     if (c.snapshot?.conversations.any(
           (group) =>
@@ -220,6 +231,38 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       return HarnessActivity.needsInput;
     }
     return native ?? HarnessActivity.unknown;
+  }
+
+  /// What the Swarm knows of an agent this Mac cannot see that stops it
+  /// running (Dee, 2026-10-29): its computer silent, offline; its session
+  /// stopped; its start failed. Null when none is known. While the Swarm
+  /// cannot be read, its computers are not called offline.
+  HarnessActivity? _swarmDown(SuperTabAgent agent) {
+    // The computer it runs on reports for itself: a Harness Team account
+    // shown as its Mac has its own heartbeat.
+    final machine = c.snapshot?.pool(agent.machineId);
+    final at = switch (machine?['observation']) {
+      {'receivedAt': final num at} => at.toInt(),
+      _ => null,
+    };
+    if (machine != null &&
+        !c.backendUnreachable &&
+        superTabMachineStatus(
+              age: at == null
+                  ? null
+                  : widget.now().difference(
+                      DateTime.fromMillisecondsSinceEpoch(at),
+                    ),
+            ) ==
+            SuperTabMachineStatus.offline) {
+      return HarnessActivity.offline;
+    }
+    if (agent.downSince != null) return HarnessActivity.paused;
+    final task = SuperTabAgentInfo(c, null, agent).taskGroup;
+    return task?.liveness?['state'] == 'orphaned' &&
+            task?.liveness?['why'] == 'start-failed'
+        ? HarnessActivity.failed
+        : null;
   }
 
   /// A person's email and role, and their week when the board has them. One's
@@ -334,11 +377,26 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   /// The mark an agent's row shows, which also orders the list: its activity,
   /// except that lost work shows the tabs' Offline, since nothing runs it
-  /// (Dee, 2026-10-29).
-  HarnessActivity _shownActivity(SuperTabAgentInfo info) =>
-      info.taskGroup?.assignment?['status'] == 'lost'
-      ? HarnessActivity.offline
-      : info.activity ?? HarnessActivity.unknown;
+  /// (Dee, 2026-10-29). An agent this Mac cannot see, and the Swarm knows
+  /// nothing stopping, takes its mark from its work: a prompt on its screen
+  /// needs input; finished and in review, done; a task under way, working;
+  /// nothing held, idle. Its words still say only Assigned for a task.
+  HarnessActivity _shownActivity(SuperTabAgentInfo info) {
+    final work = info.taskGroup?.assignment?['status'];
+    if (work == 'lost') return HarnessActivity.offline;
+    final activity = info.activity ?? HarnessActivity.unknown;
+    if (activity != HarnessActivity.unknown || _native(info.agent) != null) {
+      return activity;
+    }
+    if (info.agent.alerting.contains('prompt')) {
+      return HarnessActivity.needsInput;
+    }
+    return switch (work) {
+      'review' => HarnessActivity.done,
+      'working' || 'planned' => HarnessActivity.working,
+      _ => HarnessActivity.idle,
+    };
+  }
 
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
@@ -488,11 +546,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final scores = {
       for (final score in board?.people ?? const []) score.personId: score,
     };
-    // By name, letter case aside (Dee, 2026-10-29): the points say who leads.
+    // The selected week's points, highest first; equal points, and no points
+    // at all, by name, letter case aside (Dee, 2026-10-29).
+    int points(SuperTabPerson p) => scores[p.id]?.points ?? 0;
     String sortName(SuperTabPerson p) =>
         leaderboardName(p, scores[p.id]).toLowerCase();
     final sorted = [...people]
       ..sort((a, b) {
+        final byPoints = points(b).compareTo(points(a));
+        if (byPoints != 0) return byPoints;
         final byName = sortName(a).compareTo(sortName(b));
         return byName != 0 ? byName : a.id.compareTo(b.id);
       });
@@ -519,8 +581,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           );
     final week = weekName(_board.week, current);
     return [
+      // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
       SuperTabSectionHeading(
-        'People',
+        'Humans',
         actions: [
           if (board != null || _board.week != null)
             AppSelectField<int>(
