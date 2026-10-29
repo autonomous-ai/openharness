@@ -301,7 +301,9 @@ Each attempt keeps:
 - how it was paid: an engine plan (subscription), per token through an API (an
   API key, or a grid model shared from one), the Swarm's own GPUs, or unknown;
 - its session's token counts by model (input, output, cache reads and cache
-  writes) when it started and when it ended. Its tokens are the difference;
+  writes) when it started and when it ended. Its tokens are the difference. A
+  session counts up to 15 models apart; any more are counted together as
+  `other`, which has no price;
 - how it ended: done, stopped, cancelled, lost, or superseded when its group went
   while it was still active. A task lost to a usage limit and taken back by the
   same session is the same attempt, still going. Handing a lost task to another
@@ -322,9 +324,11 @@ and what was actually spent per token (nothing on a plan or on own GPUs).
 **Reading it.** The Lead reads `harness super-tab costs [--days N]` (7 days unless
 set, at most 90), for the Product Manager, and later for the leaderboard and the
 nightly reflection. Per engine, model, effort and kind of job it gives:
-attempts, first-review pass rate, shipped, median minutes from an attempt's start
-to its Done, tokens, API-equivalent cost, actual spend, and cost per shipped
-change. Cost per shipped change is shown only when every ended attempt's cost is
+attempts, first-review pass rate, shipped, median minutes to ship, tokens,
+API-equivalent cost, actual spend, and cost per shipped change. A request ships
+once, at its merge or first Done as the leaderboard records it, by the attempt
+that was running then; more attempts done afterwards ship nothing new. Time to
+ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is
 known, so a partial sum never reads cheaper than it was. It covers only attempts
 routed since cost records began, in the groups the reader may read.
 

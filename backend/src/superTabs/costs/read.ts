@@ -44,12 +44,12 @@ export interface CostSummaryRow {
   attempts: number
   /** Attempts whose first review has a verdict, and those that passed it; the rate is null with none. */
   firstReviews: number; firstReviewPassed: number; firstReviewPassRate: number | null
-  /** Attempts that finished done. */
+  /** Requests shipped, each once, by the attempt that ran when it shipped (shipping). */
   shipped: number
   /** By how each ended; `open` while still going. */
   outcomes: Record<string, number>
   billing: Partial<Record<Billing, number>>
-  /** From the attempt's start to its done, over the shipped ones. */
+  /** From the shipping attempt's start to when its request shipped. */
   medianMinutesToShip: number | null
   tokens: ModelTokens
   /** Attempts whose tokens are known: the sums cover only those. */
@@ -74,7 +74,21 @@ const median = (values: number[]): number | null => {
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
 }
 
-function summarize(rows: CostRow[], firstReview: Map<string, boolean>, prices: Set<string>): CostSummary['totals'] {
+/** Each shipped request's shipping attempt and when it shipped. A request ships once, at its earliest recorded merge or first
+ *  Done (leaderboard/record.ts shippedAt), by the attempt that was running then: the latest started by that time. Attempts
+ *  done after it ship nothing new; counting each Done had counted one request once per attempt (review of #2106). */
+function shipping(rows: CostRow[], groups: Conversation[]): Map<string, number> {
+  const shipped = new Map<string, number>()
+  for (const group of groups) {
+    const at = group.ledger?.shippedAt
+    if (at === undefined) continue
+    const ran = rows.filter(r => r.conversationId === group.id && r.run.startedAt <= at).sort((a, b) => b.run.startedAt - a.run.startedAt)[0]
+    if (ran) shipped.set(ran.assignmentId, at)
+  }
+  return shipped
+}
+
+function summarize(rows: CostRow[], firstReview: Map<string, boolean>, shippedAt: Map<string, number>, prices: Set<string>): CostSummary['totals'] {
   const tokens: ModelTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const outcomes: Record<string, number> = {}, billing: Partial<Record<Billing, number>> = {}, toShip: number[] = []
   let firstReviews = 0, firstReviewPassed = 0, shipped = 0, tokensKnown = 0, costKnown = 0, apiCost = 0, spend = 0, spendKnown = 0, endedUnknown = 0
@@ -84,9 +98,10 @@ function summarize(rows: CostRow[], firstReview: Map<string, boolean>, prices: S
     const outcome = row.outcome ?? 'open'
     outcomes[outcome] = (outcomes[outcome] ?? 0) + 1
     billing[row.run.billing] = (billing[row.run.billing] ?? 0) + 1
-    if (row.outcome === 'done') {
+    const at = shippedAt.get(row.assignmentId)
+    if (at !== undefined) {
       shipped++
-      if (row.run.endedAt !== undefined) toShip.push((row.run.endedAt - row.run.startedAt) / 60_000)
+      toShip.push((at - row.run.startedAt) / 60_000)
     }
     const used = attemptTokens(row.run, row.fresh)
     if (used) {
@@ -118,11 +133,11 @@ export function summarizeCosts(rows: CostRow[], groups: Conversation[]): CostSum
     const key = JSON.stringify(keyOf(row))
     byKey.set(key, [...byKey.get(key) ?? [], row])
   }
-  const prices = new Set<string>()
+  const prices = new Set<string>(), shippedAt = shipping(rows, groups)
   const summary = [...byKey.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, group]) => {
     const [engine, model, effort, kind] = keyOf(group[0]!)
-    return { engine, model, effort, kind, ...summarize(group, firstReview, prices) }
+    return { engine, model, effort, kind, ...summarize(group, firstReview, shippedAt, prices) }
   })
-  return { rows: summary, totals: summarize(rows, firstReview, new Set()),
+  return { rows: summary, totals: summarize(rows, firstReview, shippedAt, new Set()),
     prices: [...prices].sort().map(model => { const p = priceOf(model)!; return { model: p.model, source: p.source, checked: p.checked } }) }
 }

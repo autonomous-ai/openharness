@@ -9,7 +9,7 @@ import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
 
-import { MAX_USAGE_MODELS, usageModelName, usageTargetKey, type AgentTokenUsage, type AgentUsageTarget as Target, type ModelTokens } from './agentUsageWire.js'
+import { MAX_USAGE_MODELS, OTHER_MODELS, usageModelName, usageTargetKey, type AgentTokenUsage, type AgentUsageTarget as Target, type ModelTokens } from './agentUsageWire.js'
 export type { AgentTokenUsage } from './agentUsageWire.js'
 type Buckets = [number, number, number, number]
 type CodexTotals = [number, number, number, number]
@@ -68,12 +68,13 @@ function rawCodex(value: unknown): CodexTotals | null {
     tokens(row.output_tokens), tokens(row.reasoning_output_tokens)] : null
 }
 
-/** Adds a delta to its model's buckets. A session past MAX_USAGE_MODELS models files the rest as unknown, so a checkpoint
- *  and a machine report stay small whatever a transcript names. */
+/** Adds a delta to its model's buckets. Past MAX_USAGE_MODELS - 1 models a session files every new one together under
+ *  OTHER_MODELS, which keeps one place free for it: the reading stays at MAX_USAGE_MODELS whatever a transcript names, and
+ *  stays valid (a 17th bucket had made the whole reading invalid, review of #2106). */
 function addModel(state: Checkpoint, name: unknown, delta: Buckets): void {
   if (delta.every(n => n === 0)) return
   let model = usageModelName(name)
-  if (!state.models[model] && Object.keys(state.models).length >= MAX_USAGE_MODELS) model = 'unknown'
+  if (!state.models[model] && Object.keys(state.models).filter(m => m !== OTHER_MODELS).length >= MAX_USAGE_MODELS - 1) model = OTHER_MODELS
   const into = state.models[model] ??= [0, 0, 0, 0]
   delta.forEach((n, i) => { into[i] += n })
 }

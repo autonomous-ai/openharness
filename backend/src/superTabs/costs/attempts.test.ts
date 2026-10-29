@@ -71,6 +71,13 @@ describe('what an attempt ran on and how it was paid', () => {
     expect(endRun(start, swarm({ tokens: { h1: { m: opus(900) } } }), assignment(), 'w', 5000, swarm({ tokens: { h1: { m: opus(800) } } })).end).toEqual({ m: opus(900) })
   })
 
+  it('ends with the reading its session sent as it finished, and with none (unknown) when it finished without one', () => {
+    const start = startRun(swarm({ tokens: { h1: { m: opus(500) } } }), assignment(), 1000)
+    const stale = swarm({ tokens: { h1: { m: opus(600) } } })
+    expect(endRun(start, stale, assignment(), 'w', 5000, stale, { m: opus(2000) }).end).toEqual({ m: opus(2000) })
+    expect(endRun(start, stale, assignment(), 'w', 5000, stale, null).end).toBeNull()
+  })
+
   it('starts from nothing when the attempt ends on another session than it began (a replaced terminal)', () => {
     const start = startRun(swarm({ tokens: { h1: { m: opus(500) } } }), assignment(), 1000)
     const moved = swarm({ tokens: { h2: { m: opus(30) } } })

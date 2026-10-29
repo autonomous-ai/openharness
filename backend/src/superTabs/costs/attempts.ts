@@ -89,13 +89,17 @@ export function startRun(state: SuperTabState, assignment: Assignment, now: numb
   return { machineId, harnessId, ...ran, billing: billingOf(state, machineId, ran.engine, ran.grid), startedAt: now, start: tokensOf(state, machineId, harnessId) }
 }
 
-/** Its end: the totals its machine last reported, and the model and effort its agent ran at last. The report that says a
- *  session stopped no longer lists it, nor its counts: then its totals are those reported before this write (`before`). A
- *  session replaced during the attempt (agent.rebind) counts from zero, so only the new session's tokens are counted. */
-export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number, before?: SuperTabState): RouteRun {
+/** Its end, and the model and effort its agent ran at last. An agent that finishes its own work (Done, Stopped) sends its
+ *  session's totals read as it finishes (`final`); finished without them (an older host, or a Lead finishing it) its end is
+ *  unknown (null), never the last report's: that can be a report old and price real work at nothing (review of #2106). Other
+ *  ends (lost, cancelled, its host's stop) take the totals its machine last reported; the report that says a session
+ *  stopped no longer lists it, so then those reported before this write (`before`). A session replaced during the attempt
+ *  (agent.rebind) counts from zero, so only the new session's tokens are counted. */
+export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number, before?: SuperTabState,
+  final?: TokensByModel | null): RouteRun {
   const { machineId, harnessId } = assignment.execution
   const { engine: _engine, grid: _grid, ...ran } = ranOn(state, assignment, agentId)
-  const end = tokensOf(state, machineId, harnessId) ?? (before ? tokensOf(before, machineId, harnessId) : null)
+  const end = final !== undefined ? final : tokensOf(state, machineId, harnessId) ?? (before ? tokensOf(before, machineId, harnessId) : null)
   return { ...run, ...ran, ...(harnessId !== run.harnessId ? { harnessId, start: {} } : {}), endedAt: now, end }
 }
 

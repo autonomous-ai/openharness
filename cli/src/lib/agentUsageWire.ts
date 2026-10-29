@@ -13,8 +13,10 @@ export type AgentUsageTarget = Pick<RegisteredSession, 'engine' | 'sessionId' | 
   & Partial<Pick<RegisteredSession, 'cwd'>>
 export const USAGE_LIMIT = 512
 export const USAGE_REFRESH_MS = 15_000
-/** Models one session counts apart; more are filed as `unknown`. A session switches model a handful of times at most. */
+/** Models one session counts apart, `other` among them (OTHER_MODELS). A session switches model a handful of times at most. */
 export const MAX_USAGE_MODELS = 16
+/** Where a session's models past the limit are counted together (agentTokenUsage.ts addModel); never priced. */
+export const OTHER_MODELS = 'other'
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/
 /** A model as the counts name it: the engine's own identifier, or `unknown` for none or anything that is not a plain one. */
 export const usageModelName = (v: unknown): string => typeof v === 'string' && MODEL_NAME.test(v) ? v : 'unknown'

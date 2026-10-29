@@ -6,12 +6,15 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
+import Fastify from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { TokensByModel } from '../src/superTabs/costs/tokens.js'
 import { poolRows } from './hostRows.test-support.js'
+import { superTabRoutes } from '../src/routes/superTabs.js'
+import { errorHandler } from '../src/middlewares/errorHandler.js'
 
 // Each attempt keeps what it ran on, how it was paid and its tokens on its route decision, however it ends (Dee, 2026-10-29).
 // A fresh loopback replica set, created here.
@@ -81,10 +84,12 @@ async function swarm() {
   }
   const assign = async (routeDecisionId: string) => String((await execute({ type: 'work.assign', conversationId: group, agentId: worker, routeDecisionId } as Command,
     host, lead)).result.assignmentId)
-  const finish = async (assignmentId: string) => {
+  /** The worker marks its work done, sending its session's totals read as it finishes (cli superTabs/service.ts), or none
+   *  like an older host; `by` the Lead finishes it instead. */
+  const finish = async (assignmentId: string, tokens?: TokensByModel, by = worker) => {
     const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
     await execute({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'npm test, 0 failures' } as Command, host, worker)
-    await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped.' } as Command, host, worker)
+    await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped.', ...(tokens ? { tokens } : {}) } as Command, host, by)
   }
   const decision = (id: string) => db.superTabRouteDecision.findUniqueOrThrow({ where: { id } })
   return { store, tab, execute, lead, group, worker, harness, observe, beat, route, assign, finish, decision,
@@ -102,10 +107,26 @@ describe('an attempt’s record on its route decision', () => {
       billing: 'subscription', startedAt: started, start: opus(1000, 100) })
     f.clock.now += MINUTE
     await f.beat(opus(5000, 900))
-    await f.finish(assignmentId)
+    // Its last turns after that report: the totals it sends as it finishes are its end, not the report's.
+    await f.finish(assignmentId, opus(7000, 1200))
     const row = await f.decision(id)
     expect(row).toMatchObject({ assignmentId, outcome: 'done', record: { assessment: { kind: 'parser' } },
-      run: { startedAt: started, start: opus(1000, 100), endedAt: f.clock.now, end: opus(5000, 900) } })
+      run: { startedAt: started, start: opus(1000, 100), endedAt: f.clock.now, end: opus(7000, 1200) } })
+  })
+
+  it('leaves the end unknown, never the last report’s, when the attempt is finished without its own reading', async () => {
+    for (const by of ['older host', 'lead'] as const) {
+      const f = await swarm()
+      await f.beat(opus(1000, 100))
+      const id = await f.route()
+      const assignmentId = await f.assign(id)
+      await f.beat(opus(5000, 900))
+      // A Lead finishing it sends its own session's totals, which are never the worker's.
+      if (by === 'lead') await f.finish(assignmentId, opus(9_999_999, 1), f.lead)
+      else await f.finish(assignmentId)
+      expect((await f.decision(id)).run, by).toMatchObject({ end: null, endedAt: f.clock.now })
+      expect((await f.store.costSummary(owner, f.tab, 7)).totals, by).toMatchObject({ attempts: 1, tokensKnown: 0, costKnown: 0, apiCost: null })
+    }
   })
 
   it('closes lost when its machine goes silent, and stays lost when the task is handed on', async () => {
@@ -159,7 +180,7 @@ describe('the cost summary', () => {
       f.clock.now += MINUTE
       await f.beat(opus(3_000_000, 600_000))
     }
-    await f.finish(assignmentId)
+    await f.finish(assignmentId, opus(3_000_000, 600_000))
     const summary = await f.store.costSummary(owner, f.tab, 7)
     // 2M input at $4 and 0.5M output at $20 per million: $18, on a plan, so nothing spent per token.
     expect(summary.rows).toEqual([expect.objectContaining({ engine: 'claude', model: 'opus', effort: 'high', kind: 'parser', attempts: 1, shipped: 1,
@@ -171,5 +192,41 @@ describe('the cost summary', () => {
     // Past the period, nothing.
     f.clock.now += 8 * 24 * 60 * MINUTE
     expect((await f.store.costSummary(owner, f.tab, 7)).rows).toEqual([])
+  })
+})
+
+describe('route decision reads', () => {
+  // Review of #2106: members read only the summary, never an attempt's session totals.
+  it('never carry an attempt’s run or its token totals, over HTTP or to the Lead, while the summary still has them', async () => {
+    const f = await swarm()
+    await f.beat(opus(1_000_000, 100_000))
+    const id = await f.route()
+    await f.finish(await f.assign(id), opus(1_000_000, 100_000))
+    expect((await f.decision(id)).run).toMatchObject({ start: opus(1_000_000, 100_000) })
+    const app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async (request, reply) => {
+      const user = [owner, host].find(u => `Bearer ${u.sub}` === request.headers.authorization)
+      if (!user) return reply.code(401).send({ success: false })
+      request.user = user
+    })
+    await app.register(superTabRoutes, { store: f.store })
+    await app.ready()
+    try {
+      const get = async (url: string, user = owner) => {
+        const response = await app.inject({ url, headers: { authorization: `Bearer ${user.sub}` } })
+        expect(response.statusCode, url).toBe(200)
+        return response.json().data
+      }
+      const list = await get(`/api/super-tabs/${f.tab}/route-decisions`)
+      const one = await get(`/api/super-tabs/${f.tab}/route-decisions/${id}`)
+      const lead = [...await f.store.routeDecisions(host, f.tab, f.lead), await f.store.routeDecision(host, f.tab, id, f.lead)]
+      for (const decision of [...list, one, ...lead]) {
+        expect(decision).toMatchObject({ id, outcome: 'done' })
+        expect(decision).not.toHaveProperty('run')
+        expect(JSON.stringify(decision)).not.toMatch(/cacheRead|1000000/)
+      }
+      expect((await get(`/api/super-tabs/${f.tab}/costs?days=7`)).totals).toMatchObject({ attempts: 1, shipped: 1 })
+    } finally { await app.close() }
   })
 })

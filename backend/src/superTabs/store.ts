@@ -1219,7 +1219,12 @@ export class SuperTabStore {
       ended = endedHolds(original, effects.state)
       started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
-      await recordAttempts(tx, tabId, original, effects.state, context.now)
+      // An attempt finished by its own agent ends with the totals its host read as it finished; finished by anyone else, or
+      // without them, its end is unknown (costs/attempts.ts endRun).
+      const finished = command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped') ? {
+        assignmentId: command.assignmentId, tokens: actor.kind === 'agent'
+          && original.conversations.find(c => c.id === command.conversationId)?.assignment?.agentId === actor.agentId ? command.tokens ?? null : null } : undefined
+      await recordAttempts(tx, tabId, original, effects.state, context.now, finished)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)

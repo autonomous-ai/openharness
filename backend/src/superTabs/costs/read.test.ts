@@ -9,18 +9,19 @@ const run = (over: Partial<RouteRun> = {}): RouteRun => ({ machineId: 'm', harne
   billing: 'subscription', startedAt: 0, start: {}, endedAt: 30 * MINUTE, end: { 'claude-opus-5-5': t(1e6, 0) }, ...over })
 const row = (assignmentId: string, over: Partial<CostRow> = {}): CostRow => ({ conversationId: 'g1', assignmentId, outcome: 'done',
   kind: 'parser', fresh: false, run: run(), ...over })
-const group = (id: string, runs: Array<{ assignmentId: string; firstReview?: boolean }>) => ({ id, ledger: { runs: runs.map(r => ({ engine: 'claude', model: 'opus', at: 0, ...r })) } }) as Conversation
+const group = (id: string, runs: Array<{ assignmentId: string; firstReview?: boolean }>, shippedAt?: number) => ({ id,
+  ledger: { runs: runs.map(r => ({ engine: 'claude', model: 'opus', at: 0, ...r })), ...(shippedAt === undefined ? {} : { shippedAt }) } }) as Conversation
 
 describe('the cost summary', () => {
   it('groups attempts by engine, model, effort and kind with pass rate, shipped, median time to ship, tokens and costs', () => {
     const rows = [
       row('a1', { run: run({ endedAt: 10 * MINUTE }) }),
-      row('a2', { outcome: 'lost', run: run({ end: { 'claude-opus-5-5': t(5e5, 0) } }) }),
-      row('a3', { run: run({ endedAt: 50 * MINUTE, billing: 'api' }) }),
-      row('a4', { kind: null, run: run({ effort: 'xhigh' }) }),
+      row('a2', { conversationId: 'g2', outcome: 'lost', run: run({ end: { 'claude-opus-5-5': t(5e5, 0) } }) }),
+      row('a3', { conversationId: 'g3', run: run({ endedAt: 50 * MINUTE, billing: 'api' }) }),
+      row('a4', { conversationId: 'g4', kind: null, run: run({ effort: 'xhigh' }) }),
     ]
-    const summary = summarizeCosts(rows, [group('g1', [{ assignmentId: 'a1', firstReview: true }, { assignmentId: 'a2', firstReview: false },
-      { assignmentId: 'a3' }])])
+    const summary = summarizeCosts(rows, [group('g1', [{ assignmentId: 'a1', firstReview: true }], 10 * MINUTE),
+      group('g2', [{ assignmentId: 'a2', firstReview: false }]), group('g3', [{ assignmentId: 'a3' }], 50 * MINUTE), group('g4', [], 30 * MINUTE)])
     expect(summary.rows).toEqual([
       { engine: 'claude', model: 'opus', effort: 'high', kind: 'parser', attempts: 3, firstReviews: 2, firstReviewPassed: 1, firstReviewPassRate: 0.5,
         shipped: 2, outcomes: { done: 2, lost: 1 }, billing: { subscription: 2, api: 1 }, medianMinutesToShip: 30,
@@ -30,6 +31,18 @@ describe('the cost summary', () => {
         tokens: { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }, tokensKnown: 1, apiCost: 4, spend: 0, costKnown: 1, costPerShipped: 4 },
     ])
     expect(summary.totals).toMatchObject({ attempts: 4, shipped: 3, apiCost: 14, spend: 4, costPerShipped: 14 / 3 })
+  })
+
+  it('ships a request once, by the attempt that ran when it shipped, however many attempts were done after', async () => {
+    // Done at 10 minutes, then worked on and done again: still one shipped change, and both attempts' cost is its cost.
+    const rows = [row('b1', { run: run({ startedAt: 0, endedAt: 10 * MINUTE }) }), row('b2', { run: run({ startedAt: 20 * MINUTE, endedAt: 30 * MINUTE }) })]
+    const summary = summarizeCosts(rows, [group('g1', [], 10 * MINUTE)])
+    expect(summary.rows[0]).toMatchObject({ attempts: 2, shipped: 1, outcomes: { done: 2 }, medianMinutesToShip: 10, apiCost: 8, costPerShipped: 8 })
+    // Its merge recorded before any Done ships it then, by the attempt running at the merge, even one lost afterwards.
+    const merged = summarizeCosts([row('c1', { outcome: 'lost', run: run({ startedAt: 0, endedAt: 40 * MINUTE }) })], [group('g1', [], 25 * MINUTE)])
+    expect(merged.rows[0]).toMatchObject({ shipped: 1, medianMinutesToShip: 25 })
+    // A done attempt of a request with no recorded ship (a group the reader cannot read) ships nothing here.
+    expect(summarizeCosts([row('d1')], []).rows[0]).toMatchObject({ shipped: 0, costPerShipped: null })
   })
 
   it('names a grid model by the model it ran, counts open attempts as open, and leaves costs it cannot know out of the sums', () => {

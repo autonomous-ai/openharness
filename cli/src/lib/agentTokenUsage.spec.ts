@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentTokenUsageCache } from './agentTokenUsage.js'
+import { validUsage } from './agentUsageWire.js'
 import type { RegisteredSession } from './registry.js'
 
 const at = '2026-09-22T16:00:00Z'
@@ -391,6 +392,18 @@ describe('token counts by model (Swarm cost records)', () => {
       'gpt-5.5-codex': { input: 50, output: 20, cacheRead: 50, cacheWrite: 0 },
       'gpt-5.4-mini': { input: 50, output: 30, cacheRead: 50, cacheWrite: 0 },
     })
+  })
+
+  it('files models past the limit together under one reserved bucket, so the reading stays valid however many a session names', async () => {
+    const one = { input_tokens: 1, output_tokens: 1 }
+    await writeFile(target.transcriptPath!, Array.from({ length: 20 }, (_, i) => reply(`m${i}`, `model-${i}`, one)).join('')
+      + reply('late', 'model-3', one) + reply('odd', 'two words', one))
+    const usage = await read()
+    expect(Object.keys(usage!.models!)).toHaveLength(16)
+    expect(usage!.models!['model-3']).toEqual({ input: 2, output: 2, cacheRead: 0, cacheWrite: 0 })
+    // model-15 to model-19 and the unnamed one: six replies past the fifteen named models.
+    expect(usage!.models!.other).toEqual({ input: 6, output: 6, cacheRead: 0, cacheWrite: 0 })
+    expect(validUsage(usage)).toBe(true)
   })
 
   it('keeps a model name that is not a plain identifier out of the counts', async () => {

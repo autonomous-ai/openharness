@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
+import { validModelTokens } from '../lib/agentUsageWire.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
@@ -34,6 +35,15 @@ import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
+/** Done or Stopped from an agent finishing its own work carries its session's token totals by model, read from its transcript
+ *  now (core `usageFresh`): its attempt ends with every token it used, not a machine report up to a beat old (backend
+ *  superTabs/costs/attempts.ts endRun; review of #2106). Counts only. No reading, and the status goes without them. */
+async function finishingWith(core: CoreApi, command: Record<string, unknown>, harnessId: string): Promise<Record<string, unknown>> {
+  if (command.type !== 'work.status' || (command.status !== 'done' && command.status !== 'stopped')) return command
+  const models = (await core.usageFresh?.(harnessId).catch(() => null))?.models
+  return models && Object.keys(models).length && validModelTokens(models) ? { ...command, tokens: models } : command
+}
+
 const HELP = {
   status: 'Read the shared tab roster and work. Its rules are the project owners\' routing rules, each in the owner\'s own words; each binds only the agents of its projectId. A Lead\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects (group, project, title, owned code, status, Engineer, PR), read only. A project on Custom skills lists its roles (id, name, kind) in status.',
   leads: 'The Leads conversation (leadsConversationId in a Lead\'s status) is one conversation for the whole Swarm, outside every project. Only Leads and people post there, and only Leads among agents receive it. Before assigning, look at otherProjectsWork; if your task touches the same code, say so there and agree an order first, then tell your own project. The Swarm posts there by itself when two projects\' active tasks own the same code.',
@@ -502,11 +512,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          const command = await mentionCommand(taskCommand(object(payload.command)), async () => (await swarm()).state)
+          const command = await finishingWith(core, await mentionCommand(taskCommand(object(payload.command)), async () => (await swarm()).state), String(agent.harnessId))
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           let value: unknown
           try { value = await send(command) } catch (error) {
+            // A backend from before cost records refuses the totals; the status itself still goes.
+            if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {
+              const { tokens: _tokens, ...status } = command
+              return { ok: true, operationId: payload.operationId, value: await send(status) }
+            }
             if (command.type === 'agent.release' && error instanceof SuperTabHostError && error.status === 400 && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(error.code)) {
               return { error: 'RELEASE_UNSUPPORTED', detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' }
             }
