@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -26,6 +27,7 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_task_status.dart';
 import 'team_glance.dart';
 
 /// The conversations of one project the person may read, as its sheet lists
@@ -939,8 +941,10 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
     final olderReading = reader.dormantLoading(projectId);
     final older = _older ? work.older : const <SuperTabConversation>[];
     final earlier = _older && reader.hasEarlierDormant(projectId);
+    final personName = swarmTaskPersonName(snapshot);
     SwarmRow row(SuperTabConversation g) {
       final agentId = g.assignment?['agentId'] as String?;
+      final agent = agentId == null ? null : snapshot.agentName(agentId);
       return SwarmRow(
         key: ValueKey('swarm-conversation-${g.id}'),
         // Nobody holds it: its number still lines up with the others'.
@@ -954,10 +958,14 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
               ),
         number: g.number == null ? null : '#${g.number}',
         title: g.title,
-        detail: switch (_statusOf(snapshot, g)) {
-          final status? => SwarmRow.line(status),
-          null => null,
-        },
+        // Its agent, then its task's line as the drawer's (#2125); work the
+        // server gave no state keeps its words.
+        detail: swarmTaskStatus(g, clock.now()) != null
+            ? SwarmTaskLine(g, personName: personName, lead: agent)
+            : switch (_statusOf(snapshot, g)) {
+                final status? => SwarmRow.line(status),
+                null => null,
+              },
         onTap: () => openSwarmConversation(context, widget.swarmId, g.id),
       );
     }

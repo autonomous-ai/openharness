@@ -8,7 +8,23 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'identity.dart';
 import 'model.dart';
+
+/// A person of [snapshot] as the Swarm names them, for a task's "Waiting on
+/// …" ([swarmTaskStatus]); null for anyone the read does not hold, or holds
+/// with no email (a Home kept for a cold start), so a task in one Swarm never
+/// names a person from another.
+String? Function(String personId) swarmTaskPersonName(
+  SuperTabSnapshot snapshot,
+) =>
+    (personId) =>
+        switch (snapshot.people.where((p) => p.id == personId).firstOrNull) {
+          final person? when person.email.isNotEmpty => superTabPersonName(
+            person.email,
+          ),
+          _ => null,
+        };
 
 /// A task's mark, named as the desktop's activity marks are
 /// (`desktop/lib/super_tabs/task_status.dart`), drawn on the phone as a

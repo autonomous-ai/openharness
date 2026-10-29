@@ -26,6 +26,7 @@ import 'swarm_reader.dart';
 import 'swarm_machines.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_task_status.dart';
 import 'swarm_unread.dart';
 
 /// Swarm Home's drawer, from the left edge like the desktop's sidebar, as the
@@ -352,7 +353,8 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
 
   /// An open project's chats: Buddy chat, the project chat, its
   /// leaderboard, then its work — what waits on the person first, the rest
-  /// by latest activity. Worked out only while it is open: a closed project
+  /// by latest activity, each with its task's status line under its name
+  /// ([SwarmTaskLine]). Worked out only while it is open: a closed project
   /// costs its row alone.
   List<Widget> _chats(
     SwarmSession session,
@@ -373,11 +375,19 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     SwarmRowNews news(SuperTabConversation? g) => reader == null || g == null
         ? swarmNoNews
         : swarmChatNews(reader, asks, g);
-    SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(
+    final personName = swarmTaskPersonName(snapshot);
+    // A task's line under its name, as on the desktop (#2125); its trailing
+    // edge stays the tags'.
+    SwarmDrawerRow chat(
+      SuperTabConversation g,
+      String title, {
+      bool task = false,
+    }) => SwarmDrawerRow(
       key: ValueKey('swarm-drawer-chat-${g.id}'),
       title: title,
       sub: true,
       news: news(g),
+      detail: task ? SwarmTaskLine(g, personName: personName) : null,
       onTap: () => then(() => widget.onChat(swarmId, g.id)),
     );
     final buddyChat = reader == null
@@ -401,9 +411,9 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
             then(() => openSwarmLeaderboard(context, swarmId, project.id)),
       ),
       for (final g in work)
-        if (waits.contains(g.id)) chat(g, g.label),
+        if (waits.contains(g.id)) chat(g, g.label, task: true),
       for (final g in work)
-        if (!waits.contains(g.id)) chat(g, g.label),
+        if (!waits.contains(g.id)) chat(g, g.label, task: true),
     ];
   }
 }
