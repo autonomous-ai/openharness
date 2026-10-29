@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import { fail, type SuperTabState } from './model.js'
 
-/** The small set a message can be reacted with, in the order counts show. Desktop draws each (👍 🎉 ❤️ 😄 👀 🚀). */
-export const REACTIONS = ['thumbs_up', 'tada', 'heart', 'laugh', 'eyes', 'rocket'] as const
+/** The small set a message can be reacted with, in the order counts show. Desktop draws each (👍 🎉 ❤️ 😄 👀 ✅ 🚀). People and
+ *  agents alike; an agent acknowledges with the last three instead of a post, as Slack bots do: 👀 started, ✅ done, 🚀 merged.
+ *  An older client skips an emoji it does not know. */
+export const REACTIONS = ['thumbs_up', 'tada', 'heart', 'laugh', 'eyes', 'check', 'rocket'] as const
 export const reactionSchema = z.enum(REACTIONS)
 export type Reaction = (typeof REACTIONS)[number]
 
