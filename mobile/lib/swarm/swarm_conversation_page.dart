@@ -134,7 +134,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// Swarm Home C's project chat (Tony, 2026-10-30): a New messages line
   /// above the first message the person had not read as it opened
   /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
-  /// above the screen.
+  /// above the screen; and Jump to latest while they read more than a
+  /// screen back.
   final bool homeC;
 
   @override
@@ -201,6 +202,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// after it wait below, so what they read stays where it is, and the pill
   /// says how many. Null at the foot.
   final _held = ValueNotifier<String?>(null);
+
+  /// Swarm Home C: the person reads more than a screen back, where Jump to
+  /// latest is offered.
+  final _farBack = ValueNotifier<bool>(false);
 
   /// Each entry's row as last built, with what it was built from ([_row]).
   final _rows = <String, ({Object inputs, Widget row})>{};
@@ -463,6 +468,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _voice?.dispose();
     _view.dispose();
     _held.dispose();
+    _farBack.dispose();
     _litTimer?.cancel();
     _text.dispose();
     _focus.dispose();
@@ -520,6 +526,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _nearTop();
     if (!_scroll.hasClients) return;
     final back = _scroll.offset > _readingBack;
+    if (widget.homeC) {
+      _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
+    }
     // At the foot all is seen; reading back, only what was seen at the foot
     // before, or the message a notice opened the chat at.
     if (_conversation case final c?) {
@@ -987,9 +996,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               right: 0,
               bottom: 8,
               child: ListenableBuilder(
-                listenable: Listenable.merge([c, _held]),
+                listenable: Listenable.merge([c, _held, _farBack]),
                 builder: (context, _) => switch (_waiting(c)) {
-                  0 => const SizedBox.shrink(),
+                  0 when !_farBack.value => const SizedBox.shrink(),
                   final count => Center(
                     child: _NewPill(count: count, onTap: _toFoot),
                   ),
@@ -2196,8 +2205,9 @@ class _Day extends StatelessWidget {
   }
 }
 
-/// How many messages arrived below while the person read back; a tap goes
-/// down to them.
+/// How many messages arrived below while the person read back — or, with
+/// none ([count] 0), Jump to latest while they read far back (Swarm Home C);
+/// a tap goes down to the foot.
 class _NewPill extends StatelessWidget {
   const _NewPill({required this.count, required this.onTap});
 
@@ -2209,10 +2219,14 @@ class _NewPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     button: true,
-    label: count == 1 ? '1 new message' : '$count new messages',
+    label: count == 0
+        ? 'Jump to latest'
+        : count == 1
+        ? '1 new message'
+        : '$count new messages',
     excludeSemantics: true,
     child: GestureDetector(
-      key: const ValueKey('swarm-new-pill'),
+      key: ValueKey(count == 0 ? 'swarm-jump-latest' : 'swarm-new-pill'),
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       // 44 to tap, 36 to see.
@@ -2233,7 +2247,7 @@ class _NewPill extends StatelessWidget {
               const Icon(LucideIcons.arrowDown, size: 16, color: AppInk.onFill),
               const SizedBox(width: 6),
               Text(
-                '$count new',
+                count == 0 ? 'Jump to latest' : '$count new',
                 style: swarmChatText(
                   14,
                   color: AppInk.onFill,

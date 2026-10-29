@@ -777,7 +777,7 @@ void main() {
     });
   });
 
-  group('Chat, its New messages line', () {
+  group('Chat, its New messages line and Jump to latest', () {
     /// River's message [sequence] in the project's chat, [author] another's.
     Map<String, dynamic> said(
       int sequence, {
@@ -951,6 +951,73 @@ void main() {
       expect(marksSent(fake).last, 40);
     });
 
+    testWidgets('reading more than a screen back, Jump to latest takes the '
+        'person to the foot; a little way back, none', (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40),
+        page,
+      );
+      final jump = key('swarm-jump-latest');
+      expect(line, findsNothing);
+      expect(jump, findsNothing, reason: 'at the foot');
+
+      await tester.drag(key('swarm-messages'), const Offset(0, 120));
+      await tester.pumpAndSettle();
+      expect(jump, findsNothing, reason: 'not a screen back');
+
+      await tester.drag(key('swarm-messages'), const Offset(0, 1500));
+      await tester.pumpAndSettle();
+      expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(jump, findsOneWidget);
+      expect(find.text('Jump to latest'), findsOneWidget);
+      expect(tester.getSemantics(jump).label, 'Jump to latest');
+      expect(tester.getSize(jump).height, greaterThanOrEqualTo(minTouchTarget));
+
+      await tester.tap(jump);
+      await tester.pumpAndSettle();
+      expect(onScreen(tester, find.text('Update 40.')), isTrue);
+      expect(jump, findsNothing);
+    });
+
+    testWidgets('far back, what came meanwhile is counted in its place', (
+      tester,
+    ) async {
+      final fake = chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40);
+      await pump(tester, fake, page);
+      await tester.drag(key('swarm-messages'), const Offset(0, 1500));
+      await tester.pumpAndSettle();
+      expect(key('swarm-jump-latest'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+          (_) => {
+            'messages': [for (var i = 1; i <= 41; i++) said(i)],
+            'next': null,
+          };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            leadChat,
+            9,
+            groupData(
+              leadChat,
+              title: 'Mobile',
+              agentIds: ['agent-lead'],
+              leadId: 'agent-lead',
+              lastMessageSequence: 41,
+            ),
+          ),
+        ],
+      );
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-new-pill'), findsOneWidget);
+      expect(find.text('1 new'), findsOneWidget);
+      expect(key('swarm-jump-latest'), findsNothing);
+    });
+
     testWidgets("direction B's chat has none", (tester) async {
       await pump(
         tester,
@@ -960,6 +1027,19 @@ void main() {
 
       expect(find.text('Update 4.'), findsOneWidget);
       expect(line, findsNothing);
+    });
+
+    testWidgets("direction B's chat offers no Jump to latest", (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40),
+        const SwarmProjectPage(swarmId: tab, projectId: project),
+      );
+      await tester.drag(key('swarm-messages'), const Offset(0, 1500));
+      await tester.pumpAndSettle();
+
+      expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(key('swarm-jump-latest'), findsNothing);
     });
   });
 }
