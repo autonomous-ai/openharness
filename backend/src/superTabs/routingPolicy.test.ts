@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingOverrideSchema, routingPolicySchema } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, routingOverrideSchema, routingPolicySchema } from './routingPolicy.js'
 
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
@@ -38,5 +38,20 @@ describe('routing policy', () => {
     expect(bad({ models: [{ ...DEFAULT_ROUTING_POLICY.models[0], cost: 0 }] })).toBe(false)
     expect(bad({ models: [] })).toBe(false)
     expect(routingOverrideSchema.safeParse({ version: 1 }).success).toBe(false)
+  })
+
+  it('rates Kimi K3 and DeepSeek v4.1 at Sonnet\'s tier and every other grid model at the local quality, from the policy', () => {
+    const { policy } = effectivePolicy(null, null)
+    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(policy, 'deepseek/deepseek-v4.1-flash-1017', 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter')).toBe(2)
+    expect(gridQuality(policy, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
+    // A policy saved before per-model rows reads the built-in ones; the owner's own rows replace them, first match first.
+    const saved = { ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true } }
+    expect(gridQuality(effectivePolicy(saved, null).policy, 'moonshotai/kimi-k3')).toBe(2)
+    const owner = effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }] } }).policy
+    expect(gridQuality(owner, 'qwen3:4b', 'Qwen 3 4B')).toBe(3)
+    expect(gridQuality(owner, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality({ ...owner, localModels: { quality: 1, enabled: true, models: [] } }, 'moonshotai/kimi-k3')).toBe(1)
+    expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true, models: [{ model: 'x', quality: 4 }] } }).success).toBe(false)
   })
 })
