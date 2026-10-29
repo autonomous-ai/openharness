@@ -407,6 +407,8 @@ void main() {
       'contributorId': owner,
       'hostMachineId': ?host,
       'engines': ['claude', 'codex'],
+      // Reporting now: in no account list here, so only this says it is up.
+      'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
     };
 
     test("are the person's own, named without .local; never one shared with "
@@ -426,8 +428,8 @@ void main() {
       await r.refresh();
 
       expect(swarmBuddyMachines(r), [
-        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
         (id: 'mac-4', name: 'Mac Studio', inSwarm: true, away: false),
+        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
       ]);
     });
 
@@ -452,8 +454,8 @@ void main() {
           ],
         ),
         [
-          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
           (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
           (id: 'air', name: 'MacBook Air', inSwarm: false, away: true),
         ],
       );
@@ -464,6 +466,69 @@ void main() {
           computers: [(id: 'studio', name: 'Studio', away: false)],
         ),
         'Studio',
+      );
+    });
+
+    // Review of #2240: a Swarm row no account record confirms read as up.
+    test('count a Swarm machine the account does not list as offline until '
+        'its own reading is fresh', () async {
+      final swarm = FakeSwarm();
+      final stale = DateTime.now()
+          .subtract(const Duration(minutes: 5))
+          .millisecondsSinceEpoch;
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        machines: [
+          {...pool('silent', 'Silent Mac'), 'observation': null},
+          {
+            ...pool('stale', 'Stale Mac'),
+            'observation': {'receivedAt': stale},
+          },
+          pool('fresh', 'Fresh Mac'),
+        ],
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(
+        [for (final m in swarmBuddyMachines(r)) (m.id, m.away)],
+        [('fresh', false), ('silent', true), ('stale', true)],
+      );
+    });
+
+    // Lead's ruling on #2240: a phone has no "this computer".
+    test('put the one the person last started a Buddy on first among the '
+        'online, the rest by name, offline last', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        machines: [pool('alpha', 'Alpha'), pool('zulu', 'Zulu')],
+        starts: [
+          buddyStartData('old', chatId: 'chat', machineId: 'alpha'),
+          buddyStartData('new', chatId: 'chat', machineId: 'zulu'),
+          buddyStartData(
+            'theirs',
+            chatId: 'other',
+            owner: 'person-dee',
+            machineId: 'alpha',
+          ),
+        ],
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(
+        [
+          for (final m in swarmBuddyMachines(
+            r,
+            computers: [
+              (id: 'beta', name: 'Beta', away: false),
+              (id: 'aaa', name: 'Aaa', away: true),
+            ],
+          ))
+            m.id,
+        ],
+        ['zulu', 'alpha', 'beta', 'aaa'],
       );
     });
 

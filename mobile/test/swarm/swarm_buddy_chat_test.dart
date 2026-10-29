@@ -72,6 +72,8 @@ void main() {
     'name': name,
     'contributorId': owner,
     'engines': ['claude', 'codex'],
+    // Reporting now: in no account list here, so only this says it is up.
+    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
   };
 
   Map<String, dynamic> wren({String? downSince}) => {
@@ -610,7 +612,7 @@ void main() {
 
       await tester.tap(key('swarm-buddy-machine'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Mac Studio'));
+      await tester.tap(find.text('Tonys-MacBook-Pro').last);
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();
@@ -619,7 +621,7 @@ void main() {
         {
           'type': 'buddy.create',
           'projectId': project,
-          'machineId': 'mac-4',
+          'machineId': 'mac-1',
           'engine': 'claude',
         },
       ]);
@@ -647,10 +649,11 @@ void main() {
         };
       await pump(tester, fake, computers: computers);
 
+      // Online ones by name, none started on before: Studio first.
       expect(
         find.descendant(
           of: key('swarm-buddy-machine'),
-          matching: find.text('tropic'),
+          matching: find.text('Studio'),
         ),
         findsOneWidget,
       );
@@ -666,7 +669,7 @@ void main() {
         findsOneWidget,
         reason: 'not picked: the sheet stays',
       );
-      await tester.tap(find.text('Studio'));
+      await tester.tap(find.text('Studio').last);
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();

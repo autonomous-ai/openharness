@@ -265,12 +265,19 @@ const swarmBuddyAllOffline =
 /// engine (Ken, 10-28): those of their account ([computers]), in the Swarm or
 /// not, and those of theirs the Swarm lists. Never a machine someone shared
 /// with them, nor a Harness Team account; the backend refuses any other.
-/// Each by the name its person gave it; online ones first (the desktop's
-/// `buddyMachines`).
+/// Each by the name its person gave it.
+///
+/// A phone has no "this computer" (Lead's ruling on #2240): online machines
+/// come first, the one the person last started a Buddy on before the rest,
+/// which go by name; offline ones last. A Swarm row no account record
+/// confirms is online only while its own reading is fresh, so before the
+/// account's list answers nothing unconfirmed is offered as up.
 List<SwarmBuddyMachine> swarmBuddyMachines(
   SwarmReader reader, {
   List<SwarmOwnComputer> computers = const [],
+  DateTime? now,
 }) {
+  final at = now ?? DateTime.now();
   final byId = <String, SwarmBuddyMachine>{};
   for (final m in reader.snapshot?.machines ?? const <Map<String, dynamic>>[]) {
     if (m['hostMachineId'] != null ||
@@ -283,7 +290,7 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       id: id,
       name: _machineName(m['name']),
       inSwarm: true,
-      away: false,
+      away: !_reporting(m, at),
     );
   }
   for (final c in computers) {
@@ -295,10 +302,39 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       away: c.away,
     );
   }
-  return [
-    ...byId.values.where((m) => !m.away),
-    ...byId.values.where((m) => m.away),
-  ];
+  final last = _lastBuddyMachine(reader);
+  int byName(SwarmBuddyMachine a, SwarmBuddyMachine b) =>
+      a.name.toLowerCase().compareTo(b.name.toLowerCase());
+  final online = byId.values.where((m) => !m.away).toList()
+    ..sort((a, b) {
+      if ((a.id == last) != (b.id == last)) return a.id == last ? -1 : 1;
+      return byName(a, b);
+    });
+  final away = byId.values.where((m) => m.away).toList()..sort(byName);
+  return [...online, ...away];
+}
+
+/// Whether [pool]'s own reading is fresh (backend `MACHINE_FRESH_MS`, as the
+/// route reads a machine): no reading is no answer.
+bool _reporting(Map<String, dynamic> pool, DateTime now) {
+  final observation = pool['observation'];
+  final at = observation is Map ? observation['receivedAt'] : null;
+  return at is num &&
+      now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) <=
+          const Duration(seconds: 45);
+}
+
+/// The machine of the person's newest Buddy start in this Swarm, if any.
+String? _lastBuddyMachine(SwarmReader reader) {
+  final mine = reader.snapshot?.buddyStarts.where(
+    (s) =>
+        superTabMap(superTabMap(s['request'])['buddyOf'])['personId'] ==
+        reader.accountId,
+  );
+  final request = mine == null || mine.isEmpty
+      ? null
+      : superTabMap(mine.last['request']);
+  return request?['machineId'] as String?;
 }
 
 /// The machine [machineId] by the name its person gave it, else its name in
