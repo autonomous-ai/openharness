@@ -3,8 +3,9 @@ import { delegate, extracted, partId, type PartRow } from './write.js'
 import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
+import { stableId, type AgentStart } from '../model.js'
 import { ms } from './light.js'
-import { groupsBy, type GroupIndex } from './indexed.js'
+import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -16,6 +17,10 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
 
 /** A group part as `aggregateRaw` returns it, as the PartRow Prisma would. */
 const rawGroupRow = (row: Record<string, unknown>): PartRow => ({ ...row, changedAt: new Date(ms(row.changedAt)) }) as unknown as PartRow
+/** Any part as `aggregateRaw` returns it: a Float ordinal can come wrapped, and a part stored before `deleted` lacks it. */
+const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(row), version: Number(row.version), deleted: !!row.deleted,
+  ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
+    ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
 
 /** The live groups these reads find, each once. */
 async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads): Promise<PartRow[]> {
@@ -62,6 +67,31 @@ export function loadActive(tx: Transaction, tabId: string,
   })
 }
 
+/**
+ * What a machine's report works on (store.ts observeMachine, #876): `loadActive`'s parts with only the conversations its
+ * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
+ * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
+ * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
+ * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are.
+ */
+export async function loadObserved(tx: Transaction, tabId: string, machineId: string): Promise<SwarmParts> {
+  const live = { deleted: false }
+  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: live, start: { ...live, finishedAt: null }, group: [] })
+  const { projects, leadsConversationId } = loaded.head.data!
+  // A head that never stored the Leads conversation's id finds it where model.ts syncLeads would make it.
+  const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? stableId(tabId, 'leads')]
+  // One read per index (parts/indexed.ts); none of them reads a quiet conversation.
+  const groups = await liveGroups(tx, tabId, [['running', { executionMachineId: { $ne: null }, dormant: false }],
+    ['key', { key: { $in: [...new Set([...leads, ...loaded.starts.map(s => s.data!.request.conversationId)])] }, dormant: false }]])
+  const working = new Set(groups.flatMap(row => (row.data as GroupData).assignment?.status === 'working' ? [(row.data as GroupData).assignment!.agentId] : []))
+  const legacy = loaded.agents.filter(a => !a.data!.projectId).map(a => a.key)
+  const lending = loaded.agents.filter(a => a.data!.machineId === machineId && working.has(a.key)).map(a => a.key)
+  const more = await liveGroups(tx, tabId, [...legacy.length ? [['agents', { agentIds: { $in: legacy }, dormant: false }] as const] : [],
+    ...lending.length ? [['agents', { agentIds: { $in: lending }, dormant: false, 'data.audience': { $ne: null } }] as const] : []])
+  const rows = [...new Map([...groups, ...more].map(row => [row.key, row])).values()]
+  return { ...loaded, groups: rows.map(row => toPart<GroupData>('group', row)) }
+}
+
 /** What the read cache keeps of a Swarm at its main stamp (cache.ts): `loadActive`'s parts with every live start, and no
  *  machines, which it keeps at their own stamp (`loadMachines`). Dormant groups and their like come by name (`loadGroups`). */
 export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts> {
@@ -104,16 +134,38 @@ export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<v
 export async function loadChanged(tx: Transaction, tabIds: string[], since: Date, kinds: readonly PartKind[] = PART_KINDS): Promise<Map<string, Part[]>> {
   const changed = new Map<string, Part[]>(tabIds.map(id => [id, []]))
   if (!tabIds.length) return changed
+  // Plain matches that name each kind's (tabId, changedAt) index (parts/indexed.ts). Prisma sent `tabId: { in }` as an $expr
+  // $or, one planned scan per Swarm, and could pick an index that is not bounded by time at all (roadmap Phase 3.5).
+  const after = { $gt: { $date: since.toISOString() } }
+  const read = (kind: PartKind) => readBy(tx, COLLECTION[kind], 'changes', [{ $match: { tabId: { $in: tabIds }, changedAt: after } }, { $project: CHANGED_FIELDS }])
   for (const kind of kinds) {
-    const after = kind === 'machine' ? { OR: [{ changedAt: { gt: since } }, { readAt: { gt: since } }] } : { changedAt: { gt: since } }
-    for (const row of await delegate(tx, kind).findMany({ where: { tabId: { in: tabIds }, ...after } })) {
-      changed.get(row.tabId)!.push({ ...toPart(kind, row), ...row.readAt ? { readAt: row.readAt.getTime() } : {} })
+    // A machine read since the cursor counts as changed too: two bounded reads, not one $or the planner cannot bound.
+    const rows = kind === 'machine' ? [...new Map([...await read(kind), ...await readBy(tx, 'SwarmMachine', 'read',
+      [{ $match: { tabId: { $in: tabIds }, readAt: after } }, { $project: CHANGED_FIELDS }])].map(row => [row._id as string, row])).values()] : await read(kind)
+    for (const row of rows) {
+      const readAt = row.readAt == null ? null : ms(row.readAt)
+      changed.get(row.tabId as string)!.push({ ...toPart(kind, rawPartRow(row)), ...readAt ? { readAt } : {} })
     }
   }
   return changed
 }
 
-const DORMANT_PAGE = 50
+/** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)
+ *  index: a change poll reads the finished starts whose harness a machine record still lists, and no other (read/service.ts).
+ *  A plain match: through Prisma, `agentId: { in }` was $expr, which no index bounds. */
+export async function loadStartsOfAgents(tx: Transaction, tabId: string, agentIds: string[]): Promise<Part<AgentStart>[]> {
+  if (!agentIds.length) return []
+  const rows = await tx.swarmStart.aggregateRaw({ pipeline: [{ $match: { tabId, agentId: { $in: agentIds }, deleted: false } }] }) as unknown as
+    Array<Record<string, unknown>>
+  return rows.map(row => toPart<AgentStart>('start', rawPartRow(row)))
+}
+
+const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgent', group: 'SwarmGroup', machine: 'SwarmMachine', start: 'SwarmStart',
+  progress: 'SwarmProgress' } as const satisfies Record<PartKind, NamedCollection>
+/** What a changed part is made of: its other fields are indexed copies of its data. */
+const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1 }
+
+export const DORMANT_PAGE = 50
 
 /** Dormant groups the caller pages through, newest activity first, 50 at a time. A project's go through its index in that
  *  order. A later page is two reads that index bounds: the rest of its cursor's moment by key, then what is older. The

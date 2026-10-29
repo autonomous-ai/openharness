@@ -124,10 +124,11 @@ describe('planSetup', () => {
     const s = setup(state({ machines: [machine('m1'), machine('old', {}, { receivedAt: NOW - 60_000 }), machine('paused', { paused: true }),
       machine('full', { availableSlots: 0 }), machine('win', {}, { resources: { memoryTotalBytes: 68_719_476_736, memoryUsedBytes: 1, projectDiskFreeBytes: 132_155_797_504, os: 'Windows' } }),
       machine('tight', {}, { resources: { memoryTotalBytes: 8_000_000_000, memoryUsedBytes: 7_500_000_000, projectDiskFreeBytes: 132_155_797_504, os: 'macOS' } })] }))
-    expect((s.instance.machines as Json[]).map(m => m.id)).toEqual(['m1'])
+    // A Windows machine is planned like any other (Swarm agents run there since grid 0.3.61 and CLI 0.4.95).
+    expect((s.instance.machines as Json[]).map(m => m.id)).toEqual(['m1', 'win'])
     expect(Object.fromEntries(s.leftOut.map(l => [l.machine, l.reason]))).toEqual({
       'old.local': 'Machine is offline or unreachable.', 'paused.local': 'New work is paused on this machine.',
-      'full.local': 'This machine has no available agent slots.', 'win.local': 'Swarm agents do not run on Windows yet.',
+      'full.local': 'This machine has no available agent slots.',
       'tight.local': 'Insufficient measured free memory.' })
   })
 

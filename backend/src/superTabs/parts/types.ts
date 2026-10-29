@@ -45,8 +45,8 @@ export interface MachineData {
   reservations: Array<{ harnessId: string; generation: string; renewed: boolean }>
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
-  closingSessions: Array<{ agentId: string; harnessId: string; machineOwnerId: string }>
-  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string }>
+  closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string; buddyOnly?: true }>
 }
 
 /** One project's report watermark (section 3.6). Group sequences are per group; floors carry pre-split tab revisions. */

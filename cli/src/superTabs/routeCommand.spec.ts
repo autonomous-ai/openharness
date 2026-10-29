@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heldLocalModels, localProbes, routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
@@ -41,6 +41,12 @@ function daemon(machineId: string, options: { agents?: string[]; frames?: Record
   }
 }
 type Answer = Record<string, unknown>
+/** Runs [body] with [os] on the list of systems Swarm agents are not started on, as a future entry would put it. */
+async function withBlocked(os: string, body: () => Promise<void>) {
+  const blocked = NO_SWARM_AGENTS_ON as string[]
+  blocked.push(os)
+  try { await body() } finally { blocked.splice(blocked.indexOf(os), 1) }
+}
 function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; recordThrows?: boolean } = {}) {
   return vi.fn(async (payload: Record<string, any>): Promise<Record<string, unknown>> => {
     if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
@@ -243,6 +249,51 @@ describe('routeTask', () => {
     expect(fresh.next).toContain('"name":"Reviewer","role":"reviewer"')
     expect((await offered(false, false)).next).not.toContain('"role"')
   })
+  it('leaves out of a review the reviewed Builder\'s engine while another engine can review, and says why', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
+    t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+      assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+    // Codex is on in the policy, so a Codex Reviewer can run.
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const context = { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [{ machineId: 'm1', name: 'remote-1' }] } }
+    const twoEngines = await routeTask(input, scoped({ context }), where as never, opener(id => daemon(id, { agents: ['h1'],
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })), () => 'op')
+    expect(twoEngines).toMatchObject({ ok: true, pick: { engine: 'codex' } })
+    // A Claude-only Swarm reviews a Claude Builder's work on its top tier alone.
+    const s = scoped({ tab: t })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+      reason: 'A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.' }]))
+    // A Builder still in the Swarm is read from its agent: on a grid model, Claude may review it.
+    t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'claude', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
+    Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
+    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    // Nothing reviewed yet, nothing to keep apart.
+    Object.assign(t.state.conversations[2]!, { assignment: null })
+    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true })
+  })
+  it('lets the Builder\'s engine review at its top tier when the only other engine is on a machine the task may not use', async () => {
+    const pool = (machineId: string, engines: string[], patch: Record<string, unknown> = {}) => ({ machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
+      observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],
+        quotas: engines.map(engine => ({ engine, known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }, { name: 'weekly', usedPercent: 10, resetsAt: Date.now() + 5 * 86400000 }] })) }, ...patch })
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const routeWith = async (codexBox: Record<string, unknown>, requires?: string[]) => {
+      const t = tab(); t.state.agents = [agents[1]] as never
+      t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+        assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+      Object.assign(t.state.conversations[1]!, { reviewOf: 'g0', ...requires ? { task: { goal: 'g', changes: 'c', constraints: 'k', owns: [], requires: { machines: requires } } } : {} })
+      Object.assign(t.state, { machines: [pool('m1', ['claude']), codexBox] })
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [] } } })
+      return routeTask(input, s, where as never, opener(), () => 'op')
+    }
+    // Codex on m2 reviews, so Claude may not.
+    expect(await routeWith(pool('m2', ['codex']))).toMatchObject({ ok: true, pick: { engine: 'codex', machineId: 'm2' } })
+    // The task runs only on m1, or m2 may not take a teammate's project: Claude reviews at its top tier on m1.
+    expect(await routeWith(pool('m2', ['codex']), ['m1'])).toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+    expect(await routeWith(pool('m2', ['codex'], { contributorId: 'mate', teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: 'Not a Team machine.' } })))
+      .toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.
@@ -313,18 +364,69 @@ describe('routeTask', () => {
     expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
     expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
   })
-  it('starts nothing on an account machine that says it runs Windows, or whose last two starts started nothing', async () => {
+  it('starts no new agent on an account machine whose system is on the list, and keeps a member already there', async () => {
+    // The list is empty now (#1969); it stays for a system Swarm agents cannot run on yet.
+    const os = 'Plan 9'
+    const plan9 = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os }, tools: { git: true }, devices: {} } }))
+    const s = scoped()
+    await withBlocked(os, async () => expect(await routeTask(input, s, where, plan9)).toMatchObject({ ok: true, pick: { kind: 'member' } }))
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
+      reason: expect.stringContaining('Swarm agents do not run on Plan 9 yet.') })]))
+  })
+  it('offers new agents on an account machine that runs Windows, as on any other, and starts nothing where the last two starts started nothing', async () => {
+    // Swarm agents were kept off Windows while grid's CLI did not run there (2026-10-26). It does since grid 0.3.61 and CLI
+    // 0.4.95: a Claude Code agent on a grid model started and answered on DESKTOP-0TFH0OJ.
     const windows = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os: 'Windows' }, tools: { git: true }, devices: {} } }))
     const s = scoped()
-    expect(await routeTask(input, s, where, windows)).toMatchObject({ ok: true, pick: { kind: 'member' } })
-    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
-      reason: expect.stringContaining('Swarm agents do not run on Windows yet.') })]))
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where, windows)
+    const decision = recorded(s).command.decision
+    expect(decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent'))).toBe(true)
+    expect(JSON.stringify(decision.excluded)).not.toContain('Windows')
     const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.' }
     const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
     const stuck = scoped({ tab: t })
     await routeTask(input, stuck, where, opener())
     expect(recorded(stuck).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
       reason: expect.stringContaining('last 2 starts') })]))
+  })
+  // Mac Auto, Swarm autonomous-harness, 2026-10-29: two starts failed on Harness bugs later fixed and released, and the machine
+  // stayed out of every route until a person started an agent there by hand.
+  it('lets a machine back into routes once its failed starts say nothing about it: updated since, or 30 minutes old', () => {
+    const now = Date.parse('2026-10-29T10:00:00Z')
+    const failed = (id: string, at: number, version?: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: true,
+      error: 'Mac Auto did not start it within 3 minutes', dispatchedAt: at, ...(version ? { dispatchedVersion: version } : {}) })
+    const two = [failed('s1', now - 20 * 60_000, '0.5.1'), failed('s2', now - 10 * 60_000, '0.5.1')]
+    expect(stalled(two, 'm1', { clientVersion: '0.5.1' }, now)).toBe(true)
+    // Its daemon now runs another version than the newer failure was dispatched to.
+    expect(stalled(two, 'm1', { clientVersion: '0.5.6' }, now)).toBe(false)
+    // A failure on the version it runs now still counts, whatever the one before was dispatched to.
+    expect(stalled([two[0]!, failed('s3', now - 60_000, '0.5.6')], 'm1', { clientVersion: '0.5.6' }, now)).toBe(true)
+    // Routing tries once again after the window, and a start that fails then keeps it out another window.
+    expect(stalled(two, 'm1', {}, now - 10 * 60_000 + STALL_RETRY_MS)).toBe(false)
+    expect(stalled([two[1]!, failed('s4', now + STALL_RETRY_MS, '0.5.1')], 'm1', {}, now + STALL_RETRY_MS + 60_000)).toBe(true)
+    // A start from before either was recorded counts as before; one that started an agent, or one still being created, never stalls.
+    const old = { id: 'o', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'failed' }
+    expect(stalled([old, { ...old, id: 'o2' }], 'm1', { clientVersion: '0.5.6' }, now)).toBe(true)
+    expect(stalled([two[0]!, { ...two[1]!, harnessId: 'h', error: null }], 'm1', {}, now)).toBe(false)
+    expect(stalled([two[0]!, { ...two[1]!, error: null }], 'm1', {}, now)).toBe(false)
+    // A Team account's refusal of a model its owner is not offered says the request was wrong, not the machine: it never
+    // counts, so the two failures before it decide (start.ts, Fork A's refusal before anything launches).
+    const refused = (id: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: false, requestedAt: now,
+      error: "This machine's ChatGPT account (its owner's subscription, used through the owner's relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra." })
+    expect(stalled([refused('r1'), refused('r2')], 'm1', {}, now)).toBe(false)
+    expect(stalled([two[0]!, refused('r3'), refused('r4')], 'm1', {}, now)).toBe(false)
+    expect(stalled([...two, refused('r5')], 'm1', { clientVersion: '0.5.1' }, now)).toBe(true)
+    // A start queued and never picked up is dated by its request.
+    const queued = (id: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: false, error: null, requestedAt: now - STALL_RETRY_MS - 1 })
+    expect(stalled([queued('q1'), queued('q2')], 'm1', {}, now)).toBe(false)
+  })
+  it('routes again to a machine whose last 2 starts failed more than 30 minutes ago', async () => {
+    const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.',
+      dispatchedAt: Date.now() - STALL_RETRY_MS - 60_000 }
+    const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
+    const s = scoped({ tab: t })
+    await routeTask(input, s, where, opener())
+    expect(JSON.stringify(recorded(s).command.decision.excluded ?? [])).not.toContain('last 2 starts')
   })
   it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
     const needs = { cwd: '/repo/api' }
@@ -429,13 +531,18 @@ describe('routeTask', () => {
       { id: 'a1', name: 'Opus hand', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'claude-opus-4-7', effort: 'high' } },
       { id: 'a3', name: 'Sonnet hand', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'claude-sonnet-4-5[1m]', effort: 'medium' } },
       { id: 'a4', name: 'Codex hand', machineId: 'm1', harnessId: 'h4', configuration: { engine: 'codex', model: 'gpt-5.5', effort: 'high' } },
+      { id: 'a5', name: 'Mini hand', machineId: 'm1', harnessId: 'h5', configuration: { engine: 'codex', model: 'gpt-5.5-mini', effort: 'high' } },
       agents[1]] as never
+    // Codex hand was launched on the engine's own model, which it reports by its slug; Mini hand was launched on a model the
+    // policy does not name (review of #2137).
+    Object.assign(working.state, { starts: [{ harnessId: 'h4', request: { model: 'default' } }, { harnessId: 'h5', request: { model: 'gpt-5.5-mini' } }] })
     const s = scoped({ tab: working })
-    const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
-    await routeTask(input, s, where as never, open)
+    const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4', 'h5'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
+    // Low work, so a model rated 1 is shown too.
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, open)
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
-    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2] })
+    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2], 'Mini hand': [1, 1] })
   })
   it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
     const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
@@ -471,6 +578,31 @@ describe('routeTask', () => {
     expect(v1.operationId).toBe(phase1.operationId)
     expect(v1.command.decision.assessment).not.toHaveProperty('size')
     expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
+  })
+  it('records the job kind, leaving only it out for a backend from before kinds, and phase 1 fields only after a second refusal', async () => {
+    const kinded = { ...input, assessment: { ...input.assessment, kind: 'docs' } }
+    const commands = (s: ReturnType<typeof scoped>) => s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.assessment)
+    const current = scoped()
+    await routeTask(kinded, current, where as never, opener(), () => 'op')
+    expect(commands(current)).toEqual([{ difficulty: 'medium', risk: 'low', why: 'Endpoint.', size: 'medium', kind: 'docs' }])
+    const refusing = (keys: string[]) => {
+      const s = scoped(), base = s.getMockImplementation()!
+      s.mockImplementation(async payload => {
+        const sent = payload.action === 'command' ? JSON.stringify(payload.command) : ''
+        return keys.some(key => sent.includes(`"${key}"`)) ? { error: 'VALIDATION_ERROR', detail: `Unrecognized key: "${keys[0]}"`, status: 400 } : base(payload)
+      })
+      return s
+    }
+    const beforeKinds = refusing(['kind":"docs'])
+    expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size']])
+    const beforePhase1 = refusing(['kind":"docs', 'size'])
+    expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    // A task with no kind never needs the extra try.
+    const plain = refusing(['size'])
+    await routeTask(input, plain, where as never, opener(), () => 'op')
+    expect(commands(plain)).toHaveLength(2)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
@@ -866,12 +998,23 @@ describe('routing contributed capacity', () => {
     }
     const checkout = (extra: Record<string, unknown> = {}) => ({ folder: 'p2', repository: 'github.com/example/two', git: true, push: true, ...extra })
 
-    it('never starts a Swarm agent on Windows, and keeps a member already there', async () => {
+    it('never starts a Swarm agent on a contributed machine whose system is on the list, and keeps a member already there', async () => {
+      const plan9 = healthy(); Object.assign(plan9.observation.resources, { os: 'Plan 9' })
+      await withBlocked('Plan 9', async () => {
+        const { answer } = await runPool(plan9)
+        expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+        expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Plan 9 yet')
+        expect((await runPool(plan9, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      })
+    })
+
+    it('routes on Windows exactly as on any other machine, with or without members there', async () => {
       const windows = healthy(); Object.assign(windows.observation.resources, { os: 'Windows' })
-      const { answer } = await runPool(windows)
-      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
-      expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Windows yet')
-      expect((await runPool(windows, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      for (const members of [false, true]) {
+        const onWindows = (await runPool(windows, members)).answer
+        expect(onWindows.ok).toBe(true)
+        expect(onWindows.pick).toEqual((await runPool(healthy(), members)).answer.pick)
+      }
     })
 
     it('leaves out an engine the machine says is signed out or not installed, and keeps one whose sign-in is unknown', async () => {
@@ -883,6 +1026,29 @@ describe('routing contributed capacity', () => {
       for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'claude', installed: null, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
         expect((await runPool(swarm(undefined, engines), false, {}, project)).answer.ok).toBe(true)
       }
+    })
+
+    it('says why an engine\'s allowance is unknown, from the machine\'s reading', async () => {
+      const pool = swarm()
+      pool.observation.quotas = [{ engine: 'claude', known: false, windows: [] }]
+      pool.observation.quotaReasons = { claude: 'Anthropic is limiting how often the allowance can be read.' }
+      const { answer, s } = await runPool(pool, false, {}, project)
+      expect(answer.ok).toBe(true)
+      expect(JSON.stringify(recorded(s).command.decision)).toContain('quota unknown (Anthropic is limiting how often the allowance can be read.)')
+      delete pool.observation.quotaReasons
+      const older = JSON.stringify(recorded((await runPool(pool, false, {}, project)).s).command.decision)
+      expect(older).toContain('quota unknown')
+      expect(older).not.toContain('quota unknown (')
+    })
+
+    it('leaves out an engine the server says is suspended on the machine, with why, and keeps the others', async () => {
+      const pool = swarm()
+      pool.suspendedEngines = { claude: 'Claude Code is suspended on this machine: its last 2 starts there failed.' }
+      const out = await runPool(pool, false, {}, project)
+      expect(out.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is suspended on this machine: its last 2 starts there failed.')
+      pool.suspendedEngines = { codex: 'Codex is suspended on this machine: its last 2 starts there failed.' }
+      expect((await runPool(pool, false, {}, project)).answer.ok).toBe(true)
     })
 
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
@@ -1170,6 +1336,13 @@ describe('local models on the Swarm\'s grid', () => {
     const unnamed = state({ machines: [served([{ grid: GRID, model: 'qwen3' }])] })
     expect(offered(unnamed)[0]).toMatchObject({ quality: 1, gridLabel: 'qwen3' })
   })
+  it('rates each served model by the policy\'s named rows: Kimi K3 and DeepSeek v4.1 at 2, a small Qwen at the local quality', () => {
+    const models = [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }]
+    const three = state({ machines: [served([{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }, { grid: GRID, model: 'deepseek/deepseek-v4.1-flash-1017', kind: 'api' },
+      { grid: GRID, model: 'qwen3:4b', name: 'Qwen 3 4B' }])] })
+    const rows = offered(three, { policy: { ...routing, localModels: { quality: 1, enabled: true, models } } })
+    expect(rows.map(r => [r.gridModel, r.quality])).toEqual([['moonshotai/kimi-k3', 2], ['deepseek/deepseek-v4.1-flash-1017', 2], ['qwen3:4b', 1]])
+  })
   it('offers nothing with the add-on off, for a review, or when the owner turned local models off and nobody asked for one', () => {
     expect(offered(state({ localModels: undefined }))).toEqual([])
     expect(offered(state({ localModels: { grid: GRID, enabled: false } }))).toEqual([])
@@ -1240,6 +1413,43 @@ describe('local models on the Swarm\'s grid', () => {
       { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local', holders: [], refused: why },
       { model: 'tiny', label: 'Tiny 1B', kind: 'local', holders: [], refused: 'small' },
     ])
+  })
+  it('leaves out a model whose host is offline, with that reason, unless another host serves it', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true }, machines: [
+      { machineId: 'm1', name: 'remote-1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }] } },
+      { machineId: 'rig', name: '2x 4090 Rig', observation: { receivedAt: Date.now() - 10 * 60_000, localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', name: 'Kimi K3' },
+        { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
+      { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, opener(), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
+      { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so a Builder on it would never start.' },
+      { title: 'unnamed-host', reason: 'Its host, a machine of this Swarm, is offline, so a Builder on it would never start.' },
+    ])
+    expect(result).toMatchObject({ ok: true, pick: { gridModel: 'deepseek/deepseek-v4.1' } })
+    // Nothing offline is said for a review, which never runs on the grid, or with the add-on off.
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'lead' })
+    const review = scoped({ tab: t })
+    await routeTask(input, review, where as never, opener(), () => 'op')
+    expect(JSON.stringify(recorded(review).command.decision.excluded)).not.toContain('offline, so a Builder')
+    const off = { ...routing, localModels: { quality: 1, enabled: false } }
+    expect(offlineModels(t.state, off, assessment, false)).toEqual([])
+    expect(offlineModels(t.state, off, { ...assessment, local: true }, false)).toHaveLength(2)
+    expect(offlineModels({ ...t.state, localModels: { grid: GRID, enabled: false } }, routing, assessment, false)).toEqual([])
+    expect(offlineModels({ ...t.state, localModels: undefined }, routing, assessment, false)).toEqual([])
+  })
+  it('leaves the grid and anything under its floor out of a task that stepped up, and says why', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }] } }] })
+    Object.assign(t.state.conversations[1]!, { stepUp: { attempt: 3, floor: 3, reason: 'Its first review said Ready no.', at: 1, carry: '' } })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus' } })
+    const why = 'This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality 3.'
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => e.reason.includes(why)).map(e => e.title)).toEqual([expect.stringMatching(/^Multiply · Claude sonnet/),
+      expect.stringMatching(/^New agent · Claude sonnet/), expect.stringMatching(/^New agent · Claude on moonshotai\/kimi-k3/)])
   })
   it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },

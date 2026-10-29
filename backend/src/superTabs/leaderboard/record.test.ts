@@ -29,6 +29,12 @@ function fixture() {
   const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
     run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result.conversationId as string
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
+  /** The owner's Buddy chat in the Swarm's project, as adding a Buddy opens it: the one private chat (buddies.ts). */
+  const buddyChat = () => {
+    state.conversations.push({ id: 'owner-buddy', kind: 'buddy', title: 'Owner\'s Buddy', leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: state.people[0]!.generation }] } })
+    return 'owner-buddy'
+  }
   /** A worker on [id] with its task assigned, returning the assignment id. */
   const assign = (id: string, worker = add(`worker-${id}`, id)) => {
     run({ type: 'work.assign', conversationId: id, agentId: worker })
@@ -41,7 +47,7 @@ function fixture() {
   }
   const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
     run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
-  return { run, invitePeer, add, asAgent, create, group, assign, status, passChecks, say,
+  return { run, invitePeer, add, asAgent, create, group, buddyChat, assign, status, passChecks, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -89,9 +95,9 @@ describe('who asked for a group', () => {
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: null }, f.asAgent(worker))).toThrow('coordinating lead')
   })
 
-  it('opens a private conversation without a requester: private chats never count', () => {
+  it('never names a requester for a Buddy chat: private chats never count', () => {
     const f = fixture()
-    const id = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
+    const id = f.buddyChat()
     expect(f.group(id).requesterId).toBeUndefined()
     expect(f.group(id).ledger).toBeUndefined()
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: 'owner' })).toThrow('chat only')
@@ -220,6 +226,82 @@ describe('when the Lead records a merge', () => {
     expect(f.group(id).pullRequestUrls).toBeUndefined()
   })
 
+  // Evidence routing (Ken, 2026-10-29): a merged PR whose code a follow-up fix PR changes within 14 days, the follow-up linking it.
+  describe('a fix after merge', () => {
+    const FIX = 'https://github.com/o/r/pull/43', REFUSED = 'No merged pull request in this project matches that link within the last 14 days.'
+    const fixes = (conversationId: string, extra: Record<string, unknown> = {}) =>
+      commandSchema.parse({ type: 'conversation.merged', conversationId, pullRequestUrl: FIX, fixes: PR, ...extra })
+    /** The original merged at NOW, and a follow-up group for its fix. */
+    const original = () => {
+      const s = setup()
+      s.f.run(merged(s.id), s.lead)
+      const fix = s.f.create(s.lead)
+      return { ...s, fix }
+    }
+
+    it('marks the original merged request as fixed after merge, once, at the fix\'s merge', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 3 * DAY_MS)
+      const effects = f.run(fixes(fix), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+      expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
+      expect(f.group(fix).pullRequestUrls).toEqual([FIX])
+      expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      // The line is the fix's card (cards.ts: a main-chat line's links become cards, the original's too).
+      expect(f.group(fix).cards?.pullRequests?.[0]).toMatchObject({ url: FIX, messageId: effects.messages[0]!.id, mergedAt: NOW + 3 * DAY_MS })
+      // Recorded again, or by a second fix later: the first fix stays the one counted.
+      f.at(NOW + 5 * DAY_MS)
+      f.run(fixes(fix), lead)
+      const second = f.create(lead)
+      f.run(fixes(second, { pullRequestUrl: 'https://github.com/o/r/pull/44' }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
+    })
+
+    it('takes a backfilled fix merge time, and refuses one over 14 days after the original merge or before it', () => {
+      const { f, lead, id, fix } = original()
+      f.at(NOW + 20 * DAY_MS)
+      expect(() => f.run(fixes(fix), lead)).toThrow(REFUSED)
+      expect(() => f.run(fixes(fix, { mergedAt: new Date(NOW - 60_000).toISOString() }), lead)).toThrow(REFUSED)
+      f.run(fixes(fix, { mergedAt: new Date(NOW + 14 * DAY_MS).toISOString() }), lead)
+      expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 14 * DAY_MS)
+    })
+
+    it('refuses alike a link to no group, an unmerged one, the same group, a review, another project or a private chat, changing nothing', () => {
+      const { f, lead, id, fix } = original()
+      const refused = (conversationId: string, link: string) => {
+        expect(() => f.run(fixes(conversationId, { fixes: link }), lead)).toThrow(REFUSED)
+        expect(f.group(id).ledger?.fixedAfterMergeAt).toBeUndefined()
+      }
+      refused(fix, 'https://github.com/o/r/pull/99')
+      const open = f.create(lead)
+      f.group(open).pullRequestUrls = ['https://github.com/o/r/pull/50']
+      refused(fix, 'https://github.com/o/r/pull/50')
+      Object.assign(f.group(open), { reviewOf: id, ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/50')
+      refused(id, PR)
+      const other = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+      const elsewhere = f.run(commandSchema.parse({ type: 'conversation.create', projectId: other.projectId, title: 'Other', brief: 'x', checks })).result.conversationId as string
+      f.run(merged(elsewhere, { pullRequestUrl: 'https://github.com/o/r/pull/60' }))
+      refused(fix, 'https://github.com/o/r/pull/60')
+      const chat = f.buddyChat()
+      Object.assign(f.group(chat), { pullRequestUrls: ['https://github.com/o/r/pull/70'], ledger: { mergedAt: NOW, shippedAt: NOW } })
+      refused(fix, 'https://github.com/o/r/pull/70')
+      expect(f.group(fix).ledger?.shippedAt).toBeUndefined()
+      expect(f.group(fix).pullRequestUrls).toBeUndefined()
+    })
+
+    it('keeps the fix record to the Lead and owners, as the merge record', () => {
+      const { f, fix } = original()
+      f.invitePeer()
+      expect(() => f.run(fixes(fix), peer)).toThrow('Lead or an owner')
+    })
+
+    it('takes only a GitHub pull request link as the original', () => {
+      expect(() => fixes('g', { fixes: 'https://example.com/o/r/pull/1' })).toThrow()
+      expect(() => fixes('g')).not.toThrow()
+    })
+  })
+
   it('takes the record from the Swarm and project owner', () => {
     const { f, id } = setup()
     f.run(merged(id), owner)
@@ -274,8 +356,7 @@ describe('when the Lead records a merge', () => {
     const { f, lead, id } = setup()
     const review = f.create(lead, { reviewOf: id, title: 'Review', brief: 'Review it.' })
     expect(() => f.run(merged(review), lead)).toThrow('review group')
-    const chat = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
-    expect(() => f.run(merged(chat))).toThrow('chat only')
+    expect(() => f.run(merged(f.buddyChat()))).toThrow('chat only')
   })
 })
 
@@ -497,7 +578,7 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
 
   it('never credits a private conversation', () => {
     const f = fixture()
-    const chat = f.run({ type: 'conversation.create', title: 'Me and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    const chat = f.buddyChat()
     tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
@@ -527,7 +608,18 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     f.at(5_000)
     const id = f.create(owner, { checks: independent })
     const { assignmentId } = f.assign(id)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', at: 5_000 }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000 }])
+  })
+
+  it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
+    for (const effort of ['auto', 'default', null]) {
+      const f = fixture()
+      const id = f.create(owner, { checks: independent })
+      const worker = f.add(`w-${effort}`, id)
+      f.state.agents.find(a => a.id === worker)!.configuration.effort = effort
+      f.assign(id, worker)
+      expect(f.group(id).ledger!.runs![0], String(effort)).not.toHaveProperty('effort')
+    }
   })
 
   it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
@@ -540,7 +632,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
         gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
         requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
     const { assignmentId } = f.assign(id, worker)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', grid: true, at: 1_000 }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000 }])
   })
 
   it('keeps the first verdict on an independent check as the assignment\'s first review, and ignores later and other checks', () => {
@@ -583,6 +675,103 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
   })
 
+  // Evidence routing (Ken, 2026-10-29): a rework round is a re-review after a failed review in the same attempt.
+  it('counts each re-review after a failed verdict as a rework round of the attempt, a review of several checks once', () => {
+    const two = [{ description: 'Code review', independent: true }, { description: 'Security review', independent: true }, { description: 'Builder', independent: false }]
+    const f = fixture()
+    const id = f.create(owner, { checks: two })
+    const { assignmentId } = f.assign(id)
+    const [code, security, own] = f.group(id).checks
+    const run = () => f.group(id).ledger!.runs![0]!
+    const check = (checkId: string, passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' })
+    check(code!.id, true)
+    check(own!.id, false)
+    check(own!.id, true)
+    expect(run().reworkRounds).toBeUndefined()
+    // Both reviews fail, then both pass: one round, not two.
+    check(code!.id, false)
+    check(security!.id, false)
+    expect(run().reworkRounds).toBe(0)
+    check(code!.id, true)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    // A verdict after a pass is not a re-review of a failure.
+    check(code!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    check(security!.id, false)
+    check(security!.id, false)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(3)
+    // A new attempt starts from none.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    f.run({ type: 'work.check', conversationId: id, assignmentId: second.assignmentId, checkId: code!.id, passed: true, evidence: 'rev def' })
+    expect(f.group(id).ledger!.runs![1]).toMatchObject({ assignmentId: second.assignmentId })
+    expect(f.group(id).ledger!.runs![1]!.reworkRounds).toBeUndefined()
+  })
+
+  it('records each finished review verdict an agent gives, with the model it ran on, for the reviewer models\' points', () => {
+    const f = fixture()
+    f.at(7_000)
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    f.state.agents.find(a => a.id === reviewer)!.configuration = { ...config, engine: 'codex', model: 'gpt-5.5', effort: 'medium' }
+    verdict(f, id, assignmentId, false, true, f.asAgent(reviewer))
+    // The same check passed again on the same attempt is the same review (full review of #2097).
+    verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    // A person's verdict, and one on a check that is not a review, are no model's review.
+    verdict(f, id, assignmentId, true)
+    verdict(f, id, assignmentId, true, false, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews).toEqual([
+      { week: weekStart(7_000), engine: 'codex', model: 'gpt-5.5', effort: 'medium', count: 1 },
+    ])
+    // A new attempt is reviewed anew.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    verdict(f, id, second.assignmentId, true, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews![0]!.count).toBe(2)
+  })
+
+  it('gives no model credit for verdicts on an attempt recorded before attempts were (review of #2128)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    // As an assignment from before attempts were recorded: no run, so no way to tell a repeat.
+    delete f.group(id).ledger!.runs
+    for (let i = 0; i < 3; i++) verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews).toBeUndefined()
+  })
+
+  it('counts every verdict exactly, however many a group gets in a week (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id), reviewer = f.add('reviewer', id)
+    // 45 attempts, each reviewed once: more than the 20 attempts a group keeps.
+    for (let i = 0; i < 45; i++) {
+      const { assignmentId } = f.assign(id, worker)
+      verdict(f, id, assignmentId, i % 2 === 0, true, f.asAgent(reviewer))
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.reviews).toEqual([{ week: weekStart(1_000), engine: 'claude', model: 'opus', effort: 'high', count: 45 }])
+  })
+
+  it('keeps review counts for the weeks the board reads, and drops older ones', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id), reviewer = f.add('reviewer', id)
+    const start = weekStart(Date.UTC(2026, 9, 26))
+    // A new attempt reviewed each week.
+    for (let back = 6; back >= 0; back--) {
+      f.at(start - back * WEEK_MS + DAY_MS)
+      const { assignmentId } = f.assign(id, worker)
+      verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.reviews!.map(r => (start - r.week) / WEEK_MS)).toEqual([4, 3, 2, 1, 0])
+  })
+
   it('keeps the last 20 assignments of a group', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
@@ -595,5 +784,178 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     expect(f.group(id).ledger!.runs).toHaveLength(20)
     expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
+  })
+
+  it('takes the asked time for a request recorded before the first assignment was kept, once its first attempt may have rolled off', () => {
+    const f = fixture()
+    f.at(1_000)
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    for (let i = 0; i < 21; i++) {
+      f.at(10_000 + i)
+      const { assignmentId } = f.assign(id, worker)
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    // As a group recorded before the time was kept: 20 attempts kept, the first rolled off.
+    delete f.group(id).ledger!.firstAssignedAt
+    f.at(20_000)
+    f.assign(id, worker)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(1_000)
+  })
+
+  it('takes the first assignment time from the kept attempts for a request recorded before it was kept (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    f.at(10_000)
+    const first = f.assign(id, worker)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: first.assignmentId, reason: 'Again.' })
+    // As a group recorded before the time was kept.
+    delete f.group(id).ledger!.firstAssignedAt
+    f.at(10_001)
+    f.assign(id, worker)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
+  })
+
+  it('records the attempt a request shipped on, and keeps it through a later attempt (review of #2097)', () => {
+    const f = fixture()
+    f.at(5_000)
+    const id = f.create(owner, { checks })
+    const { worker, assignmentId } = f.assign(id)
+    f.at(6_000)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high' }
+    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
+    // Reopened and worked again on another model: the ship stays the first attempt's.
+    const other = f.add('other', id)
+    f.state.agents.find(a => a.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(7_000)
+    f.assign(id, other)
+    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
+  })
+
+  it('keeps who led the group and the attempt when it shipped, through a later lead and a later merge record (review of #2097)', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'lead', true)
+    const id = f.create(owner, { checks })
+    expect(f.group(id).leadId).toBe(lead)
+    f.at(1_000)
+    const { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const shippedBy = f.group(id).ledger!.shippedBy
+    expect(f.group(id).ledger!.shippedLeadId).toBe(lead)
+    f.group(id).leadId = 'someone-else'
+    f.at(2_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 2_000, shippedLeadId: lead, shippedBy })
+  })
+
+  it('keeps the shipping attempt through a later assignment before the merge is recorded (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(1_000)
+    const { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const other = f.add('other', id)
+    f.state.agents.find(a => a.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(1_500)
+    f.assign(id, other)
+    f.at(2_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId, model: 'opus', at: 1_000 })
+  })
+
+  it('ships on the attempt that ran when the recorded merge happened', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const first = f.assign(id)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: first.assignmentId, reason: 'Again.' })
+    f.at(8_000)
+    f.assign(id, f.add('second', id))
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(6_000).toISOString() })
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId: first.assignmentId, at: 5_000 })
+  })
+
+  it('takes the snapshot again when a merge recorded later moves the ship earlier than Done (review of #2097)', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'lead', true)
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const a = f.assign(id)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: a.assignmentId, reason: 'Again.' })
+    const other = f.add('other', id)
+    f.state.agents.find(x => x.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(8_000)
+    const b = f.assign(id, other)
+    f.at(8_500)
+    f.passChecks(id, b.assignmentId)
+    f.status(id, b.assignmentId, other, 'done', 'Shipped at rev abc.')
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId: b.assignmentId, model: 'sonnet' })
+    f.group(id).leadId = 'someone-else'
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(6_000).toISOString() })
+    // The attempt running at the merge, with the lead kept from the ship (no lead history is recorded).
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 6_000, shippedBy: { assignmentId: a.assignmentId, model: 'opus', at: 5_000 },
+      shippedLeadId: lead })
+  })
+
+  it('ships on the earliest attempt when the merge came before any attempt started', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const { assignmentId } = f.assign(id)
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(4_000).toISOString() })
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 4_000, shippedBy: { assignmentId, at: 5_000 } })
+  })
+
+  it('keeps the request\'s first assignment time once its first attempt has rolled off (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    for (let i = 0; i < 21; i++) {
+      f.at(10_000 + i)
+      const { assignmentId } = f.assign(id, worker)
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.runs![0]!.at).toBe(10_001)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
+  })
+})
+
+describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy earns when it ships)', () => {
+  /** A Buddy of the owner in the project, and its proposal posted in the project chat. */
+  function proposed(f: ReturnType<typeof fixture>) {
+    const buddy = f.add('buddy')
+    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'g' }
+    const proposal: NonNullable<CommandContext['proposal']> = { id: 'm-proposal', conversationId: 'lead',
+      author: { kind: 'agent', id: buddy, name: 'buddy', membershipGeneration: 'g' }, source: { kind: 'buddy-proposal', personId: 'owner', ownerMessageId: 'm-ask' } }
+    return { buddy, proposal }
+  }
+  const createFrom = (f: ReturnType<typeof fixture>, proposal: CommandContext['proposal']) =>
+    f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.', checks, proposalMessageId: 'm-proposal' }), owner,
+      { proposal }).result.conversationId as string
+
+  it('records the Buddy whose proposal the group comes from', () => {
+    const f = fixture()
+    f.at(5_000)
+    const { buddy, proposal } = proposed(f)
+    const id = createFrom(f, proposal)
+    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
+  })
+
+  it('refuses a link to a message that is not a Buddy\'s proposal in this project\'s chat', () => {
+    const f = fixture()
+    const { proposal } = proposed(f)
+    const lead = f.add('not-buddy')
+    for (const wrong of [undefined, { ...proposal, source: null }, { ...proposal, conversationId: 'elsewhere' },
+      { ...proposal, author: { ...proposal.author, id: lead } }, { ...proposal, author: { ...proposal.author, kind: 'person' as const, id: 'owner' } }]) {
+      expect(() => createFrom(f, wrong), JSON.stringify(wrong)).toThrow(/proposal/i)
+    }
   })
 })

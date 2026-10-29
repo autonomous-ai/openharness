@@ -254,7 +254,8 @@ export function inspectPane(engine: AgentEngine, capture: string, takeover: Take
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
   const rawMarker = prompt.search(rawMarks)
   const rawTail = rawMarker >= 0 ? prompt.slice(rawMarker + 1) : ''
-  const placeholder = hasPlaceholderSgr(rawTail)
+  // Devin 3000.11 greys its placeholder in truecolor, with no dim or italic: all of it muted, it is the placeholder.
+  const placeholder = hasPlaceholderSgr(rawTail) || (engine === 'devin' && allVisibleTextIsMuted(rawTail))
   if (placeholder || IDE_CONTEXT_CHIPS.test(visible)) visible = ''
   const draft = visible.length > 0
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
@@ -297,7 +298,7 @@ export function paneModal(engine: AgentEngine, capture: string, readTakeover: Ta
   return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
 }
 
-const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|(?<!between )Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
 
 /** The approval prompts among them. */
 /**

@@ -69,6 +69,19 @@ describe('the core API a light service runs on in its own process', () => {
     ask.mockRejectedValueOnce(new Error('offline'))
     expect(await api.usage!(target)).toBeNull()
   })
+  it('reads an agent’s usage fresh through the core, validated, and nothing without a core', async () => {
+    expect(await processCoreApi('/data', 'superTabs').usageFresh!('a')).toBeNull()
+    const ask = vi.fn(async (_type: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ value: { totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' } }))
+    const api = processCoreApi('/data', 'superTabs', { ask })
+    expect(await api.usageFresh!('a')).toEqual({ totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' })
+    expect(ask).toHaveBeenCalledWith('agentUsageFresh', { agentId: 'a' })
+    for (const answer of [{}, { error: 'STALE_USAGE_TARGET' }, { value: { totalTokens: -1 } }]) {
+      ask.mockResolvedValueOnce(answer)
+      expect(await api.usageFresh!('a')).toBeNull()
+    }
+    ask.mockRejectedValueOnce(new Error('offline'))
+    expect(await api.usageFresh!('a')).toBeNull()
+  })
   it('answers the agents from what the core last said, by agent id or session id', () => {
     const live = [agent('a1'), agent('a2')]
     const api = processCoreApi('/data', 'projects', { live: () => live, advertised: () => [live[1]] })
@@ -242,7 +255,10 @@ describe('the core API a light service runs on in its own process', () => {
     expect(ask).toHaveBeenLastCalledWith('super_tab_screen', { agentId: 'h1', scrollback: 20 })
     expect(await doors.input('h1', 'yes', ['Enter'])).toEqual({ ok: true })
     expect(ask).toHaveBeenLastCalledWith('super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
+    expect(await doors.inputIfScreen('h1', ['Escape'], 'Update available')).toEqual({ ok: true })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })
     ask.mockRejectedValue(new Error('gone'))
+    expect(await doors.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
     expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
     expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
     ask.mockResolvedValue({ error: 'NOT_SUPER_TABS' })

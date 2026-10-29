@@ -29,6 +29,7 @@ import { formatNext, type NextStep } from './next.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath, type Pending, type Started, type Told } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
+import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
@@ -66,6 +67,8 @@ ${ON_MACHINE}`
 export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--json] -- <words…>
 
 Says <words> to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer to the question it asked, or what to do next.
+To a harness in a pane, only when it is idle and the person allows it (harness settings programs-reply): more work,
+typed into it once its composer is free. Then wait for it (harness wait <name>) and read its answer (harness show <name>).
 The person's, or a program's acting for them; an agent does not answer for the person.
 ${ON_MACHINE}`
 export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
@@ -105,8 +108,9 @@ and, if not, who can change that; how many of yours are open, and how many start
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, refused: 5, timeout: 124 } as const
 
 /** Not a failure: the caller may not do this. It should not retry; it tells the person or does the work itself.
- *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s: retried, they are refused the same. */
-export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING'])
+ *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s, `REPLY_OFF` is `harness reply`'s: retried, they are refused the
+ *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
+export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -735,6 +739,11 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
   })
 }
 
+/** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
+const PROBE_CHARS = 80
+/** The words as a turn's ask holds them, to compare: spaces as one, since a pane may wrap or trim them. */
+const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
 // ── reply ──────────────────────────────────────────────────────────────────────────────────────────
 
 export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
@@ -748,15 +757,34 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     const o = await opened(s)
     let t: Target | null = null
     try {
-      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a cloud harness: tell them what it asked.')
+      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
-      // A terminal agent is typed to in its pane; nothing here sends it words.
-      if (t.frame.location !== 'cloud') throw new UsageError(`${name} is not a cloud harness: open it in Harness to talk to it.`)
-      const reply = await t.daemon.request('cloud_send', { agentId: t.frame.id, text }, 3 * 60_000)
-      if (typeof reply.error === 'string') throw new AgentClientError(reply.error, typeof reply.detail === 'string' && reply.detail ? reply.detail : `${name} did not take it (${reply.error}).`)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
       const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
+      if (t.frame.location !== 'cloud') {
+        // A harness in a pane, for a program acting for the person (messages/replyLocal.ts): the machine it runs on
+        // checks the switch and that it is idle again, and queues the words in its mailbox.
+        if (!readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', REPLY_OFF_TEXT)
+        const state = stateOf(t.frame)
+        if (state === 'stopped' || state === 'offline') throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
+        if (state !== 'idle') throw new AgentClientError('NOT_IDLE', state === 'working' ? `${name} is working. Wait for it to finish (${step(s.env, 'wait', at)}), then reply.` : `${name} is not idle: it may be waiting for the person (a question or a permission). Only they answer that.`)
+        let reply: Record<string, unknown>
+        try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'reply_local', machine: o.machine, agentId: t.frame.id, text }, 20_000) } catch (error) {
+          if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+          throw error
+        }
+        // As a tell's: `wait` and `show` then hold the answer to the work before until it has taken these words.
+        try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
+        catch { /* `wait` then reads its last answer as it would without the line */ }
+        const failed = reply.state === 'failed'
+        const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.` : `${name} has it: typed once its composer is free.`
+        s.out(flags.has('--json') ? JSON.stringify({ ok: !failed, name, id: t.frame.id, message: reply.id ?? null, state: reply.state ?? 'queued', effect, next: failed ? [] : next })
+          : [`${name} on ${t.machine}: ${effect}`, failed ? null : formatNext(next)].filter(Boolean).join('\n'))
+        return failed ? EXIT.failed : EXIT.ok
+      }
+      const reply = await t.daemon.request('cloud_send', { agentId: t.frame.id, text }, 3 * 60_000)
+      if (typeof reply.error === 'string') throw new AgentClientError(reply.error, typeof reply.detail === 'string' && reply.detail ? reply.detail : `${name} did not take it (${reply.error}).`)
       s.out(flags.has('--json') ? JSON.stringify({ ok: true, name, id: t.frame.id, next }) : `Sent to ${name}.\n${formatNext(next)}`)
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
@@ -764,11 +792,6 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
 }
 
 // ── tell ───────────────────────────────────────────────────────────────────────────────────────────
-
-/** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
-const PROBE_CHARS = 80
-/** The words as a turn's ask holds them, to compare: spaces as one, since a pane may wrap or trim them. */
-const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 /**
  * More work for a harness the caller started (messages/tell.ts): asked of the machine it runs on, which checks its own
@@ -836,7 +859,9 @@ const TOLD_HOLD_MS = 10 * 60_000
  * then its last answer is to the work before: the answer a `wait` returned at once, and wrongly, after a tell.
  */
 function toldPending(o: Opened, t: Target, turn: { ask?: string | null } | null, now: number): Told | null {
-  const told = o.caller ? o.ledger.toldBy(o.caller, { machineId: t.machineId, agentId: t.frame.id }) : null
+  // No caller is the person, or a program acting for them: their replies are recorded as the person's (`harness reply`).
+  const by = o.caller ?? (o.orphan ? null : { machineId: o.where.machineId, agentId: PERSON_AGENT_ID })
+  const told = by ? o.ledger.toldBy(by, { machineId: t.machineId, agentId: t.frame.id }) : null
   if (!told || now - told.at > TOLD_HOLD_MS) return null
   if (turn?.ask && flat(turn.ask).includes(told.probe)) return null
   // Another machine's clock: a minute either way says nothing, and the turn's words still do.

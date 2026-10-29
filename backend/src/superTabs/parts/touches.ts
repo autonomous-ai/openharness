@@ -5,6 +5,7 @@ import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
+import { buddiesHearing } from '../buddyNews.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -47,6 +48,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
+  // News for a Buddy relies on its person still reading there (buddyNews.ts): their part guards it, as a person.tell's does.
+  for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
+
   switch (command.type) {
     case 'tab.rename': case 'tab.project': case 'tab.pause':
       if (actor.kind === 'agent') group('lead')
@@ -54,11 +58,26 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
+    case 'buddy.create':
+      // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
+      slots(command.machineId)
+      break
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
+    case 'member.username':
+      // Unique in the Swarm: a concurrent choice of the same name writes another person's part, and a join writes the head.
+      for (const person of before.people) member(person.id)
+      head()
+      break
     case 'project.report': case 'project.repository': case 'project.skills':
       leadCheck(command.projectId)
+      break
+    case 'person.tell':
+      // The line reads that its person still reads the Lead's project: their own part guards it, as a revoke touches the
+      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
+      member(command.personId)
+      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
@@ -177,13 +196,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'route.modelResult':
       group(context.routeDecision?.conversationId)
       break
-    case 'conversation.audience': {
-      // Rule (b): everyone the change removes sees it through their own part (design section 1.2).
-      const kept = new Set(effects.state.conversations.find(c => c.id === command.conversationId)?.audience?.people.map(p => p.id))
-      for (const person of before.conversations.find(c => c.id === command.conversationId)?.audience?.people ?? []) if (!kept.has(person.id)) member(person.id)
-      group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
-      break
-    }
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))
       break

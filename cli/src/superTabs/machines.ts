@@ -9,7 +9,7 @@ import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
+import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -21,6 +21,7 @@ import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
+import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -134,7 +135,11 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
 /** A pool's starts this host launches: its agents', and its Buddies', which the backend lists apart so that a host from before
  *  Buddies never launches one as a Builder (backend read/hostRows.ts). */
-const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts)]
+/** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
+ *  before them never launches one as a worker. */
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
+/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager. */
+const CAPABILITIES = ['leadStart']
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
@@ -172,6 +177,8 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
+  private readonly unconfirmed = new Map<string, Unconfirmed>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -188,6 +195,7 @@ export class ContributedMachines {
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
+  private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
@@ -200,6 +208,12 @@ export class ContributedMachines {
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
    *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
+  /** The account reader's last answer, when it was read and until when it stands ([USAGE_FRESH_MS] and the rest). */
+  private usageRead: { value: Record<string, unknown>; at: number; until: number } | null = null
+  /** Per engine, its last readable allowance windows and when they were read, kept [USAGE_KEEP_MS] through failed reads. */
+  private readonly goodQuota = new Map<string, { windows: ReturnType<typeof quotaOf>['windows']; at: number }>()
+  /** Until when the reading leaves out why an allowance is unknown, which the backend refused. */
+  private quotaReasonsRefusedUntil = 0
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
   private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
@@ -220,6 +234,29 @@ export class ContributedMachines {
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
     return value
+  }
+  /** The account reader's answer, read again only once the last one is [USAGE_FRESH_MS] old: sooner, and Anthropic refuses
+   *  the reads for 5 minutes. A refused or failed read is not repeated sooner than its own wait. */
+  private async allowance(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }) {
+    const now = this.deps.now()
+    if (this.usageRead && now < this.usageRead.until) return this.usageRead
+    const value = object(await local.request('usage_read', {}, 20_000).catch(() => null))
+    const providers = list(value.providers)
+    const wait = !Array.isArray(value.providers) ? USAGE_RETRY_MS
+      : providers.some(p => p.outcome === 'answered' && p.httpStatus === 429) ? USAGE_LIMITED_MS : USAGE_FRESH_MS
+    return this.usageRead = { value, at: now, until: now + wait }
+  }
+  /** What the reading says of [engine]'s allowance. Windows that could not be read again stand for [USAGE_KEEP_MS] after
+   *  they were read, unless the engine signed out; past that, unknown says why. */
+  private quotaFor(read: { value: Record<string, unknown>; at: number }, engine: string) {
+    const q = quotaOf(read.value, engine, false)
+    if (q.known) { this.goodQuota.set(engine, { windows: q.windows, at: read.at }); return { engine, known: true, windows: q.windows } }
+    // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+    if (meteredEngine(engine, this.deps.env ?? process.env)) return { engine, known: true, windows: [] }
+    if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
+    const kept = this.goodQuota.get(engine)
+    if (kept && this.deps.now() - kept.at <= USAGE_KEEP_MS) return { engine, known: true, windows: kept.windows }
+    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
    *  until the first read is in. */
@@ -327,6 +364,7 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
@@ -337,7 +375,7 @@ export class ContributedMachines {
       ? await (this.deps.modelsStamp ?? (() => localModelsStamp(this.core.dataDir, this.deps.env ?? process.env)))().catch(() => '') : ''
     // The local daemon is reached only for a reading to send, never for a pass that has nothing to say.
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
-    let usage: Record<string, unknown> | null = null
+    let usage: { value: Record<string, unknown>; at: number } | null = null
     try {
       for (const row of pools) {
         try {
@@ -369,9 +407,8 @@ export class ContributedMachines {
         if (!last || last.signature !== signature || last.starting || began - last.at >= MACHINE_HEARTBEAT_MS) {
         try {
         local ??= await this.deps.open(where)
-        // The existing usage reader owns its provider cache. Raw responses and
-        // account credentials never leave this machine.
-        const readings = usage ??= await local.request('usage_read', {}, 20_000).catch(() => ({}))
+        // Raw responses and account credentials never leave this machine.
+        const readings = usage ??= await this.allowance(local)
         const sampledAt = this.deps.now()
         const probeTools = tools.filter(name => (this.toolCache.get(name)?.until ?? 0) <= sampledAt)
         const observed = await this.deps.capabilities({ cwd: pool.cwd, tools: probeTools, devices: [] })
@@ -423,7 +460,16 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
-        const observation = { generation: pool.generation, tools: reportedTools, ...(preparing.length ? { preparingStartIds: preparing } : {}),
+        const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
+        const allowances = engines.map(engine => this.quotaFor(readings, engine))
+        const quotaReasons = began >= this.quotaReasonsRefusedUntil
+          ? Object.fromEntries(allowances.flatMap(q => 'reason' in q && q.reason ? [[q.engine, q.reason]] : [])) : {}
+        // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
+        // every reading with it.
+        const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+          ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
+          ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
+          ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
@@ -435,11 +481,7 @@ export class ContributedMachines {
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
-          quotas: engines.map(engine => {
-            const q = quotaOf(readings, engine, false)
-            // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
-            return { engine, known: q.known || meteredEngine(engine, this.deps.env ?? process.env), windows: q.windows }
-          }), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         this.sending.add(String(row.tabId))
@@ -451,7 +493,9 @@ export class ContributedMachines {
           // readiness, progress, then privacy): a backend that takes everything else keeps the local models it reads. Their
           // boolean-only view still safely refuses an unverified tool, and a reading without privacy is never one a Team
           // machine passes on.
-          const { preparingStartIds: _preparing, ...unprepared } = observation
+          const { quotaReasons: _reasons, ...unreasoned } = observation
+          const { harnessTokens: _tokens, ...untokened } = unreasoned
+          const { preparingStartIds: _preparing, ...unprepared } = untokened
           const { harnessUncommitted: _uncommitted, ...known } = unprepared
           const { readiness: _readiness, ...ready } = known
           const { harnessProgress: _progress, ...withoutProgress } = ready
@@ -460,7 +504,8 @@ export class ContributedMachines {
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('preparingStartIds' in observation ? [observation] : []), ...('harnessUncommitted' in unprepared ? [unprepared] : []),
+          const attempts = [...('quotaReasons' in observation ? [observation] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+            ...('harnessUncommitted' in unprepared ? [unprepared] : []),
             ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
@@ -472,7 +517,9 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
+              if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
               else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
@@ -539,6 +586,10 @@ export class ContributedMachines {
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
               if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
               else this.preparing.delete(String(start.id))
+              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
+              if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
+                this.unconfirmed.set(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
+              } else this.unconfirmed.delete(String(start.id))
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
@@ -563,6 +614,50 @@ export class ContributedMachines {
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }
     } finally { local?.close() }
+  }
+  /**
+   * A start this host launched, its engine never recording its session, that the backend no longer lists as pending: when
+   * the backend says it failed (its machine did not start it within 3 minutes, say) and joined no agent, the agent this
+   * host created for it is stopped. Nothing else would: the host no longer sees the start, and the agent is no member of
+   * the Swarm. Mac Auto's Harness Team account kept ten such Codex panes idle on 2026-10-29. Only the agent this start's
+   * own creation receipt names is closed (core closeMember), never one that joined; a status the backend cannot give now
+   * is asked again on later passes, a few times.
+   */
+  private async abandoned(startId: string, launch: Unconfirmed): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.unconfirmed.delete(startId); return }
+      const close = this.core.agents.closeMember
+      if (!close) { this.unconfirmed.delete(startId); return }
+      const closed = await close(launch.harnessId, launch.creationId)
+      if ('closed' in closed && closed.closed) {
+        this.unconfirmed.delete(startId)
+        this.log(`Stopped the agent a failed start launched (start ${startId}, session ${launch.harnessId.slice(0, 8)}): ${String(status.error)}`)
+        return
+      }
+      // Not this start's own agent, as its receipt says: nothing here to stop.
+      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.unconfirmed.delete(startId); return }
+      throw new Error(`${'error' in closed ? closed.error : 'unknown'}${'detail' in closed && closed.detail ? `: ${closed.detail}` : ''}`)
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.unconfirmed.delete(startId)
+      this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
+  }
+
+  /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
+   *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
+   *  here. A session with none read yet is left out. */
+  private async tokensOf(running: readonly string[]): Promise<Record<string, Record<string, ModelTokens>>> {
+    const counted: Record<string, Record<string, ModelTokens>> = {}
+    for (const id of running) {
+      const session = this.core.agents.byAgent(id)
+      const target = session && usageTarget(session)
+      if (!target || !validUsageTarget(target)) continue
+      const models = (await this.core.usage?.(target).catch(() => null))?.models
+      if (models && Object.keys(models).length && validModelTokens(models)) counted[id] = models
+    }
+    return counted
   }
   /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
    *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).
@@ -767,6 +862,15 @@ export class ContributedMachines {
  *  probe that failed is tried again. */
 const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
+/** How long an allowance reading stands. 2026-10-29: Anthropic answered 5 reads in a row, then refused them for 5 minutes
+ *  (HTTP 429, retry-after 300); read on every 15-second report, Claude's allowance showed as unknown. */
+const USAGE_FRESH_MS = 3 * 60_000
+/** After a refused read: Anthropic's own retry-after. */
+const USAGE_LIMITED_MS = 5 * 60_000
+/** After the reader on this machine did not answer at all. */
+const USAGE_RETRY_MS = 60_000
+/** How long the last readable windows stand while later reads fail; past it the allowance is unknown, with why. */
+const USAGE_KEEP_MS = 20 * 60_000
 /** The backend's limit on one reading's checkouts (`machineObservationSchema`). */
 const MAX_CHECKOUTS = 64
 type ReadyEngine = { engine: string; installed: true | null; signedIn: boolean | null }
@@ -846,6 +950,11 @@ const MAX_LOCAL_MODELS = 64
 const GRID_MODELS_MS = 60_000
 /** Every Swarm's grid, as the backend mints its name: their models belong to their own Swarm. */
 const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
+
+/** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
+interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** How many passes ask about an abandoned start before it is let go. */
+const ABANDONED_TRIES = 5
 
 type LocalModelReading = { grid: string; model: string; name?: string; contextWindow?: number; kind: 'local' | 'api' | 'shared'; starting?: true }
 

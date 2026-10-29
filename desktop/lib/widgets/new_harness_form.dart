@@ -18,6 +18,8 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
+import '../state/lead_placement.dart';
+import '../super_tabs/identity.dart' show SuperTabAvatar;
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -87,6 +89,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
+      box.leadBlocked == null &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
       !box.taskTooLong &&
@@ -160,6 +163,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       box.useDesktopChoices(widget.desktop);
+      _startOnLastMachine();
       if (box.checking) _row = _Row.start;
       _syncField();
       // Restoring the successful agent can replace an unfocusable Terminal
@@ -401,7 +405,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.advanced => box.advancedOpen ? '[-]' : '[+]',
     _Row.project => box.launchProjectLabel,
     _Row.agent => box.launchAgentLabel,
-    _Row.model => box.modelLabel,
+    // The Product Manager's own model, never one guessed from other agents.
+    _Row.model => box.placesLead ? box.leadModelLabel : box.modelLabel,
     _Row.branch => box.branchRowLabel,
     _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
@@ -1669,6 +1674,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
                                     _desktopSettings(),
+                                    if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
                                       const SizedBox(height: 14),
@@ -1788,19 +1794,23 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
-  Widget _desktopHeader() {
+  String get _desktopProjectName {
     final folder = box.project.folder;
     final lastPart = folder
         ?.split(RegExp(r'[/\\]'))
         .where((p) => p.isNotEmpty)
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
-    final projectName = box.asGuest
+    return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
               lastPart ??
               box.project.repository?.name ??
               'Choose repo';
+  }
+
+  Widget _desktopHeader() {
+    final projectName = _desktopProjectName;
     // A phone has room for neither the capsules side by side nor a mouse's
     // target: there each is a line of its own, a finger tall.
     final phone = workspaceIsCompact(context);
@@ -1844,6 +1854,31 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   textSize: 13,
                   surfaceColor: DesktopChrome.surface,
                   onPressed: null,
+                ),
+              )
+            else if (box.placesLead)
+              _desktopField(
+                order: 2,
+                finger: phone,
+                anchor: _headerMachineAnchor,
+                child: _desktopLeadMachineAnchor(
+                  child: DesktopPill(
+                    key: const ValueKey('new-harness-field-machine'),
+                    focusNode: _headerMachineFocus,
+                    label: _leadChipLabel,
+                    semanticLabel: 'Computer, $_leadChipLabel',
+                    icon: AppIcons.monitor,
+                    menu: true,
+                    capsule: true,
+                    tooltip: 'Choose computer',
+                    textSize: 13,
+                    surfaceColor: DesktopChrome.surface,
+                    onPressed: box.locked
+                        ? null
+                        : () => _headerMachineMenu.isOpen
+                              ? _headerMachineMenu.close()
+                              : _headerMachineMenu.open(),
+                  ),
                 ),
               )
             else
@@ -2018,6 +2053,226 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
+  /// New Project's machine chip: where the Product Manager runs, or Choose
+  /// machine until the person has one it can run on.
+  String get _leadChipLabel => box.leadMachine?.name ?? 'Choose machine';
+
+  /// New Project opens on the person's last-used machine, as New Harness
+  /// does, when it can run the Product Manager; else nothing is chosen for
+  /// them and the chip asks (Lead's ruling, 10-29: the Swarm picks nothing).
+  void _startOnLastMachine() {
+    final machines = box.integration?.leadMachines;
+    if (machines == null || box.leadPicked || box.locked) return;
+    if (machines.any((m) => m.id == box.machineId && m.startable)) {
+      box.chooseLeadMachine(box.machineId);
+    }
+  }
+
+  /// A machine's one status word in the menu, or null when it can take the
+  /// Product Manager: no explanation lines (Dee, 10-29).
+  String? _leadStatusWord(LeadMachine machine) => machine.startable
+      ? null
+      : !machine.online
+      ? 'offline'
+      : machine.unavailable == kLeadSwarmPaused ||
+            machine.unavailable == 'Paused in this Swarm'
+      ? 'paused'
+      : machine.unavailable == null &&
+            machine.leadEngines.isNotEmpty &&
+            (machine.freeAgents ?? 1) <= 0
+      ? 'busy'
+      : 'unavailable';
+
+  /// Under the settings, only while it blocks New Project: one line saying
+  /// why. Choosing a machine is the chip's to ask.
+  Widget _desktopLeadBlocked() {
+    final why = box.leadBlocked;
+    if (why == null || why == kLeadChooseMachine) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 4),
+      child: Text(
+        why,
+        key: const ValueKey('new-harness-lead-blocked'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+      ),
+    );
+  }
+
+  /// New Project's machine menu: your machines, then team machines, each its
+  /// own name (a team machine wears its owner's avatar) and one status word
+  /// when it cannot take the Product Manager now.
+  Widget _desktopLeadMachineAnchor({required Widget child}) {
+    final machines = box.integration?.leadMachines ?? const <LeadMachine>[];
+    final yours = [
+      for (final m in machines)
+        if (m.own) m,
+    ];
+    final team = [
+      for (final m in machines)
+        if (!m.own) m,
+    ];
+    Widget heading(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+      child: Semantics(
+        header: true,
+        child: Text(
+          text,
+          style: DesktopChrome.text(
+            size: 12,
+            medium: true,
+            color: DesktopChrome.muted,
+          ),
+        ),
+      ),
+    );
+    return MenuAnchor(
+      controller: _headerMachineMenu,
+      childFocusNode: _headerMachineFocus,
+      consumeOutsideTap: true,
+      alignmentOffset: const Offset(8, 0),
+      onOpen: () => setState(() {}),
+      onClose: () {
+        if (!mounted) return;
+        setState(() {});
+        _focusEditor();
+      },
+      style: MenuStyle(
+        alignment: Alignment.bottomLeft,
+        backgroundColor: WidgetStatePropertyAll(DesktopChrome.surface),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(grid.AppMenu.elevation),
+        maximumSize: const WidgetStatePropertyAll(Size(264, 460)),
+        padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
+        shape: WidgetStatePropertyAll(
+          DesktopChrome.shape(radius: DesktopChrome.menuRadius),
+        ),
+      ),
+      menuChildren: [
+        if (yours.isNotEmpty) heading('Your machines'),
+        for (final machine in yours) _desktopLeadMachineRow(machine),
+        if (team.isNotEmpty) heading('Team machines'),
+        for (final machine in team) _desktopLeadMachineRow(machine),
+      ],
+      child: child,
+    );
+  }
+
+  Widget _desktopLeadMachineRow(LeadMachine machine) {
+    final chosen = machine.id == box.leadMachine?.id;
+    final enabled = machine.startable && !box.locked;
+    final status = _leadStatusWord(machine);
+    return KeyedSubtree(
+      key: ValueKey('new-harness-lead-machine-${machine.id}'),
+      child: MenuItemButton(
+        autofocus: chosen && enabled,
+        onPressed: enabled ? () => box.chooseLeadMachine(machine.id) : null,
+        style:
+            MenuItemButton.styleFrom(
+              foregroundColor: DesktopChrome.foreground,
+              disabledForegroundColor: DesktopChrome.muted,
+              enabledMouseCursor: SystemMouseCursors.click,
+              disabledMouseCursor: SystemMouseCursors.basic,
+              side: BorderSide.none,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              textStyle: DesktopChrome.text(size: 13),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              ),
+            ).copyWith(
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? DesktopChrome.muted
+                    : states.contains(WidgetState.focused) ||
+                          states.contains(WidgetState.hovered)
+                    ? DesktopChrome.onSelection
+                    : DesktopChrome.foreground,
+              ),
+              iconColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? DesktopChrome.muted
+                    : states.contains(WidgetState.focused) ||
+                          states.contains(WidgetState.hovered)
+                    ? DesktopChrome.onSelection
+                    : DesktopChrome.muted,
+              ),
+              backgroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? Colors.transparent
+                    : states.contains(WidgetState.focused) ||
+                          states.contains(WidgetState.hovered)
+                    ? DesktopChrome.activeSelection
+                    : chosen
+                    ? DesktopChrome.selection
+                    : Colors.transparent,
+              ),
+            ),
+        // Inside the button, so it keeps its press action and enabled state
+        // (review of #2237); assistive technology hears the full reason where
+        // the row shows one word.
+        child: Semantics(
+          selected: chosen,
+          label: machine.startable
+              ? machine.name
+              : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
+          excludeSemantics: true,
+          child: SizedBox(
+            width: 232,
+            child: Row(
+              children: [
+                if (machine.owner case final owner?)
+                  Opacity(
+                    opacity: enabled ? 1 : .55,
+                    child: SuperTabAvatar.person(owner, size: 16),
+                  )
+                else
+                  Icon(
+                    box.app.stateOf(machine.id)?.isLocalMachine == true
+                        ? AppIcons.laptop
+                        : AppIcons.monitor,
+                    size: 16,
+                  ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    machine.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                // Enlarged text shortens the word rather than the row overflowing.
+                if (status != null) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    flex: 2,
+                    fit: FlexFit.tight,
+                    child: Text(
+                      status,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                      style: grid.AppType.caption(height: 1.35),
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 16,
+                  child: chosen ? Icon(AppIcons.check, size: 16) : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _desktopTaskBox() => ListenableBuilder(
     listenable: _taskFocus,
     builder: (context, _) => Material(
@@ -2132,7 +2387,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               anchor: _desktopAnchors[_Row.approvals]!,
               child: _desktopChoiceButton(_Row.approvals, AppIcons.shieldCheck),
             ),
-          if (box.usesProfile)
+          if (box.usesProfile && !box.leadThroughSwarm)
             _desktopField(
               order: 7,
               anchor: _desktopAnchors[_Row.profile]!,
@@ -2144,7 +2399,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (box.canUseWorktree)
+          // A Product Manager always gets its own worktree.
+          if (box.canUseWorktree && !box.placesLead)
             _desktopField(
               order: 8,
               anchor: _desktopAnchors[_Row.worktree]!,
@@ -2170,6 +2426,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           if (!box.isCloud &&
+              !box.leadThroughSwarm &&
               (box.isGitProject || box.checkingGit || box.gitError != null))
             _desktopField(
               order: 9,
@@ -2355,25 +2612,26 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
-        FocusTraversalOrder(
-          order: const NumericFocusOrder(9.95),
-          child: ProjectVisibility(
-            key: const ValueKey('new-harness-project-visibility'),
-            value: box.integration!.projectVisibility!,
-            disabledReason: box.integration!.projectVisibilityLocked
-                ? 'Project creation has started. Visibility is fixed for this request.'
-                : box.locked
-                ? 'Finish the current request before changing visibility.'
-                : null,
-            onChanged: box.locked || box.integration!.projectVisibilityLocked
-                ? null
-                : (value) => setState(
-                    () => box.integration!.projectVisibility = value,
-                  ),
-          ),
-        ),
+        _desktopProjectVisibility(9.95),
       _desktopStartButton(),
     ],
+  );
+
+  Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
+    order: NumericFocusOrder(order),
+    child: ProjectVisibility(
+      key: const ValueKey('new-harness-project-visibility'),
+      value: box.integration!.projectVisibility!,
+      disabledReason: box.integration!.projectVisibilityLocked
+          ? 'Project creation has started. Visibility is fixed for this request.'
+          : box.locked
+          ? 'Finish the current request before changing visibility.'
+          : null,
+      onChanged: box.locked || box.integration!.projectVisibilityLocked
+          ? null
+          : (value) =>
+                setState(() => box.integration!.projectVisibility = value),
+    ),
   );
 
   Widget _desktopStartButton() => ListenableBuilder(

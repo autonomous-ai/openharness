@@ -1,4 +1,21 @@
 import 'harness_attachments.dart';
+import 'lead_placement.dart';
+
+/// A new project's Product Manager the Swarm starts rather than this
+/// Desktop, on [machineId].
+class LeadSwarmStart {
+  const LeadSwarmStart({
+    required this.machineId,
+    required this.engine,
+    required this.repositoryUrl,
+    required this.title,
+    required this.task,
+    this.files = const [],
+  });
+  final String? repositoryUrl, title;
+  final String machineId, engine, task;
+  final List<HarnessAttachment> files;
+}
 
 class HarnessLaunchRole {
   const HarnessLaunchRole({
@@ -33,6 +50,7 @@ class HarnessLaunchIntegration {
     this.swarmSkillMode,
     this.roles,
     this.roleId,
+    this.startInSwarm,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -55,7 +73,24 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
-  final Future<String> Function(String machineId, String task) prepare;
+
+  /// A new project in a Swarm: the Swarm's machines its Product Manager may
+  /// start on, best first. The form then shows only the task, repo and
+  /// visibility, with the machine on a "Product Manager:" line. Null keeps
+  /// the ordinary machine, agent and folder controls.
+  List<LeadMachine>? leadMachines;
+
+  /// With [leadMachines]: creates the project and has the Swarm start its
+  /// Product Manager, when this Desktop does not start it itself.
+  final Future<void> Function(LeadSwarmStart start)? startInSwarm;
+
+  /// With [leadMachines]: the Swarm's model list for its engine and model.
+  LeadModelList? leadModels;
+
+  /// Before anything is created: the prompt for [task], which a destination
+  /// may refuse for [machineId] and [engine], the engine about to start.
+  final Future<String> Function(String machineId, String task, String engine)
+  prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;
   Future<void> Function()? resume;

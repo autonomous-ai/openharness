@@ -111,27 +111,28 @@ Future<void> _mountApp(
 }
 
 void main() {
-  testWidgets('Desktop: a Swarm tab not shown keeps its 3 s poll', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    await _mount(tester, f);
-    final swarm = f.app.activeSwarmId;
-    f.app.newSwarm();
-    await tester.pump();
-    final before = _stateReads(f);
-    await tester.pump(const Duration(seconds: 30));
-    expect(_stateReads(f) - before, 10);
-    f.app.selectSwarm(swarm);
-    _hide(tester);
-    final hidden = _stateReads(f);
-    await tester.pump(const Duration(seconds: 30));
-    expect(_stateReads(f) - hidden, 10);
-    _reveal(tester);
-    await tester.pumpWidget(const SizedBox());
-    f.dispose();
-  });
+  testWidgets(
+    'Desktop: a Swarm tab not shown, or a hidden app, polls every 15 s',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      await _mount(tester, f);
+      final swarm = f.app.activeSwarmId;
+      f.app.newSwarm();
+      await tester.pump();
+      final before = _stateReads(f);
+      await tester.pump(const Duration(seconds: 30));
+      expect(_stateReads(f) - before, 2);
+      f.app.selectSwarm(swarm);
+      _hide(tester);
+      final hidden = _stateReads(f);
+      await tester.pump(const Duration(seconds: 30));
+      expect(_stateReads(f) - hidden, 2);
+      _reveal(tester);
+      await tester.pumpWidget(const SizedBox());
+      f.dispose();
+    },
+  );
 
   testWidgets('web: another tab or a hidden page stops the Swarm tab reading', (
     tester,

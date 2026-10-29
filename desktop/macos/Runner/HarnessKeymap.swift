@@ -126,7 +126,7 @@ private final class HarnessKeyNode {
 /// Reject a malformed snapshot as a whole, leaving the caller's last good map.
 /// Defaults and overrides are already resolved in Dart, including unbinding.
 final class HarnessNativeKeymap {
-  static let contexts: Set<String> = ["workspace", "terminal", "picker", "project"]
+  static let contexts: Set<String> = ["workspace", "terminal", "picker", "project", "swarmChat"]
   private var roots: [String: HarnessKeyNode] = [:]
   private(set) var bindings: [String: [HarnessNativeBinding]] = [:]
 

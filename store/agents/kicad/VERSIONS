@@ -2,11 +2,13 @@
 # Since 2026-09-29 the v2 pipeline lives on `main` (PR #34 merged it; #39/#41 added the Firmware
 # tab, the firmware step and the Flash button; #42/#43/#44 on 2026-10-01/02 made the Firmware phase
 # wait for a built binary, vendored the RP2040 toolchain with cmake + ninja, added the read / checker
-# / power-entry rules, the module cards and the Export Gerber button). A newer KiCad tile is a bump
-# of UPSTREAM_COMMIT to a later commit on main. The fetch is by commit, so a branch commit would work too.
+# / power-entry rules, the module cards and the Export Gerber button). #45–#62 to 2026-10-29 moved the
+# tile to GPT-6.1 Sol, added the Case phase (CadQuery, the Case tab, Bambu plates and Open in Bambu),
+# the contract-first team for new Codex projects, the print team and the plate and publish rules.
+# A newer KiCad tile is a bump of UPSTREAM_COMMIT to a later commit on main. The fetch is by commit, so a branch commit would work too.
 UPSTREAM_NAME="autonomous-circuit"
 UPSTREAM_REPO="https://github.com/autonomous-ai/autonomous-circuit.git"
-UPSTREAM_COMMIT="0e0ea33030658b10e724e19a6ef1d5b732f03284"
+UPSTREAM_COMMIT="9fcfc9c4e80cd5067bf372ef15df5480ba4237a8"
 # Everything but its product library and examples (118 MB a board build never reads).
 UPSTREAM_SPARSE_MODE="no-cone"
 UPSTREAM_SPARSE="/* !/products/ !/examples/"

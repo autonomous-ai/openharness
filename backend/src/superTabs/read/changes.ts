@@ -3,7 +3,8 @@
  * dormant group goes as a one-line stub, and only to a reader who could read the part's last data. Where that check
  * cannot be made (its project is gone), the change also moved the visibility epoch and every reader reloads.
  */
-import type { Actor, Agent, AgentStart, Conversation } from '../model.js'
+import { groupWithoutMachines, type Actor, type Agent, type AgentStart, type Conversation } from '../model.js'
+import { isBuddyReader } from '../buddies.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
 import { knownKind, type MachineData, type Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, Tombstone } from './contract.js'
@@ -23,7 +24,7 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
   const groupOf = (id: string) => state.conversations.find(c => c.id === id)
     ?? changed.find(p => p.kind === 'group' && p.key === id)?.data as Conversation | undefined
   const visibleAgents = new Set(seen.agents.map(a => a.key))
-  const seenMachines = seenIn(seen)
+  const seenMachines = seenIn(seen), buddy = isBuddyReader(state, actor)
   const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
   for (const part of changed) {
     switch (part.kind) {
@@ -46,10 +47,19 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         if (part.data && !knownKind(part.data as Conversation)) break
         if (part.deleted || part.dormant) { if (groupReadable(part.data as Conversation)) out.groups.push(part.deleted ? stub(part) : dormantStub(part)) }
         // Sent from the changed part itself: the reader's view may hold only a conversation's light fields (parts/light.ts).
-        else if (groupReadable(part.data as Conversation)) out.groups.push(envelope(part, visibleGroupView(part.data as Conversation, visibleAgents, seenMachines)))
+        else if (groupReadable(part.data as Conversation)) {
+          const group = part.data as Conversation
+          out.groups.push(envelope(part, visibleGroupView(buddy ? groupWithoutMachines(group) : group, visibleAgents, seenMachines)))
+        }
         break
       }
       case 'machine': {
+        // A Buddy reads no machines, not even a removal's id (review 1 of #2115).
+        if (buddy) break
+        // Nor does anyone read a Buddy-only machine, its own person included, who never had it listed (model.ts visibleState):
+        // not its record, its cleanup or the part's removal, whose data is the last the part held (security review 1 of #2234).
+        const data = part.data as MachineData | null
+        if (data?.contribution?.buddyOnly || data?.cleanups?.some(c => c.buddyOnly) || data?.closingSessions?.some(c => c.buddyOnly)) break
         const machine = live(seen.machines, part.key)
         if (machine && !part.deleted) out.machines.push(machine)
         // Machine ids are no secret among members, unlike conversations: a contribution that ended reads as a removal.

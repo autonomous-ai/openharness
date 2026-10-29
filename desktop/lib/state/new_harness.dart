@@ -33,6 +33,7 @@ import 'attached_task_delivery.dart';
 import 'harness_placement.dart';
 import 'harness_attachments.dart';
 import 'harness_launch_integration.dart';
+import 'lead_placement.dart';
 import 'pane_arrangement.dart';
 
 /// Whether New Harness opens as a line in the box, or as the full form.
@@ -516,6 +517,8 @@ class NewHarnessController extends ChangeNotifier {
     // its machine, whatever machine this form was opened on.
     if (this.integration case final request? when request.pending) {
       _machineId = request.machineId ?? _machineId;
+      // Its person chose that machine when it was sent.
+      _leadPicked = request.machineId != null;
       if (request.engine case final engine?) {
         _engine = engine;
         _harnessId = null;
@@ -862,16 +865,26 @@ class NewHarnessController extends ChangeNotifier {
   bool get worktree =>
       isGitProject &&
       !inWorktree &&
-      (_worktree ??
-          (_desktopChoices
-              ? app.agentPreference.successfulWorktree ?? true
-              : app.projectHistory.worktreeFor(
-                      _machineId,
-                      _project.folder ?? '',
-                    ) ??
-                    worktreeByDefault(_gitProject)));
+      // A Swarm's Product Manager never edits the person's checkout.
+      (placesLead ||
+          (_worktree ??
+              (_desktopChoices
+                  ? app.agentPreference.successfulWorktree ?? true
+                  : app.projectHistory.worktreeFor(
+                          _machineId,
+                          _project.folder ?? '',
+                        ) ??
+                        worktreeByDefault(_gitProject))));
 
   bool? _recoveredWorktreePreference;
+
+  /// The Worktree setting a successful start saves for the next New Harness,
+  /// or null to leave it: a Swarm's Product Manager always gets a worktree,
+  /// which is not the person's choice.
+  bool? get worktreeToRemember => placesLead
+      ? null
+      : _recoveredWorktreePreference ??
+            (isGitProject && !inWorktree ? worktree : null);
 
   /// Fresh desktop work starts on main, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
@@ -969,7 +982,7 @@ class NewHarnessController extends ChangeNotifier {
       : _branchHere == null && _worktreeOf(branchRef) != null;
 
   void toggleWorktree() {
-    if (locked || !canUseWorktree) return;
+    if (locked || !canUseWorktree || placesLead) return;
     _worktree = !worktree;
     _recoveredWorktreePreference = null;
     if (_project.folder case final folder? when !_desktopChoices) {
@@ -1226,6 +1239,8 @@ class NewHarnessController extends ChangeNotifier {
           group: 'Subscription',
           engine: _engine,
           machineId: _machineId,
+          enabled: _leadModelRefusal(null) == null,
+          why: _leadModelRefusal(null),
         ),
       ]),
       if (catalog?.supportsModelLaunch == true &&
@@ -1253,6 +1268,8 @@ class NewHarnessController extends ChangeNotifier {
                   grid: section.name,
                 ),
                 machineId: _machineId,
+                enabled: _leadModelRefusal(model.id, grid: true) == null,
+                why: _leadModelRefusal(model.id, grid: true),
               ),
           ]),
       NewHarnessOption(
@@ -1556,6 +1573,249 @@ class NewHarnessController extends ChangeNotifier {
   /// servers, so it takes no folder, model, approvals or branch here — a coding
   /// one takes a GitHub repository, and Devin Cloud an ACU limit.
   bool get isCloud => _harnessId == null && isCloudAgentId(_engine);
+
+  /// New Project in a Swarm: the Swarm places the Product Manager on one of
+  /// [HarnessLaunchIntegration.leadMachines], and the form asks only the
+  /// task, repo and visibility.
+  bool get placesLead => integration?.leadMachines != null;
+
+  /// The machine the Swarm starts the Product Manager on, rather than this
+  /// Desktop: a teammate's Team account, or a machine of the person's this
+  /// Desktop is not connected to. The repo stays the one chosen on
+  /// [machineId]; that machine clones it. Null when this Desktop starts it on
+  /// [machineId].
+  String? _swarmLeadMachine;
+  String? get leadSwarmMachine => _swarmLeadMachine;
+
+  /// The person chose the Product Manager's machine: none is chosen for them,
+  /// since only they know which one stays on (Ken, 10-29).
+  bool _leadPicked = false;
+  bool get leadPicked => _leadPicked;
+
+  /// The machine the Product Manager starts on, as the Swarm lists it; null
+  /// until the person chooses one.
+  LeadMachine? get leadMachine => !_leadPicked
+      ? null
+      : integration?.leadMachines
+            ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
+            .firstOrNull;
+
+  bool _paused(List<LeadMachine> machines) =>
+      machines.isNotEmpty &&
+      machines.every((m) => m.unavailable == kLeadSwarmPaused);
+
+  /// No machine could start the Product Manager now: each is paused, offline,
+  /// full, another person's that cannot take it, or runs no engine it can
+  /// start with. Its list says why for each.
+  bool get leadNone {
+    final machines = integration?.leadMachines;
+    return machines != null &&
+        !_paused(machines) &&
+        !machines.any((m) => m.startable);
+  }
+
+  /// The Swarm starts the Product Manager, on [leadSwarmMachine]; this
+  /// Desktop does not.
+  bool get leadThroughSwarm => placesLead && _swarmLeadMachine != null;
+
+  /// The address the Swarm clones the chosen repo from, or null when it is
+  /// not known.
+  String? get leadRepositoryUrl => switch (_remoteOf(_machineId, _project)) {
+    final String remote when remote.startsWith('github.com/') =>
+      'https://$remote',
+    final remote => remote,
+  };
+
+  String? get _leadRepositoryName =>
+      _project.repository?.name ??
+      switch (_project.folder) {
+        final String folder => _pathsFor(_machineId, folder).basename(folder),
+        null => null,
+      };
+
+  /// The Product Manager line: where it starts, its engine and model.
+  String get leadLine {
+    final target = leadMachine;
+    final name = target == null
+        ? machineLabel
+        : target.inTeam(_engine)
+        ? '${target.name}’s Team account'
+        : target.name;
+    return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');
+  }
+
+  /// Under [leadLine]: the repo that machine clones first, or null.
+  String? get leadCloneNote {
+    if (_leadRepositoryName == null) return null;
+    final target = leadMachine;
+    final clones = leadThroughSwarm
+        ? target != null && !target.has(leadRepositoryUrl)
+        : _project.repository != null;
+    return clones ? 'Clones $_leadRepositoryName there first' : null;
+  }
+
+  /// Why New Project cannot start its Product Manager now, or null.
+  String? get leadBlocked {
+    final machines = integration?.leadMachines;
+    if (machines == null) return null;
+    if (_paused(machines)) {
+      return '$kLeadSwarmPaused. New Project can start once it resumes.';
+    }
+    if (leadNone) return 'No machine can run the Product Manager now.';
+    if (!_leadPicked) return kLeadChooseMachine;
+    if (leadMachine?.startable != true) {
+      final name = leadMachine?.name ?? machineLabel;
+      return '$name cannot start the Product Manager. Choose another machine.';
+    }
+    final refusal = leadMachine?.engineRefusals[_engine];
+    if (refusal != null) {
+      return '${leadMachine!.name} can’t run $agentLabel: $refusal. '
+          'Choose another engine.';
+    }
+    if (leadThroughSwarm) {
+      if (leadRepositoryUrl == null) {
+        return 'Choose a repo with a remote, so the Swarm can clone it for '
+            'the Product Manager.';
+      }
+      if (_model != null) {
+        return 'Models on the grid run only where this Desktop starts the '
+            'Product Manager. Choose the default model.';
+      }
+    }
+    return _leadModelListRefusal;
+  }
+
+  /// The engine a chosen machine runs, as a choice the person did not make.
+  void _placeLeadEngine(String engine) {
+    final touched = _selectionTouched;
+    _selectEngine(engine);
+    _selectionTouched = touched;
+  }
+
+  /// Starts the Product Manager on [id], a machine the list can start it on
+  /// now: this Desktop starts it on one of the person's it is connected to,
+  /// the Swarm on any other. Anything else is refused with its reason.
+  void chooseLeadMachine(String id) {
+    if (locked) return;
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == id)
+        .firstOrNull;
+    // The machine chosen last wins over an engine it cannot run.
+    if (listed != null && listed.startable && !listed.runs(_engine)) {
+      _placeLeadEngine(listed.leadEngines.first);
+    }
+    if (listed != null && listed.startable && !listed.native) {
+      error = null;
+      _swarmLeadMachine = id;
+      _leadPicked = true;
+      notifyListeners();
+      return;
+    }
+    final choice = machineChoices.where((m) => m.id == id).firstOrNull;
+    if (listed == null ||
+        !listed.startable ||
+        choice == null ||
+        !choice.enabled) {
+      warn(
+        listed?.unavailable ??
+            choice?.why ??
+            '${listed?.name ?? 'This machine'} cannot start the Product Manager.',
+      );
+      return;
+    }
+    error = null;
+    _swarmLeadMachine = null;
+    _leadPicked = true;
+    final remote = _remoteOf(_machineId, _project);
+    _selectMachine(id);
+    if (remote != null) _keepRepository(id, remote, listed.name);
+    // That machine's branches: a branch chosen on the other one is not here.
+    if (_desktopChoices) _syncGitProject();
+    notifyListeners();
+  }
+
+  /// The model the Product Manager runs: the one chosen, else its engine's
+  /// default, which nothing knows before it starts.
+  String get leadModelLabel => _model != null ? modelLabel : 'Default model';
+
+  /// Why the Swarm's model list rules out [model] (null for the engine's
+  /// default) for a new project's Product Manager, or null.
+  String? _leadModelRefusal(String? model, {bool grid = false}) {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (grid && !list.gridModels) {
+      return 'The Swarm’s model list turns off models on its grid.';
+    }
+    return list.refusal(_engine, model);
+  }
+
+  /// Why the Swarm's model list rules out the engine or model chosen, or
+  /// null.
+  String? get _leadModelListRefusal {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (list.engineRefusal(_engine) case final why?) {
+      return '$why Choose another engine.';
+    }
+    final why = _leadModelRefusal(_model?.id, grid: _model != null);
+    return why == null ? null : '$why Choose another model.';
+  }
+
+  /// The remote [project] on [machineId] has, when anything says so: a
+  /// repository to clone, an agent that ran in that folder, or the Swarm's
+  /// own checkout there.
+  String? _remoteOf(String machineId, NewHarnessProject project) {
+    if (project.repository case final repository?) return repository.url;
+    final folder = project.folder;
+    if (folder == null) return null;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known?.remote case final remote?
+          when known!.root == folder || known.cwd == folder) {
+        return remote;
+      }
+    }
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull;
+    for (final MapEntry(:key, :value) in listed?.folders.entries ?? const []) {
+      if (value == folder) return key;
+    }
+    return null;
+  }
+
+  /// Keeps the repo [remote] names on [machineId]: its folder there, found by
+  /// its remote, or else the repository to clone there.
+  void _keepRepository(String machineId, String remote, String machineName) {
+    final key = leadRepositoryKey(remote);
+    String? folder;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known != null &&
+          !known.worktree &&
+          leadRepositoryKey(known.remote) == key) {
+        folder = known.root ?? known.cwd;
+        break;
+      }
+    }
+    folder ??= integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull
+        ?.folders[key];
+    final clone = GitHubRepository.parse(
+      remote.startsWith('github.com/') ? 'https://$remote' : remote,
+    );
+    if (folder != null) {
+      _project = NewHarnessProject.folder(folder);
+    } else if (clone != null) {
+      _project = NewHarnessProject.clone(clone);
+    } else {
+      warn('$machineName has no copy of $remote. Choose its folder there.');
+      return;
+    }
+  }
 
   /// The GitHub repository a cloud coding agent works on: the one chosen to
   /// clone, else the chosen folder's own remote; null when neither is on GitHub.
@@ -2285,6 +2545,8 @@ class NewHarnessController extends ChangeNotifier {
           if (option.id != codingId) _selectEngine(option.id);
         }
       case NewHarnessField.agent:
+        // A machine that cannot run it says so (leadBlocked); the person
+        // chooses again, nothing moves on its own.
         _selectEngine(option.id);
       case NewHarnessField.model:
         _model = option.model;
@@ -3245,12 +3507,15 @@ class NewHarnessController extends ChangeNotifier {
   /// machine its row says so instead of opening.
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
+    final ruledOut = placesLead
+        ? integration?.leadModels?.engineRefusal(id)
+        : null;
     return NewHarnessOption(
       id: id,
       title: labelOf(id),
       engine: id,
-      enabled: !finderElsewhere,
-      why: finderElsewhere ? kFinderElsewhere : null,
+      enabled: !finderElsewhere && ruledOut == null,
+      why: finderElsewhere ? kFinderElsewhere : ruledOut,
     );
   }
 
@@ -3912,6 +4177,12 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     if (isCloud) return _createCloud();
+    // Whoever starts it, New Project never starts a Product Manager on a
+    // machine the person did not choose, or one that cannot run it.
+    if (placesLead) {
+      if (leadBlocked case final why?) return _fail(why);
+    }
+    if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
       if (gitError != null) retryGitProject();
@@ -4077,7 +4348,7 @@ class NewHarnessController extends ChangeNotifier {
     if (integration case final destination?) {
       try {
         launchMessage = destination.preparedPrompt ??= await destination
-            .prepare(_machineId, firstMessage);
+            .prepare(_machineId, firstMessage, base);
       } catch (failure) {
         return _fail(failure.toString());
       }
@@ -4195,7 +4466,7 @@ class NewHarnessController extends ChangeNotifier {
           choice,
           harnessId: harness,
           setup: launchSetup,
-          worktree: launchedWorktree,
+          worktree: worktreeToRemember,
         ),
       );
     }
@@ -4238,6 +4509,44 @@ class NewHarnessController extends ChangeNotifier {
 
   /// A cloud harness: made by the cloud service on this machine (CLI
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
+  /// New Project's Product Manager the Swarm starts
+  /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
+  Future<NewHarnessOutcome> _startInSwarm() async {
+    final start = integration?.startInSwarm;
+    if (start == null) {
+      return _fail(
+        'Update Harness to start a Product Manager on another machine.',
+      );
+    }
+    if (leadBlocked case final why?) return _fail(why);
+    busy = true;
+    error = null;
+    status =
+        'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
+    notifyListeners();
+    try {
+      await start(
+        LeadSwarmStart(
+          machineId: _swarmLeadMachine!,
+          engine: _engine,
+          repositoryUrl: leadRepositoryUrl,
+          title: _leadRepositoryName,
+          task: task.trim(),
+          files: attachments?.files ?? const [],
+        ),
+      );
+    } catch (failure) {
+      return _fail(failure.toString());
+    }
+    integration?.completed = true;
+    if (_disposed) return NewHarnessOutcome.created;
+    busy = false;
+    status = null;
+    attachments?.clear();
+    notifyListeners();
+    return NewHarnessOutcome.created;
+  }
+
   Future<NewHarnessOutcome> _createCloud() async {
     busy = true;
     error = null;

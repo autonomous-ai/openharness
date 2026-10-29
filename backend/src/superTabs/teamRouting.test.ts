@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -134,6 +134,10 @@ describe('which machines take a teammate\'s project', () => {
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'standard-user' })), NOW)?.reason).toContain('(standard-user: the team account is an administrator)')
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'unchecked' })), NOW)?.reason).toContain('(unchecked: the check did not run)')
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'icloud' })), NOW)?.reason).toContain('(icloud)')
+    // The items a Linux and a Windows team account check that a Mac's does not (cli/src/team/privacy.ts, windowsTeam.ts).
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'firefox' })), NOW)?.reason).toContain('(firefox: it could list its owner\'s Firefox profile)')
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'edge' })), NOW)?.reason).toContain('(edge: it could list its owner\'s Edge profile)')
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'credentials' })), NOW)?.reason).toContain('(credentials: it could list its owner\'s Windows Credential Manager folder)')
   })
 
   it('not on a machine with no Harness Team account', () => {
@@ -581,7 +585,10 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.machine('mate-team').paused).toBe(true)
     f.run({ type: 'machine.contribute', machineId: 'mate-mac', name: 'Work MacBook', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 }, mate,
       { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
-    expect(f.machine('mate-team')).toMatchObject({ maxAgents: 6, paused: false, name: 'Work MacBook', generation: 'g1' })
+    // New settings keep the pause the owner chose, on the Mac and its team account (review of #2084).
+    expect([f.machine('mate-mac').paused, f.machine('mate-team')]).toEqual([true, expect.objectContaining({ maxAgents: 6, paused: true, name: 'Work MacBook', generation: 'g1' })])
+    f.run({ type: 'machine.pause', machineId: 'mate-mac', paused: false }, mate)
+    expect(f.machine('mate-team').paused).toBe(false)
     const removed = f.run({ type: 'machine.remove', machineId: 'mate-mac' }, mate)
     expect(f.machine('mate-team').removal).toMatchObject({ state: 'cleaning' })
     expect(removed.result.removedAgents).toContain(teamAgent)
@@ -676,3 +683,57 @@ describe('a Team machine serving more than one Workspace', () => {
     expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, false)).toBeNull()
   })
 })
+
+// A machine Desktop adds as its person joins a Swarm (Scholes, 2026-10-29): nobody chose to lend it to teammates, so their
+// work reaches it only through its Harness Team account, whose privacy check passed, even while the rule is not
+// required everywhere. Until then it runs only its person's own projects, and never a teammate's agent as that person.
+describe('a machine added as its person joined', () => {
+  beforeEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
+  const joined: Extract<Command, { type: 'machine.contribute' }> = { type: 'machine.contribute', machineId: 'joined-mac', name: 'MacBook Air',
+    cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4, teamAccountOnly: true }
+  const contribution = { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } }
+
+  it('refuses a teammate\'s start on it while it has no Harness Team account, and keeps its person\'s own projects', () => {
+    const f = swarm(), group = f.group(), own = f.group(f.mine, mate)
+    f.run(joined, mate, contribution)
+    f.machine('joined-mac').observation = reading('computer')
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'joined-mac') }, owner, f.pooled('joined-mac'))))
+      .toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED', status: 403, message: 'MacBook Air has no Harness Team account yet, so it runs only its owner\'s projects.' })
+    expect(f.state.starts ?? []).toEqual([])
+    f.run({ type: 'agent.start', request: f.request(own, 'joined-mac', f.mine) }, mate, f.pooled('joined-mac'))
+    expect(f.state.starts).toHaveLength(1)
+  })
+
+  it('says why in its reading, so routing leaves it out of a teammate\'s project', () => {
+    const f = swarm()
+    f.run(joined, mate, contribution)
+    f.machine('joined-mac').observation = reading('computer')
+    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    // An ordinary machine contributed by hand takes it as before while the rule is not required.
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
+  })
+
+  it('keeps the rule when its settings are saved again, which sends the contribution without it', () => {
+    const f = swarm()
+    f.run(joined, mate, contribution)
+    const { teamAccountOnly: _rule, ...settings } = joined
+    f.run({ ...settings, maxAgents: 2 }, mate, contribution)
+    expect(f.machine('joined-mac')).toMatchObject({ maxAgents: 2, teamAccountOnly: true })
+  })
+
+  it('admits a teammate\'s work once its Team account\'s privacy check passed', () => {
+    const f = swarm()
+    f.run(joined, mate, contribution)
+    f.machine('joined-mac').observation = reading('team', PASSED)
+    expect(teamWorkRefusal(f.machine('joined-mac'), NOW)).toBeNull()
+    f.machine('joined-mac').observation = reading('team', FAILED)
+    expect(teamWorkRefusal(f.machine('joined-mac'), NOW)?.code).toBe('PRIVACY_CHECK_FAILED')
+  })
+
+  it('is a choice only its person makes: the field is refused on any other command shape', () => {
+    expect(commandSchemaOf(joined).success).toBe(true)
+    expect(commandSchemaOf({ ...joined, teamAccountOnly: false }).success).toBe(false)
+  })
+})
+
+const commandSchemaOf = (command: unknown) => commandSchema.safeParse(command)

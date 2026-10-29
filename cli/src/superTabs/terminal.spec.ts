@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
 import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
@@ -21,7 +22,7 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })) },
+      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
@@ -243,6 +244,87 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+describe('dismissing Codex\'s update screen for a Swarm agent', () => {
+  const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
+  const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+
+  it('sends Esc through the core\'s if-screen door with the screen it read, types nothing itself, and raises no alert', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([['h1', ['Escape'], CODEX_UPDATE_PROMPT]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    t.showing(idle)
+    for (let i = 0; i < 14; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(dismissed(t)).toHaveLength(1)
+    expect(t.alerts()).toEqual([])
+  })
+
+  it('answers only the agent whose screen shows it, and only a Swarm agent of this machine', async () => {
+    const t = setup({ screen: harnessId => harnessId === 'h2' ? update() : idle(), live: ['h1', 'h2', 'h3'] })
+    await t.host.tick([row('a1', 'h1'), row('a2', 'h2'), { tabId: 'tab', agent: { id: 'a3', harnessId: 'h3', machineId: 'other' } }])
+    expect(dismissed(t)).toEqual([['h2', ['Escape'], CODEX_UPDATE_PROMPT]])
+  })
+
+  it.each([['trust', CODEX_TRUST_PROMPT, 'trust_open'], ['model', CODEX_MODEL_MIGRATION, 'model_prompt_open'],
+    ['sign-in', CODEX_SIGN_IN, 'sign_in_open'], ['permission', 'Allow? 1. Yes', 'permission_open']] as const)('asks for nothing on the %s screen', async (_name, text, hold) => {
+    const t = setup({ screen: () => ({ ok: true, text, hold }) })
+    await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([])
+  })
+
+  it('asks for nothing when the update screen is misread (a Skip row as 0), and alerts as before after 3 minutes', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: CODEX_UPDATE_PROMPT.replace('  2. Skip\n', '  0. Skip\n'), hold: 'update_prompt_open' }) })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([])
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('tries three times at most when the screen stays, then leaves it to the 3-minute alert', async () => {
+    const t = setup({ screen: update })
+    for (let i = 0; i < 12; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(3)
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('starts the tries again for a new update screen once the old one is gone', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    t.showing(idle); t.wait(15_000); await t.host.tick([row()])
+    t.showing(update); t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(2)
+  })
+
+  it('goes on watching when the core refuses, because the screen had changed or the terminal did not take the key', async () => {
+    const t = setup({ screen: update })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockRejectedValueOnce(new Error('core gone'))
+    await t.host.tick([row()])
+    t.wait(15_000); await t.host.tick([row()])
+    t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(3)
+  })
+})
+
+// Nova, the Lead of the Swarm autonomous-harness (2026-10-29): Claude Code's drafted bug report covered its prompt, and every
+// message to it came back undelivered until someone pressed a key in its terminal.
+describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
+  const DRAFT = '│ ✻ Bug report drafted: Lead switched Codex model │\n│ 1 to review · 2 to send · 0 to dismiss │\n────\n❯ '
+  const TURN_OFF = 'Turn off Claude-drafted feedback? 0 to turn off · Esc to keep\n────\n❯ '
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+
+  it('dismisses the draft with 0, then keeps the setting with Esc, through the if-screen door, and raises no alert', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: DRAFT, hold: 'prompt_hidden' }) })
+    await t.host.tick([row()])
+    t.showing(() => ({ ok: true, text: TURN_OFF, hold: 'prompt_hidden' })); t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([['h1', ['0'], DRAFT], ['h1', ['Escape'], TURN_OFF]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.alerts()).toEqual([])
   })
 })
 

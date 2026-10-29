@@ -125,12 +125,15 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
     super_tabs: async (payload) => {
       if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
-      const { action, tabId, leadId, on, include, session, harnessId, machineId, text, focus } = payload
-      // A round dial that speaks swarmChat asks for the chat on the face, and the window's open conversation rides with the
-      // wish (superTabs/inCore/cards.ts checks both); absent, the request is today's.
-      const chat = payload.chat === true ? { chat: true } : {}
+      const { action, tabId, leadId, on, include, session, harnessId, machineId, text, focus, side } = payload
+      // A round dial that speaks swarmChat asks for the chat on the face (one that speaks swarmBuddy, 'buddy'), and the
+      // window's open conversation rides with the wish (superTabs/inCore/cards.ts checks them); absent, the request is today's.
+      const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
       return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
-        : action === 'cardSay' ? { action, harnessId, text, ...chat } : action === 'cardWorker' ? { action, machineId, harnessId }
+        : action === 'cardSay' ? { action, harnessId, text, ...chat, ...(typeof payload.chatId === 'string' ? { chatId: payload.chatId } : {}),
+          ...(payload.reviewed === true ? { reviewed: true } : {}) }
+        : action === 'cardWorker' ? { action, machineId, harnessId }
+        : action === 'cardSide' ? { action, tabId, side }
         : { action, tabId, leadId, session, ...chat })
     },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every

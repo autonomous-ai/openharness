@@ -31,6 +31,8 @@ int main(void)
     check("{\"features\":[\"form\",{}]}", 0);
     check("{\"features\":[\"form\",[\"visit\"]]}", 0);
     check("{\"features\":[\"agents.refresh\"]}", CABLE_FEATURE_AGENTS_REFRESH);
+    check("{\"features\":[\"swarm.review\"]}", CABLE_FEATURE_SWARM_REVIEW);
+    check("{\"features\":[\"swarm.remote\"]}", CABLE_FEATURE_SWARM_REMOTE);
     static const char *names[] = {"form", "selection", "visit", "voice.draft", "question.review", "agents.refresh"};
     for (unsigned mask=0; mask<64; mask++) {
         cJSON *root=cJSON_CreateObject(), *array=cJSON_AddArrayToObject(root,"features");

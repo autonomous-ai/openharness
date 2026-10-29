@@ -83,6 +83,7 @@ describe('what each action reads of the Swarm', () => {
     const builder = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.builderId }, owner)
     expect(String(object(lead.help).post)).toContain('--mention')
     expect(String(object(builder.help).post)).not.toContain('--mention')
+    for (const help of [lead.help, builder.help]) expect(String(object(help).react)).toMatch(/^react GROUP MESSAGE_ID EMOJI OPERATION_ID \[--off\]: .*eyes.*check.*rocket/)
     expect(s.reads()).toEqual([])
   })
   it('reads the roster as it is now for every call, so an agent started a moment ago is known at once', async () => {
@@ -169,5 +170,15 @@ describe('decisions', () => {
       expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.leadId, state }, owner)).toEqual({ ok: true, value: listed })
       expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=${state}&asAgentId=${FIXTURE.leadId}`, undefined)
     }
+  })
+})
+
+describe('costs', () => {
+  it('reads the cost summary of the period as that agent, and lists it in help', async () => {
+    const summary = { days: 30, rows: [], totals: { attempts: 0 }, prices: [] }
+    const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/costs?`) ? ok(summary) : undefined)
+    expect(await s.ask({ action: 'costs', tabId: T, agentId: FIXTURE.leadId, days: 30 }, owner)).toEqual({ ok: true, value: summary })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/costs?days=30&asAgentId=${FIXTURE.leadId}`, undefined)
+    expect(((await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.leadId }, owner)) as { help: { costs?: string } }).help.costs).toMatch(/^costs \[--days N\]/)
   })
 })

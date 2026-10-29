@@ -238,6 +238,23 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
   })
+  it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true }])
+  })
+  it('says in its reading that it starts Product Managers, to a backend that asks, and to no other', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { capabilitiesWanted: true })
+    await f.machine.tick()
+    const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart'] })
+    // A backend from before them does not ask, and would refuse the field.
+    const older = fixture()
+    await older.machine.tick()
+    expect(posted(older)[0]).not.toHaveProperty('capabilities')
+  })
   it('probes common tools plus pending-start requirements and publishes failures without calling them missing', async () => {
     const f = fixture()
     Object.assign(f.pool.starts[0]!, { request: { requirements: { tools: ['docker'] } } })
@@ -662,6 +679,47 @@ describe('contributed machine executor', () => {
     expect(posts().map(fields).slice(-2)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
   })
 
+  it('sends each running harness’s token counts by model, and nothing for one with none or not running', async () => {
+    const f = fixture()
+    const session = (id: string) => ({ agentId: id, sessionId: `session-${id}`, engine: 'claude', transcriptPath: `/transcripts/${id}.jsonl`, registeredAt: 1 })
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'quiet'].includes(id) ? session(id) as never : undefined)
+    f.pool.harnessIds = ['running', 'quiet', 'stopped']
+    const opus = { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }
+    f.core.usage = vi.fn(async target => target.agentId === 'running'
+      ? { totalTokens: 135, updatedAt: '2026-10-29T00:00:00Z', inputTokens: 130, outputTokens: 5, models: { 'claude-opus-5-5': opus },
+        work: { current: [{ cwd: '/private/work', at: '2026-10-29T00:00:00Z' }], locations: [], pullRequests: [], uncertain: false, truncated: false } }
+      : { totalTokens: null, updatedAt: '2026-10-29T00:00:00Z' })
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    // Counts only: never the session's folders, pull requests or any other part of its usage reading.
+    expect(body.harnessTokens).toEqual({ running: { 'claude-opus-5-5': opus } })
+    expect(f.core.usage).toHaveBeenCalledTimes(2)
+    f.core.usage = vi.fn(async () => null)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessTokens')
+  })
+
+  it('drops token counts for a backend that refuses them, keeping every other field, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running'
+      ? { agentId: id, sessionId: 's', engine: 'claude', transcriptPath: '/t.jsonl', registeredAt: 1 } as never : undefined)
+    f.core.usage = vi.fn(async () => ({ totalTokens: 3, updatedAt: '2026-10-29T00:00:00Z', models: { m: { input: 1, output: 1, cacheRead: 1, cacheWrite: 0 } } }))
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessTokens) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessTokens', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    const fields = (post: unknown) => ['harnessTokens', 'harnessProgress'].filter(key => key in (post as object))
+    await machine.tick()
+    expect(posts().map(c => fields(c[3]))).toEqual([['harnessTokens', 'harnessProgress'], ['harnessProgress']])
+    f.advance(); await machine.tick()
+    expect(posts().map(c => fields(c[3])).at(-1)).toEqual(['harnessProgress'])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(c => fields(c[3])).slice(-2)).toEqual([['harnessTokens', 'harnessProgress'], ['harnessProgress']])
+  })
+
   it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
     const f = fixture()
     const original = f.backend.getMockImplementation()!
@@ -701,6 +759,83 @@ describe('contributed machine executor', () => {
       f.advance(); await f.machine.tick()
       f.advance(); await f.machine.tick()
       expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+    })
+
+    // Mac Auto's Harness Team account, 2026-10-29: the backend failed each start at 3 minutes while its Codex never recorded
+    // its session, and the agent the machine launched for it stayed, idle, with no Swarm agent behind it.
+    describe('that the backend then fails', () => {
+      const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
+        detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+      const startPath = '/api/super-tabs/hosts/host/starts/tab/start'
+      function failedLater(status: () => unknown) {
+        const f = fixture()
+        const closeMember = vi.fn(async (_agentId: string, _creationId?: string): Promise<Record<string, unknown>> => ({ closed: true }))
+        f.core.agents.closeMember = closeMember as never
+        f.start.mockResolvedValue(waiting as never)
+        const original = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path === startPath ? status() : original(core, method, path, body))
+        return { f, closeMember, fail: () => { f.pool.starts = [] } }
+      }
+      const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+      it('stops the agent it launched for it, by the start\'s own creation receipt', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        expect(closeMember).not.toHaveBeenCalled()
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Stopped the agent a failed start launched (start start, session launched)')
+        // Once: it is no longer the host's to stop.
+        f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledTimes(1)
+      })
+
+      it('never stops one that joined, one its receipt does not name, or one whose start is still pending', async () => {
+        const joined = failedLater(() => ({ harnessId: 'launched' }))
+        await joined.f.machine.tick(); joined.fail(); joined.f.advance(); await joined.f.machine.tick(); await settle()
+        expect(joined.closeMember).not.toHaveBeenCalled()
+        const settled = failedLater(() => ({ error: null }))
+        await settled.f.machine.tick(); settled.fail(); settled.f.advance(); await settled.f.machine.tick(); await settled.f.machine.tick(); await settle()
+        expect(settled.closeMember).not.toHaveBeenCalled()
+        const other = failedLater(() => ({ error: 'Abandoned before it started.' }))
+        other.closeMember.mockResolvedValue({ error: 'NOT_A_MEMBER' })
+        await other.f.machine.tick(); other.fail(); other.f.advance(); await other.f.machine.tick(); await settle()
+        other.f.advance(); await other.f.machine.tick(); await settle()
+        expect(other.closeMember).toHaveBeenCalledTimes(1)
+        // Still pending on the backend: nothing is asked, nothing stopped.
+        const pending = failedLater(() => ({ error: 'unused' }))
+        await pending.f.machine.tick(); pending.f.advance(); await pending.f.machine.tick(); await settle()
+        expect(pending.f.backend.mock.calls.some(c => c[2] === startPath)).toBe(false)
+        expect(pending.closeMember).not.toHaveBeenCalled()
+      })
+
+      it('asks again on later passes when it cannot tell or cannot stop it, a few times, then lets it go', async () => {
+        const { f, closeMember, fail } = failedLater(() => { throw new Error('backend down') })
+        await f.machine.tick(); fail()
+        for (let pass = 0; pass < 7; pass++) { f.advance(); await f.machine.tick(); await settle() }
+        expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(5)
+        expect(closeMember).not.toHaveBeenCalled()
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not stop the agent a failed start launched (start start): backend down')
+        const refused = failedLater(() => ({ error: 'failed' }))
+        refused.closeMember.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE', detail: 'busy' })
+        await refused.f.machine.tick(); refused.fail()
+        refused.f.advance(); await refused.f.machine.tick(); await settle()
+        refused.f.advance(); await refused.f.machine.tick(); await settle()
+        expect(refused.closeMember).toHaveBeenCalledTimes(2)
+        expect(refused.f.log.mock.calls.flat().join('\n')).toContain('SERVICE_UNAVAILABLE: busy')
+      })
+
+      it('leaves alone a start whose agent is not named, and a host whose core cannot close', async () => {
+        const unnamed = failedLater(() => ({ error: 'failed' }))
+        unnamed.f.start.mockResolvedValue({ ...waiting, harnessId: undefined } as never)
+        await unnamed.f.machine.tick(); unnamed.fail(); unnamed.f.advance(); await unnamed.f.machine.tick(); await settle()
+        expect(unnamed.closeMember).not.toHaveBeenCalled()
+        const noClose = failedLater(() => ({ error: 'failed' }))
+        noClose.f.core.agents.closeMember = undefined
+        await noClose.f.machine.tick(); noClose.fail(); noClose.f.advance(); await noClose.f.machine.tick(); await settle()
+        noClose.f.advance(); await noClose.f.machine.tick(); await settle()
+        expect(noClose.f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(1)
+      })
     })
 
     it('is not a start whose launch is uncertain, refused or failed', async () => {
@@ -1825,5 +1960,95 @@ describe('removed machine cleanup', () => {
     expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8'))).toEqual({ version: 1, worktrees: [
       { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }] })
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
+  })
+})
+
+// 2026-10-29: Anthropic answered 5 quick allowance reads, then refused them for 5 minutes (HTTP 429, retry-after 300). Each
+// machine read the allowance on every 15-second report, so Claude's showed as unknown on Ken's MacBook Pro while its
+// agents ran there. The reading is now kept for a while, and an unknown one says why.
+describe('the allowance a machine reports', () => {
+  const reads = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'usage_read').length
+  const last = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).at(-1)![3] as Record<string, unknown>
+  const answer = (codex: Record<string, unknown>) => async (type: string): Promise<Record<string, unknown>> =>
+    type === 'usage_read' ? { providers: [{ provider: 'codex', account: 'k', ...codex }] } : {}
+  const limited = answer({ outcome: 'answered', httpStatus: 429, body: { error: {} } })
+
+  it('is read from the vendor at most once in 3 minutes, however often the machine reports', async () => {
+    const f = fixture()
+    await f.machine.tick(); f.advance(); await f.machine.tick(); f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).length).toBe(3)
+    expect(reads(f)).toBe(1)
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+  })
+
+  it('keeps the last good windows while the vendor limits reads, and asks again only after 5 minutes', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(limited)
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true, windows: [{ usedPercent: 25 }] }] })
+    expect(last(f).quotaReasons).toBeUndefined()
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+    f.step(120_000); await f.machine.tick()
+    expect(reads(f)).toBe(3)
+  })
+
+  it('says unknown, and why, once the last good windows are 20 minutes old', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(limited)
+    for (let i = 0; i < 4; i++) { f.step(300_000); await f.machine.tick() }
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true }] })
+    // The next report, past the 15-second beat, still on the 429 read: the kept windows are now too old.
+    f.step(16_000); await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }],
+      quotaReasons: { codex: 'OpenAI is limiting how often the allowance can be read.' } })
+  })
+
+  it('drops the kept windows at once when the engine signs out', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    f.step(180_000); await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }],
+      quotaReasons: { codex: 'No subscription sign-in is stored on this machine.' } })
+  })
+
+  it('reads again a minute after the reader did not answer', async () => {
+    const f = fixture()
+    f.request.mockImplementation(async type => { if (type === 'usage_read') throw new Error('timed out'); return {} })
+    await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false }], quotaReasons: { codex: 'The allowance reader on this machine did not answer.' } })
+    f.step(61_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+  })
+
+  it("says a Harness Team account's allowance is read on its owner's machine", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    await f.machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
+  it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    f.request.mockImplementation(limited)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.quotaReasons) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: quotaReasons', 400)
+      return original(core, method, path, body)
+    })
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => 'quotaReasons' in (c[3] as object))
+    await f.machine.tick()
+    expect(posts()).toEqual([true, false])
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false }] })
+    f.advance(); await f.machine.tick()
+    expect(posts().at(-1)).toBe(false)
+    expect(posts()).toHaveLength(3)
+    f.step(600_000); await f.machine.tick()
+    expect(posts().slice(-2)).toEqual([true, false])
   })
 })
