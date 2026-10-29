@@ -1659,8 +1659,7 @@ class NewHarnessController extends ChangeNotifier {
         null => null,
       };
 
-  /// The Product Manager line: where it starts, its engine and model, and a
-  /// repo cloned there first.
+  /// The Product Manager line: where it starts, its engine and model.
   String get leadLine {
     if (leadQueued) {
       return 'All Swarm machines are busy. The project starts on the first '
@@ -1672,16 +1671,17 @@ class NewHarnessController extends ChangeNotifier {
         : target.team
         ? '${target.name}’s Team account'
         : target.name;
+    return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');
+  }
+
+  /// Under [leadLine]: the repo that machine clones first, or null.
+  String? get leadCloneNote {
+    if (leadQueued || _leadRepositoryName == null) return null;
+    final target = leadMachine;
     final clones = leadThroughSwarm
         ? target != null && !target.has(leadRepositoryUrl)
         : _project.repository != null;
-    return [
-      'Product Manager: $name',
-      agentLabel,
-      leadModelLabel,
-      if (clones && _leadRepositoryName != null)
-        '$_leadRepositoryName will be cloned there',
-    ].join(' · ');
+    return clones ? 'Clones $_leadRepositoryName there first' : null;
   }
 
   /// Why New Project cannot start its Product Manager now, or null.

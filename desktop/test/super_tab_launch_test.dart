@@ -822,7 +822,7 @@ void main() {
     (
       'has no Team account',
       [machineRow('rig', '2x 4090 Rig', lead: true)],
-      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+      'diego’s personal account: runs only diego’s projects. Yours need your own computer or a Team account machine',
     ),
     (
       'fails its Team account’s privacy check',
@@ -1003,37 +1003,42 @@ void main() {
     expect(row('m').startable, isTrue);
   });
 
-  test('a machine offering only Codex is never proposed with Claude Code', () async {
-    Future<NewHarnessController> place(List<Map<String, dynamic>> rows) async {
-      final f = SuperTabLaunchFixture();
-      noLocalEngines(f);
-      knownRepo(f);
-      f.connection.server.state['machines'] = rows;
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      final box = await f.box(newProject: true, engine: 'claude');
-      box.placeLead();
-      return box;
-    }
+  test(
+    'a machine offering only Codex is never proposed with Claude Code',
+    () async {
+      Future<NewHarnessController> place(
+        List<Map<String, dynamic>> rows,
+      ) async {
+        final f = SuperTabLaunchFixture();
+        noLocalEngines(f);
+        knownRepo(f);
+        f.connection.server.state['machines'] = rows;
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true, engine: 'claude');
+        box.placeLead();
+        return box;
+      }
 
-    final rig = offering(
-      machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
-      ['codex'],
-    );
-    // Alone, the rig takes the PM with Codex.
-    var box = await place([rig]);
-    expect((box.leadMachine?.id, box.engine), ('rig', 'codex'));
-    expect(box.leadBlocked, isNull);
-    // With your Mac Studio running Claude Code, Claude Code stays.
-    box = await place([
-      rig,
-      offering(machineRow('m', 'Mac Studio', contributor: 'owner'), [
-        'claude',
-        'codex',
-      ]),
-    ]);
-    expect((box.leadMachine?.id, box.engine), ('m', 'claude'));
-    expect(box.leadBlocked, isNull);
-  });
+      final rig = offering(
+        machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+        ['codex'],
+      );
+      // Alone, the rig takes the PM with Codex.
+      var box = await place([rig]);
+      expect((box.leadMachine?.id, box.engine), ('rig', 'codex'));
+      expect(box.leadBlocked, isNull);
+      // With your Mac Studio running Claude Code, Claude Code stays.
+      box = await place([
+        rig,
+        offering(machineRow('m', 'Mac Studio', contributor: 'owner'), [
+          'claude',
+          'codex',
+        ]),
+      ]);
+      expect((box.leadMachine?.id, box.engine), ('m', 'claude'));
+      expect(box.leadBlocked, isNull);
+    },
+  );
 
   test('with no machine able to run a PM, New Project says why and how to '
       'fix it', () async {

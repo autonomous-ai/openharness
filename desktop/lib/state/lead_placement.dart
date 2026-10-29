@@ -98,15 +98,13 @@ Map<String, String> leadEngineRefusals({
   Map<String, String> suspended = const {},
 }) => {
   for (final engine in kLeadEngines)
-    if (_engineRefusal(
-          leadEngineLabel(engine),
-          offered: offered == null || offered.contains(engine),
-          readiness: readiness[engine],
-          used: usedPercents[engine] ?? const [],
-          suspended: suspended[engine],
-        )
-        case final why?)
-      engine: why,
+    engine: ?_engineRefusal(
+      leadEngineLabel(engine),
+      offered: offered == null || offered.contains(engine),
+      readiness: readiness[engine],
+      used: usedPercents[engine] ?? const [],
+      suspended: suspended[engine],
+    ),
 };
 
 String? _engineRefusal(
@@ -218,6 +216,10 @@ LeadMachine? bestLeadMachine(
 String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
   if (!machine.online) return 'Offline';
+  if (machine.leadEngines.isEmpty) {
+    return 'Can’t run a Product Manager: '
+        '${[for (final engine in kLeadEngines) ?machine.engineRefusals[engine]].join(', ')}';
+  }
   final free = machine.freeAgents;
   if (free == null) return 'Online · Not in this Swarm';
   return [

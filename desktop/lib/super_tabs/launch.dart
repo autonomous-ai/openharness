@@ -18,6 +18,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'launch_prompt.dart';
+import 'identity.dart' show superTabPersonName;
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -329,9 +330,8 @@ class SuperTabLaunch {
           _ => null,
         },
         readiness: {
-          for (final raw in part(observation['readiness'])['engines']
-                  as List? ??
-              const [])
+          for (final raw
+              in part(observation['readiness'])['engines'] as List? ?? const [])
             if (part(raw) case {'engine': final String engine} && final row)
               engine: (
                 installed: row['installed'] as bool?,
@@ -416,8 +416,15 @@ class SuperTabLaunch {
                   ? null
                   : 'Not connected to this computer')
             : !team
-            ? '$name has no Harness Team account yet, so it runs only its '
-                  'owner’s projects.'
+            ? switch (snapshot.people
+                  .where((person) => person.id == pool['contributorId'])
+                  .firstOrNull) {
+                final person? =>
+                  '${superTabPersonName(person.email)}’s personal account: '
+                      'runs only ${superTabPersonName(person.email)}’s '
+                      'projects. $_yoursNeed',
+                null => '$name runs only its owner’s projects. $_yoursNeed',
+              }
             : switch (reading['teamWork']) {
                 {'allowed': false, 'reason': final String reason} => reason,
                 _ when !capable =>
@@ -1056,3 +1063,6 @@ class SuperTabLaunch {
     checkAccount();
   }
 }
+
+/// Where a teammate's project's Product Manager may run instead.
+const _yoursNeed = 'Yours need your own computer or a Team account machine';
