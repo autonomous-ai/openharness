@@ -1471,15 +1471,17 @@ class SuperTabController extends ChangeNotifier {
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
 
   /// What the reader missed in [id] after [after] (backend catchUp.ts).
-  Future<SuperTabCatchUp> readCatchUp(String id, int after) async =>
-      SuperTabCatchUp.fromJson(
-        superTabMap(
-          await request(
-            'GET',
-            '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
-          ),
-        ),
-      );
+  Future<SuperTabCatchUp> readCatchUp(
+    String id,
+    int after,
+  ) async => SuperTabCatchUp.fromJson(
+    superTabMap(
+      await request(
+        'GET',
+        '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
+      ),
+    ),
+  );
 
   late final _serverMarks = SuperTabReadMarkSender(
     (id, sequence) => request(
@@ -1582,6 +1584,10 @@ class SuperTabController extends ChangeNotifier {
       return true;
     });
   }
+
+  /// How many rows of [id] are kept for the saved view.
+  @visibleForTesting
+  int heldRows(String id) => _rows[id]?.length ?? 0;
 
   void _keepRows(String id, List rows) {
     if (!_policy.drawsSaved) return;

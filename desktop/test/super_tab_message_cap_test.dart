@@ -111,6 +111,10 @@ void main() {
     // While it is on its way, a poll brings 50 more and cuts as many.
     await pollThrough(server, c, 50);
     expect(c.messages('lead'), hasLength(500));
+    final outgoing = c.outgoing('lead');
+    expect(outgoing, hasLength(1));
+    expect(outgoing.single.state, SuperTabOutgoingState.sending);
+    expect(outgoing.single.text, 'Please check the arm64 build');
     post.complete();
     await sending;
 
@@ -146,12 +150,35 @@ void main() {
       List.generate(100, (i) => i + 1901),
     );
     expect(again.hasOlder('lead'), isTrue);
-    await again.refresh();
+
+    // The Earlier row, pressed before any read has answered: the cursor is
+    // the one the view saved.
+    final reads = <String>[];
+    server.onRead = reads.add;
     await again.loadMessages('lead', older: true);
+
+    expect(
+      reads.single,
+      endsWith('messages?before=1901&beforeId=message-1901'),
+    );
     expect(
       again.messages('lead').map((m) => m.sequence),
       List.generate(200, (i) => i + 1801),
     );
+  });
+
+  test('the rows kept for the saved view are cut with the messages', () async {
+    final server = ConversationServer();
+    final c = server.controller(
+      reading: const SuperTabReading(drawsSaved: true),
+    );
+    addTearDown(c.dispose);
+    await c.refresh();
+
+    await pollThrough(server, c, 2000);
+
+    expect(c.messages('lead'), hasLength(500));
+    expect(c.heldRows('lead'), 500);
   });
 
   test('rows from where the view lays its list out are never cut', () async {
