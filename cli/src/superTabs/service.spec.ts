@@ -333,6 +333,23 @@ describe('other projects\' work in status', () => {
   })
 })
 
+// Security review of #2087: a harness that names another agent with --agent spoke as it (a Buddy as its Builder). The CLI
+// now says which harness asks, and the agent it names must be that harness's own.
+it('refuses a harness that names another agent, for posts, commands, work status and message reads, and serves its own', async () => {
+  const t = setup()
+  const post = { type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, recipientIds: [] }
+  const status = { type: 'work.status', conversationId: 'g1', assignmentId: 'a1', status: 'done', result: 'r' }
+  const asks = [{ action: 'command', operationId: 'op-1', command: post }, { action: 'command', operationId: 'op-2', command: status },
+    { action: 'message', conversationId: 'lead', messageId: 'old-question' }, { action: 'messages', conversationId: 'lead' }]
+  for (const ask of asks) {
+    t.call.mockClear()
+    expect(await t.ask({ ...ask, tabId: 'tab', agentId: t.agentId, harnessId: 'buddy-pane' }, owner)).toEqual({
+      error: 'AGENT_MISMATCH', detail: 'This harness may speak only as its own Swarm agent. Run the command without --agent, or with its own id.' })
+    expect(t.call.mock.calls.filter(([method]) => method === 'POST')).toEqual([])
+    expect(await t.ask({ ...ask, tabId: 'tab', agentId: t.agentId, harnessId: 'native' }, owner)).toMatchObject({ ok: true })
+  }
+})
+
 it('resolves a replacement terminal to the original stable member', async () => {
   const t = setup()
   t.agent.harnessId = 'replacement'

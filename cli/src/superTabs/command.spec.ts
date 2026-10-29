@@ -33,7 +33,7 @@ it('finds the native caller without requiring an ID in the initial launch prompt
 it('uses the existing daemon transport and retains a receipt in an uncertain answer', async () => {
   const print = vi.fn(), close = vi.fn(), request = vi.fn(async () => ({ ok: true }))
   const open = vi.fn(async () => ({ request, close, machineId: 'machine' }))
-  const deps = { where: () => where, open, print }
+  const deps = { where: () => where, pane: undefined, open, print }
   expect(await superTabCommand([...prefix, 'post', 'lead', 'Ready', 'op'], deps)).toBe(0)
   expect(close).toHaveBeenCalledOnce()
   request.mockRejectedValueOnce(new Error('Connection lost'))
@@ -113,7 +113,7 @@ it('uploads each --attach file to the daemon\'s local upload route as the agent,
         ? new Response(JSON.stringify({ success: false, error: { code: 'FORBIDDEN', message: 'Not in this conversation.' } }), { status: 403 })
         : new Response(JSON.stringify({ success: true, data: { attachment: { id: `f${++uploads}` } } }), { status: 200 })
     })
-    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
+    const deps = { where: () => where, pane: undefined, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
       fetch: fetch as unknown as typeof globalThis.fetch }
     expect(await superTabCommand([...prefix, 'post', 'lead', '', 'op', '--attach', join(dir, 'shot.png'), '--attach', join(dir, 'shot.png')], deps)).toBe(0)
     expect(calls.map(c => c.step ?? c.action)).toEqual(['sent', 'command'])
@@ -162,7 +162,7 @@ it('sends a terminal request, reads its result again while it is pending, and pr
   const results: Record<string, unknown>[] = [{ error: 'BACKEND_TIMEOUT', detail: 'slow' }, { ok: true, value: { requestId: 'r1', pending: true } }, { ok: true, value: { ok: true, text: 'Allow?\n1. Yes' } }]
   const request = vi.fn(async (_type: string, payload: Record<string, any> = {}): Promise<Record<string, unknown>> => payload.action === 'command'
     ? { ok: true, value: { result: { requestId: 'r1' } } } : results.shift()!)
-  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
   expect(await superTabCommand([...prefix, 'screen', 'worker'], deps)).toBe(0)
   expect(request.mock.calls.map(([, payload]) => payload!.action)).toEqual(['command', 'terminalResult', 'terminalResult', 'terminalResult'])
   expect(request.mock.calls[0]![1]).toMatchObject({ tabId: 'tab', agentId: 'agent', operationId: expect.stringMatching(/^terminal-/), command: { type: 'agent.screen', agentId: 'worker' } })
@@ -183,7 +183,7 @@ it('gives up after three pending reads, and passes on a refused request without 
   const request = vi.fn(async (_type: string, payload: Record<string, any> = {}): Promise<Record<string, unknown>> => payload.action === 'command'
     ? refused ? { error: 'LEAD_REQUIRED', detail: 'Only the Lead of this agent\'s project may read its terminal.' } : { ok: true, value: { result: { requestId: 'r1' } } }
     : { ok: true, value: { requestId: 'r1', pending: true } })
-  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
   expect(await superTabCommand([...prefix, 'screen', 'worker'], deps)).toBe(1)
   expect(request).toHaveBeenCalledTimes(4)
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'TERMINAL_PENDING', detail: 'The worker\'s machine has not answered yet. Try again in a moment.' })
@@ -218,7 +218,7 @@ it('lets a machine owner preview and then remove their machine, as the person, w
 it('refuses to remove a machine for an agent: a Swarm agent\'s pane, an outside agent\'s shell, or --agent', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async (type: string) => type === 'agents_list' ? { agents: [{ id: 'worker', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
-  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
   for (const [argv, extra] of [
     [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%7', env: {} }],
     [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%99', env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session' } }],
@@ -248,7 +248,7 @@ it('lets a machine owner set how many agents it offers, as the person, from thei
 it('refuses to set a machine\'s agents for an agent: a Swarm agent\'s pane, an outside agent\'s shell, or --agent', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async (type: string) => type === 'agents_list' ? { agents: [{ id: 'worker', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
-  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
   for (const [argv, extra] of [
     [['--tab', 'tab', 'set-agents', 'studio', '96'], { pane: '%7', env: {} }],
     [['--tab', 'tab', 'set-agents', 'studio', '96'], { pane: '%99', env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session' } }],
@@ -290,7 +290,7 @@ it('keeps the mentioned people on a post that sends files', async () => {
     const request = vi.fn(async (_type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> =>
       payload.step === 'sent' ? { ok: true, value: { agentId: 'agent-1', attachmentIds: null } } : { ok: true, value: { revision: 9, result: { messageId: 'm' } } })
     const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
-    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
+    const deps = { where: () => where, pane: undefined, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
       fetch: fetch as unknown as typeof globalThis.fetch }
     expect(await superTabCommand([...prefix, 'post', 'lead', 'Please check', 'op', '--attach', join(dir, 'shot.png'), '--mention', 'person-ken'], deps)).toBe(0)
     expect(request.mock.calls.at(-1)![1]).toMatchObject({ action: 'command', command: { type: 'message.send', attachmentIds: ['f1'], mentions: ['person-ken'] } })
@@ -310,4 +310,34 @@ it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whateve
   expect(parseSuperTabArgs([...prefix, 'propose', 'op-1', JSON.stringify({ ...proposal, type: 'work.assign' })], where).payload)
     .toMatchObject({ action: 'command', operationId: 'op-1', command: { ...proposal, type: 'buddy.propose' } })
   expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1'], where)).toThrow('harness super-tab')
+})
+// Security review of #2087: --agent naming a Builder let a Buddy on the same machine speak as it. The harness the command
+// runs in goes with every request, and the daemon holds the agent named to that harness's own (service.spec.ts).
+it('sends the pane\'s own harness with every --agent request, so the agent it names is checked against it', async () => {
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'buddy-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn() }
+  for (const argv of [['post', 'g1', 'Ready', 'op'], ['command', 'op', '{"type":"work.status"}'], ['message', 'g1', 'm1'], ['messages', 'g1'], ['status']]) {
+    expect(await superTabCommand(['--tab', 'tab', '--agent', 'builder', ...argv], deps)).toBe(0)
+    expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ agentId: 'builder', harnessId: 'buddy-harness' }), 30_000)
+  }
+})
+// The Lead's must on #904's plan: the harness asking is the pane the command runs in, never one it names.
+it('refuses a command that sets TMUX_PANE to another harness\'s pane, before it asks the Swarm anything', async () => {
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'builder-harness', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
+  const print = vi.fn()
+  // This command runs in pane %42 (its process 700 is an ancestor); %7 is the Builder's.
+  const probe = { panes: () => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }], ancestors: () => [900, 800, 700, 1] }
+  const deps = { where: () => where, probe, env: { TMUX_PANE: '%7' }, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print }
+  for (const argv of [['--tab', 'tab', 'post', 'g1', 'Ready', 'op'], ['--tab', 'tab', '--agent', 'builder', 'post', 'g1', 'Ready', 'op']]) {
+    expect(await superTabCommand(argv, deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe('This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.')
+  }
+  expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
+  // Unset, the pane is still found from the processes: %42, which is no harness, so --agent is the person's as before.
+  expect(await superTabCommand(['--tab', 'tab', '--agent', 'builder', 'status'], { ...deps, env: {} })).toBe(0)
+  const sent = request.mock.calls.at(-1) as unknown as [string, Record<string, unknown>]
+  expect(sent[1]).toMatchObject({ action: 'status', agentId: 'builder' })
+  expect(sent[1]).not.toHaveProperty('harnessId')
 })

@@ -9,6 +9,7 @@ import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
+import { runningPane, type PaneProbe } from './callerPane.js'
 
 const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
@@ -95,7 +96,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 }
 
 export async function superTabCommand(argv: readonly string[], deps: {
-  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
+  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -103,6 +104,10 @@ export async function superTabCommand(argv: readonly string[], deps: {
   try {
     const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
     operationId = request.payload.operationId
+    // The pane this runs in, from its processes: TMUX_PANE is what the command says, and it may not name another harness's.
+    const running = 'pane' in deps ? { pane: deps.pane } : runningPane(deps.env ?? process.env, deps.probe)
+    if (running.refused) throw new Error(running.refused)
+    const pane = running.pane
     daemon = await (deps.open ?? openDaemon)(request.where)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
     if (owners) {
@@ -110,19 +115,22 @@ export async function superTabCommand(argv: readonly string[], deps: {
       // (Lead, 2026-10-28). So neither a Swarm agent on it (its pane, or --agent) nor an outside agent's shell may run
       // them with the owner's authority.
       const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
-      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, request.where.machineId)) {
+      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, request.where.machineId)) {
         throw new Error(request.payload.action === 'backend' ? 'Remove a machine from your own terminal or from Desktop, not from an agent.'
           : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
       }
     }
     // Help names the caller when it can, so a Lead also reads its own options; outside a harness it is the plain help.
     const help = request.payload.action === 'help'
-    if (!owners && !request.payload.agentId && (!help || request.payload.tabId)) {
+    // A harness's pane speaks as its own agent alone: with --agent too, its harness goes with the request, and the daemon
+    // refuses an agent that is not that harness's (security review of #2087: a Buddy named its Builder). A person's terminal
+    // is no harness, and its --agent is the person's as before.
+    if (!owners && (!request.payload.agentId || pane) && (!help || request.payload.tabId)) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
-      const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, request.where.machineId)
+      const caller = callerOf(frames, pane, request.where.machineId)
       if (caller) request.payload.harnessId = caller.agentId
-      else if (!help) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
+      else if (!help && !request.payload.agentId) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
     }
     const source = daemon
     const scoped = (payload: Record<string, unknown>) => source.request('super_tabs', {

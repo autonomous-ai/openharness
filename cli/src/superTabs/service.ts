@@ -415,6 +415,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The server leaves an agent off the roster when this machine has no access or billing for it; it gives no reason,
         // and the server enforces the grant anyway, so the text says where to look (Lead's ruling, #1726 G5).
         if (!caller || !identifier(agent.id)) return { error: 'AGENT_UNAVAILABLE', detail: OFF_ROSTER }
+        // A harness speaks as its own agent alone (security review of #2087: a Buddy named its Builder with --agent).
+        if (named && identifier(payload.harnessId) && agent.harnessId !== payload.harnessId && payload.action !== 'help') {
+          return { error: 'AGENT_MISMATCH', detail: 'This harness may speak only as its own Swarm agent. Run the command without --agent, or with its own id.' }
+        }
         if (typeof agent.harnessId !== 'string' || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
