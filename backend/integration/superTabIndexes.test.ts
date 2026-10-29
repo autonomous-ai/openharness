@@ -219,11 +219,11 @@ describe('model evidence', () => {
   it('reads the weeks of a period and the last-ten rows with one index scan each, examining only that Swarm\'s rows', async () => {
     const WEEK = 7 * 86_400_000, MONDAY = Date.UTC(2026, 9, 26)
     const rows = ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].flatMap(model => Array.from({ length: 26 }, (_, w) => ({
-      _id: `${tabId}-${model}-${w}`, tabId, engine: 'claude', model, kind: 'backend', week: { $date: new Date(MONDAY - w * WEEK).toISOString() },
+      _id: `${tabId}-${model}-${w}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', week: { $date: new Date(MONDAY - w * WEEK).toISOString() },
       attempts: 1, updatedAt: { $date: new Date(MONDAY).toISOString() } }))))
     await db.$runCommandRaw({ insert: 'SuperTabModelEvidence', documents: rows as never })
     await db.$runCommandRaw({ insert: 'SuperTabModelRecent', documents: ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].map(model => ({
-      _id: `${tabId}-${model}`, tabId, engine: 'claude', model, kind: 'backend', results: [{ a: 'x', at: MONDAY, passed: true }],
+      _id: `${tabId}-${model}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', results: [{ a: 'x', at: MONDAY, passed: true }],
       updatedAt: { $date: new Date(MONDAY).toISOString() } }))) as never })
     // The last four weeks: 3 models x 4 weeks.
     const [read, profile] = await profiled('SuperTabModelEvidence', () => readEvidence(db, 'A', MONDAY - 3 * WEEK))

@@ -5,6 +5,7 @@ import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
+import { expireEvidence } from './evidence/store.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -121,7 +122,7 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

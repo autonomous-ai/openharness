@@ -1328,11 +1328,13 @@ model SuperTabRouteDecision {
   @@index([tabId, assignmentId])
 }
 
-/// How one model did on one kind of job in one week of a Swarm (superTabs/evidence/store.ts): counts and sums only, never a
-/// person, an agent or task text. `id` is the hash of the Swarm, engine, model, kind and week. Kept 180 days.
+/// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
+/// only, never a person, an agent or task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Kept 180 days.
 model SuperTabModelEvidence {
   id                 String   @id @map("_id")
   tabId              String
+  /// The project of the groups its attempts ran in: the report shows a reader only projects they see.
+  projectId          String
   engine             String
   model              String
   kind               String
@@ -1359,14 +1361,17 @@ model SuperTabModelEvidence {
   updatedAt          DateTime
 
   @@index([tabId, week])
+  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
+  @@index([week])
 }
 
-/// One model's last ten first-review results on one kind of job in a Swarm, oldest first: [{ a: assignment id, at: its start,
+/// One model's last ten first-review results on one kind of job in one project of a Swarm, oldest first: [{ a: assignment id, at: its start,
 /// passed }] (superTabs/evidence/store.ts). Routing reads it for a model under 50% and its recovery. Kept 180 days after its
 /// last change.
 model SuperTabModelRecent {
   id        String   @id @map("_id")
   tabId     String
+  projectId String
   engine    String
   model     String
   kind      String
@@ -1374,6 +1379,8 @@ model SuperTabModelRecent {
   updatedAt DateTime
 
   @@index([tabId, updatedAt])
+  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
+  @@index([updatedAt])
 }
 
 model SuperTabStopReceipt {

@@ -14,6 +14,8 @@ import type { TokensByModel } from '../src/superTabs/costs/tokens.js'
 import { DAY_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { EVIDENCE_RETENTION_MS, readEvidence } from '../src/superTabs/evidence/store.js'
 import { poolRows } from './hostRows.test-support.js'
+import { groupProject } from '../src/superTabs/projects.js'
+import { sweepSwarms } from '../src/superTabs/sweeps.js'
 
 // Evidence routing (Ken, 2026-10-29): each Swarm keeps per model and kind of job what its attempts cost and how they went.
 let replica: MongoMemoryReplSet
@@ -123,7 +125,52 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     // 1,000,000 input at $4 and 100,000 output at $20 per million.
     expect(read.models[0]!.apiCost).toBeCloseTo(6, 6)
     expect(read.models[0]!.costPerShipped).toBeCloseTo(6, 6)
-    expect(read.weeks).toEqual([expect.objectContaining({ engine: 'claude', model: 'opus', kind: 'backend', week: weekStart(T0), attempts: 1 })])
+    const state = (await f.store.read(owner, f.tab)).state
+    const projectId = groupProject(state, state.conversations.find(c => c.id === g)!).id
+    expect(read.weeks).toEqual([expect.objectContaining({ projectId, engine: 'claude', model: 'opus', kind: 'backend', week: weekStart(T0), attempts: 1 })])
+  })
+
+  // Review of #2173: each row keeps its project, so the report can show a reader only the projects they see; Swarm-wide totals
+  // are the sum over projects.
+  it('sums every project by default, reads only the projects asked for, and merges their last ten by time', async () => {
+    const f = await swarm(), week = weekStart(T0)
+    const row = (projectId: string, attempts: number) => db.superTabModelEvidence.create({ data: { id: `${f.tab}-${projectId}`, tabId: f.tab, projectId,
+      engine: 'claude', model: 'opus', kind: 'backend', week: new Date(week), attempts, shipped: attempts, updatedAt: new Date(T0) } })
+    const recent = (projectId: string, results: Array<[number, boolean]>) => db.superTabModelRecent.create({ data: { id: `${f.tab}-r-${projectId}`, tabId: f.tab,
+      projectId, engine: 'claude', model: 'opus', kind: 'backend', results: results.map(([at, passed], i) => ({ a: `${projectId}-${i}`, at, passed })), updatedAt: new Date(T0) } })
+    await row('p1', 2)
+    await row('p2', 5)
+    await recent('p1', [[1, true], [3, true], [5, true], [7, true], [9, true], [11, true]])
+    await recent('p2', [[2, false], [4, false], [6, false], [8, false], [10, false], [12, false]])
+    const all = await f.evidence()
+    expect(all.models.map(m => [m.attempts, m.shipped])).toEqual([[7, 7]])
+    expect(all.models[0]!.recent).toEqual([true, false, true, false, true, false, true, false, true, false])
+    expect(all.weeks.map(w => [w.projectId, w.attempts])).toEqual([['p1', 2], ['p2', 5]])
+    const one = await readEvidence(db, f.tab, T0 - DAY_MS, ['p1'])
+    expect(one.models.map(m => [m.attempts, m.recent.length])).toEqual([[2, 6]])
+    expect(one.weeks.map(w => w.projectId)).toEqual(['p1'])
+    expect((await readEvidence(db, f.tab, T0 - DAY_MS, [])).models).toEqual([])
+  })
+
+  it('prunes every Swarm\'s rows past 180 days in the hourly sweep, with no write in that Swarm', async () => {
+    const f = await swarm(), other = await swarm(), now = T0 + 400 * DAY_MS
+    const cut = weekStart(now - EVIDENCE_RETENTION_MS)
+    for (const tabId of [f.tab, other.tab]) {
+      for (const [name, week] of [['old', cut - 7 * DAY_MS], ['kept', cut]] as const) {
+        await db.superTabModelEvidence.create({ data: { id: `${tabId}-sweep-${name}`, tabId, projectId: 'p1', engine: 'claude', model: 'opus', kind: 'docs',
+          week: new Date(week), attempts: 1, updatedAt: new Date(week) } })
+      }
+      for (const [name, at] of [['old', now - EVIDENCE_RETENTION_MS - DAY_MS], ['kept', now - EVIDENCE_RETENTION_MS + DAY_MS]] as const) {
+        await db.superTabModelRecent.create({ data: { id: `${tabId}-sweep-r-${name}`, tabId, projectId: 'p1', engine: 'claude', model: `opus-${name}`, kind: 'docs',
+          results: [], updatedAt: new Date(at) } })
+      }
+    }
+    const result = await sweepSwarms(db, now)
+    expect(result.evidenceExpired).toBeGreaterThanOrEqual(4)
+    for (const tabId of [f.tab, other.tab]) {
+      expect((await db.superTabModelEvidence.findMany({ where: { tabId, id: { startsWith: `${tabId}-sweep` } } })).map(r => r.id)).toEqual([`${tabId}-sweep-kept`])
+      expect((await db.superTabModelRecent.findMany({ where: { tabId, id: { startsWith: `${tabId}-sweep` } } })).map(r => r.id)).toEqual([`${tabId}-sweep-r-kept`])
+    }
   })
 
   it('moves the ship to the recorded merge and counts a fix after merge, without counting the attempt twice', async () => {
@@ -186,12 +233,12 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
 
   it('deletes rows older than 180 days on the next write, and reads only its own Swarm\'s rows', async () => {
     const f = await swarm(), other = await swarm()
-    const old = (tabId: string, week: number, id: string) => db.superTabModelEvidence.create({ data: { id, tabId, engine: 'claude', model: 'opus',
+    const old = (tabId: string, week: number, id: string) => db.superTabModelEvidence.create({ data: { id, tabId, projectId: 'p1', engine: 'claude', model: 'opus',
       kind: 'docs', week: new Date(week), attempts: 5, updatedAt: new Date(week) } })
     const stale = weekStart(T0 - EVIDENCE_RETENTION_MS) - 7 * DAY_MS, kept = weekStart(T0 - EVIDENCE_RETENTION_MS) + 7 * DAY_MS
     await old(f.tab, stale, `stale-${f.tab}`)
     await old(f.tab, kept, `kept-${f.tab}`)
-    await db.superTabModelRecent.create({ data: { id: `recent-${f.tab}`, tabId: f.tab, engine: 'claude', model: 'opus', kind: 'docs',
+    await db.superTabModelRecent.create({ data: { id: `recent-${f.tab}`, tabId: f.tab, projectId: 'p1', engine: 'claude', model: 'opus', kind: 'docs',
       results: [{ a: 'x', at: stale, passed: true }], updatedAt: new Date(T0 - EVIDENCE_RETENTION_MS - DAY_MS) } })
     const g = await f.group()
     await f.beat(opus(0, 0))

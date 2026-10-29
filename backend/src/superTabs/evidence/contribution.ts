@@ -26,9 +26,9 @@ export const COUNTS: ReadonlyArray<keyof Counts> = ['attempts', 'firstReviews', 
   'minutesToShipCount', 'fixesAfterMerge', 'tokensInput', 'tokensOutput', 'tokensCacheRead', 'tokensCacheWrite', 'tokensKnown', 'apiCost', 'costKnown',
   'costUnknown', 'spend', 'spendKnown']
 
-/** The row an attempt counts in: its engine, its model (a grid model by its own name; efforts merged), its kind and the week
- *  (Monday 00:00 UTC) it started. */
-export interface EvidenceKey { engine: string; model: string; kind: JobKind; week: number }
+/** The row an attempt counts in: its group's project (the report shows a reader only projects they see; review of #2173), its
+ *  engine, its model (a grid model by its own name; efforts merged), its kind and the week (Monday 00:00 UTC) it started. */
+export interface EvidenceKey { projectId: string; engine: string; model: string; kind: JobKind; week: number }
 /** One attempt's part, as its route decision keeps it. `firstReview` and `startedAt` feed the model's last-ten row. */
 export interface Contribution extends EvidenceKey { counts: Counts; firstReview?: boolean; startedAt: number }
 
@@ -49,9 +49,10 @@ const zero = (): Counts => Object.fromEntries(COUNTS.map(k => [k, 0])) as unknow
  * gone, what was counted before stays, as those no longer change.
  */
 export function contributionOf(decision: EvidenceDecision, group: Pick<Conversation, 'reviewOf' | 'task' | 'ledger'> | undefined,
-  previous: Contribution | null): Contribution | null {
+  previous: Contribution | null, groupProjectId: string | undefined): Contribution | null {
   const run = decision.run
-  if (!run || decision.outcome == null || !decision.assignmentId) return null
+  const projectId = groupProjectId ?? previous?.projectId
+  if (!run || decision.outcome == null || !decision.assignmentId || !projectId) return null
   const word = typeof decision.record.assessment?.kind === 'string' ? decision.record.assessment.kind : undefined
   const kind = (JOB_KINDS as readonly unknown[]).includes(decision.record.jobKind) ? decision.record.jobKind as JobKind : jobKindOf(group ?? {}, word)
   const counts = zero()
@@ -88,12 +89,12 @@ export function contributionOf(decision: EvidenceDecision, group: Pick<Conversat
   const cost = attemptCost(run, fresh)
   if (cost.apiCost !== null) { counts.costKnown = 1; counts.apiCost = cost.apiCost } else counts.costUnknown = 1
   if (cost.spend !== null) { counts.spendKnown = 1; counts.spend = cost.spend }
-  return { engine: run.engine, model: run.grid ?? run.model, kind, week: weekStart(run.startedAt), counts,
+  return { projectId, engine: run.engine, model: run.grid ?? run.model, kind, week: weekStart(run.startedAt), counts,
     ...(firstReview !== undefined ? { firstReview } : {}), startedAt: run.startedAt }
 }
 
 export const sameKey = (a: EvidenceKey, b: EvidenceKey): boolean =>
-  a.engine === b.engine && a.model === b.model && a.kind === b.kind && a.week === b.week
+  a.projectId === b.projectId && a.engine === b.engine && a.model === b.model && a.kind === b.kind && a.week === b.week
 
 /** The non-zero differences of [after] less [before], or all of [sign] times [counts]. */
 const diff = (after: Counts, before: Counts | null, sign = 1): Partial<Counts> =>
