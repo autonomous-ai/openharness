@@ -5,6 +5,7 @@
  * receipt names it (`closeMember`). The core offers these only while the Swarm is on (core/api.ts `swarmAgents`).
  */
 import type { SwarmAgentDeps, SwarmAgents } from '../../core/api.js'
+import { PURGE_RECORD_UNREADABLE } from './teamPurge.js'
 
 export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members, purgeEnded }: SwarmAgentDeps & {
   /** The Leads and members this machine's Super Tab host keeps (superTabs/retention.ts). */
@@ -20,7 +21,8 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
     const said = await purgeEnded(agentId).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
     if (typeof said.error !== 'string') return closed
     const detail = typeof (said as Record<string, unknown>).detail === 'string' ? (said as Record<string, unknown>).detail as string : said.error
-    console.warn(`[super-tabs] could not delete the session data of ${agentId}: ${detail}`)
+    // An unreadable record was said once, where it was kept; its host logs each refused retry (review of #2142).
+    if (said.error !== PURGE_RECORD_UNREADABLE) console.warn(`[super-tabs] could not delete the session data of ${agentId}: ${detail}`)
     return { error: 'PURGE_FAILED', detail }
   }
   return {

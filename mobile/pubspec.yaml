@@ -21,6 +21,9 @@ dependencies:
     sdk: flutter
   # `compareNatural` — the desktop's name order, so `harness 9` sorts before `harness 10` on both.
   collection: ^1.19.1
+  # The time a Swarm status clears by (`swarm/swarm_face.dart`), which tests move
+  # with the fake clock `testWidgets` runs under.
+  clock: ^1.1.2
 
   cupertino_icons: ^1.0.8
   lucide_icons_flutter: ^3.1.15
@@ -47,6 +50,9 @@ dependencies:
   # The running build's version, shown in Settings and sent with analytics.
   package_info_plus: ^10.2.1
   path: ^1.9.1
+  # The app's temporary folder on Android, where a Swarm chat's pickers leave the copies it deletes
+  # once read (`swarm/swarm_file_picker.dart`). Already in the app through flutter_cache_manager.
+  path_provider: ^2.1.6
 
   # The phone's second wire to a machine: the `terminal-v1` data channel the
   # harness CLI opens with werift on the desktop's behalf (lib/p2p/). Data
@@ -61,6 +67,11 @@ dependencies:
   # are re-encoded to PNG before they leave — see `terminal/image_transcode.dart`
   # for why the whole pipe past this point accepts nothing else.
   image_picker: ^1.2.3
+  # Pictures in a Swarm chat shown in place (`swarm/swarm_attachment.dart`): each file kept in the
+  # app's private temporary folder, one folder per account, for at most 7 days unopened and 200
+  # files, and emptied on sign-out, Swarm off, account change and a Swarm's removal. Pinned
+  # exactly: it decides where the account's files lie on the phone.
+  flutter_cache_manager: 3.4.5
   # Sending any other file to an agent — a PDF, a log, a zip — from the same key: the system's own
   # document picker (Files on iOS, the Storage Access Framework on Android), which hands over one
   # file the person chose and asks for no storage permission. The bytes go out as the CLI's
@@ -93,11 +104,19 @@ dependencies:
   # interactive demo. It also plays a video a terminal printed, downloaded from the agent's machine
   # (`phone/media_preview_page.dart`).
   video_player: ^2.14.0
+  # The key the last Swarm Home is sealed under, in the iOS Keychain (Android: Keystore-backed), so a
+  # cold start draws it at once (`swarm/swarm_home_cache.dart`); the sealed view sits beside the
+  # state file. Pinned exactly: a native plugin, and 10.x is the line with a Swift package, which the
+  # iOS build needs (no CocoaPods).
+  flutter_secure_storage: 10.3.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # The cache's own file abstraction, which `flutter_cache_manager` already brings in: tests keep
+  # Swarm's image files in a temporary folder through it (`test/swarm/swarm_attachment_*`).
+  file: 7.0.1
   # The p2p routing is all timers (retry, migration sweep, upgrade) — tests drive
   # them without waiting them out.
   fake_async: ^1.3.1

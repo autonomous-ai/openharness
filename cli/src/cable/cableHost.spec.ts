@@ -1017,7 +1017,7 @@ describe('Swarm cards', () => {
 
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => true),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), swarmCardSide: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => ({ said: true as const })),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
@@ -1031,13 +1031,21 @@ describe('Swarm cards', () => {
     expect(w.swarmCardOpen).toHaveBeenLastCalledWith('c1', 'st1', 'l1', true)
     await host.swarmCardRecap('st1', 'l1', true)
     expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', true)
-    expect(await host.swarmSay('h1', 'ship it', true)).toBe(true)
+    expect(await host.swarmSay('h1', 'ship it', true)).toEqual({ said: true })
     expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', true)
     await host.swarmSay('h1', 'ship it')
     expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', false)
+    // A dial that speaks swarmBuddy asks for the face on its side, and says which side it swiped to.
+    await host.swarmCardRecap('st1', 'l1', 'buddy')
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
+    host.swarmCardSide('st1', 'buddy')
+    expect(w.swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
     const bare = new DaemonCableHost(wiring())
-    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+    expect(await bare.swarmSay('h1', 'ship it')).toEqual({ said: false })
   })
 })
 

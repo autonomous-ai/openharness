@@ -14,9 +14,14 @@ import 'package:harness_mobile/core/local_key_value_store.dart';
 /// migration and a backend release. These exist to try a feature on one phone while it is being
 /// built (owner, 2026-10-26), so they live in this phone's state file.
 enum PhoneExperiment {
-  /// Swarm on the phone, while its screens are built. Its way in, the Swarm command in Find, is
-  /// offered only while this is on (`phone/phone_search_actions.dart`).
-  swarm('swarm', 'Swarm', 'Open your Swarms from Find. Still taking shape.');
+  /// Swarm on the phone, while its screens are built. Its ways in, the Swarm mark on Home's title
+  /// (`swarm/swarm_mark.dart`) and the Swarm command in Find (`phone/phone_search_actions.dart`),
+  /// are offered only while this is on.
+  swarm(
+    'swarm',
+    'Swarm',
+    'Open your Swarms from Home or Find. Still taking shape.',
+  );
 
   const PhoneExperiment(this.id, this.label, this.description);
 

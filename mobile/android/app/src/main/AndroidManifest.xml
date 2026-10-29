@@ -13,7 +13,7 @@
          request, which Android confirms with its own sheet. Neither is a runtime permission. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- Taking a picture to send to an agent. Picking an EXISTING picture needs
+    <!-- Taking a picture to send to an agent or into a Swarm chat. Picking an EXISTING picture needs
          no permission at all: image_picker goes through ACTION_GET_CONTENT / the
          photo picker, which hands back one item the user chose rather than
          opening the library — hence no READ_MEDIA_IMAGES here. -->

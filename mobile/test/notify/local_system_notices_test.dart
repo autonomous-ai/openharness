@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,6 +70,87 @@ void main() {
     expect(notices.openedDevice.value, isNull);
   });
 
+  group('a Swarm notice', () {
+    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, decisionId: null);
+    const swarm = (
+      key: 'decision:d1',
+      title: 'River asks you',
+      subtitle: 'Mobile',
+      body: 'Open Harness to answer.',
+      target: target,
+    );
+
+    test('its own channel, where it is on the second line, replaced by its own key', () async {
+      await notices.showSwarm(swarm);
+      await notices.showSwarm(swarm);
+
+      expect(plugin.shown.map((n) => n.id).toSet(), {swarmNoticeIdFor('decision:d1')});
+      final shown = plugin.shown.first;
+      expect(shown.title, 'River asks you');
+      expect(shown.body, 'Open Harness to answer.');
+      expect(shown.details!.android!.channelId, 'swarm-needs-you');
+      expect(shown.details!.android!.subText, 'Mobile');
+      expect(shown.details!.iOS!.subtitle, 'Mobile');
+      expect(shown.details!.iOS!.threadIdentifier, 'swarm-needs-you');
+      expect(decodeAgentPayload(shown.payload), isNull);
+    });
+
+    test('a locked phone that hides private content hides it', () async {
+      await notices.showSwarm(swarm);
+      final shown = plugin.shown.single;
+
+      // Android: content hidden on a secure lock screen that hides it.
+      expect(shown.details!.android!.visibility, NotificationVisibility.private);
+      // iOS: when previews are hidden, who asks and where still show.
+      expect(shown.details!.iOS!.categoryIdentifier, 'swarm-needs-you');
+      final category = plugin.settings!.iOS!.notificationCategories.singleWhere(
+        (c) => c.identifier == 'swarm-needs-you',
+      );
+      expect(category.options, {
+        DarwinNotificationCategoryOption.hiddenPreviewShowTitle,
+        DarwinNotificationCategoryOption.hiddenPreviewShowSubtitle,
+      });
+    });
+
+    test('a tap opens that conversation, and no agent or device', () async {
+      await notices.showSwarm(swarm);
+      plugin.onResponse!(
+        NotificationResponse(
+          notificationResponseType: NotificationResponseType.selectedNotification,
+          payload: plugin.shown.single.payload,
+        ),
+      );
+      expect(notices.openedSwarm.value, target);
+      expect(notices.opened.value, isNull);
+      expect(notices.openedDevice.value, isNull);
+    });
+
+    test('the tap that launched the app from cold opens it too', () async {
+      plugin.launch = NotificationAppLaunchDetails(
+        true,
+        notificationResponse: NotificationResponse(
+          notificationResponseType: NotificationResponseType.selectedNotification,
+          payload: encodeSwarmPayload(target),
+        ),
+      );
+      await notices.requestPermission();
+      expect(notices.openedSwarm.value, target);
+    });
+
+    test('taking it down cancels its own id', () async {
+      await notices.cancelSwarm('decision:d1');
+      expect(plugin.cancelled, [swarmNoticeIdFor('decision:d1')]);
+    });
+
+    test('a plugin that fails never throws into the Swarm', () async {
+      plugin.failShow = true;
+      plugin.failCancel = true;
+      await notices.showSwarm(swarm);
+      await notices.cancelSwarm('decision:d1');
+      expect(plugin.shown, isEmpty);
+    });
+  });
+
   test('nothing starts until a notice is first needed', () {
     expect(plugin.initialized, 0);
     // The app's own, over the real plugin: building it reaches no platform.
@@ -126,9 +208,9 @@ void main() {
     expect(plugin.cancelled, [noticeIdFor(ref)]);
   });
 
-  test('asking permission asks both platforms for alerts and sound', () async {
+  test('asking permission asks both platforms for alerts, sound and the icon count', () async {
     await notices.requestPermission();
-    expect(plugin.ios.asked, [(alert: true, sound: true)]);
+    expect(plugin.ios.asked, [(alert: true, sound: true, badge: true)]);
     expect(plugin.android.asked, 1);
   });
 
@@ -170,6 +252,48 @@ void main() {
     plugin.launch = const NotificationAppLaunchDetails(false);
     await notices.cancel(ref);
     expect(notices.opened.value, isNull);
+  });
+
+  group("the app icon's count", () {
+    const channel = MethodChannel('harness/app_badge');
+    late List<MethodCall> calls;
+    var fail = false;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      calls = [];
+      fail = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (fail) throw PlatformException(code: 'badge');
+        calls.add(call);
+        return null;
+      });
+    });
+
+    tearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('is set on the icon on iOS', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await notices.setSwarmBadge(3);
+      await notices.setSwarmBadge(0);
+      expect(calls.map((c) => (c.method, c.arguments)), [('set', 3), ('set', 0)]);
+    });
+
+    test('is left alone on Android, whose launchers show a dot from the notices', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await notices.setSwarmBadge(3);
+      expect(calls, isEmpty);
+    });
+
+    test('a platform that fails never throws into the Swarm', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      fail = true;
+      await notices.setSwarmBadge(3);
+      expect(calls, isEmpty);
+    });
   });
 
   group('a plugin that fails', () {
@@ -290,7 +414,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
 }
 
 class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
-  final asked = <({bool alert, bool sound})>[];
+  final asked = <({bool alert, bool sound, bool badge})>[];
   bool fail = false;
 
   @override
@@ -304,7 +428,7 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
     bool providesAppNotificationSettings = false,
   }) async {
     if (fail) throw PlatformException(code: 'permission');
-    asked.add((alert: alert, sound: sound));
+    asked.add((alert: alert, sound: sound, badge: badge));
     return true;
   }
 
