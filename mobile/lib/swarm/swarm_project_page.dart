@@ -16,6 +16,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_buddy_chat.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
@@ -75,7 +76,7 @@ Set<String> swarmWaitingOnYou(SwarmInbox inbox, String swarmId) => {
 /// One project, as prototype B draws it (Tony, 2026-10-28): its project chat
 /// (its Product Manager and everyone) is the screen, under the project's name
 /// and who is in it, with nothing under the header; and at the header's end a
-/// ⋮ menu (Tony, 2026-10-29) with Chat with PM and the team's status in words
+/// ⋮ menu (Tony, 2026-10-29) with Buddy chat and the team's status in words
 /// ([SwarmProjectStatus]), which opens the project's work and team in a sheet
 /// ([showSwarmProjectSheet]).
 class SwarmProjectPage extends StatefulWidget {
@@ -94,10 +95,10 @@ class SwarmProjectPage extends StatefulWidget {
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
 
-  /// Chat with PM: being opened, and why the last one did not open. The
-  /// menu's button and the line under the header listen; the chat is not
-  /// built again for them.
-  final _pm = ValueNotifier<({bool opening, String? error})>((
+  /// The person's Buddy chat: being opened, and why the last one did not
+  /// open. The menu's button and the line under the header listen; the chat
+  /// is not built again for them.
+  final _buddy = ValueNotifier<({bool opening, String? error})>((
     opening: false,
     error: null,
   ));
@@ -133,7 +134,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void dispose() {
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
-    _pm.dispose();
+    _buddy.dispose();
     super.dispose();
   }
 
@@ -178,18 +179,18 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   Future<void> _pull() =>
       _reader?.refresh() ?? _session?.inbox.refresh() ?? Future.value();
 
-  Future<void> _openPm() async {
+  Future<void> _openBuddy() async {
     final reader = _reader;
-    if (reader == null || _pm.value.opening) return;
-    _pm.value = (opening: true, error: null);
-    final error = await openSwarmPm(
+    if (reader == null || _buddy.value.opening) return;
+    _buddy.value = (opening: true, error: null);
+    final error = await openSwarmBuddy(
       context,
       reader,
       widget.swarmId,
       widget.projectId,
     );
     if (!mounted) return;
-    _pm.value = (opening: false, error: error);
+    _buddy.value = (opening: false, error: error);
   }
 
   void _openSheet() => unawaited(
@@ -201,20 +202,22 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   );
 
   /// The header's menu ([showSwarmProjectMenu]), then what was picked in it.
-  /// With Buddies on there is no Chat with PM ([SwarmReader.buddiesOn]).
+  /// A viewer with no Buddy chat here has none to open, and starts none.
   Future<void> _openMenu() async {
     final reader = _reader;
-    if (reader == null || _pm.value.opening) return;
+    if (reader == null || _buddy.value.opening) return;
     final picked = await showSwarmProjectMenu(
       context,
       swarmId: widget.swarmId,
       projectId: widget.projectId,
-      pmChat: !reader.buddiesOn,
+      buddyChat:
+          swarmBuddyChat(reader, widget.projectId) != null ||
+          swarmCanWrite(reader),
     );
     if (!mounted) return;
     switch (picked) {
-      case SwarmProjectMenuItem.pmChat:
-        await _openPm();
+      case SwarmProjectMenuItem.buddyChat:
+        await _openBuddy();
       case SwarmProjectMenuItem.status:
         _openSheet();
       case null:
@@ -242,17 +245,17 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       title: inputs.$2,
       subtitle: inputs.$3,
       action: ValueListenableBuilder(
-        valueListenable: _pm,
-        builder: (context, pm, _) => _MenuButton(
-          opening: pm.opening,
+        valueListenable: _buddy,
+        builder: (context, buddy, _) => _MenuButton(
+          opening: buddy.opening,
           onPressed: () => unawaited(_openMenu()),
         ),
       ),
       // Nothing else under the header (Tony, 2026-10-29): the team's status
       // is in the menu.
       below: ValueListenableBuilder(
-        valueListenable: _pm,
-        builder: (context, pm, _) => switch (pm.error) {
+        valueListenable: _buddy,
+        builder: (context, buddy, _) => switch (buddy.error) {
           final error? => Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpace.screenInset,
@@ -260,7 +263,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             ),
             child: SwarmRow.line(
               error,
-              key: const ValueKey('swarm-pm-error'),
+              key: const ValueKey('swarm-buddy-error'),
               lines: 3,
               color: AppColors.danger,
             ),
@@ -352,7 +355,7 @@ class _Frame extends StatelessWidget {
 }
 
 /// The header's ⋮: 44 points square, its glyph's end on the screen's side
-/// margin, as the header's words are. While Chat with PM opens ([opening]), a
+/// margin, as the header's words are. While Buddy chat opens ([opening]), a
 /// spinner in its place, and taps do nothing.
 class _MenuButton extends StatelessWidget {
   const _MenuButton({required this.opening, required this.onPressed});
@@ -368,7 +371,7 @@ class _MenuButton extends StatelessWidget {
       key: const ValueKey('swarm-project-menu'),
       button: true,
       enabled: !opening,
-      label: opening ? 'Opening Chat with PM…' : 'Project menu',
+      label: opening ? 'Opening Buddy chat…' : 'Project menu',
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -400,10 +403,11 @@ class _MenuButton extends StatelessWidget {
 }
 
 /// What the project's menu ([showSwarmProjectMenu]) was closed with.
-enum SwarmProjectMenuItem { pmChat, status }
+enum SwarmProjectMenuItem { buddyChat, status }
 
-/// The project's ⋮ menu, as Tony asked for it (2026-10-29): Chat with PM —
-/// none while Buddies are on ([pmChat]) — then the team's status in words
+/// The project's ⋮ menu, as Tony asked for it (2026-10-29): Buddy chat, where
+/// Chat with PM was (#2090) — none for a viewer without one ([buddyChat]) —
+/// then the team's status in words
 /// ([SwarmProjectStatus]), which opens the project's work and team. Its rows
 /// are a thumb's height at least, on the sheet the composer's + opens.
 /// Answers the row picked, or null when the person closes it.
@@ -411,24 +415,27 @@ Future<SwarmProjectMenuItem?> showSwarmProjectMenu(
   BuildContext context, {
   required String swarmId,
   required String projectId,
-  required bool pmChat,
+  required bool buddyChat,
 }) => showModalBottomSheet<SwarmProjectMenuItem>(
   context: context,
   backgroundColor: AppGlass.rowFill,
   shape: AppControl.sheetShape,
-  builder: (_) =>
-      _ProjectMenu(swarmId: swarmId, projectId: projectId, pmChat: pmChat),
+  builder: (_) => _ProjectMenu(
+    swarmId: swarmId,
+    projectId: projectId,
+    buddyChat: buddyChat,
+  ),
 );
 
 class _ProjectMenu extends StatelessWidget {
   const _ProjectMenu({
     required this.swarmId,
     required this.projectId,
-    required this.pmChat,
+    required this.buddyChat,
   });
 
   final String swarmId, projectId;
-  final bool pmChat;
+  final bool buddyChat;
 
   @override
   Widget build(BuildContext context) {
@@ -459,12 +466,12 @@ class _ProjectMenu extends StatelessWidget {
                 ),
               ),
             ),
-            if (pmChat)
+            if (buddyChat)
               _MenuRow(
-                key: const ValueKey('swarm-project-menu-pm-chat'),
-                onTap: () => pick(SwarmProjectMenuItem.pmChat),
+                key: const ValueKey('swarm-project-menu-buddy-chat'),
+                onTap: () => pick(SwarmProjectMenuItem.buddyChat),
                 child: Text(
-                  'Chat with PM',
+                  'Buddy chat',
                   style: AppType.body(color: AppPalette.textPrimary),
                 ),
               ),

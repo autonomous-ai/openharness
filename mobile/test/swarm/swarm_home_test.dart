@@ -969,23 +969,6 @@ void main() {
       return found;
     }
 
-    /// [fake] with its Swarm's Buddies on.
-    FakeSwarm withBuddies(FakeSwarm fake) {
-      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
-        final load = parts(body)! as Map<String, dynamic>;
-        final head = load['head'] as Map<String, dynamic>;
-        return {
-          ...load,
-          'head': {
-            ...head,
-            'data': {...head['data'] as Map<String, dynamic>, 'buddies': true},
-          },
-        };
-      };
-      return fake;
-    }
-
     testWidgets('opens on its project chat, its name over who is in it, its '
         'menu at the top right, and nothing under the header', (tester) async {
       await pump(tester, backend());
@@ -1012,7 +995,11 @@ void main() {
         findsNothing,
         reason: 'the status is in the menu',
       );
-      expect(key('swarm-pm-chat'), findsNothing, reason: 'in the menu');
+      expect(
+        key('swarm-project-menu-buddy-chat'),
+        findsNothing,
+        reason: 'in the menu',
+      );
       expect(find.text('Chat with PM'), findsNothing);
 
       final menu = key('swarm-project-menu');
@@ -1040,16 +1027,17 @@ void main() {
       );
     });
 
-    testWidgets('its menu has Chat with PM, then the team in words, each a '
+    testWidgets('its menu has Buddy chat, then the team in words, each a '
         'row a thumb can press', (tester) async {
       await pump(tester, backend());
       await openProject(tester, project);
       await openMenu(tester);
 
       expect(
-        inside('swarm-project-menu-pm-chat', find.text('Chat with PM')),
+        inside('swarm-project-menu-buddy-chat', find.text('Buddy chat')),
         findsOneWidget,
       );
+      expect(find.text('Chat with PM'), findsNothing, reason: 'closed (#2090)');
       expect(
         status(tester),
         '1 waiting on you · 1 down',
@@ -1074,12 +1062,12 @@ void main() {
         reason: 'it opens more',
       );
       expect(
-        y(tester, 'swarm-project-menu-pm-chat'),
+        y(tester, 'swarm-project-menu-buddy-chat'),
         lessThan(y(tester, 'swarm-project-menu-status')),
-        reason: 'Chat with PM first',
+        reason: 'Buddy chat first, where Chat with PM was',
       );
       for (final row in [
-        'swarm-project-menu-pm-chat',
+        'swarm-project-menu-buddy-chat',
         'swarm-project-menu-status',
       ]) {
         expect(
@@ -1152,17 +1140,26 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(status(tester), '1 waiting on you · 2 down', reason: 'Nova too');
-      expect(key('swarm-project-menu-pm-chat'), findsOneWidget, reason: 'open');
+      expect(
+        key('swarm-project-menu-buddy-chat'),
+        findsOneWidget,
+        reason: 'open',
+      );
     });
 
-    testWidgets('with Buddies on, the menu has the team alone: there is no '
-        'Chat with PM', (tester) async {
-      await pump(tester, withBuddies(backend()));
+    testWidgets("a viewer with no Buddy chat in the project has the menu's "
+        'team alone: they start no Buddy', (tester) async {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) => {
+        ...parts(body)! as Map<String, dynamic>,
+        'members': [part(me, 1, person(me, role: 'viewer'))],
+      };
+      await pump(tester, fake);
       await openProject(tester, project);
       await openMenu(tester);
 
-      expect(key('swarm-project-menu-pm-chat'), findsNothing);
-      expect(find.text('Chat with PM'), findsNothing);
+      expect(key('swarm-project-menu-buddy-chat'), findsNothing);
       expect(status(tester), '1 waiting on you · 1 down');
     });
 
@@ -1229,24 +1226,24 @@ void main() {
       );
     });
 
-    testWidgets("the menu's Chat with PM opens it, and back comes back to the "
-        'project chat', (tester) async {
-      await pump(tester, backend());
+    testWidgets("the menu's Buddy chat opens the person's Buddy chat, and back "
+        'comes back to the project chat', (tester) async {
+      await pump(tester, backend(buddy: true));
       await openProject(tester, project);
       await openMenu(tester);
 
-      await tester.tap(key('swarm-project-menu-pm-chat'));
+      await tester.tap(key('swarm-project-menu-buddy-chat'));
       await tester.pumpAndSettle();
       final page = tester.widget<SwarmConversationPage>(
         find.byType(SwarmConversationPage),
       );
-      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+      expect((page.swarmId, page.conversationId), (tab, 'buddy-me'));
 
       await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
       expect(key('swarm-project-menu'), findsOneWidget, reason: 'back on it');
       expect(
-        key('swarm-project-menu-pm-chat'),
+        key('swarm-project-menu-buddy-chat'),
         findsNothing,
         reason: 'the menu closed as the chat opened',
       );
@@ -1330,7 +1327,7 @@ void main() {
       );
     });
 
-    testWidgets('Chat with PM shows it is opening in place of the menu, and '
+    testWidgets('Buddy chat shows it is opening in place of the menu, and '
         'says why it did not open', (tester) async {
       final semantics = tester.ensureSemantics();
       final fake = backend();
@@ -1340,11 +1337,11 @@ void main() {
       await openProject(tester, web);
 
       await openMenu(tester);
-      await tester.tap(key('swarm-project-menu-pm-chat'));
+      await tester.tap(key('swarm-project-menu-buddy-chat'));
       // A spinner turns until the answer: nothing settles.
       await frames(tester);
       expect(
-        key('swarm-project-menu-pm-chat'),
+        key('swarm-project-menu-buddy-chat'),
         findsNothing,
         reason: 'the menu closed',
       );
@@ -1352,7 +1349,7 @@ void main() {
         inside('swarm-project-menu', find.byType(CircularProgressIndicator)),
         findsOneWidget,
       );
-      expect(find.bySemanticsLabel('Opening Chat with PM…'), findsOneWidget);
+      expect(find.bySemanticsLabel('Opening Buddy chat…'), findsOneWidget);
       await tester.tap(key('swarm-project-menu'));
       await frames(tester);
       expect(
@@ -1360,7 +1357,9 @@ void main() {
         findsNothing,
         reason: 'no menu while it opens',
       );
-      expect(fake.commands, hasLength(1), reason: 'one tap, one chat');
+      expect(fake.commands, [
+        {'type': 'buddy.chat', 'projectId': web},
+      ], reason: 'one tap, one chat');
 
       answer.complete({'result': <String, dynamic>{}});
       await tester.pumpAndSettle();
@@ -1369,12 +1368,12 @@ void main() {
             .widget<SwarmConversationPage>(find.byType(SwarmConversationPage))
             .conversationId,
         webLead,
-        reason: 'no Chat with PM over the project chat',
+        reason: 'no Buddy chat over the project chat',
       );
       expect(
         find.descendant(
-          of: key('swarm-pm-error'),
-          matching: find.text('Chat with PM is not ready yet. Try again.'),
+          of: key('swarm-buddy-error'),
+          matching: find.text('Your Buddy chat is not ready yet. Try again.'),
           matchRoot: true,
         ),
         findsOneWidget,
