@@ -68,7 +68,7 @@ export interface CheckedFile { name: string; type: string; bytes: Buffer }
 /**
  * A Buddy's proposal files, each read from the one descriptor its checks were made on (security review of #2103): only a
  * regular file inside its own folder, the one place it may read (lib/buddyGuard.ts), never under its repository's or
- * Harness's records. The last name is opened without following a link; the file must have that one name (a hard link
+ * Harness's records. The last name is opened without following a link or waiting; the file must have that one name (a hard link
  * would give a file outside a second name inside), and the real path's file must be the one opened, so a name swapped
  * for a link after the check is refused or never read. Each is at most a chat file's size, so read whole.
  */
@@ -77,7 +77,9 @@ export function readInsideFolder(paths: string[], folder: string): CheckedFile[]
   return paths.map(path => {
     const outside = () => new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat by its id.`)
     let fd: number
-    try { fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)) } catch (error) {
+    // Never waiting on the open: a named pipe with no writer held the proposal forever (re-check of #2103). A regular
+    // file reads the same without blocking, and anything else is refused below before a byte is read.
+    try { fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)) } catch (error) {
       throw (error as NodeJS.ErrnoException).code === 'ELOOP' ? outside() : new Error(`${path} is not a file.`)
     }
     try {

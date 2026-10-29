@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, expect, it, vi } from 'vitest'
 
 /** A name swapped while it is checked: right after it was opened, before its real path is read. */
@@ -55,3 +57,17 @@ it('refuses a link as the last name, a folder inside, and a file over the limit'
   writeFileSync(join(folder, 'big.bin'), Buffer.alloc(10 * 1024 * 1024 + 1))
   expect(() => readInsideFolder([join(folder, 'big.bin')], folder)).toThrow('over the 10.0 MB limit')
 })
+
+// Run apart: a blocking open stops the whole process, which no test timeout in it can end (re-check of #2103).
+it.skipIf(process.platform === 'win32')('refuses a named pipe and the terminal\'s input without waiting on them', async () => {
+  const folder = dir('buddy-folder-')
+  execFileSync('mkfifo', [join(folder, 'pipe.md')])
+  const script = `
+    const { readInsideFolder } = await import(${JSON.stringify(new URL('./attach.ts', import.meta.url).pathname)})
+    const tried = (path) => { try { readInsideFolder([path], process.argv[1]); return 'read' } catch (error) { return error.message } }
+    console.log(JSON.stringify([tried(process.argv[2]), tried('/dev/stdin')]))
+  `
+  const { stdout } = await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, folder, join(folder, 'pipe.md')],
+    { timeout: 15_000 })
+  expect(JSON.parse(stdout.trim())).toEqual([`${join(folder, 'pipe.md')} is not a file.`, expect.stringContaining('/dev/stdin is outside your folder')])
+}, 20_000)
