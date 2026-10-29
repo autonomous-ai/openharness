@@ -88,6 +88,20 @@ class SuperTabOutgoing {
 
 /// Personal navigation/drafts live on this client. Membership, work and messages
 /// live on the backend; refreshing never selects another person's conversation.
+/// WS roadmap Phase 2a: a server that pushes Swarm changes (backend
+/// lib/swarmClientPushes.ts) says so every 4 minutes. Without that word for
+/// this long (an older server, a rollback, the switch off) a Swarm polls as
+/// before.
+const kSwarmPushLease = Duration(minutes: 5);
+
+/// While the server pushes, a Swarm nothing was said of is still read this
+/// often: the safety net for a push lost on the way.
+const kSwarmPushSafetyNet = Duration(seconds: 60);
+
+/// While the server pushes, which Swarms the account is in is still read this
+/// often; a change to one asks for a read at once (`SuperTabClient`).
+const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
+
 class SuperTabController extends ChangeNotifier {
   SuperTabController({
     required this.tabId,
@@ -265,6 +279,65 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabReading _policy;
   DateTime? _startedAt, _lastFullRead;
+
+  /// Until when the server is known to push this Swarm's changes
+  /// ([kSwarmPushLease]); set by [SuperTabClient] as it hears the server.
+  DateTime? pushUntil;
+
+  /// Told of a change since the last read began: one of its main parts, or a
+  /// machine's reading alone. And told while a read was out, which may have
+  /// missed it.
+  bool _toldMain = false, _toldMachine = false, _rereadAfter = false;
+
+  bool get _pushing {
+    final until = pushUntil;
+    return until != null && clock.now().isBefore(until);
+  }
+
+  /// The server said this Swarm changed. A change to its main parts reads now,
+  /// or once more after a read already out; a machine's reading alone waits
+  /// for the next poll, so it is read no more often than before pushes.
+  void told({required bool main}) {
+    if (_disposed || accessRevoked || updateRequired) return;
+    if (!main) {
+      _toldMachine = true;
+      return;
+    }
+    _toldMain = true;
+    if (_refreshing != null) {
+      _rereadAfter = true;
+      return;
+    }
+    unawaited(refresh());
+  }
+
+  /// Whether this poll reads. Always, unless the server pushes: then only when
+  /// told, when the safety net is due, or while the person's own message in
+  /// the open conversation waits for its receipt, which no push names.
+  bool get _pollDue {
+    if (!_pushing || _toldMain || _toldMachine || _receiptOpen(selectedId)) {
+      return true;
+    }
+    final last = _lastFullRead;
+    return last == null || clock.now().difference(last) >= kSwarmPushSafetyNet;
+  }
+
+  /// The person's latest message in [id] still has a delivery in hand.
+  bool _receiptOpen(String id) {
+    SuperTabMessage? own;
+    for (final m in _messages[id] ?? const <SuperTabMessage>[]) {
+      if (m.fromAgent || m.fromTerminal || m.authorId != accountId) continue;
+      if (own == null || m.sequence > own.sequence) own = m;
+    }
+    return own != null &&
+        own.deliveries.any(
+          (d) => !const {
+            'answered',
+            'cancelled',
+            'superseded',
+          }.contains(d['status']),
+        );
+  }
 
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
@@ -803,7 +876,9 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
-      _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
+      _poll = Timer.periodic(pollInterval, (_) {
+        if (_pollDue) unawaited(refresh());
+      });
       return;
     }
     if (accessRevoked || (_policy.pausesAway && _away)) return;
@@ -819,7 +894,12 @@ class SuperTabController extends ChangeNotifier {
   /// comes a poll after this one began, however long its answer took.
   Future<void> _tick() async {
     final began = clock.now();
-    await (_fullReadDue ? refresh() : _readMessages(selectedId, light: true));
+    if (_pollDue) {
+      // Told of a change: the whole Swarm, not only the open conversation.
+      await (_fullReadDue || _toldMain || _toldMachine
+          ? refresh()
+          : _readMessages(selectedId, light: true));
+    }
     _schedule(pollInterval - clock.now().difference(began));
   }
 
@@ -1528,7 +1608,13 @@ class SuperTabController extends ChangeNotifier {
 
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
-    return _refreshing ??= _read().whenComplete(() => _refreshing = null);
+    return _refreshing ??= _read().whenComplete(() {
+      _refreshing = null;
+      if (_rereadAfter && !_disposed) {
+        _rereadAfter = false;
+        unawaited(refresh());
+      }
+    });
   }
 
   Future<void> _read() async {
@@ -1540,6 +1626,8 @@ class SuperTabController extends ChangeNotifier {
     loading = snapshot == null;
     if (!quiet) _changed();
     _lastFullRead = clock.now();
+    // Taken as the read starts: a push heard while it is out reads once more.
+    _toldMain = _toldMachine = false;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the
