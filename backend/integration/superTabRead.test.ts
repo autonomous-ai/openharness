@@ -20,6 +20,7 @@ import { decisionsWaiting } from '../src/superTabs/decisions.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -297,11 +298,15 @@ describe('dormant groups on demand (design 4.5)', () => {
     })
     await writeGroup(s.tabId, s.buddyId, NOW, g => { g.dormant = true; g.lastActivityAt = new Date(NOW).toISOString() })
     const first = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, outsider)).body.data
-    expect(first.groups).toHaveLength(49)
+    // A group the reader may not see never shortens a page, and the cursor names the last group it got, never a hidden
+    // one (security review 2 of #2115).
+    expect(first.groups).toHaveLength(50)
     expect(first.groups.every((g: { data: { dormant: boolean } }) => g.data.dormant)).toBe(true)
     expect(keys(first.groups)).not.toContain(s.buddyId)
+    expect(JSON.parse(Buffer.from(first.next, 'base64url').toString()).k).toBe(keys(first.groups).at(-1))
     const second = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1&before=${first.next}`, outsider)).body.data
     expect(second).toMatchObject({ next: null })
+    expect(second.groups).toHaveLength(3)
     expect(new Set([...keys(first.groups), ...keys(second.groups)]).size).toBe(53)
     expect(keys((await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, peer)).body.data.groups)[0]).toBe(s.buddyId)
   })
@@ -339,6 +344,18 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
     expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
+  })
+
+  it('sends no empty id list to the database, for a person with no Swarm or with Swarms all in parts', async () => {
+    await scene()
+    const queries: Query[] = []
+    const reads = new SwarmReads(new SuperTabStore(watched(db, queries)), { now: () => clock })
+
+    expect((await reads.list(outsider)).tabs.length).toBeGreaterThan(0)
+    expect((await reads.list({ ...outsider, sub: 'u-without-swarms' })).tabs).toEqual([])
+
+    expect(queries.some(q => q.model === 'superTab')).toBe(true)
+    expect(queries.filter(sendsEmptyIn)).toEqual([])
   })
 
   it('reads each Swarm\'s newest change over all its parts, without a groupBy (it once panicked the engine on Mongo)', async () => {
@@ -446,6 +463,52 @@ describe('host form (design 4.10)', () => {
     clock = Date.now()
     return (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === tabId)?.pool as { machine: { paused: boolean } } | undefined
   }
+
+  // WS roadmap Phase 2a: the host reads its changes only when told (lib/swarmHostPushes.ts), so every commit its read would
+  // wake for must tell it, and a commit that concerns other machines, or only this machine's reading, must not.
+  it('tells this machine\'s host after a commit exactly when its host read would wake for it', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; machineIds: string[]; lastChangedAt: number }> = []
+    const store = new SuperTabStore(db, Date.now, null, { hostsChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    const toldHere = () => told.filter(t => t.tabId === s.tabId && t.machineIds.includes(machine))
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Not this machine' })
+    expect(toldHere()).toEqual([])
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(toldHere()).toEqual([])
+    const before = Date.now()
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'Its worker\'s group' })
+    expect(toldHere()).toEqual([{ tabId: s.tabId, machineIds: expect.arrayContaining([machine]), lastChangedAt: expect.any(Number) }])
+    expect(toldHere()[0]!.lastChangedAt).toBeGreaterThanOrEqual(before)
+    await run({ type: 'machine.pause', machineId: machine, paused: true })
+    expect(toldHere()).toHaveLength(2)
+  })
+
+  // WS roadmap Phase 2a, client reads: a member's apps read a Swarm when told (lib/swarmClientPushes.ts). The Lead's rule: a
+  // member removed by a commit hears that commit and nothing after it; someone not in the Swarm hears nothing.
+  it('tells the Swarm\'s people after each commit, a removed one once more and never again', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; userIds: string[]; lastChangedAt: number; parts: string[] }> = []
+    const store = new SuperTabStore(db, Date.now, null, { swarmChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Renamed' })
+    expect(told).toEqual([{ tabId: s.tabId, userIds: expect.arrayContaining([owner.sub, peer.sub, outsider.sub]), lastChangedAt: expect.any(Number), parts: ['main'] }])
+    expect(told[0]!.userIds).toHaveLength(3)
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(told.at(-1)!.parts).toEqual(['machine'])
+    await run({ type: 'member.remove', userId: outsider.sub })
+    expect(told.at(-1)!.userIds).toContain(outsider.sub)
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'After the removal' })
+    expect(told.at(-1)!.userIds.sort()).toEqual([owner.sub, peer.sub].sort())
+  })
 
   it('wakes the host for a pause even when a reading lands after it, before the host polls', async () => {
     const s = await hostScene()
@@ -1106,6 +1169,49 @@ describe('what a read costs the database (group 3b)', () => {
 
   // Every host reads each second (a production backend went to 5 pods on it, 2026-10-27): a Swarm with no change for it
   // must not cost the newest-change aggregate, seven groupBy over all its parts.
+  it('the host poll reads a Swarm that keeps an old state without ever loading that state', async () => {
+    const machineId = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
+    const padding = 'old-state-'.repeat(2_000)
+    await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
+    const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
+    const rawRows: Array<Record<string, unknown>> = []
+    // A named-index read (parts/indexed.ts readBy) names its fields in the $project that ends its pipeline: only an inclusion
+    // projection counts, since one that only leaves fields out (`{ _id: 0 }`, `{ padding: 0 }`) still returns the old state.
+    const included = (stage: { $project?: Record<string, unknown> } | undefined) => {
+      const fields = Object.entries(stage?.$project ?? {})
+      return fields.some(([, on]) => on === 1 || on === true)
+        && fields.every(([field, on]) => on === 1 || on === true || (field === '_id' && (on === 0 || on === false))) ? stage!.$project : undefined
+    }
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      const raw = operation === 'aggregateRaw'
+      if (model === 'SuperTab') {
+        reads.push({ operation, select: raw ? included((args as { pipeline?: Array<{ $project?: Record<string, unknown> }> }).pipeline?.at(-1))
+          : (args as { select?: Record<string, unknown> }).select })
+      }
+      const result = await query(args)
+      // And what the database answered: no raw row holds the old state, whatever the pipeline says.
+      if (model === 'SuperTab' && raw) rawRows.push(...result as unknown as Array<Record<string, unknown>>)
+      return result
+    } } } }) as unknown as PrismaClient
+    const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
+    clock = Date.now()
+
+    const first = await hosts.changes(owner, machineId, { full: true })
+    clock = Date.now()
+    const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
+
+    expect(first.tabs).toHaveLength(1)
+    expect(JSON.stringify([first, idle])).not.toContain('old-state-')
+    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields (Prisma's select, or a raw
+    // read's closing inclusion $project): none is the old state, and no raw row the database returned holds it.
+    expect(reads.length).toBeGreaterThan(0)
+    for (const read of reads) expect(read.select, read.operation).toBeDefined()
+    for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
+    for (const row of rawRows) expect(Object.keys(row)).not.toContain('legacyState')
+  })
+
   it('the host form asks for the newest change only of the Swarms it answers for', async () => {
     const machineId = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })

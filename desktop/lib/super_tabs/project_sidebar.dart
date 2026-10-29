@@ -9,10 +9,15 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
+import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
+import 'leaderboard/models_section.dart';
+import 'leaderboard/reader.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
@@ -42,6 +47,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenAgent,
     this.onOpenBuddyChat,
     this.readLocal,
+    this.board,
     this.now = DateTime.now,
   });
   final SuperTabController controller;
@@ -61,6 +67,10 @@ class ProjectSidebar extends StatelessWidget {
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.
   final ValueChanged<String>? onOpenBuddyChat;
+
+  /// The open project's week board the right pane shows, for Models; none
+  /// without it.
+  final SuperTabLeaderboardReader? board;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
   /// the Machines group's readings taken without a real machine.
@@ -580,6 +590,15 @@ class ProjectSidebar extends StatelessWidget {
       name: name,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
+      // Where it runs, as the Agents list once showed every Buddy: only its
+      // person reads this line now. The project is in the name when several.
+      detail: agent == null
+          ? null
+          : [
+              if (!named) project.name,
+              '${buddyEngineName(agent.engine)} on ${buddyMachineName(controller, agent.machineId, app: app)}',
+            ].join(' · '),
+      status: agent == null ? null : _buddyMark(agent),
       note: switch ((agent, controller.buddyStart(project.id))) {
         (null, {'harnessId': null, 'error': null}) => 'starting',
         (null, _) => 'not started',
@@ -597,6 +616,30 @@ class ProjectSidebar extends StatelessWidget {
           : controller.saving || controller.hasPendingAction
           ? null
           : () => _openBuddyChat(project.id),
+    );
+  }
+
+  /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
+  Widget? _buddyMark(SuperTabAgent agent) {
+    final app = this.app;
+    if (app == null) return null;
+    final theme = terminalThemeFor(
+      grid.AppTheme.surfacePalette,
+      terminalThemeStore.value,
+    );
+    final activity = agent.downSince != null
+        ? HarnessActivity.offline
+        : harnessActivity(app, agent.machineId, agent.harnessId) ??
+              HarnessActivity.unknown;
+    return ActivityMark(
+      activity: activity,
+      tooltip: false,
+      showIdle: true,
+      color: activityColor(
+        activity,
+        theme,
+        color: appearancePrefsStore.value.prompt.color,
+      ),
     );
   }
 
@@ -841,6 +884,14 @@ class ProjectSidebar extends StatelessWidget {
               );
             },
           ),
+          if (board case final board?) ...[
+            const SizedBox(height: 16),
+            LeaderboardModelsSection(
+              board: board,
+              projectId: snapshot?.projectFor(controller.selectedId)?.id,
+              now: now,
+            ),
+          ],
         ],
       ),
     );

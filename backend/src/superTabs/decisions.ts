@@ -3,13 +3,13 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { openBuddyChat } from './buddies.js'
+import { isBuddy, openBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, isClosedPmChat, ledProject, projectOf, readsRecordsIn } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { groupsBy } from './parts/indexed.js'
@@ -134,6 +134,11 @@ export async function waitingIn(tx: Tx, tabId: string, conversationId: string): 
   return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
 }
 
+/** How many decisions asked of `personId` in this conversation still wait for them (catchUp.ts). */
+export async function waitingFor(tx: Tx, tabId: string, conversationId: string, personId: string): Promise<number> {
+  return tx.superTabDecision.count({ where: { tabId, conversationId, personId, ...waiting } })
+}
+
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
 const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>
@@ -196,6 +201,10 @@ export async function recordAnswer(tx: Tx, tabId: string, answer: DecisionAnswer
  *  and a Lead also those asked in its project. Nobody else, owners included. */
 function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisionWhereInput {
   if (actor.kind === 'person') return { personId: person(state, actor.userId).id }
+  // A Buddy reads its person's own decisions in its project, by the person's index; each one's conversation is still
+  // checked as the Buddy reads it (readableIn), so none in a private chat or after its person left (buddies.ts).
+  const buddy = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
+  if (buddy) return { personId: buddy.buddyOf!.personId, projectId: agentProjectId(state, buddy) }
   const led = ledProject(state, actor.agentId)
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }

@@ -1,9 +1,13 @@
-import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
+import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { noteStartFailed } from './engineHealth.js'
+import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
-import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
-import { MACHINE_FRESH_MS } from './machines.js'
+import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
+import { leadStartFailed } from './leadStart.js'
 import { ledProject, projectsOf } from './projects.js'
 import { waitedOn } from './leaderboard/record.js'
 
@@ -45,10 +49,47 @@ const reachable = (state: SuperTabState, row: MessageDraft): MessageDraft => ({ 
   return !!target && state.people.find(p => p.id === target.contributorId)?.generation === target.membershipGeneration
 }) })
 
+/** A notice for the Lead (terminal.ts toLead): when the Lead hears it in its own chat, the copy left in the task's chat for
+ *  no one is that same notice, read by no one either. With no Lead to hear it, people read it (review of #2177). */
+export function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
+  return rows.some(row => row.recipients.length) ? rows.map(row => row.recipients.length ? row : { ...row, source: forRecipients(row.source ?? {}) }) : rows
+}
+
 /** The agent's own progress (an assignment, a status, a check, a post) renews the lease stored on its assignment. */
 export function renewLease(assignment: Assignment, now: number): void {
   assignment.leaseUntil = now + LEASE_MS
   assignment.progressAt = now
+}
+
+/** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
+ *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
+ *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
+const READY_FOR_REVIEW = /\bready for review\b/i
+const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
+
+/** Work that waits for its review, whose quiet time therefore does not count (2026-10-29: five Engineers who had handed
+ *  over lost their tasks waiting for a Reviewer). In review, or working with a hand-off as its latest result, as Engineers
+ *  report while done is refused until the review passes, until a review finds problems in it. */
+export function waitingForReview(assignment: Assignment): boolean {
+  if (assignment.status === 'review') return true
+  return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
+    && READY_FOR_REVIEW.test(assignment.result) && REVISION.test(assignment.result)
+}
+
+/** Work that stopped waiting for its review counts its quiet time from now: its agent keeps it QUIET_RUNNING_MS without
+ *  progress, as after its last screen change, though its screen stayed still while it waited. */
+export function restartQuietTime(assignment: Assignment, now: number): void {
+  assignment.progressAt = now
+  assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
+}
+
+/** A review found problems in work waiting for it: the work is its Engineer's to fix again, and its quiet time counts. */
+export function reviewFoundProblems(assignment: Assignment, now: number): boolean {
+  if (!waitingForReview(assignment)) return false
+  assignment.status = 'working'
+  assignment.reviewFoundAt = now
+  restartQuietTime(assignment, now)
+  return true
 }
 
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
@@ -103,13 +144,14 @@ function limitReason(worker: Agent, now: number): string | null {
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return `its session on ${pool.name} stopped`
-  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return `its machine ${pool.name} has been offline for 2 minutes`
+  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
+  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
+  if (waitingForReview(assignment)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -140,10 +182,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
       : 'Assign it to another agent now, or cancel it.')
   // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
   const loss = String(now)
-  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
-    { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
-      text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
-    .map(row => reachable(state, row))
+  return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
+    recipients: [], text: wake, source }).map(row => reachable(state, row))),
+  reachable(state, { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
+    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` })]
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
@@ -176,10 +218,45 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
     text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
 }
 
+/** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
+ *  conversation, written under the person who asked for it as a machine's removal is (machines.ts removalEnded). Nothing while
+ *  it still waits for a machine. */
+function leadNotice(state: SuperTabState, start: AgentStart, text: string | null): MessageDraft[] {
+  const asker = start.request.leadFor!
+  const person = state.people.find(p => p.id === asker.personId && p.generation === asker.generation)
+  if (!text || !person || !state.conversations.some(c => c.id === start.request.conversationId)) return []
+  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation },
+    text, source: { kind: 'system' } }]
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
+  dropIdleBuddyMachines(state, now)
+  return drafts
+}
+
+/** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */
+export const PURGE_NOTICE_MS = 15 * 60_000
+
+/** A removed confidential session whose host has not confirmed its data deleted (commands.ts removeAgent `heldFor`): its
+ *  Team account keeps serving only its project, and its project's conversation hears once, or the Swarm's first one when
+ *  its project went with it. Its host keeps trying (cli superTabs/host.ts endSession). */
+function unpurged(state: SuperTabState, now: number): MessageDraft[] {
+  const owner = state.people.find(p => p.id === state.ownerId)
+  return (state.closingSessions ?? []).flatMap(closing => {
+    if (!closing.heldFor || closing.noticed || closing.since === undefined || now - closing.since <= PURGE_NOTICE_MS || !owner) return []
+    closing.noticed = true
+    const project = projectsOf(state).find(p => p.id === closing.heldFor) ?? projectsOf(state)[0]
+    if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
+    return [{ id: stableId('unpurged', closing.agentId, closing.harnessId), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+      author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
+      text: `The saved session of a removed agent that held people's private chats, on ${machineName(state, closing.machineId)}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`,
+      source: { kind: 'system' } }]
+  })
 }
 
 /** The Lead's own time checks: those above, then each task's state, waking the Lead for those that just stalled. Only the
@@ -309,10 +386,14 @@ export const BUDDY_PICKUP_MS = 5 * 60_000
 
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
-    if (start.request.buddyOf && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+    if ((start.request.buddyOf || start.request.leadFor) && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
       && now - start.requestedAt > BUDDY_PICKUP_MS) {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
+      if (start.request.leadFor) {
+        start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
+        return leadNotice(state, start, leadStartFailed(state, start, start.error))
+      }
       start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
       return buddyNotice(state, start)
     }
@@ -324,15 +405,21 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
+    // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
+    const suspended = noteStartFailed(state, start, now)
+    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)
+    // A grid host that never started the agent steps the work up a tier (stepUp.ts).
+    const stepped = group && start.request.gridModel && !activeWork(group) ? stepUp(state, group, GRID_START_FAILED, now, start.id) : null
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
+      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}${suspended ? `\n\n${suspended}` : ''}`,
+      ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

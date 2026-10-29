@@ -1,3 +1,5 @@
+import '../super_tabs/model.dart' show SuperTabPerson;
+
 /// A machine of the Swarm a new project's Product Manager could start on, as
 /// New Project lists it under "Lead: … · Change".
 class LeadMachine {
@@ -11,6 +13,12 @@ class LeadMachine {
     this.maySleep = false,
     this.unavailable,
     this.inSwarm = true,
+    this.own = true,
+    this.native = true,
+    this.team = false,
+    this.teamEngines,
+    this.engineRefusals = const {},
+    this.owner,
   });
   final String id, name;
   final bool online;
@@ -22,6 +30,29 @@ class LeadMachine {
   /// Listed by the Swarm. A person may still start their project's Product
   /// Manager on another machine of theirs, as before.
   final bool inSwarm;
+
+  /// One of the person's own machines. Another person's runs the Product
+  /// Manager only in its Mac's Harness Team account ([team]).
+  final bool own;
+
+  /// This Desktop starts the Product Manager itself, on a machine of the
+  /// person's it is connected to; otherwise the Swarm starts it there.
+  final bool native;
+
+  /// It runs in that machine's Harness Team account.
+  final bool team;
+
+  /// The engines it runs in that Mac's Harness Team account, as the server
+  /// decided (backend leadStart.ts leadChoices); the others run on the Mac
+  /// itself. Null from a server that does not say: then [team] holds for all.
+  final Set<String>? teamEngines;
+
+  /// Whose machine it is, for a teammate's (its menu row wears their
+  /// avatar); null for the person's own.
+  final SuperTabPerson? owner;
+
+  /// It runs with [engine] in that Mac's Harness Team account.
+  bool inTeam(String engine) => teamEngines?.contains(engine) ?? team;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
@@ -36,12 +67,76 @@ class LeadMachine {
   /// Why the Product Manager cannot start here whatever its state, or null.
   final String? unavailable;
 
+  /// Why an engine cannot run a Product Manager here (not offered to the
+  /// Swarm, not installed or signed in, no quota left, suspended), by engine.
+  /// An engine not in it runs.
+  final Map<String, String> engineRefusals;
+
+  bool runs(String engine) => !engineRefusals.containsKey(engine);
+
+  /// The Product Manager engines it runs, in [kLeadEngines] order.
+  List<String> get leadEngines => [
+    for (final engine in kLeadEngines)
+      if (runs(engine)) engine,
+  ];
+
   bool has(String? repository) {
     final key = leadRepositoryKey(repository);
     return key != null && repositories.contains(key);
   }
 
-  bool get startable => unavailable == null && online && (freeAgents ?? 1) > 0;
+  /// It can start a Product Manager now, with one of [leadEngines].
+  bool get startable =>
+      unavailable == null &&
+      online &&
+      (freeAgents ?? 1) > 0 &&
+      leadEngines.isNotEmpty;
+}
+
+/// The engines a Product Manager runs on: routing reads quota for these two.
+const kLeadEngines = ['claude', 'codex'];
+
+/// A Product Manager engine's name as people read it.
+String leadEngineLabel(String engine) =>
+    const {'claude': 'Claude Code', 'codex': 'Codex'}[engine] ?? engine;
+
+/// Why each of [kLeadEngines] cannot run a Product Manager on a machine, from
+/// what the Swarm reads of it: the engines it offers the Swarm ([offered],
+/// null when not reported), each engine's install and sign-in as its host
+/// reported them ([readiness], null for not known), its subscription windows'
+/// use ([usedPercents], absent when unread) and the engines the server
+/// suspended there after failed starts ([suspended], with why). What is not
+/// known does not rule an engine out, as the route does not.
+Map<String, String> leadEngineRefusals({
+  Set<String>? offered,
+  Map<String, ({bool? installed, bool? signedIn})> readiness = const {},
+  Map<String, List<num>> usedPercents = const {},
+  Map<String, String> suspended = const {},
+}) => {
+  for (final engine in kLeadEngines)
+    engine: ?_engineRefusal(
+      leadEngineLabel(engine),
+      offered: offered == null || offered.contains(engine),
+      readiness: readiness[engine],
+      used: usedPercents[engine] ?? const [],
+      suspended: suspended[engine],
+    ),
+};
+
+String? _engineRefusal(
+  String label, {
+  required bool offered,
+  required ({bool? installed, bool? signedIn})? readiness,
+  required List<num> used,
+  required String? suspended,
+}) {
+  if (!offered) return '$label isn’t offered here';
+  if (readiness?.installed == false) return '$label isn’t installed';
+  if (readiness?.signedIn == false) return '$label isn’t signed in';
+  if (used.any((percent) => percent >= 100)) {
+    return '$label has no quota left until it resets';
+  }
+  return suspended;
 }
 
 /// One repository however its remote is spelled: `host/owner/name`, lower
@@ -61,17 +156,18 @@ String? leadRepositoryKey(String? remote) {
   return value.isEmpty ? null : value;
 }
 
-/// Best first: one the Product Manager can start on now (the Swarm's machines
-/// before the person's others, always on with laptops that may sleep last,
-/// with [repository] already there, with the most room); then the ones it
-/// cannot use yet (full), then other people's, then offline ones.
+/// Best first: one the Product Manager can start on now (the person's own
+/// before a teammate's, the Swarm's machines before the person's others,
+/// always on with laptops that may sleep last, one this Desktop starts, with
+/// [repository] already there, with the most room); then the ones it cannot
+/// use yet (full), then unavailable ones, then offline ones.
 List<LeadMachine> rankLeadMachines(
   Iterable<LeadMachine> machines,
   String? repository,
 ) {
   int tier(LeadMachine m) => m.startable
       ? 0
-      : m.unavailable == null && m.online
+      : m.unavailable == null && m.online && m.leadEngines.isNotEmpty
       ? 1
       : m.online
       ? 2
@@ -80,8 +176,13 @@ List<LeadMachine> rankLeadMachines(
   return [...machines]..sort(
     (a, b) => [
       tier(a).compareTo(tier(b)),
+      // The person's own first, as the Swarm places a waiting one.
+      flag(a.own).compareTo(flag(b.own)),
       flag(a.inSwarm).compareTo(flag(b.inSwarm)),
       flag(!a.maySleep).compareTo(flag(!b.maySleep)),
+      // Started by this Desktop: its files go in directly, its result is
+      // known at once.
+      flag(a.native).compareTo(flag(b.native)),
       flag(a.has(repository)).compareTo(flag(b.has(repository))),
       (b.freeAgents ?? 0).compareTo(a.freeAgents ?? 0),
       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -89,20 +190,15 @@ List<LeadMachine> rankLeadMachines(
   );
 }
 
-/// Where the Swarm places the Product Manager, or null when no machine can
-/// take it now.
-LeadMachine? bestLeadMachine(
-  Iterable<LeadMachine> machines,
-  String? repository,
-) => rankLeadMachines(
-  machines,
-  repository,
-).where((m) => m.startable).firstOrNull;
-
 /// A machine's row detail, in words, so colour is never the only signal.
 String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
   if (!machine.online) return 'Offline';
+  if (machine.leadEngines.isEmpty) {
+    // One reason for both engines (a paused or offline machine) said once.
+    return 'Can’t run a Product Manager: '
+        '${{for (final engine in kLeadEngines) ?machine.engineRefusals[engine]}.join(', ')}';
+  }
   final free = machine.freeAgents;
   if (free == null) return 'Online · Not in this Swarm';
   return [
@@ -110,10 +206,14 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
     free <= 0
         ? 'No agents free'
         : '$free ${free == 1 ? 'agent' : 'agents'} free',
+    if (free > 0 && machine.team) 'Team account',
     if (free > 0 && machine.has(repository)) 'Has repo',
     if (free > 0 && machine.maySleep) 'May sleep',
   ].join(' · ');
 }
+
+/// New Project's reason while no machine is chosen: its machine chip asks.
+const kLeadChooseMachine = 'Choose the machine the Product Manager runs on.';
 
 /// Why a paused Swarm's machines take no work, as its rows and the
 /// Product Manager line say it.

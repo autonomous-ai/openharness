@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadRecap, SaidOnCard, SwarmCard } from '../superTabs/cards.js'
 import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
@@ -108,11 +108,14 @@ export interface CableHostWiring {
   /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
   swarmCardsWanted?: (on: boolean) => void
   /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?: (tabId: string, leadId: string, chat?: boolean) => Promise<LeadRecap | null>
+  swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
-  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: boolean) => void
-  /** Words for a Lead that runs here, posted as the person in its Swarm chat; false when the harness leads no project. */
-  swarmSay?: (harnessId: string, text: string, chat?: boolean) => Promise<boolean>
+  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
+  /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
+  swarmCardSide?: (tabId: string, side: CardSide) => void
+  /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
+   *  `refused` with the backend's reason when it refused the post. */
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
@@ -415,13 +418,13 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (superTabs/inCore/cards.ts replays). */
-  private cards: SwarmCard[] = []
+  private cards: SwarmCard[] | null = null
 
   setSwarmCards(items: SwarmCard[]): void {
     this.cards = items
   }
 
-  swarmCards(): SwarmCard[] {
+  swarmCards(): SwarmCard[] | null {
     return this.cards
   }
 
@@ -429,16 +432,21 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardsWanted?.(on)
   }
 
-  swarmCardRecap(tabId: string, leadId: string, chat = false): Promise<LeadRecap | null> {
+  swarmCardRecap(tabId: string, leadId: string, chat: CardChat = false): Promise<LeadRecap | null> {
     return this.wiring.swarmCardRecap?.(tabId, leadId, chat) ?? Promise.resolve(null)
   }
 
-  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat = false): void {
+  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat: CardChat = false): void {
     this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
   }
 
-  swarmSay(harnessId: string, text: string, chat = false): Promise<boolean> {
-    return this.wiring.swarmSay?.(harnessId, text, chat) ?? Promise.resolve(false)
+  swarmCardSide(tabId: string, side: CardSide): void {
+    this.wiring.swarmCardSide?.(tabId, side)
+  }
+
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
+    const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
+    return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
   }
 
   superTabSelected(superTabId: string, projectId: string): void {

@@ -79,6 +79,8 @@ class SwarmPartsBackend {
           'decisionsDigest',
           'otherProjectsWork',
           'githubApp',
+          'readMarks',
+          'teamAccounts',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -141,7 +143,7 @@ class SwarmPartsBackend {
 
   String _cursor(int tick) => 'c${tick}e$epoch';
 
-  Map<String, dynamic> _derived(Map<String, dynamic> state) => {
+  Map<String, dynamic> _derived(Map<String, dynamic> state, String? reader) => {
     'agents': <String, dynamic>{},
     'machines': <String, dynamic>{},
     if (state['mentionsWaiting'] != null)
@@ -155,6 +157,11 @@ class SwarmPartsBackend {
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
+    // Only where the server does not try Team accounts (backend read/views.ts).
+    if (state['teamAccounts'] == false) 'teamAccounts': false,
+    // The reader's own read marks alone, as backend readMarks.ts sends them.
+    if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
+      'readMarks': Map<String, dynamic>.from(marks),
   };
 
   List<MapEntry<String, _HeldPart>> _ordered() =>
@@ -217,7 +224,7 @@ class SwarmPartsBackend {
         'githubApp': state['githubApp'] ?? false,
         'head': _envelope('head:head', _parts['head:head']!),
         for (final kind in _kinds) kind: <dynamic>[],
-        'derived': _derived(state),
+        'derived': _derived(state, reader),
       };
       for (final entry in _ordered()) {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
@@ -247,7 +254,7 @@ class SwarmPartsBackend {
         'epoch': epoch,
         'head': null,
         for (final kind in _kinds) kind: <dynamic>[],
-        'derived': _derived(state),
+        'derived': _derived(state, reader),
       };
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
@@ -385,20 +392,45 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
+  /// Whether messages are written with threads, as backends from threads on
+  /// write them (backend threads.ts).
+  bool threads = false;
+
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
+
+  /// Conversations whose single-message reads (`?messageId=`) the backend
+  /// refuses, as it does for one the reader may not read.
+  final forbidMessageReads = <String>{};
+
+  /// How many of the next single-message reads fail as if offline.
+  int failMessageReads = 0;
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
   Completer<void>? holdReads;
-  // Makes every command answer with this refusal: {code, message}.
+  // Makes every command answer with this refusal: {code, message}, with
+  // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
   // While set, every command waits for it before it answers: a slow server.
   Completer<void>? holdCommands;
+
+  int refuseStatus = 409;
+
+  /// How many re-sends of an operation already answered lose their reply
+  /// too, as a second dropped connection does.
+  int loseResentReplies = 0;
+
+  /// Machines whose `machine.contribute` the server refuses, with its message.
+  final refuseContributions = <String, String>{};
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
+
+  /// Refuses the next lead.start with this code and message, as the backend
+  /// refuses a machine that cannot take the Product Manager (leadStart.ts).
+  Map<String, String>? leadRefusal;
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
@@ -470,6 +502,9 @@ class ConversationServer {
       'id': 'message-$revision',
       'conversationId': conversationId,
       'sequence': revision,
+      // A top-level message is its own thread's root, as the backend writes
+      // it; without [threads], a message from before threads.
+      if (threads) 'thread': 'message-$revision',
       'text': text,
       'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
@@ -480,6 +515,125 @@ class ConversationServer {
       (g) => g['id'] == conversationId,
     )['lastMessageSequence'] = revision;
   }
+
+  /// The read marks this device sent, in order: {conversationId, sequence}.
+  final readMarkPosts = <Map<String, dynamic>>[];
+
+  /// The catch-up summary the backend answers per conversation (catchUp.ts);
+  /// one not set answers an empty summary.
+  final catchUps = <String, Map<String, dynamic>>{};
+
+  /// Every catch-up read, by path; [failCatchUp] makes them fail as offline.
+  final catchUpReads = <String>[];
+  bool failCatchUp = false;
+
+  /// While set, catch-up reads wait for it: a summary that arrives late.
+  Completer<void>? holdCatchUp;
+
+  Map<String, dynamic> _catchUp(String conversationId, int after) {
+    const empty = {'total': 0, 'items': <dynamic>[]};
+    return catchUps[conversationId] ??
+        {
+          'after': after,
+          'through': after,
+          'unread': 0,
+          'more': false,
+          'decisions': 0,
+          'landed': empty,
+          'blocked': empty,
+          'needsYou': empty,
+        };
+  }
+
+  /// Every read-mark write fails, as offline.
+  bool failReadMarks = false;
+
+  /// A read mark [reader] made on another device, as the backend keeps it.
+  void markReadElsewhere(
+    String conversationId,
+    int sequence, {
+    String reader = 'owner',
+  }) => _keepReadMark(conversationId, sequence, reader);
+
+  int _keepReadMark(String conversationId, int sequence, String reader) {
+    final marks =
+        ((state['readMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+          reader,
+          () => <String, dynamic>{},
+        ) as Map;
+    final kept = max(marks[conversationId] as int? ?? 0, sequence);
+    return marks[conversationId] = kept;
+  }
+
+  /// The backend's read-mark route (readMarks.ts): forward only, never past
+  /// the conversation's newest message.
+  Map<String, dynamic> _markRead(
+    String conversationId,
+    int sequence,
+    String? reader,
+  ) {
+    readMarkPosts.add({'conversationId': conversationId, 'sequence': sequence});
+    if (failReadMarks) {
+      throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+    }
+    final newest =
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == conversationId,
+                )['lastMessageSequence']
+            as int? ??
+        0;
+    return {
+      'sequence': _keepReadMark(
+        conversationId,
+        min(sequence, newest),
+        reader ?? 'owner',
+      ),
+    };
+  }
+
+  /// The summaries of the threads [page]'s rows are in, as the backend's
+  /// pages carry them (threads.ts).
+  List<Map<String, dynamic>> _threads(
+    String conversationId,
+    List<Map<String, dynamic>> page,
+  ) => [
+    for (final root in {
+      for (final m in page)
+        if (m['thread'] case final String root) root,
+    })
+      if (messages
+              .where(
+                (m) =>
+                    m['conversationId'] == conversationId &&
+                    m['thread'] == root,
+              )
+              .toList()
+          case final thread when thread.length > 1)
+        {
+          'id': root,
+          'replies': thread.length - 1,
+          'lastSequence': thread.last['sequence'],
+          'lastAt': thread.last['createdAt'],
+          'authors': [
+            ...{
+              for (final m in thread.skip(1).toList().reversed)
+                '${(m['author'] as Map)['kind']}:${(m['author'] as Map)['id']}':
+                    m['author'],
+            }.values,
+          ].take(3).toList(),
+          'people': [
+            ...{
+              for (final m in thread) ...[
+                if ((m['author'] as Map)['kind'] == 'person')
+                  (m['author'] as Map)['id'],
+                ...(m['mentions'] as List? ?? const []),
+              ],
+            },
+          ],
+        },
+  ];
 
   // Avatar pictures uploaded, as the backend's avatar route keeps them.
   final avatarUploads = <Uint8List>[];
@@ -496,8 +650,8 @@ class ConversationServer {
     };
   }
 
-  /// A person's own status or avatar, or an agent's avatar, as the backend
-  /// stores it (profile.ts).
+  /// A person's own status, username or avatar, or an agent's avatar, as the
+  /// backend stores it (profile.ts, usernames.ts).
   void _profile(Map command, String reader) {
     final (key, id) = command['type'] == 'agent.avatar'
         ? ('agents', command['agentId'])
@@ -520,6 +674,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.username')
+              'username': (command['username'] as String?)?.toLowerCase()
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -609,6 +765,12 @@ class ConversationServer {
     Map<String, dynamic>? body,
   }) async {
     final reader = Zone.current[_reader] as String?;
+    final read = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/read$').firstMatch(path)
+        : null;
+    if (read != null) {
+      return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
       if (holdCommands case final hold?) await hold.future;
@@ -623,11 +785,26 @@ class ConversationServer {
         throw SuperTabFailure(
           refusal['code']!,
           refusal['message']!,
-          statusCode: 409,
+          statusCode: refuseStatus,
+        );
+      }
+      if (body['command']
+          case {'type': 'machine.contribute', 'machineId': final String id}
+          when refuseContributions.containsKey(id)) {
+        throw SuperTabFailure(
+          'MACHINE_NOT_FOUND',
+          refuseContributions[id]!,
+          statusCode: refuseStatus,
         );
       }
       final operationId = body['operationId'] as String;
-      if (receipts[operationId] case final receipt?) return receipt;
+      if (receipts[operationId] case final receipt?) {
+        if (loseResentReplies > 0) {
+          loseResentReplies--;
+          throw StateError('Connection lost again');
+        }
+        return receipt;
+      }
       final tick = parts.clock;
       final command = body['command'] as Map;
       final output = <String, dynamic>{};
@@ -641,8 +818,18 @@ class ConversationServer {
           ],
         );
         messages.last['replyTo'] = command['replyTo'];
+        // A reply joins its message's thread at the root; one to a message
+        // written before threads stays inline (backend commands.ts).
+        final target = messages
+            .where((m) => m['id'] == command['replyTo'])
+            .firstOrNull;
+        if (target?['thread'] case final String root) {
+          messages.last['thread'] = root;
+          if (command['alsoSend'] == true) messages.last['alsoInChat'] = true;
+        }
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
@@ -877,6 +1064,31 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.start') {
+        if (leadRefusal case final refusal?) {
+          leadRefusal = null;
+          throw SuperTabFailure(
+            refusal['code']!,
+            refusal['message']!,
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final machineId = command['machineId'] as String?;
+        output.addAll(
+          machineId == null
+              ? {'waiting': true}
+              : {'startId': 'lead-start-$revision', 'machineId': machineId},
+        );
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        project?['lead'] = {
+          'status': machineId == null ? 'waiting' : 'starting',
+          'machineId': ?machineId,
+          'requestedAt': revision,
+        };
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[
@@ -962,6 +1174,15 @@ class ConversationServer {
     if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
+    if (uri.pathSegments.last == 'catch-up') {
+      catchUpReads.add(path);
+      if (holdCatchUp case final hold?) await hold.future;
+      if (failCatchUp) throw StateError('Offline');
+      final id = uri.pathSegments[uri.pathSegments.length - 2];
+      final after = int.parse(uri.queryParameters['after']!);
+      return jsonDecode(jsonEncode(_catchUp(id, after)))
+          as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'mentions') {
       mentionReads++;
       if (mentionsMissing) {
@@ -1035,7 +1256,20 @@ class ConversationServer {
       final after = int.tryParse(query['after'] ?? '');
       final before = int.tryParse(query['before'] ?? '');
       final afterId = query['afterId'], beforeId = query['beforeId'];
-      final messageId = query['messageId'];
+      final messageId = query['messageId'], thread = query['thread'];
+      if (messageId != null) {
+        if (forbidMessageReads.contains(conversationId)) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Forbidden.',
+            statusCode: 403,
+          );
+        }
+        if (failMessageReads > 0) {
+          failMessageReads--;
+          throw StateError('Offline');
+        }
+      }
       // Pages run in (sequence, id) order (section 4.6).
       int order(Map<String, dynamic> a, Map<String, dynamic> b) {
         final bySequence = (a['sequence'] as int).compareTo(
@@ -1058,6 +1292,7 @@ class ConversationServer {
                 (m) =>
                     m['conversationId'] == conversationId &&
                     (messageId == null || m['id'] == messageId) &&
+                    (thread == null || m['thread'] == thread) &&
                     (after == null || past(m, after, afterId, 1)) &&
                     (before == null || past(m, before, beforeId, -1)),
               )
@@ -1072,6 +1307,7 @@ class ConversationServer {
         jsonEncode({
           'messages': after == null ? page.reversed.toList() : page,
           'next': next,
+          'threads': _threads(conversationId, page),
           'reactionSeq':
               (state['conversations'] as List)
                   .cast<Map>()
@@ -1206,6 +1442,7 @@ class ConversationServer {
   static final _reader = Object();
 
   SuperTabController controller({
+    String tabId = 'tab',
     Map<String, dynamic>? initial,
     String account = 'owner',
     SuperTabUpload? upload,
@@ -1213,7 +1450,7 @@ class ConversationServer {
   }) => SuperTabController(
     avatarUpload: uploadAvatar,
     reading: reading,
-    tabId: 'tab',
+    tabId: tabId,
     accountId: account,
     request: (method, path, {body}) => runZoned(
       () => request(method, path, body: body),

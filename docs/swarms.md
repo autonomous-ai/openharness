@@ -66,6 +66,28 @@ contributed machine, plus every machine an agent of the Swarm already runs on
 available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
+A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10-29). On another person's Mac it runs in
+that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
+unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
+
+Who can start it, where, and who then reaches it:
+
+- **Who starts it**: only the project's owner, a person (not an agent), with `lead.start`. They always name the machine
+  (only they know which one stays on); with none named the server refuses (`MACHINE_REQUIRED`), and nothing places it on
+  another machine. New Project chooses none for them.
+- **Where**: a machine on the Swarm's Machines list whose contribution is still valid, not paused or offline, with a free
+  agent slot, an engine it runs, and a Harness that starts Product Managers. New Project lists only these as choosable
+  and greys out the rest with the reason.
+- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when that account
+  admits this Product Manager with its engine now: privacy check passed, the engine offered, signed in and not suspended
+  there, a free slot, its host starts Product Managers, and no other project's work. Otherwise the Mac itself, in its
+  owner's account: **that owner can read whatever the Product Manager reads and writes on their Mac** (the trust change Ken
+  chose, 10-29). The server makes this choice for each engine (`leadChoices` in `leadStart.ts`), and New Project shows the
+  choice the start will make.
+- **Who watches it**: the project's members watch its terminal live, whichever account it runs in (the Mac's owner does
+  not when it runs in a Team account). Typing in it: nobody in a Team account; on a teammate's Mac itself, only that
+  Mac's owner, and only when they may read the project. A private project they are not in shows them nothing.
+
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
@@ -180,6 +202,15 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
   them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
   chosen, or Codex.
+- **On the round dial.** Each project has two screens. The PM screen is the project's face as before, with two dots at
+  the right edge. Swipe up for the Buddy screen: a lilac ring, the Buddy's avatar (Desktop's pattern and colour) and
+  its last message. Swipe down to return to the PM screen. A swipe down on the PM screen still opens the inbox when
+  something is unread. The dial keeps the screen per Swarm as you move between projects; opening another conversation
+  on the desktop puts the dial back on what the desktop shows. A project without a Buddy shows "No Buddy here yet". Tap
+  to talk works on both screens: on the Buddy screen the words go to the Buddy chat, with the Buddy's engine
+  listening, and a refused post shows as an error on the dial, never as words in a terminal. A new line from the
+  Buddy is quiet: no beep and no inbox entry, only a lilac badge on the lower dot and "Your Buddy replied", until you
+  open the Buddy screen.
 - **The product manager's lines to one person.** What the product manager tells one person directly goes to that
   person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
   decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads
@@ -189,7 +220,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
   Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
   runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
@@ -208,14 +239,66 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   caller itself from its connection; that's the planned follow-up.
 - On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
   Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
-- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
-  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
-  Swarm read shows no machines or routing rules.
-- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
+- A Buddy reads what its owner reads of its project, so it can answer which task owns something, where its pull
+  request stands and what blocks it without the product manager's summaries. That is the project chat, its own chat
+  and the project's workgroups: each task's status, agents, checks, linked pull requests and its owner's open decisions,
+  and on request a task's messages and the archived tasks, a page at a time. The server checks every read as the owner,
+  at the membership they added the Buddy in: once they leave, rejoin or lose a private project, the Buddy reads nothing.
+- A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
+  conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
+  only in its own chat. The server refuses every other command.
+- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read and which ones
+  are archived but not yet in the product manager's report; routing rows (where a task was routed, what was left out
+  and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
+  GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
+  information, never as instructions; only its owner's words ask it to act.
+- A Buddy tells its owner how their proposals go without being asked (Diego, 2026-10-29). The server hands it, as
+  news, only the project-chat lines that reply in the thread of its owner's proposal, tag its owner, or say work its
+  owner requested shipped, and, when work its owner requested is assigned, one line inside that task for the Buddy
+  alone: the task's number, title and status. Nothing else from the project chat, nothing from a private chat, and
+  never its owner's own words. Each is sent only while the Buddy reads that conversation as its owner would, and checked
+  again when its machine picks it up: once its owner leaves, rejoins or loses a private project, nothing more arrives
+  and what waits is refused. A line written while its owner loses the project is written again without the Buddy.
+  Nobody else sees which lines reached a Buddy: they are not listed as the line's recipients or deliveries. The Buddy
+  posts one short note in its own chat at each milestone (the product manager took it, the task it went to, its pull
+  request merged or released) and nothing when nothing changed. It still cannot post in the project chat or assign work.
+- A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
+  dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
+  Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
+  list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
+  no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
+  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
+  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out leaves
+  the call to dontAsk: it still runs the commands Claude Code itself counts as read-only, inside the folder, and refuses
+  everything else, so nothing can write. A managed policy that runs only managed hooks (`allowManagedHooksOnly`) would
+  leave a Buddy in that same state, plus whatever the policy itself allows; that was not tested, as it is an
+  administrator's file. Its Super Tab commands are a Buddy's
+  own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
+  `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
+  (18473) cannot run these commands, since reaching that daemon takes `--port`.
+- What a Buddy reads: the guard confines the Buddy's own reads to its folder. Files another local process places in
+  that folder, by link, hard link or copy, are outside what it can stop: it judges a path when it answers, before
+  Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
+  it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
+  it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
+  sign-in, and through Harness its own chat, the project chat and the project's workgroups, as above. Its own
+  reads reach nothing else on the machine: absolute paths and `..`
+  are refused, glued to an option
+  too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+  Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
+  broken one, is refused by its real path when the guard answers each command, and grep, rg and ls may not follow
+  links as they walk.
+- A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
+  person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
+  in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise
+  run with the person's credentials. It loads no memory file either (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`):
+  a committed one importing files from outside the folder stopped a Buddy at a question nobody answers, and a yes would
+  read them past the guard. It can still read the project's instructions with Read. Its `grep` is Claude Code's
+  built-in ugrep, so only grep's plain long options are allowed, by their whole names, and rg's likewise. Harness's own session, turn and
+  Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
+  in its own copy of the project are read-only.
+  A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
   Harness GitHub App's token.
-  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
-  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
   asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
   `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
@@ -324,6 +407,67 @@ never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
 
+## Routing
+
+The Lead routes each task before starting or assigning an agent. The route
+leaves out what cannot run it or breaks one of the owner's hard rules, then
+orders the rest by the owner's soft rules and the routing policy (strength,
+quota fit, effective cost).
+
+**Grid models.** A model served on the Swarm's grid counts as strong as the
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+grid or local model takes the policy's local quality (1). An owner can change
+both, and add rows of their own, in the policy's local models (`models`: a name
+and a quality, first match first). A model whose host is offline is left out
+with that reason, so no Builder is sent to a machine that cannot start it.
+
+**Cheap first.** Low-risk work that is not a review ranks a grid model first:
+low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
+`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
+work. An owner opts out with the `noGridFirst` rule.
+
+**Stepping up.** When a grid attempt's first review says Ready no, or its grid
+host never starts the agent (the start fails or misses its window), the Swarm
+steps the task up: it closes the attempt, tells its Builder to stop, and wakes
+the Lead to route it again. The next attempt runs on no grid model and nothing
+below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+task steps up at most twice; after that the Lead decides. The route and the
+server both keep to the new floor. The next attempt's brief carries the pull
+request, the last result and the review's findings, and the step (attempt
+number and why) is kept on the attempt and its route decision.
+
+**Reviews.** A review never runs on a grid model or on a model the policy rates
+below 2. A model the policy does not name, a small Codex variant such as a mini
+or nano among them, is rated 1; an agent launched on its engine's own model is
+rated by that engine's `default` row. A review runs on another engine than the
+reviewed Builder's while a strong Reviewer of another engine can run in the
+Swarm (a Builder on a grid model counts as that model's family). A Swarm with
+one engine keeps its automatic reviews: the Builder's own engine reviews at its
+top tier (quality 3) only, and the route decision records why. The server
+refuses such a start, assignment or pick from an agent, whatever the soft rules
+say, and lets a person through with a warning.
+
+Design:
+
+- Growth: one step record per task, replaced at each step; it goes with its
+  group. Policy rows are capped at 40.
+- Concurrency: a step is recorded in the write that saw the failure (the
+  review's verdict, the failed start or the start timeout), so a newer write
+  retries on current data like every other Swarm write.
+- Read cost: no new reads beyond the tab's policy, which work commands read once.
+- Scale: at most two steps per task; a Swarm's 300 tasks a week add at most 600
+  small records. The step-up rate in `costs` is the first warning.
+- Compatibility: a policy saved before per-model rows reads the built-in rows.
+  An older CLI routes without the new exclusions, and the server still refuses
+  a grid or weak Reviewer and a pick below a step's floor.
+- Migration and rollback: additive fields, no migration. Rolling back leaves
+  them unread; a stepped-up task is then routed as before.
+- Audience: the step is part of its group, read by whoever reads the group.
+- Identity: steps are the Swarm's own notices, written as the project's Lead.
+- Failure: a step is told to the Lead and the Builder; a step that cannot be
+  taken (the cap) leaves the attempt with its Builder.
+- Platforms: server-side; the same on every host.
+
 ## Cost records
 
 Every task a Lead routes records what it ran on, what it cost and how it ended,
@@ -368,7 +512,9 @@ and what was actually spent per token (nothing on a plan or on own GPUs).
 set, at most 90), for the Product Manager, and later for the leaderboard and the
 nightly reflection. Per engine, model, effort and kind of job it gives:
 attempts, first-review pass rate, shipped, median minutes to ship, tokens,
-API-equivalent cost, actual spend, and cost per shipped change. A request ships
+API-equivalent cost, actual spend, cost per shipped change, and how many
+attempts stepped up from a cheaper model. The same figures per model alone (a
+grid model by its own name) compare models week over week. A request ships
 once, at its merge or first Done as the leaderboard records it, by the attempt
 that was running then; more attempts done afterwards ship nothing new. Time to
 ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is

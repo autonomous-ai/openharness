@@ -77,9 +77,14 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
+import '../super_tabs/join_machine.dart';
+import '../super_tabs/join_machine_note.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
+import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
+import '../super_tabs/controller.dart' show SuperTabController;
+import '../super_tabs/notifications.dart' show SuperTabMentions;
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
 import '../state/device_finder.dart';
@@ -296,6 +301,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
   StreamSubscription<String>? _teamSetupAsks;
+  StreamSubscription<SwarmJoinedMachine>? _joinedMachines;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -738,6 +744,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.systemNotifications.onTap = (machineId, agentId) async {
       await revealWindow();
       if (!mounted) return;
+      // A tag's notice carries its Swarm tab and tag: the click opens it as the menu bar's row
+      // does, once the tag is still the person's to read.
+      if (machineId == SystemNotifications.mentionNoticeMachine) {
+        final slash = agentId.indexOf('/');
+        if (slash <= 0) return;
+        await _openTagNotice(
+          agentId.substring(0, slash),
+          agentId.substring(slash + 1),
+        );
+        return;
+      }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
       // agent goes: the click opens that device.
       if (machineId == SystemNotifications.deviceNoticeMachine) {
@@ -847,6 +864,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
     _teamSetupAsks = app.teamSetupAsks.listen((_) {
       if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
+    });
+    // This computer, added to a Swarm as its person joined it (super_tabs/join_machine.dart).
+    _joinedMachines = app.joinedMachines.listen((note) {
+      if (mounted) showJoinedMachineNote(context, app.superTabs.open, note);
     });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1003,6 +1024,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
     _teamSetupAsks?.cancel();
+    _joinedMachines?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -2459,6 +2481,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
+    if (mounted && call.method == 'keymapCommand') {
+      final command = (call.arguments as Map?)?['command'];
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) return;
+    }
+
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -6336,6 +6363,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
+              hidden: (row) =>
+                  app.superTabs
+                      .peek(superTabTarget.tabId)
+                      ?.snapshot
+                      ?.agents
+                      .any(
+                        (agent) =>
+                            agent.isBuddy &&
+                            agent.machineId == row.machineId &&
+                            agent.harnessId == row.agentId,
+                      ) ==
+                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6360,6 +6399,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
+                  // Buddies are personal; the picker does not list them either.
+                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6382,7 +6423,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null)
           for (final agent
-              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.teamAgents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -7185,6 +7226,38 @@ class _SwarmScreenState extends State<SwarmScreen> {
     } finally {
       if (mounted) await revealWindow();
     }
+  }
+
+  /// A click on a tag's system notice: the Swarm it is in, open here or not
+  /// (not loaded yet, its tab closed), opens at the tag. The account must
+  /// still be in that Swarm, and the server must list the tag as the person's
+  /// to answer now, in a read that succeeded; otherwise nothing opens, and a
+  /// Swarm loaded only to check is let go again.
+  Future<void> _openTagNotice(String tabId, String mentionId) async {
+    final name = app.superTabName(tabId);
+    if (name == null) return;
+    final loadedHere = app.superTabs.peek(tabId) == null;
+    // Unless the person went to that Swarm meanwhile: its view holds it now.
+    void letGo() {
+      if (loadedHere && app.activeSwarm.superTabId != tabId) {
+        app.superTabs.release(tabId);
+      }
+    }
+
+    final SuperTabController controller;
+    try {
+      controller = await app.superTabs.open(tabId);
+    } catch (_) {
+      return;
+    }
+    // One read decides and supplies the tag the view opens at.
+    final waiting = await SuperTabMentions.of(controller).waitingNow(mentionId);
+    if (!mounted || !waiting || controller.accessRevoked) return letGo();
+    if (_newHarness?.requestDismiss() == false) return letGo();
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    app.openSuperTab(tabId, name);
+    controller.openNotice('mention', mentionId);
   }
 
   /// A row of the menu bar's Swarm section: its Swarm tab comes forward and
@@ -8100,7 +8173,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: Focus(
+            child: SuperTabQuickSwitcherScope(
+              app: app,
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(

@@ -67,7 +67,7 @@ const tokensOf = (state: SuperTabState, machineId: string, harnessId: string): T
  *  reads plan windows for it, per token when it reads it as known with none (an API key, cli superTabs/capacity.ts). */
 function billingOf(state: SuperTabState, machineId: string, engine: string, grid: string | undefined): Billing {
   if (grid) {
-    const kinds = new Set((state.machines ?? []).flatMap(m => (m.observation?.localModels ?? []).filter(s => s.model === grid).map(s => s.kind)))
+    const kinds = new Set((state.machines ?? []).filter(m => !m.buddyOnly).flatMap(m => (m.observation?.localModels ?? []).filter(s => s.model === grid).map(s => s.kind)))
     if (kinds.size !== 1) return 'unknown'
     const [kind] = kinds
     return kind === 'local' ? 'own-hardware' : kind === 'api' ? 'api' : 'unknown'

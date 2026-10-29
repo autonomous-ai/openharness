@@ -12,6 +12,7 @@ import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
@@ -270,7 +271,9 @@ describe('which machines take teammates\' work is read once per 15 s per Swarm',
   it('two polls within 15 s read the team machines once; a machine turning team shows 15 s after the read', async () => {
     const s = await scene()
     const swarmReads = new SwarmReads(store, { now: () => clock })
-    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'sessionKind'])
+    // The one machine-row read (store.ts machineFacts): the Swarm's machines by id, alive, in its environment. Since #2196 it
+    // takes the account kind and CLI version from the rows it returns, not from its filter.
+    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'autonomousEnv', 'deletedAt'])
     const teamWork = (read: { derived: { machines: Record<string, { teamWork: unknown }> } }) => read.derived.machines[s.machineId]!.teamWork
     clock = Date.now()
     const readAt = clock
@@ -320,5 +323,66 @@ describe('the owner\'s grid poll', () => {
     await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: outsider.userId } })
     expect(await db.swarmMember.findFirst({ where: { tabId: s.tabId, key: outsider.userId }, select: { deleted: true } })).toEqual({ deleted: true })
     expect((await store.hostGrids(owner)).find(g => g.tabId === s.tabId)!.members).toEqual([peer.email])
+  })
+})
+
+// Roadmap Phase 3.1: the host poll's Swarm lookup, once a second per host. Prisma sent `machineIds has` OR `cleanupMachineIds has`
+// as $expr, sorted by updatedAt, which no index held: the slow log showed 17 Swarms examined per one returned.
+describe('the host poll\'s Swarm lookup', () => {
+  it('reads only the Swarms that list this machine, newest first, by the machine indexes', async () => {
+    // Swarms of other machines: a lookup the machine does not bound examines these too.
+    for (let i = 0; i < 6; i++) await scene()
+    const s = await scene(), also = await scene({ sharedMachine: s.machineId })
+    // A Swarm that removed this machine still lists it for cleanup until its host has cleaned up.
+    const cleanup = await scene()
+    const at = Date.now()
+    await db.superTab.update({ where: { id: cleanup.tabId }, data: { machineIds: { set: [cleanup.machineId] }, cleanupMachineIds: { set: [s.machineId] },
+      updatedAt: new Date(at + 30_000) } })
+    await db.superTab.update({ where: { id: also.tabId }, data: { updatedAt: new Date(at + 60_000) } })
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
+    const hosts = new HostReads(store, { now: () => Date.now() })
+    let tabs: string[] = []
+    const entries = await profiled(async () => { tabs = (await hosts.changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId) })
+    // Newest write first, across both indexes: the cleanup Swarm sits between the two that list it as a machine.
+    expect(tabs).toEqual([also.tabId, cleanup.tabId, s.tabId])
+    const lookups = entries.filter(e => e.ns.endsWith('.SuperTab')).filter(e => /machineIds|cleanupMachineIds/.test(JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})))
+    expect(lookups.length, JSON.stringify(plan(lookups))).toBe(2)
+    for (const lookup of lookups) {
+      expect(lookup.docsExamined, JSON.stringify(plan(lookups))).toBeLessThanOrEqual(lookup.nreturned!)
+      expect(lookup.command?.hint, `the lookup names its index: ${JSON.stringify(plan(lookups))}`).toBeTruthy()
+    }
+  })
+
+  it('lists a Swarm found by both indexes once, and caps the merged list at the newest', async () => {
+    const s = await scene(), both = await scene({ sharedMachine: s.machineId }), cleanupOnly = await scene()
+    const at = Date.now()
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
+    // Listed as a machine and for cleanup at once: found by both reads, returned once.
+    await db.superTab.update({ where: { id: both.tabId }, data: { cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 20_000) } })
+    await db.superTab.update({ where: { id: cleanupOnly.tabId }, data: { machineIds: { set: [cleanupOnly.machineId] },
+      cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 30_000) } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([cleanupOnly.tabId, both.tabId, s.tabId])
+    // Capped after merging: the newest two of the three, though each read alone returns up to two.
+    expect(await machineSwarms(db, 'prod', s.machineId, 2)).toEqual([cleanupOnly.tabId, both.tabId])
+    expect(await machineSwarms(db, 'prod', s.machineId, 1)).toEqual([cleanupOnly.tabId])
+  })
+
+  it('never returns a Swarm of another environment, one that dropped the machine, or one not yet in parts', async () => {
+    const s = await scene()
+    // The same machine id listed by a Swarm of another environment, as a machine and for cleanup.
+    const dev = await scene({ sharedMachine: s.machineId }), devCleanup = await scene()
+    await db.superTab.update({ where: { id: dev.tabId }, data: { autonomousEnv: 'dev' } })
+    await db.superTab.update({ where: { id: devCleanup.tabId }, data: { autonomousEnv: 'dev', cleanupMachineIds: { set: [s.machineId] } } })
+    // A Swarm whose host cleaned up after the machine left: it lists the machine nowhere.
+    const dropped = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: dropped.tabId }, data: { machineIds: { set: [] }, cleanupMachineIds: { set: [] } } })
+    // A Swarm still in one row (format 1) is left for its migration.
+    const legacy = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: legacy.tabId }, data: { format: 1 } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([s.tabId])
+    expect((await new HostReads(store, { now: () => Date.now() }).changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId)).toEqual([s.tabId])
+    // The removed Swarms' check keeps only this environment's ids, whatever ids it is handed.
+    expect(await swarmsIn(db, 'prod', [s.tabId, dev.tabId, devCleanup.tabId, 'no-such-swarm'])).toEqual([s.tabId])
+    expect(await swarmsIn(db, 'prod', [])).toEqual([])
   })
 })

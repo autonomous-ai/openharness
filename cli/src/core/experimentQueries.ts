@@ -27,7 +27,8 @@
  *   (`core.superTabs`, superTabs/inCore/cards.ts), for the Super Tab service alone;
  * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
  *   service alone;
- * - `super_tab_screen`, `super_tab_input`: a member's terminal read as plain text and typed into for its Lead
+ * - `super_tab_screen`, `super_tab_input`, `super_tab_input_if_screen`: a member's terminal read as plain text and typed into for its Lead,
+ *   and keys typed there only while its screen is still the one the Service read
  *   (`core.superTabs`, superTabs/inCore/terminal.ts), for the Super Tab service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
@@ -42,7 +43,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -76,9 +77,11 @@ export function answerMachineAddonsQuery(core: Pick<CoreApi, 'daemon'>, service:
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
-  // Share's is answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so the
-  // backend's grid name never reached it, and the picker said "Sign in to find models" to a signed-in person.
-  if (query === 'account' && service !== 'sharing') return null
+  // Share's and the Swarm's are answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so
+  // the backend's grid name never reached it, and the picker said "Sign in to find models" to a signed-in person. The
+  // Swarm's round dial cards need the reader to find their own Buddy: answered nothing, the dial said "No Buddy here
+  // yet" to a person with one (Diego's dial, 2026-10-29).
+  if (query === 'account' && service !== 'sharing' && service !== 'superTabs') return null
   if (!experiments.has(service)) return { error: 'NOT_AN_EXPERIMENT' }
   switch (query) {
     case 'shown':
@@ -179,12 +182,15 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       core.superTabs.shareObservers()
       return {}
     case 'super_tab_screen':
-    case 'super_tab_input': {
+    case 'super_tab_input':
+    case 'super_tab_input_if_screen': {
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
-      const { agentId, scrollback = 0, text: typed = '', keys = [] } = payload
+      const { agentId, scrollback = 0, text: typed = '', keys = [], screen } = payload
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) || typeof scrollback !== 'number' || typeof typed !== 'string'
-        || !Array.isArray(keys) || !keys.every(key => typeof key === 'string')) return { ok: false, error: 'INVALID_REQUEST' }
+        || !Array.isArray(keys) || !keys.every(key => typeof key === 'string')
+        || (query === 'super_tab_input_if_screen' && (typeof screen !== 'string' || !keys.length))) return { ok: false, error: 'INVALID_REQUEST' }
       return { ...query === 'super_tab_screen' ? await core.superTabs.screen(agentId as string, scrollback)
+        : query === 'super_tab_input_if_screen' ? await core.superTabs.inputIfScreen(agentId as string, keys as string[], screen as string)
         : await core.superTabs.input(agentId as string, typed, keys as string[]) }
     }
     case 'account': {

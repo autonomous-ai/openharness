@@ -40,7 +40,7 @@ describe('the Harness Team account, set up on its own', () => {
 
   it('says in its log why it asked nothing, one line per answer, so a Mac that never saw the prompt can tell why', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
-      [{ platform: 'linux' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
+      [{ platform: 'freebsd' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
       [{ accountExists: vi.fn(async () => true) }, 'exists'],
     ]
     for (const [over, state] of cases) {
@@ -59,7 +59,7 @@ describe('the Harness Team account, set up on its own', () => {
 
   it('asks nothing off a Mac, signed out, on a computer that runs team work only, or where the account exists', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
-      [{ platform: 'linux' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
+      [{ platform: 'freebsd' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
       [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'], [{ readConfig: () => ({ user: 'harnessteam' }) as TeamConfig }, 'exists'],
       [{ accountExists: vi.fn(async () => true) }, 'exists'],
     ]
@@ -100,6 +100,68 @@ describe('the Harness Team account, set up on its own', () => {
       writeDecision: vi.fn(() => { throw new Error('read-only') }) })
     await unreadable.auto.offer('join'); await unreadable.auto.settled()
     expect(unreadable.log.join('\n')).toContain('could not remember')
+  })
+
+  it('tells its own Desktop why there is no account: cancelled, failed with the reason, still running, or nothing yet', async () => {
+    const f = fake()
+    expect(await f.auto.status()).toEqual({ state: 'none' })
+    f.setDecision({ state: 'declined', at: 5 })
+    expect(await f.auto.status()).toEqual({ state: 'declined' })
+    f.setDecision({ state: 'failed', at: 5, detail: 'launchd would not start it' })
+    expect(await f.auto.status()).toEqual({ state: 'failed', detail: 'launchd would not start it' })
+    let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
+    ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    await f.auto.offer('manual')
+    expect(await f.auto.status()).toEqual({ state: 'running' })
+    finish({ code: 0, result: { ok: true } })
+    await f.auto.settled()
+    // Made since: whatever was remembered before no longer explains anything.
+    const made = fake({ accountExists: vi.fn(async () => true) })
+    made.setDecision({ state: 'declined', at: 5 })
+    expect(await made.auto.status()).toEqual({ state: 'exists' })
+    expect(made.deps.setup).not.toHaveBeenCalled()
+  })
+
+  it('on Linux, offers it as on a Mac: wanted at a join, then started; an account there answers exists', async () => {
+    const linux = fake({ platform: 'linux' })
+    expect(await linux.auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    expect(linux.deps.setup).not.toHaveBeenCalled()
+    expect(await linux.auto.offer('manual')).toEqual({ state: 'started' })
+    await linux.auto.settled()
+    expect(linux.deps.setup).toHaveBeenCalledTimes(1)
+    // Its log names the system that asks (the gridtest VM said "macOS" on Linux, 2026-10-28).
+    expect(linux.log[0]).toBe('setting up the Harness Team account: the system asks for an administrator password')
+    expect(await fake({ platform: 'linux', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
+    // Windows too: User Account Control can always show, while a person is at it (Desktop asks only then).
+    expect(await fake({ platform: 'win32', canPrompt: () => false }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    const windows = fake({ platform: 'win32' })
+    expect(await windows.auto.offer('join')).toEqual({ state: 'started' })
+    await windows.auto.settled()
+    expect(windows.log[0]).toBe('setting up the Harness Team account: Windows asks for permission (User Account Control)')
+    expect(await fake({ platform: 'win32', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
+  })
+
+  it('on Linux with no prompt it can show, answers no-prompt up front, runs nothing and remembers nothing', async () => {
+    // The owner's daemon under systemd --user has no DISPLAY: setup would only answer NO_PROMPT after "started" was said.
+    for (const [reason, check] of [['join', true], ['manual', false], ['manual', true]] as const) {
+      const f = fake({ platform: 'linux', canPrompt: () => false })
+      expect(await f.auto.offer(reason, undefined, check), `${reason} ${check}`).toEqual({ state: 'no-prompt' })
+      expect(f.deps.setup).not.toHaveBeenCalled()
+      expect(f.deps.writeDecision).not.toHaveBeenCalled()
+      expect(f.log).toEqual([`the Harness Team account was not offered (${reason}): no-prompt`])
+    }
+    // An account that is there, or a Mac (osascript always asks), is answered as before.
+    expect(await fake({ platform: 'linux', canPrompt: () => false, accountExists: vi.fn(async () => true) }).auto.offer('manual')).toEqual({ state: 'exists' })
+    expect(await fake({ platform: 'darwin', canPrompt: () => false }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    expect(await fake({ platform: 'linux', canPrompt: () => true }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+  })
+
+  it('remembers a setup Linux refused before it made anything as failed: no systemd, no tmux, no prompt to show', async () => {
+    for (const code of ['NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT']) {
+      const f = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, code, message: `refused: ${code}` } })) })
+      await f.auto.offer('join'); await f.auto.settled()
+      expect(f.decision(), code).toEqual({ state: 'failed', at: 1_000_000, detail: `refused: ${code}` })
+    }
   })
 
   it('at app start, asks only while this Mac is in a Swarm with other people in it', async () => {

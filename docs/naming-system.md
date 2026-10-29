@@ -128,6 +128,10 @@ draggable dividers; their default side widths are 300 and 280 pixels, respecting
 The right pane is a stable directory of all humans and agents in the current Swarm that the
 viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
 local machine inventory does not add people or agents to it.
+The members pane has two sections, **Humans** and **Agents**: two roles in one team. **Humans**
+is the section heading and the label for the human role; ordinary prose still says *people*.
+Humans are listed by the selected week's points, highest first; equal points and no points
+by name. Agents are listed most urgent first, by the tabs' status marks.
 Agents have individual display names and the same avatar treatment as people. Their role badges
 are **PM**, **Dev** and **Rev**. The name, role badge and compact project tag share the first line;
 the existing status icon and activity or assigned task appear underneath. Shortened names and

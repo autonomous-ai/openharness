@@ -20,9 +20,9 @@ no capability negotiation — if you can serve JSON over HTTPS, you can implemen
 See it work before reading the spec:
 
 ```bash
-cd reference-provider && npm install && npm run dev     # http://127.0.0.1:4501
+cd reference-provider && npm install && npm run dev     # http://127.0.0.1:4319
 curl -H 'Authorization: Bearer any-key' -H 'content-type: application/json' \
-     -d '{"jsonrpc":"2.0","id":1,"method":"agent.list","params":{}}' localhost:4501
+     -d '{"jsonrpc":"2.0","id":1,"method":"agent.list","params":{}}' localhost:4319
 ```
 
 Then point the runner at your own endpoint. **Zero failures is the bar:**

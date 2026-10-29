@@ -30,6 +30,95 @@ void main() {
     language.dispose();
   });
 
+  test('a take that reaches its limit ends there, its words kept for the '
+      'next send', () {
+    fakeAsync((async) {
+      backend.replies.add('a long thought');
+      unawaited(voice.startListening());
+      async.flushMicrotasks();
+
+      async.elapse(VoiceInputController.maxTake);
+      async.flushMicrotasks();
+
+      expect(recorder.stops, 1);
+      expect(voice.status, VoiceInputStatus.idle);
+      expect(voice.transcript, 'a long thought');
+    });
+  });
+
+  test('an owner that takes over the limit is told, and the take runs on', () {
+    fakeAsync((async) {
+      var told = 0;
+      voice.onTakeLimit = () async => told++;
+      unawaited(voice.startListening());
+      async.flushMicrotasks();
+
+      async.elapse(VoiceInputController.maxTake - const Duration(seconds: 1));
+      expect(told, 0);
+      async.elapse(const Duration(seconds: 1));
+      async.flushMicrotasks();
+
+      expect(told, 1);
+      expect(recorder.stops, 0);
+      expect(backend.calls, isEmpty);
+      expect(voice.status, VoiceInputStatus.listening);
+      voice.clear();
+    });
+  });
+
+  test('an owner that holds a take back keeps it from the backend until it '
+      'says yes, asked once the microphone has closed', () async {
+    final gate = Completer<bool>();
+    var asked = 0;
+    voice.mayTranscribe = () {
+      asked++;
+      expect(recorder.stops, 1, reason: 'asked after the stop');
+      return gate.future;
+    };
+    backend.replies.add('held words');
+    await voice.startListening();
+
+    final stopping = voice.stopListening();
+    await Future<void>.delayed(Duration.zero);
+    expect(asked, 1);
+    expect(backend.calls, isEmpty);
+    expect(voice.status, VoiceInputStatus.transcribing);
+
+    gate.complete(true);
+    await stopping;
+    expect(backend.calls, hasLength(1));
+    expect(voice.transcript, 'held words');
+  });
+
+  test('a take its owner will not let go is never transcribed', () async {
+    voice.mayTranscribe = () async => false;
+    backend.replies.add('kept back');
+    await voice.startListening();
+
+    await voice.stopListening();
+
+    expect(backend.calls, isEmpty);
+    expect(voice.transcript, isEmpty);
+    expect(voice.isIdle, isTrue);
+    expect(voice.notice, isNull, reason: 'nothing failed');
+  });
+
+  test('a take cleared while held back is not transcribed when it is let '
+      'go', () async {
+    final gate = Completer<bool>();
+    voice.mayTranscribe = () => gate.future;
+    await voice.startListening();
+    final stopping = voice.stopListening();
+    await Future<void>.delayed(Duration.zero);
+
+    voice.clear();
+    gate.complete(true);
+    await stopping;
+
+    expect(backend.calls, isEmpty);
+    expect(voice.isIdle, isTrue);
+  });
+
   test('at rest until the mic is pressed', () async {
     expect(voice.isIdle, isTrue);
     expect(recorder.starts, 0);

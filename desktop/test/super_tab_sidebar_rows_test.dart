@@ -102,6 +102,38 @@ void main() {
   );
 
   testWidgets(
+    'a Buddy click leaves a collapsed project collapsed and an expanded one expanded',
+    (tester) async {
+      final controller = await show(tester, humansSwarm());
+      // A task of the project is open, and its list was then hidden: the
+      // project shows as selected, as in the report.
+      await controller.select('offline');
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(controller.expandedProjects, isEmpty);
+      expect(controller.selectedId, 'offline');
+
+      await tester.tap(dm);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
+      expect(controller.expandedProjects, isEmpty);
+      expect(workgroup, findsNothing);
+
+      // Open, and a task selected: the Buddy click leaves the list showing.
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      await controller.select('offline');
+      await tester.pumpAndSettle();
+      await tester.tap(dm);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
+      expect(controller.expandedProjects, {'lead'});
+      expect(workgroup, findsOneWidget);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
     'a project name click opens its chat and leaves its list as it was',
     (tester) async {
       final controller = await show(tester, humansSwarm());

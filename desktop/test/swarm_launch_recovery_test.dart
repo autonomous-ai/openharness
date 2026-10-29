@@ -113,6 +113,8 @@ void main() {
       final next = await reopen(f, machineId: 'm');
       expect(next.checking, isFalse);
       expect(next.integration!.creationId, isNot(saved['creationId']));
+      // A new project: its person chooses the Product Manager's machine.
+      next.chooseLeadMachine('m');
       expect(
         await next.create(),
         NewHarnessOutcome.created,
@@ -296,7 +298,7 @@ void main() {
         var created = 0;
         final integration = HarnessLaunchIntegration(
           creationId: 'file-review',
-          prepare: (_, task) async => task,
+          prepare: (_, task, _) async => task,
           complete: (_, _) async {},
           beforeSubmit: (_, _) async {},
           needsAttachmentReview: () => true,
@@ -377,7 +379,7 @@ void main() {
         folder: '/work/project',
         integration: HarnessLaunchIntegration(
           creationId: 'stage-files',
-          prepare: (_, task) async => task,
+          prepare: (_, task, _) async => task,
           beforeSubmit: (_, _) async {},
           complete: (_, _) async {},
           stageAttachments: (_, _) async =>

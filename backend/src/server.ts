@@ -29,6 +29,9 @@ import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
 import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { startRelayUsageFlush } from './lib/productUsage.js'
+import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
 
@@ -132,8 +135,13 @@ const app = Fastify({
 async function start(): Promise<void> {
   // Mint the Cloudflare TURN credential before the first socket lands; no-op when TURN is unconfigured.
   startTurnCredentialRefresh()
+  // Every request is named by its route pattern before any hook reads the database, so its queries count for it.
+  registerWorkContext(app)
   // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
   selfProfileFromEnv(app)
+  // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
+  const stopQueryStats = startQueryStats()
+  const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
 
   app.setErrorHandler(errorHandler)
 
@@ -186,6 +194,8 @@ async function start(): Promise<void> {
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
 
+  // Connect counts are kept in memory and written once a minute; shutdown writes what is left (lib/productUsageRelay.ts).
+  const stopRelayUsage = startRelayUsageFlush()
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
@@ -210,6 +220,11 @@ async function start(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 250))
       // Bounded wait for Fastify to finish its onClose hooks; never block shutdown on it.
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
+      // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
+      await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
+      // The last partial minute of both logs, once the drain and the usage flush have run their queries.
+      stopQueryStats()
+      stopRouteLatency()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

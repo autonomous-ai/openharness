@@ -7,9 +7,13 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_private/panic_internal.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
+#include "soc/lp_system_reg.h"
+#include "soc/soc.h"
+#include "wdt_pc.h"
 
 static const char *TAG = "boot";
 
@@ -34,6 +38,9 @@ static RTC_NOINIT_ATTR ring_t s_ring;
 static RTC_NOINIT_ATTR crash_record_t s_rec;
 static crash_record_t s_prev_rec;
 static bool s_have_rec;
+// What the hardware kept (wdt_pc.h): read at boot, reported with the reset reason.
+static cr_hw_t s_hw;
+static bool s_have_hw;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static esp_reset_reason_t s_reason;
@@ -67,6 +74,7 @@ static const char *reason_name(esp_reset_reason_t r)
     case ESP_RST_SDIO:      return "sdio";
     case ESP_RST_USB:       return "usb";
     case ESP_RST_JTAG:      return "jtag";
+    case ESP_RST_CPU_LOCKUP: return "CPU LOCKUP";
     default:                return "unknown";
     }
 }
@@ -75,7 +83,25 @@ void last_words_boot(void)
 {
     s_reason = esp_reset_reason();
     s_abnormal = s_reason == ESP_RST_PANIC || s_reason == ESP_RST_INT_WDT || s_reason == ESP_RST_TASK_WDT
-              || s_reason == ESP_RST_WDT || s_reason == ESP_RST_BROWNOUT || s_reason == ESP_RST_UNKNOWN;
+              || s_reason == ESP_RST_WDT || s_reason == ESP_RST_BROWNOUT || s_reason == ESP_RST_CPU_LOCKUP
+              || s_reason == ESP_RST_UNKNOWN;
+    if (s_abnormal) {
+        // Which watchdog, and at what level: ESP_RST_WDT folds the P4's six watchdog resets into one.
+        s_hw.cause[0] = (unsigned)esp_rom_get_reset_reason(0);
+        s_hw.cause[1] = (unsigned)esp_rom_get_reset_reason(1);
+        uint32_t w[WDT_PC_WORDS] = {
+            REG_READ(LP_SYSTEM_REG_LP_STORE11_REG), REG_READ(LP_SYSTEM_REG_LP_STORE12_REG),
+            REG_READ(LP_SYSTEM_REG_LP_STORE13_REG), REG_READ(LP_SYSTEM_REG_LP_STORE14_REG),
+            REG_READ(LP_SYSTEM_REG_LP_STORE15_REG),
+        };
+        // Sealed by the bootloader hook only after a watchdog or lockup reset; an older bootloader never seals it.
+        s_hw.have_pc = wdt_pc_valid(w);
+        s_hw.pc[0] = w[WDT_PC_PC0]; s_hw.sp[0] = w[WDT_PC_SP0];
+        s_hw.pc[1] = w[WDT_PC_PC1]; s_hw.sp[1] = w[WDT_PC_SP1];
+        s_have_hw = true;
+    }
+    // Read once: a later clean reset must not replay this one's record.
+    REG_WRITE(LP_SYSTEM_REG_LP_STORE15_REG, 0);
     if (s_abnormal && ring_valid() && s_ring.len) {
         // Unroll the ring into reading order: oldest byte first.
         uint32_t start = (s_ring.head + RING_BYTES - s_ring.len) % RING_BYTES;
@@ -139,19 +165,30 @@ void last_words_add(const char *line, size_t len)
     portEXIT_CRITICAL(&s_mux);
 }
 
+// One warning per '\n'-separated line of a crash_record text.
+static void log_lines(char *text)
+{
+    for (char *p = text, *nl; p && *p; p = nl ? nl + 1 : NULL) {
+        if ((nl = strchr(p, '\n'))) *nl = '\0';
+        ESP_LOGW(TAG, "%s", p);
+    }
+}
+
 void last_words_report(void)
 {
     if (s_reported) return;
     s_reported = true;
     if (s_abnormal) ESP_LOGW(TAG, "reset reason: %s", reason_name(s_reason));
     else            ESP_LOGI(TAG, "reset reason: %s", reason_name(s_reason));
+    static char text[512];
+    if (s_have_hw) {
+        cr_format_hw(&s_hw, text, sizeof text);
+        log_lines(text);
+        s_have_hw = false;
+    }
     if (s_have_rec) {
-        static char text[512];
         cr_format(&s_prev_rec, text, sizeof text);
-        for (char *p = text, *nl; p && *p; p = nl ? nl + 1 : NULL) {
-            if ((nl = strchr(p, '\n'))) *nl = '\0';
-            ESP_LOGW(TAG, "%s", p);
-        }
+        log_lines(text);
         s_have_rec = false;
     }
     if (!s_previous_len) return;

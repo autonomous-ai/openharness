@@ -1,17 +1,33 @@
 /** Buddies (Ken's spec, 10-28): each person may add their own agent per project and brainstorm with it in a chat only they
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
- *  reads only its project's chat and its own chat, and does nothing but post in its chat and propose. On in every Swarm:
- *  Buddies replaced Chat with PM (Ken, 10-29). */
+ *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
+ *  chat and propose. On in every Swarm: Buddies replaced Chat with PM (Ken, 10-29). */
 import { agentDisplayName, isRoleName } from './agentNames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
 export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
 
-/** Whether a Buddy reads [group] of its own project: the project chat, and its own owner's chat it is in. */
-export function buddyReads(buddy: Agent, group: Conversation, leadConversationId: string): boolean {
-  if (group.id === leadConversationId) return true
-  return isBuddyChat(group) && group.agentIds.includes(buddy.id) && group.audience?.people.some(p => p.id === buddy.buddyOf!.personId) === true
+/** Whether a Buddy reads [group] of its own project, as its person would (Ken, 10-29): the project chat, its own chat, and
+ *  the project's workgroups. Never a private conversation, its own person's with others included, nor another Buddy chat.
+ *  [person] is its person while still a member at the membership they added it in, and reading the project themselves;
+ *  without one it reads nothing. */
+export function buddyReads(buddy: Agent, group: Conversation, leadConversationId: string, person: Pick<Person, 'id'> | undefined): boolean {
+  if (!person) return false
+  if (isBuddyChat(group)) return group.agentIds.includes(buddy.id) && group.audience?.people.some(p => p.id === person.id) === true
+  return group.id === leadConversationId || !group.audience
+}
+
+/** The rows that tell how work is routed: a route and its override name the machines that could run a task and why others
+ *  could not, and a rule row the routing rules. A Buddy reads none of them, as its Swarm read has no machines or rules. */
+const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule'])
+export const routingRow = (source: unknown): boolean => ROUTING_ROWS.has(String((source as { kind?: unknown } | null | undefined)?.kind))
+
+/** Whether [actor] is a Buddy, which reads no routing (no route rows, routing decisions, policy or costs) and no machines. */
+export const isBuddyReader = (state: SuperTabState, actor: Actor): boolean =>
+  actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))
+export function refuseBuddyRouting(state: SuperTabState, actor: Actor): void {
+  if (isBuddyReader(state, actor)) fail('BUDDY_FORBIDDEN', 'A Buddy reads no routing.', 403)
 }
 
 /** A person's Buddy chat in a project, the same each time they add a Buddy there; a new membership opens a new one, as a

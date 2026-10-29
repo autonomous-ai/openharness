@@ -19,6 +19,15 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
+it('reacts to a message as people do, and --off takes the reaction back', () => {
+  expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-1'], where).payload).toEqual({ action: 'command', tabId: 'tab', agentId: 'agent',
+    operationId: 'op-1', command: { type: 'message.react', conversationId: 'lead', messageId: 'msg-1', emoji: 'eyes', on: true } })
+  expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-2', '--off'], where).payload.command).toMatchObject({ emoji: 'eyes', on: false })
+  for (const argv of [[...prefix, 'react', 'lead', 'msg-1', 'eyes'], [...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op', '--on'],
+    [...prefix, 'react', '../x', 'msg-1', 'eyes', 'op'], [...prefix, 'react', 'lead', 'msg-1', '../eyes', 'op'], [...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op', '--off', 'x']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
 it('finds the native caller without requiring an ID in the initial launch prompt', async () => {
   const request = vi.fn(async (type: string) => type === 'agents_list'
     ? { agents: [{ id: 'native', engine: 'codex', tmuxPane: '%42', status: 'active' }] }
@@ -576,6 +585,19 @@ it('refuses --agent from an agent\'s shell on Windows when this computer\'s Swar
     open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe('Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.')
   expect(request.mock.calls.filter(([type, payload]) => type === 'super_tabs' && (payload as Record<string, unknown>)?.action !== 'buddyCheck')).toEqual([])
+})
+
+// A Buddy's read verbs (Ken, 10-29): archived tasks a page at a time, and a task's older messages, with no new verb.
+it('parses archived status pages and older message pages', () => {
+  const at = ['--tab', 'tab']
+  expect(parseSuperTabArgs([...at, 'status', '--archived'], where).payload).toMatchObject({ action: 'status', archived: true })
+  expect(parseSuperTabArgs([...at, 'status', '--archived', 'eyJsYSI6MX0'], where).payload).toMatchObject({ action: 'status', archived: true, before: 'eyJsYSI6MX0' })
+  // By sequence and message id together: messages may share a sequence, and a sequence alone skipped them (security review 2).
+  expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40', 'm-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40, beforeId: 'm-1' })
+  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
+    ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
+    expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
+  }
 })
 
 // Cost records (Dee, 2026-10-29): what routed attempts cost and how they went, over the last days.

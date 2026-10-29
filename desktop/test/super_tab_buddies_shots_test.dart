@@ -29,8 +29,19 @@ void main() {
     });
     giveBuddy(server);
     giveBuddy(server, projectId: 'web', id: 'moss', name: 'Moss');
-    ((server.state['agents'] as List).last as Map)['downSince'] =
-        '2026-10-28T09:00:00Z';
+    // Other people's Buddies run in the Swarm too; no list shows them.
+    giveBuddy(
+      server,
+      person: 'owner',
+      id: 'sage',
+      name: 'Sage',
+      machineId: 'studio',
+      machineOwnerId: 'owner',
+    );
+    // The reader's own web Buddy is the one that is down.
+    (server.state['agents'] as List).cast<Map>().firstWhere(
+      (a) => a['id'] == 'moss',
+    )['downSince'] = '2026-10-28T09:00:00Z';
     server.append(
       'I want people to keep editing when the network drops.',
       conversationId: 'buddy-peer-lead',
