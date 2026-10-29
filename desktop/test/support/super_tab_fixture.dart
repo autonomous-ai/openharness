@@ -385,6 +385,10 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
+  /// Whether messages are written with threads, as backends from threads on
+  /// write them (backend threads.ts).
+  bool threads = false;
+
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
@@ -475,6 +479,9 @@ class ConversationServer {
       'id': 'message-$revision',
       'conversationId': conversationId,
       'sequence': revision,
+      // A top-level message is its own thread's root, as the backend writes
+      // it; without [threads], a message from before threads.
+      if (threads) 'thread': 'message-$revision',
       'text': text,
       'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
@@ -485,6 +492,48 @@ class ConversationServer {
       (g) => g['id'] == conversationId,
     )['lastMessageSequence'] = revision;
   }
+
+  /// The summaries of the threads [page]'s rows are in, as the backend's
+  /// pages carry them (threads.ts).
+  List<Map<String, dynamic>> _threads(
+    String conversationId,
+    List<Map<String, dynamic>> page,
+  ) => [
+    for (final root in {
+      for (final m in page)
+        if (m['thread'] case final String root) root,
+    })
+      if (messages
+              .where(
+                (m) =>
+                    m['conversationId'] == conversationId &&
+                    m['thread'] == root,
+              )
+              .toList()
+          case final thread when thread.length > 1)
+        {
+          'id': root,
+          'replies': thread.length - 1,
+          'lastSequence': thread.last['sequence'],
+          'lastAt': thread.last['createdAt'],
+          'authors': [
+            ...{
+              for (final m in thread.skip(1).toList().reversed)
+                '${(m['author'] as Map)['kind']}:${(m['author'] as Map)['id']}':
+                    m['author'],
+            }.values,
+          ].take(3).toList(),
+          'people': [
+            ...{
+              for (final m in thread) ...[
+                if ((m['author'] as Map)['kind'] == 'person')
+                  (m['author'] as Map)['id'],
+                ...(m['mentions'] as List? ?? const []),
+              ],
+            },
+          ],
+        },
+  ];
 
   // Avatar pictures uploaded, as the backend's avatar route keeps them.
   final avatarUploads = <Uint8List>[];
@@ -645,6 +694,15 @@ class ConversationServer {
           ],
         );
         messages.last['replyTo'] = command['replyTo'];
+        // A reply joins its message's thread at the root; one to a message
+        // written before threads stays inline (backend commands.ts).
+        final target = messages
+            .where((m) => m['id'] == command['replyTo'])
+            .firstOrNull;
+        if (target?['thread'] case final String root) {
+          messages.last['thread'] = root;
+          if (command['alsoSend'] == true) messages.last['alsoInChat'] = true;
+        }
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.avatar' ||
@@ -999,7 +1057,7 @@ class ConversationServer {
       final after = int.tryParse(query['after'] ?? '');
       final before = int.tryParse(query['before'] ?? '');
       final afterId = query['afterId'], beforeId = query['beforeId'];
-      final messageId = query['messageId'];
+      final messageId = query['messageId'], thread = query['thread'];
       if (messageId != null) {
         if (forbidMessageReads.contains(conversationId)) {
           throw const SuperTabFailure(
@@ -1035,6 +1093,7 @@ class ConversationServer {
                 (m) =>
                     m['conversationId'] == conversationId &&
                     (messageId == null || m['id'] == messageId) &&
+                    (thread == null || m['thread'] == thread) &&
                     (after == null || past(m, after, afterId, 1)) &&
                     (before == null || past(m, before, beforeId, -1)),
               )
@@ -1049,6 +1108,7 @@ class ConversationServer {
         jsonEncode({
           'messages': after == null ? page.reversed.toList() : page,
           'next': next,
+          'threads': _threads(conversationId, page),
           'reactionSeq':
               (state['conversations'] as List)
                   .cast<Map>()
