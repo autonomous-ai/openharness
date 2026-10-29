@@ -392,7 +392,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
       if (start.request.leadFor) {
         start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
-        return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
+        return leadNotice(state, start, leadStartFailed(state, start, start.error))
       }
       start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
       return buddyNotice(state, start)
@@ -407,7 +407,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
     const suspended = noteStartFailed(state, start, now)
-    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
+    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)

@@ -1,12 +1,13 @@
 /** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B), as a Buddy's start is
- *  (buddies.ts): recorded on the machine's contribution and launched by its host. On another person's Mac it runs only in
- *  that Mac's Harness Team account, never as the Mac's owner, whatever the Swarm's switch (machines.ts teamAccountRequired)
- *  says for workers: a Product Manager reads people's private chats. With no machine named, it waits for the first free
- *  one. Desktop's own-machine flow (project.create, a local start, agent.add) is unchanged. */
-import { admitMachineStart, failTeamWork, machineContribution, machineSlots, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
-  swarmMachines, type ContributedMachine } from './machines.js'
-import { actorKey, fail, person, stableId, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { mutableProjects, projectsOf, type SwarmProject } from './projects.js'
+ *  (buddies.ts): recorded on the machine's contribution and launched by its host. Any machine of the Swarm takes it (Ken,
+ *  10-29): on another person's Mac it runs in that Mac's Harness Team account when the account can take it now, else on the
+ *  Mac itself, as its owner, whatever the Swarm's switch (machines.ts teamAccountRequired) says for workers. Its person always
+ *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
+ *  start, agent.add) is unchanged. */
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf,
+  teamWorkRefusal, type ContributedMachine } from './machines.js'
+import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
@@ -15,28 +16,14 @@ export const LEAD_NAME = 'Product Manager'
 export const LEAD_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 85,
   tools: ['git'], devices: [], quotaRequired: false }
 
-/** Where the project's Product Manager is: waiting for a machine, starting on one, started, or failed with the reason. */
+/** Where the project's Product Manager is: starting on the machine its person named, started, or failed with the reason. */
 export interface LeadPlacement {
-  status: 'waiting' | 'starting' | 'started' | 'failed'
-  requestedAt: number
-  requestedBy: { personId: string; generation: string }
-  request: LeadRequest
-  /** The machine the person named, or null: the first free one. */
-  chosen: string | null
-  machineId?: string
-  machineName?: string
+  status: 'starting' | 'started' | 'failed'
+  machineId: string
+  machineName: string
   startId?: string
   reason?: string
-  /** Machines a start from the queue already failed on, tried again only once no other is free. */
-  skipped?: string[]
-  /** How many starts from the queue failed, and when it is placed again: each wait twice the last (security review 1 of
-   *  #2089: one that kept failing was placed again at every machine reading, each failure a row in its conversation). */
-  failures?: number
-  retryAt?: number
 }
-/** A Product Manager from the queue gives up after this many failed starts, and says so once. */
-export const LEAD_QUEUE_ATTEMPTS = 3
-const RETRY_BASE_MS = 60_000, RETRY_MAX_MS = 15 * 60_000
 /** `repositoryUrl`: the address its folder is cloned from, recorded for a project that has none yet. */
 export interface LeadRequest { engine: string; model?: string; effort?: string; branchRef?: string; repositoryUrl?: string }
 
@@ -47,34 +34,15 @@ export interface LeadContext {
   teamAccountsIdle?: boolean
 }
 
-/** The contribution [project]'s Product Manager runs in when placed on [machineId]: the machine itself for its own owner,
- *  else the Mac's Harness Team account, refused with that account's reason. Never the Mac's owner's account. */
-function leadPool(state: SuperTabState, project: SwarmProject, machineId: string, context: LeadContext): ContributedMachine {
-  const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
-  if (named.contributorId === project.ownerId) return named
-  const teamMachines = context.teamMachines ?? []
-  // With no GitHub App, or outside the Swarms Team accounts are tried in, a Team account takes no work (machines.ts
-  // teamMachineFor) and the Mac would run it itself: refused, where a worker would go ahead.
-  if (context.teamAccountsIdle || !teamAccountSwarm(state)) {
-    fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
-  }
-  const pool = named.hostMachineId ? named : teamPoolOf(state, named, teamMachines) ?? named
-  const refusal = teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
-    (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
-  if (refusal) failTeamWork(refusal)
-  return pool
-}
+/** The engines a Product Manager runs on, as people read them. */
+const LEAD_ENGINES = { claude: 'Claude Code', codex: 'Codex' } as const
 
-/** Records the start of [project]'s Product Manager on [machineId] for [by], and marks the project starting. Refuses, and
- *  changes nothing, when that machine cannot take it now. */
-export function placeLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string, request: LeadRequest,
-  startId: string, context: LeadContext): AgentStart {
-  const pool = leadPool(state, project, machineId, context)
-  const start: AgentStartRequest = { conversationId: project.leadConversationId, machineId: pool.machineId, engine: request.engine,
-    ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: LEAD_NAME,
-    cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}),
-    requirements: LEAD_REQUIREMENTS, leadFor: { projectId: project.id, personId: by.id, generation: by.generation } }
-  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
+/** Admits [project]'s Product Manager as [start] asks, in [pool], or throws why not. Writes nothing. */
+function admitLead(state: SuperTabState, project: SwarmProject, pool: ContributedMachine, start: AgentStartRequest, context: LeadContext): void {
+  if (!contributedEngines(pool).includes(start.engine)) {
+    fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
+  }
+  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project)
   // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
   if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
     fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${LEAD_NAME} now.`, 409)
@@ -82,6 +50,92 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
     fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${LEAD_NAME} there.`, 409)
   }
+}
+
+/** Where [project]'s Product Manager with [request]'s engine runs when its person names [machineId], as its start request; or
+ *  throws why it cannot run there now. Writes nothing. The machine itself for its own owner; on another person's Mac, its
+ *  Harness Team account when that admits this Product Manager with this engine now, else the Mac itself, as its owner,
+ *  unless the Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason.
+ *  The start (placeLead) and New Project's machine list (leadChoices) both read it, so they never disagree. */
+export function leadHost(state: SuperTabState, project: SwarmProject, machineId: string, request: LeadRequest, leadFor: AgentStartRequest['leadFor'],
+  context: LeadContext): AgentStartRequest {
+  // A machine whose owner left the Swarm stays listed while its host cleans up. Its contribution is withdrawn; machineContribution
+  // would tell the person starting the Product Manager that they lost access themselves.
+  const listed = state.machines?.find(m => m.machineId === machineId)
+  if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
+  const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
+  const startIn = (pool: ContributedMachine): AgentStartRequest => ({ conversationId: project.leadConversationId, machineId: pool.machineId,
+    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: LEAD_NAME,
+    cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
+  const teamMachines = context.teamMachines ?? []
+  // With no GitHub App, or outside the Swarms Team accounts are tried in, a Team account takes no work (machines.ts
+  // teamMachineFor).
+  const teamsWork = !context.teamAccountsIdle && teamAccountSwarm(state)
+  const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
+    (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
+  let candidates: ContributedMachine[]
+  if (named.contributorId === project.ownerId) candidates = [named]
+  else if (teamAccountPool(named)) {
+    if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
+    const why = refusal(named)
+    if (why) failTeamWork(why)
+    candidates = [named]
+  } else {
+    const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
+    // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
+    if (named.teamAccountOnly) {
+      const pool = team ?? named
+      const why = refusal(pool)
+      if (why) failTeamWork(why)
+      candidates = [pool]
+    } else candidates = team && !refusal(team) ? [team, named] : [named]
+  }
+  // The Team account first, with every check its start has (engine, sign-in, room, other projects' work, its host); refused
+  // there for any reason, the Mac itself (security reviews 1 and 2 of #2228). The last one's reason is the answer.
+  for (const [i, pool] of candidates.entries()) {
+    const start = startIn(pool)
+    try {
+      admitLead(state, project, pool, start, context)
+      return start
+    } catch (error) {
+      if (!(error instanceof SuperTabError) || i === candidates.length - 1) throw error
+    }
+  }
+  throw new Error('unreachable: a Product Manager has at least one candidate machine')
+}
+
+/** Where New Project's Product Manager would run on each teammate's machine, for [personId] as its owner, by engine: the
+ *  machine it runs in, or why it cannot run there now. The same answer leadHost gives the start, before the project exists, so
+ *  Desktop shows the server's decision rather than working one out (security review 1 of #2228). The person's own machines
+ *  are left to Desktop, which starts the Product Manager there itself; a Team account is read through its Mac. Reasons name
+ *  no other project. */
+export function leadChoices(state: SuperTabState, personId: string, context: LeadContext): Record<string, Record<string, { machineId: string } | { refused: string }>> {
+  const by = state.people.find(p => p.id === personId)
+  if (!by || state.paused) return {}
+  const project = { id: '', name: '', ownerId: personId, leadConversationId: '', visibility: 'private', members: [], updateMinutes: 5,
+    skillMode: 'default' } as unknown as SwarmProject
+  const leadFor = { projectId: '', personId, generation: by.generation }
+  const choices: Record<string, Record<string, { machineId: string } | { refused: string }>> = {}
+  for (const machine of state.machines ?? []) {
+    if (machine.hostMachineId || machine.removal || machine.contributorId === personId) continue
+    choices[machine.machineId] = Object.fromEntries(Object.keys(LEAD_ENGINES).map(engine => {
+      try {
+        return [engine, { machineId: leadHost(state, project, machine.machineId, { engine }, leadFor, context).machineId }]
+      } catch (error) {
+        if (!(error instanceof SuperTabError)) throw error
+        return [engine, { refused: error.message }]
+      }
+    }))
+  }
+  return choices
+}
+
+/** Records the start of [project]'s Product Manager on [machineId] for [by], and marks the project starting. Refuses, and
+ *  changes nothing, when that machine cannot take it now. */
+export function placeLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string, request: LeadRequest,
+  startId: string, context: LeadContext): AgentStart {
+  const start = leadHost(state, project, machineId, request, { projectId: project.id, personId: by.id, generation: by.generation }, context)
+  const pool = machineContribution(state, start.machineId)!
   state.starts ??= []
   if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
   const contributor = person(state, pool.contributorId)
@@ -91,8 +145,7 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
     harnessId: null, dispatched: false, error: null, requestedAt: context.now }
   state.starts.push(recorded)
   project.repository ??= { machineId: pool.machineId, cwd: start.cwd, repositoryUrl: request.repositoryUrl ?? null }
-  const { reason: _reason, ...placement } = project.lead!
-  project.lead = { ...placement, status: 'starting', machineId: pool.machineId, machineName: pool.name, startId }
+  project.lead = { status: 'starting', machineId: pool.machineId, machineName: pool.name, startId }
   return recorded
 }
 
@@ -114,77 +167,14 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   return `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
 }
 
-/** Its start failed with [reason] at [now]: on the machine its person chose, the project says why and waits for them; placed
- *  from the queue, it waits for another machine, longer after each failure, and gives up after LEAD_QUEUE_ATTEMPTS. The line
- *  its conversation shows, once, when it stops trying; null while it still waits. */
-export function leadStartFailed(state: SuperTabState, start: AgentStart, reason: string, now: number): string | null {
+/** Its start failed with [reason]: the project says why and waits for its person to name a machine again. The line its
+ *  conversation shows; null for a start that is no longer the project's. */
+export function leadStartFailed(state: SuperTabState, start: AgentStart, reason: string): string | null {
   const placement = placementOf(state, start)
   if (!placement) return null
   delete placement.startId
   // Every reader of the project reads its placement: the reason a group member may read, never the host's own words, which
   // can name a folder on the machine or a token problem (startFailure.ts). Its asker reads those on the start.
-  const shown = publicReason(reason)
-  if (placement.chosen !== null) {
-    Object.assign(placement, { status: 'failed', reason: shown })
-    return failureNotice(start.request.name, reason)
-  }
-  const failures = (placement.failures ?? 0) + 1
-  delete placement.machineId
-  delete placement.machineName
-  if (failures >= LEAD_QUEUE_ATTEMPTS) {
-    delete placement.retryAt
-    Object.assign(placement, { status: 'failed', reason: shown, failures })
-    return `The ${LEAD_NAME} could not start after ${failures} tries. The last one: ${shown} Start it again when a machine is ready.`
-  }
-  Object.assign(placement, { status: 'waiting', reason: shown, failures, retryAt: now + Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS),
-    skipped: [...new Set([...placement.skipped ?? [], start.request.machineId])].slice(-16) })
-  return null
-}
-
-export const WAITING_TEXT = `Waiting for a machine to start the ${LEAD_NAME}.`
-
-/** lead.start: [project]'s Product Manager on [machineId], refused with the reason when it cannot run there now; or, with
- *  none named, on the first free machine, else waiting for one (placeWaitingLeads). A request already waiting is replaced. */
-export function requestLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string | null, request: LeadRequest,
-  operationId: string, context: LeadContext): { startId: string; machineId: string } | { waiting: true } {
-  project.lead = { status: 'waiting', requestedAt: context.now, requestedBy: { personId: by.id, generation: by.generation }, request, chosen: machineId }
-  const start = machineId ? placeLead(state, project, by, machineId, request, operationId, context) : placeOnFree(state, project, by, operationId, context)
-  return start ? { startId: start.id, machineId: start.request.machineId } : { waiting: true }
-}
-
-/** The machines a waiting Product Manager is tried on, in order: the project owner's own, then the most free agent slots, and
- *  last those a start from the queue already failed on. A Mac's Harness Team account is reached through its Mac. */
-function candidates(state: SuperTabState, project: SwarmProject): string[] {
-  const skipped = project.lead?.skipped ?? []
-  const rank = (m: ContributedMachine) => [skipped.includes(m.machineId) ? 1 : 0, m.contributorId === project.ownerId ? 0 : 1, machineSlots(state, m) - m.maxAgents] as const
-  return swarmMachines(state).filter(m => !m.hostMachineId).map(m => ({ m, r: rank(m) }))
-    .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.r[2] - b.r[2]).map(({ m }) => m.machineId)
-}
-
-function placeOnFree(state: SuperTabState, project: SwarmProject, by: Person, startId: string, context: LeadContext): AgentStart | null {
-  for (const machineId of candidates(state, project)) {
-    try { return placeLead(state, project, by, machineId, project.lead!.request, startId, context) } catch (error) {
-      // Each refusal comes before anything is written (placeLead), so the next machine sees the state unchanged.
-      if (!(error instanceof SuperTabError)) throw error
-    }
-  }
-  return null
-}
-
-/** On a machine's reading: each project whose Product Manager waits starts on the first free machine. The ids of those
- *  placed. Nothing is read or written for a Swarm with none waiting. */
-export function placeWaitingLeads(state: SuperTabState, context: LeadContext): string[] {
-  const waiting = projectsOf(state).filter(p => p.lead?.status === 'waiting' && !(p.lead.retryAt !== undefined && p.lead.retryAt > context.now))
-  if (!waiting.length || state.paused) return []
-  const placed: string[] = []
-  for (const { id } of waiting) {
-    const project = mutableProjects(state).find(p => p.id === id)!, lead = project.lead!
-    const by = state.people.find(p => p.id === lead.requestedBy.personId && p.generation === lead.requestedBy.generation)
-    if (!by) {
-      Object.assign(lead, { status: 'failed', reason: 'The person who asked for it left the Swarm.' })
-      continue
-    }
-    if (placeOnFree(state, project, by, stableId('lead-start', project.id, String(lead.requestedAt), String(context.now)), context)) placed.push(project.id)
-  }
-  return placed
+  Object.assign(placement, { status: 'failed', reason: publicReason(reason) })
+  return failureNotice(start.request.name, reason)
 }

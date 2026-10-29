@@ -13,7 +13,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentOpenDeliveries, deliveredCopies, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { agentOpenDeliveries, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -21,7 +21,6 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
-import { placeWaitingLeads } from './leadStart.js'
 import { buddyChatId } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -58,7 +57,8 @@ import { costRows, summarizeCosts } from './costs/read.js'
 import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -362,6 +362,12 @@ export class GrantReads {
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
 
+/** Whether `actor` reads a row of a conversation they read: an agent-only notice is listed for its own recipient alone, and a
+ *  Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it and why
+ *  others could not (security review 2 of #2115). */
+const readsRow = (actor: Actor, buddy: boolean) => (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>): boolean =>
+  (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))) && !(buddy && routingRow(m.source))
+
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
  *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
 function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
@@ -385,6 +391,10 @@ export class SuperTabStore {
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
   get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
+  /** No Harness GitHub App on this server: Team accounts take no teammates' work (SuperTabStoreHooks.teamAccountsIdle). Reads
+   *  decide New Project's Product Manager host as its start does (read/views.ts). */
+  get teamAccountsIdle(): boolean { return this.hooks.teamAccountsIdle === true }
+
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.polls = hooks.polls ?? localPollMemory(now)
@@ -1924,10 +1934,8 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
     // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
-    // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
-    const buddy = isBuddyReader(state, actor)
-    const readable = (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>) => (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
-      && !(buddy && routingRow(m.source))
+    // and why others could not (security review 2 of #2115). Left out like an agent-only notice (readsRow), so no page is shorter.
+    const buddy = isBuddyReader(state, actor), readable = readsRow(actor, buddy)
     // One thread is read only through a root this reader may read. A hidden root (an agent-only note to someone else; for a
     // Buddy, a route row) reads as one that is not in this conversation, and as an exact message it may not see: an empty
     // page, never its replies alone (review 2 of #2168). By its id, through the primary key.
@@ -1944,7 +1952,7 @@ export class SuperTabStore {
     const at = { tabId, conversationId, messageId: cursor.messageId, thread: cursor.thread }
     const start: MessageEdge | undefined = forward ? { sequence: cursor.after!, id: cursor.afterId }
       : cursor.before !== undefined ? { sequence: cursor.before, id: cursor.beforeId } : undefined
-    // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
+    // Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
     // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
     const rows: SuperTabMessage[] = []
@@ -1967,8 +1975,7 @@ export class SuperTabStore {
     const onPage = new Set(page.map(m => m.id))
     const pointed = [...new Set(page.flatMap(m => [m.thread, m.replyTo]).filter((id): id is string => !!id && !onPage.has(id)))]
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one (pageReads.ts deliveredCopies).
-    const pointedRows = pointed.length ? await tx.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: pointed } },
-      select: { id: true, source: true, recipientIds: true } }) : []
+    const pointedRows = await messagesById(tx, tabId, conversationId, pointed)
     const pointedCopies = pointedRows.length ? await deliveredCopies(tx, tabId, pointedRows) : new Set<string>()
     const hidden = new Set(pointedRows.filter(m => !readable(m) || pointedCopies.has(m.id)).map(m => m.id))
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
@@ -1982,6 +1989,27 @@ export class SuperTabStore {
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
+  }
+
+  /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
+   *  shows them: the same read check and row filter as messages(). People only, reading as themselves: agents read every
+   *  message as it comes. At most CATCH_UP_SCAN rows are read; `more` says there were more. */
+  async catchUp(user: AuthUser, tabId: string, conversationId: string, after: number): Promise<CatchUp> {
+    this.personOnly(user)
+    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
+    const actor = await this.actor(this.db, user, state)
+    readConversation(state, actor, conversationId)
+    const buddy = isBuddyReader(state, actor)
+    const [rows, decisions] = await Promise.all([
+      this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
+        take: CATCH_UP_SCAN + 1 }),
+      waitingFor(this.db, tabId, conversationId, user.sub),
+    ])
+    const scanned = rows.slice(0, CATCH_UP_SCAN), reads = readsRow(actor, buddy)
+    // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
+    const copies = await deliveredCopies(this.db, tabId, scanned)
+    const shown = scanned.filter(m => !copies.has(m.id) && reads(m))
+    return catchUpSummary(buddy ? shown.map(withoutMachineNames) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
   }
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
@@ -2221,12 +2249,6 @@ export class SuperTabStore {
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
-      // A Product Manager waiting for a machine starts on the first free one (leadStart.ts). The Team machines are read only
-      // while one waits.
-      if (projectsOf(state).some(p => p.lead?.status === 'waiting')) {
-        placeWaitingLeads(state, { now, teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state),
-          ...(this.hooks.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
-      }
       return saved(checked)
     })
   }

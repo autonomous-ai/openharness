@@ -187,6 +187,8 @@ function chatLead(l: SwarmLead, chat = l.chat): Record<string, unknown> {
 function buddyLead(l: SwarmLead): Record<string, unknown> {
   return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: { ...l.buddy } } : {}) }
 }
+/** A Swarm agent's id as the backend makes it; a harness's id is a UUID, so the two never meet. */
+const SWARM_AGENT_ID = /^[0-9a-f]{24}$/
 /** The byte cuts a name is shortened through, on a character, when a frame would not fit. */
 const NAME_CUTS = [24, 12, 6, 3, 1, 0]
 /**
@@ -874,7 +876,9 @@ export class CableSession {
     form?: { command?: FormCommand; pin: Promise<FormResult> };
     /** The chat on this dial's face for that agent's Swarm project as the person began to speak: the words go there or
      *  nowhere, and a Buddy chat's never reach a terminal (review of #2146). */
-    swarmFace?: SwarmFace } | null = null
+    swarmFace?: SwarmFace;
+    /** That Lead runs on another machine: named by its Swarm id, it has no terminal here. */
+    swarmRemote?: true } | null = null
   private voiceSearch?: SelectionCommand
   private voiceForm?: FormCommand
   private voiceCarryId?: string
@@ -1349,7 +1353,9 @@ export class CableSession {
             ...(this.host.answerReviewed ? ['question.review'] : []),
             // Words reviewed on a Swarm face are posted in its chat by Send. A dial asks for review there only when it sees
             // this: an older daemon would type the reviewed words into the Lead's terminal.
-            ...(this.host.swarmSay ? ['swarm.review'] : []),
+            // swarm.remote: a dial names a Lead on another machine by its Swarm id, which an older daemon would hand to the
+            // pane focused in the window.
+            ...(this.host.swarmSay ? ['swarm.review', 'swarm.remote'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
@@ -1726,12 +1732,16 @@ export class CableSession {
         // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
         const dialFace = plain ? this.swarmFaceOf(str('agentId')!) : undefined
-        const focused = plain && !dialFace ? this.host.appFocus?.() : undefined
+        // A Swarm Lead's id (the backend's 24 hex; a harness's is a UUID) with no card here yet (the devices process just
+        // restarted) or any more: words for a Lead on another machine, which the focused pane must not take (review of #2232).
+        const swarmId = plain && !dialFace && SWARM_AGENT_ID.test(str('agentId')!)
+        const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
         const swarmFace = dialFace ?? (agentId ? this.swarmFaceOf(agentId) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
+          ...((swarmFace && agentId && !this.swarmLeadHere(agentId)) || swarmId ? { swarmRemote: true } : {}),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
           // The DIAL's rate, never this side's guess. Describing 8 kHz audio as 16 kHz does not make the
@@ -2356,6 +2366,9 @@ export class CableSession {
       this.voiceDraftCreation = { uploadId, id: state.id }
       await reply({ t: 'voice.draft', ...state }); return
     }
+    // A Lead on another machine with no card here: no draft, whose Send would type into no harness and say it was sent
+    // (review of #2232).
+    if (review && turn.swarmRemote && !turn.swarmFace) { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
     if (review) {
       const recipient = agentId
       const state = this.voiceDraft.create({ agentId: recipient, name: agentName || 'Harness', text: transcript,
@@ -2394,7 +2407,8 @@ export class CableSession {
       }
       // Words for the reader's Buddy chat (a swarmBuddy dial's Buddy face, an older dial's PM face), which the PM cannot read.
       if (face?.kind === 'buddy') { await reply({ t: 'voice.error', message: 'Could not reach your Buddy. Try again.' }); return }
-      if (face?.kind === 'pm') { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
+      // A Lead on another machine has no terminal here to fall back to: its Swarm id names no harness.
+      if (face?.kind === 'pm' || turn.swarmRemote) { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
     }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
@@ -2744,11 +2758,17 @@ export class CableSession {
   private swarmFaceOf(harnessId: string): SwarmFace | undefined {
     if (!this.swarmChat) return undefined
     for (const card of this.host.swarmCards?.() ?? []) {
-      const lead = card.leads.find((l) => l.local === harnessId)
+      // A Lead on another machine is named by its Swarm id: its card has no harness here (Diego's dial, 2026-10-29).
+      const lead = card.leads.find((l) => l.local === harnessId || (!l.local && l.id === harnessId))
       const face = lead && (this.swarmBuddy ? lead.sideChat ?? lead.chat : lead.chat)
       if (lead) return face && { ...face, project: lead.project }
     }
     return undefined
+  }
+
+  /** Whether `harnessId` is a Swarm Lead's harness on this machine. */
+  private swarmLeadHere(harnessId: string): boolean {
+    return (this.host.swarmCards?.() ?? []).some((card) => card.leads.some((l) => l.local === harnessId))
   }
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */

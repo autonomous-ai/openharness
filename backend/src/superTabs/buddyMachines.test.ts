@@ -116,17 +116,14 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect((f.state.starts ?? []).filter(s => !s.request.buddyOf)).toEqual([])
   })
 
-  it('is never where a new Product Manager is placed, though no Swarm machine has room', () => {
+  // Its person names the machine a Product Manager runs on (main's leadStart.ts, Ken 10-29); a private one is refused.
+  it('takes no Product Manager its person names onto it, even for their own project with room to spare', () => {
     const f = setup()
     addOwn(f, f.app.projectId)
-    // A current host that can run a Product Manager (leadStart.ts LEAD_CAPABILITY).
-    // Spare room too: its slots fit its Buddies alone, which keeps any other start off it as well.
     Object.assign(buddyOnly(f)!, { observation: { ...reading(1000), capabilities: [LEAD_CAPABILITY] }, maxAgents: 4 })
-    f.state.machines!.find(m => m.machineId === 'owner-mac')!.paused = true
-    // peer's own project: their own machine would be the first tried.
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }, peer).result as { projectId: string }
-    const placed = f.run({ type: 'lead.start', projectId: docs.projectId, machineId: null, engine: 'claude', repositoryUrl: 'https://github.com/example/docs' } as Command, peer)
-    expect(placed.result).toMatchObject({ waiting: true })
+    expect(() => f.run({ type: 'lead.start', projectId: docs.projectId, machineId: 'peer-laptop', engine: 'claude',
+      repositoryUrl: 'https://github.com/example/docs' } as Command, peer)).toThrow('This machine is not one of the Swarm\'s machines')
     expect((f.state.starts ?? []).filter(s => s.request.leadFor)).toEqual([])
   })
 

@@ -144,6 +144,9 @@ export interface AgentStart {
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
  * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
+/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts); catchUp.ts reads it back. */
+export const STATUS_LABELS = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done',
+  stopped: 'Stopped' } as const satisfies Partial<Record<WorkStatus, string>>
 export interface Check {
   id: string
   description: string

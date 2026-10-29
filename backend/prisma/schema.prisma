@@ -587,6 +587,8 @@ model ProductUsageActivity {
   @@map("product_usage_activity")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
   @@index([expiresAt], map: "product_usage_expiry")
+  /// The hourly people rollup reads the marks of its last days (services/ProductUsagePeopleRollupService.ts).
+  @@index([dayUtc])
 }
 
 /// Legacy individual counters. New ingestion is disabled; dayUtc TTL removes these after 35 days.
@@ -1579,6 +1581,8 @@ model SwarmMember {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 /// One conversation: its work, checks, assignment, members and message counter.
@@ -1650,6 +1654,8 @@ model SwarmAgent {
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
   @@index([key, deleted])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 /// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.
@@ -1678,6 +1684,8 @@ model SwarmMachine {
   @@index([machineId, deleted])
   /// Machines whose settings changed since a host's cursor (read/host.ts woken).
   @@index([tabId, hostChangedAt])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 model SwarmStart {
@@ -1704,6 +1712,8 @@ model SwarmStart {
   @@index([tabId, agentId])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
+  /// Live starts by finish time: the hourly sweep expires those finished 7 days ago (superTabs/sweeps.ts expireStarts).
+  @@index([deleted, finishedAt])
 }
 
 /// One project's report watermark, and the fence a Lead's worker decisions serialize on.

@@ -4,6 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { suspendedEngines } from '../engineHealth.js'
+import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
@@ -34,6 +35,8 @@ export interface ReadExtras {
   teamMachines: string[]
   /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
   otherWorkspaceMachines?: string[]
+  /** No Harness GitHub App on this server, so Team accounts take no work (store.ts teamAccountsIdle). */
+  teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
   machineVersions?: Record<string, string>
   /** A person's open mentions, counted by the store. */
@@ -113,6 +116,11 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
+  // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
+  const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
+    ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
+      ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
+    : {}
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
@@ -120,7 +128,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     const suspended = suspendedEngines(stored, now)
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
-      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }] as const
+      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
