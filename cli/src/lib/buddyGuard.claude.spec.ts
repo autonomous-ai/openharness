@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PERMISSION_MODES } from './engineLaunch.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
+import { allowBuddyReads, buddyReadsOf } from './buddyGuard.js'
+import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
 import { notifyHookEntry } from '../engines/kit/hookSettings.js'
 import { hookArgv } from '../engines/kit/notifyHooks.js'
@@ -96,13 +98,17 @@ const INSIDE_IMPORT = 'Imported from inside the folder'
 const LOCAL_MEMORY = 'Local memory a teammate committed'
 const RULES_MEMORY = 'A rule a teammate committed'
 const SUBFOLDER_MEMORY = 'Subfolder memory a teammate committed'
+const SENT = 'A log its person sent it in their Buddy chat'
+const OTHER_CHAT = 'TOP-SECRET-a-file-of-another-chat'
+// A 1x1 PNG: the screenshot its person sent.
+const PICTURE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
 describe.skipIf(!hasClaude).each([
   { mode: 'print', skip: false },
   // The session a Buddy runs: in a terminal nobody types into. Every call must be answered with no key pressed.
   { mode: 'interactive', skip: !hasTmux },
 ])('a Buddy\'s folder with the real Claude Code ($mode)', ({ mode, skip }) => {
-  let root: string, folder: string, remote: string, bin: string, ran: string, posts: string[], sinkPath: string
+  let root: string, folder: string, remote: string, bin: string, ran: string, posts: string[], sinkPath: string, sent: string
   let api: ReturnType<typeof fakeModel>, sink: Server, stdout = '', tmux: IsolatedTmux | undefined, pane: number | undefined
   const screens: string[] = []
   const git = (...args: string[]) => execFileSync('git', args, { cwd: folder, encoding: 'utf8',
@@ -125,6 +131,9 @@ describe.skipIf(!hasClaude).each([
     // a link out either, which the check on what reaches the model below holds it to.
     grepTool: { name: 'Grep', input: { pattern: 'TOP-SECRET', output_mode: 'content' } } as Call,
     globTool: { name: 'Glob', input: { pattern: '**/secret*' } } as Call,
+    // What its person sent it in their Buddy chat, downloaded to Harness's folder and listed for it (Tony, 10-30).
+    readSent: { name: 'Read', input: { file_path: '' } } as Call,
+    readPicture: { name: 'Read', input: { file_path: '' } } as Call,
   }
   const refused = {
     gitPush: bash('git push origin HEAD:main'),
@@ -155,6 +164,10 @@ describe.skipIf(!hasClaude).each([
     committedMcp: { name: 'mcp__committed__run', input: {} } as Call,
     write: { name: 'Write', input: { file_path: '', content: 'x' } } as Call,
     edit: { name: 'Edit', input: { file_path: '', old_string: 'first', new_string: 'changed' } } as Call,
+    // Beside what it was sent: another chat's download, and the sent file written or read from the shell.
+    readOtherChat: { name: 'Read', input: { file_path: '' } } as Call,
+    writeSent: { name: 'Write', input: { file_path: '', content: 'x' } } as Call,
+    catSent: bash(''),
   }
 
   beforeAll(async () => {
@@ -224,6 +237,16 @@ describe.skipIf(!hasClaude).each([
     allowed.readDocs.input.file_path = join(folder, 'docs', 'guide.md')
     refused.write.input.file_path = join(folder, 'created.txt')
     refused.edit.input.file_path = join(folder, 'notes.txt')
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const drop = (name: string, bytes: string | Buffer) => { const path = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-${name}`); writeFileSync(path, bytes); return path }
+    sent = drop('build.log', `${SENT}\n`)
+    const picture = drop('screen.png', PICTURE), otherChat = drop('notes.txt', `${OTHER_CHAT}\n`)
+    allowBuddyReads(buddyReadsOf('session'), { files: [sent, picture], links: [] })
+    allowed.readSent.input.file_path = sent
+    allowed.readPicture.input.file_path = picture
+    refused.readOtherChat.input.file_path = otherChat
+    refused.writeSent.input.file_path = sent
+    refused.catSent.input.command = `cat ${sent}`
 
     posts = []
     sink = createServer((request, response) => { posts.push(`${request.method} ${request.url}`); response.end('ok') })
@@ -301,6 +324,14 @@ describe.skipIf(!hasClaude).each([
     expect(api.results.get(api.id(allowed.messages))).toEqual({ is_error: false, content: expect.stringContaining('harness-ran') })
     // Its post and its read once each: none of the waits ran it.
     expect(readFileSync(join(ran, 'harness'), 'utf8')).toBe('super-tab --tab t post chat hello; nothing > here op-1\nsuper-tab --tab t messages chat\n')
+  })
+
+  it.skipIf(skip)('opens the log and the picture its person sent it, and nothing else of Harness\'s downloads', () => {
+    // Claude Code marks no error on a Read that worked (2.1.312): is_error is left out.
+    expect(api.results.get(api.id(allowed.readSent))).toEqual({ is_error: undefined, content: expect.stringContaining(SENT) })
+    expect(api.results.get(api.id(allowed.readPicture))).toEqual({ is_error: undefined, content: expect.any(String) })
+    expect(api.bodies.filter((body) => body.includes(OTHER_CHAT))).toEqual([])
+    expect(readFileSync(sent, 'utf8')).toBe(`${SENT}\n`)
   })
 
   it.skipIf(skip).each(Object.keys(refused))('refuses %s, and it never ran', (name) => {
