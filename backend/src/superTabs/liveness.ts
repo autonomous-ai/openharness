@@ -1,9 +1,11 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
-  type SuperTabState } from './model.js'
+  type SuperTabState, type TaskLiveness } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
+import { ledProject, projectsOf } from './projects.js'
+import { waitedOn } from './leaderboard/record.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -175,9 +177,103 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
 }
 
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
- *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
+ *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. Then each
+ *  task's state is recorded, and the Lead is woken for those that just stalled. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now)]
+  return [...loseTasks(state, now), ...failStalledStarts(state, now), ...recordTaskStates(state, now)]
+}
+
+/** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act
+ *  (Ken, 2026-10-29). Its screen may still be changing: a session whose screen stays still this long loses its task. */
+export const TASK_QUIET_MS = 30 * 60_000
+/** A start for a task still not launched this long after it was asked for, and after the Lead last acted on the task, leaves
+ *  the task orphaned: its Lead's machine never found room for it. */
+export const START_PICKUP_MS = 10 * 60_000
+
+const FINISHED_WORK = ['done', 'cancelled', 'stopped']
+
+/** The state of a project task now, from what is loaded (never a further read), or null for anything that is not one: a
+ *  Lead or Leads conversation, a private chat (it never holds work), an archived group, finished work, or none yet. */
+export function taskLiveness(state: SuperTabState, group: Conversation, now: number): TaskLiveness | null {
+  if (group.kind || group.audience || group.archived || projectsOf(state).some(p => p.leadConversationId === group.id)) return null
+  if (!projectsOf(state).some(p => p.id === (group.projectId ?? 'lead'))) return null
+  const assignment = group.assignment
+  if (assignment && activeWork(group)) {
+    const worker = state.agents.find(a => a.id === assignment.agentId)
+    if (worker && ledProject(state, worker.id)) return null
+    if (!worker || assignment.status === 'reconciling') return { state: 'orphaned', why: 'removed', since: now }
+    const progress = assignment.progressAt ?? (group.lastActivityAt ? Date.parse(group.lastActivityAt) : now)
+    if (assignment.status === 'needs_human') {
+      return { state: 'waiting', why: 'person', personId: waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
+    }
+    if (assignment.status === 'review' || assignment.status === 'blocked') return { state: 'waiting', why: assignment.status, since: progress }
+    // A review whose build is back with its Engineer waits for the new revision.
+    const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+    if (build && activeWork(build) && build.assignment!.status !== 'review') return { state: 'waiting', why: 'revision', since: progress }
+    return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : { state: 'working', why: 'progress', since: progress }
+  }
+  // Only unfinished starts are loaded, with those that ended in this same write.
+  const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
+  if (start && !start.harnessId && !start.error) {
+    if (start.dispatched) return { state: 'waiting', why: 'starting', since: start.dispatchedAt ?? now }
+    // A start from before requestedAt has no clock to run out.
+    if (start.requestedAt === undefined) return { state: 'waiting', why: 'queued', since: now }
+    const stale = now - Math.max(start.requestedAt, group.leadAction?.at ?? 0) >= START_PICKUP_MS
+    return { state: stale ? 'orphaned' : 'waiting', why: stale ? 'unstarted' : 'queued', since: start.requestedAt }
+  }
+  if (assignment && FINISHED_WORK.includes(assignment.status)) return null
+  if (start?.error && !start.harnessId) return { state: 'orphaned', why: 'start-failed', since: now }
+  if (assignment?.status === 'lost') return { state: 'orphaned', why: 'lost', since: assignment.lost?.at ?? now }
+  return null
+}
+
+/** Records a task's state at once, where a command ended its start: a failed start is not loaded by the next sweep. */
+export function recordTaskState(state: SuperTabState, group: Conversation, now: number): void {
+  const next = taskLiveness(state, group, now)
+  if (next) group.liveness = next
+}
+
+const sameState = (a: TaskLiveness | undefined, b: TaskLiveness | undefined) => a?.state === b?.state && a?.why === b?.why
+  && a?.personId === b?.personId && (a?.state !== 'waiting' || a.since === b?.since)
+
+function stalledLine(state: SuperTabState, group: Conversation, liveness: TaskLiveness, now: number): string {
+  const task = `${group.number ? `#${group.number} ` : ''}"${group.title}"`
+  const worker = state.agents.find(a => a.id === group.assignment?.agentId)
+  const minutes = plural(Math.max(0, Math.floor((now - liveness.since) / 60_000)), 'minute')
+  const why = liveness.why === 'silent' ? `quiet, ${worker?.displayName ?? worker?.name ?? 'its agent'} has reported nothing for ${minutes}`
+    : liveness.why === 'removed' ? 'orphaned, its agent was removed from the Swarm' : `orphaned, its agent has not started for ${minutes}`
+  return `- ${task}: ${why}.`
+}
+
+/** Records each task's state where it changed, so readers see it, and wakes each project's Lead once, in its chat, for the
+ *  tasks that just turned quiet or orphaned. A task lost or whose start failed has had its own notice already. The record
+ *  is the deduplication: a sweep on another server writes the same group, so one of the two retries and finds it recorded.
+ *  An orphaned task stays so until it has work again: its failed start is no longer loaded once it ended. */
+function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
+  const stalled = new Map<string, Conversation[]>()
+  for (const group of state.conversations) {
+    const before = group.liveness
+    const finished = !!group.assignment && FINISHED_WORK.includes(group.assignment.status)
+    const next = taskLiveness(state, group, now) ?? (before?.state === 'orphaned' && !finished && !group.archived ? before : undefined)
+    if (sameState(before, next)) continue
+    if (next) group.liveness = next
+    else delete group.liveness
+    if (next && (next.state === 'quiet' || next.state === 'orphaned') && before?.state !== next.state && next.why !== 'lost' && next.why !== 'start-failed') {
+      const projectId = group.projectId ?? 'lead'
+      stalled.set(projectId, [...stalled.get(projectId) ?? [], group])
+    }
+  }
+  return [...stalled].flatMap(([projectId, groups]) => {
+    const chat = state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === projectId)!.leadConversationId)
+    const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
+    if (!chat || !lead) return []
+    const one = groups.length === 1
+    const text = `${one ? 'A task needs' : `${groups.length} tasks need`} you:\n${groups.map(g => stalledLine(state, g, g.liveness!, now)).join('\n')}\n`
+      + `Act on ${one ? 'it' : 'each'} now: nudge its agent, reassign it, or post in its chat why it waits.`
+    return [reachable(state, { id: stableId('work-stalled', projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
+      recipients: chat.agentIds.includes(lead.id) ? [lead.id] : [], text,
+      source: { kind: 'work-stalled', tasks: groups.map(g => ({ conversationId: g.id, state: g.liveness!.state, why: g.liveness!.why })) } })]
+  })
 }
 
 /** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a

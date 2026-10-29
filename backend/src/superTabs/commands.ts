@@ -13,7 +13,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, DELEGATED_NOTICE, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
@@ -557,6 +557,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
       ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
     result.messageId = operationId
+  }
+  /** The project Lead's own route, start, assignment or post on a task, with its time (liveness.ts reads it). It rides on the
+   *  write each of them makes to the group anyway. */
+  const leadActed = (conversationId: string, kind: NonNullable<Conversation['leadAction']>['kind']) => {
+    const group = state.conversations.find(c => c.id === conversationId)
+    if (!group || group.kind || group.audience || actor.kind !== 'agent') return
+    const project = groupProject(state, group)
+    if (project.leadConversationId !== group.id && conversation(state, project.leadConversationId).leadId === actor.agentId) {
+      group.leadAction = { kind, at: context.now }
+    }
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   /** A private conversation is chat only (design section 4.8). */
@@ -1321,7 +1331,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
-        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null })
+        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      leadActed(command.request.conversationId, 'start')
       result.startId = operationId
       let personChose = false
       if (command.routeDecisionId) {
@@ -1467,6 +1478,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
         message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
+        recordTaskState(state, group, context.now)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
@@ -1744,6 +1756,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
       recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      leadActed(group.id, 'post')
       break
     }
     case 'delivery.resolve': {
@@ -1799,6 +1812,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         pick: { id: chosen.id, title: chosen.title },
         alternatives: decision.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })),
       })
+      leadActed(command.conversationId, 'route')
       break
     }
     case 'route.modelResult': {
@@ -1886,6 +1900,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       renewLease(group.assignment, context.now)
+      leadActed(group.id, 'assign')
       recordRun(state, group, group.assignment, worker, context.now)
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId

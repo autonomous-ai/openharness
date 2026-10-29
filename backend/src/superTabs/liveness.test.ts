@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Assignment, SuperTabState } from './model.js'
+import type { AgentStart, Assignment, SuperTabState } from './model.js'
 import { LEASE_MS, QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
@@ -119,5 +119,154 @@ describe('a start its machine has launched', () => {
     expect(preparing(launched([{ receivedAt: now, preparingStartIds: ['s1'] }], { dispatched: false, dispatchedAt: undefined }))).toBe(false)
     expect(preparing(launched([{ machineId: 'x', receivedAt: now, preparingStartIds: ['s1'] }]))).toBe(false)
     expect(preparing(launched([{ receivedAt: now - MACHINE_FRESH_MS - 1, preparingStartIds: ['s1'] }]))).toBe(false)
+  })
+})
+
+describe('the state of each task, and the Lead woken when one stalls', () => {
+  const NOW = 100 * MINUTE
+  /** A project "lead" led by L, its owner p, and task g1 ("Ship it", #7) held by worker w, whose machine reports it running
+   *  with a fresh screen, so only the task's own progress decides. */
+  const project = (task: Partial<Assignment> | null, patch: Record<string, unknown> = {}) => ({ id: 't', name: 'Swarm', ownerId: 'p',
+    agents: [{ id: 'L', machineId: 'lm', harnessId: 'lh', machineOwnerId: 'o', contributorId: 'p', membershipGeneration: 'g', name: 'Lead' },
+      { id: 'w', machineId: 'm', harnessId: 'h', machineOwnerId: 'o', contributorId: 'p', membershipGeneration: 'g', name: 'Worker', displayName: 'Luna',
+        configuration: assignment().configuration }],
+    people: [{ id: 'p', email: 'p@example.com', role: 'owner', generation: 'g' }],
+    machines: [{ machineId: 'm', name: 'Mac', observation: { runningHarnessIds: ['h'], stoppedHarnessIds: [], receivedAt: NOW, harnessProgress: { h: NOW } } }],
+    conversations: [{ id: 'lead', title: 'Lead', leadId: 'L', agentIds: ['L'], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 },
+      { id: 'g1', number: 7, title: 'Ship it', leadId: 'L', agentIds: ['L', 'w'], archived: false, brief: 'Do it', checks: [], lastMessageSequence: 0,
+        assignment: task && assignment({ leaseUntil: NOW + LEASE_MS, progressAt: NOW, ...task }) }],
+    starts: [], ...patch,
+  } as unknown as SuperTabState)
+  const task = (state: SuperTabState) => state.conversations.find(c => c.id === 'g1')!
+  const wakes = (rows: ReturnType<typeof sweepLiveness>) => rows.filter(r => r.source?.kind === 'work-stalled')
+
+  it('is working while its agent reported progress in the last 30 minutes, and wakes nobody', () => {
+    const state = project({ progressAt: NOW - 29 * MINUTE })
+    expect(wakes(sweepLiveness(state, NOW))).toEqual([])
+    expect(task(state).liveness).toEqual({ state: 'working', why: 'progress', since: NOW - 29 * MINUTE })
+  })
+
+  it('turns quiet after 30 minutes without its agent\'s own status, check or post, and wakes the Lead once, in its chat', () => {
+    const state = project({ progressAt: NOW - 30 * MINUTE })
+    const rows = wakes(sweepLiveness(state, NOW))
+    expect(task(state).liveness).toEqual({ state: 'quiet', why: 'silent', since: NOW - 30 * MINUTE })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ conversationId: 'lead', recipients: ['L'], author: { kind: 'agent', id: 'L' },
+      source: { kind: 'work-stalled', tasks: [{ conversationId: 'g1', state: 'quiet', why: 'silent' }] } })
+    expect(rows[0]!.text).toBe('A task needs you:\n- #7 "Ship it": quiet, Luna has reported nothing for 30 minutes.\n'
+      + 'Act on it now: nudge its agent, reassign it, or post in its chat why it waits.')
+    // Every later sweep, on any server, sees it already quiet.
+    expect(wakes(sweepLiveness(state, NOW + 30_000))).toEqual([])
+    expect(wakes(sweepLiveness(state, NOW + 60 * MINUTE))).toEqual([])
+  })
+
+  it('wakes the Lead again only after the task moved and stalled once more', () => {
+    const state = project({ progressAt: NOW - 30 * MINUTE })
+    sweepLiveness(state, NOW)
+    task(state).assignment!.progressAt = NOW + MINUTE
+    task(state).assignment!.leaseUntil = NOW + MINUTE + LEASE_MS
+    expect(wakes(sweepLiveness(state, NOW + 2 * MINUTE))).toEqual([])
+    expect(task(state).liveness!.state).toBe('working')
+    // Its machine still reports the session running, its screen changing.
+    state.machines![0]!.observation = { ...state.machines![0]!.observation!, receivedAt: NOW + 31 * MINUTE, harnessProgress: { h: NOW + 31 * MINUTE } }
+    expect(wakes(sweepLiveness(state, NOW + 31 * MINUTE))).toHaveLength(1)
+  })
+
+  it('waits on purpose, never quiet, while it needs a person (named), is in review or is blocked', () => {
+    const asked = project({ status: 'needs_human', result: 'Mockup OK?', progressAt: NOW - 3 * 60 * MINUTE })
+    task(asked).ledger = { waiting: { assignmentId: 'a1', since: NOW - 12 * MINUTE, messageId: 'm1' } }
+    expect(wakes(sweepLiveness(asked, NOW))).toEqual([])
+    expect(task(asked).liveness).toEqual({ state: 'waiting', why: 'person', personId: 'p', since: NOW - 12 * MINUTE })
+    const review = project({ status: 'review', progressAt: NOW - 3 * 60 * MINUTE })
+    expect(wakes(sweepLiveness(review, NOW))).toEqual([])
+    expect(task(review).liveness).toEqual({ state: 'waiting', why: 'review', since: NOW - 3 * 60 * MINUTE })
+    const blocked = project({ status: 'blocked', progressAt: NOW - 3 * 60 * MINUTE })
+    expect(wakes(sweepLiveness(blocked, NOW))).toEqual([])
+    expect(task(blocked).liveness).toEqual({ state: 'waiting', why: 'blocked', since: NOW - 3 * 60 * MINUTE })
+  })
+
+  it('waits, never quiet, while it reviews a build that is back in progress, and turns quiet once that build is ready again', () => {
+    const state = project({ progressAt: NOW - 3 * 60 * MINUTE })
+    // g1 is now the review of build g0, whose Engineer is fixing the findings.
+    task(state).reviewOf = 'g0'
+    state.conversations.push({ ...structuredClone(task(state)), id: 'g0', number: 6, title: 'Build', reviewOf: undefined,
+      assignment: assignment({ id: 'a0', agentId: 'L', status: 'working', progressAt: NOW }) })
+    expect(wakes(sweepLiveness(state, NOW))).toEqual([])
+    expect(task(state).liveness).toEqual({ state: 'waiting', why: 'revision', since: NOW - 3 * 60 * MINUTE })
+    state.conversations.find(c => c.id === 'g0')!.assignment!.status = 'review'
+    expect(wakes(sweepLiveness(state, NOW))).toHaveLength(1)
+    expect(task(state).liveness).toMatchObject({ state: 'quiet', why: 'silent' })
+  })
+
+  it('is orphaned at once when its agent was removed or is gone, and wakes the Lead once', () => {
+    const removed = project({ status: 'reconciling' })
+    expect(wakes(sweepLiveness(removed, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent was removed from the Swarm.')
+    expect(task(removed).liveness).toEqual({ state: 'orphaned', why: 'removed', since: NOW })
+    expect(wakes(sweepLiveness(removed, NOW + MINUTE))).toEqual([])
+    const gone = project({})
+    gone.agents = gone.agents.filter(a => a.id !== 'w')
+    expect(wakes(sweepLiveness(gone, NOW))).toHaveLength(1)
+    expect(task(gone).liveness).toMatchObject({ state: 'orphaned', why: 'removed' })
+  })
+
+  it('is orphaned when its agent stopped, told by the lost-work notice alone', () => {
+    const state = project({})
+    state.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    const rows = sweepLiveness(state, NOW)
+    expect(rows.filter(r => r.source?.kind === 'work-lost' && r.recipients.includes('L'))).toHaveLength(1)
+    expect(wakes(rows)).toEqual([])
+    expect(task(state).liveness).toEqual({ state: 'orphaned', why: 'lost', since: NOW })
+  })
+
+  /** Task g1 with no assignment yet and one start for it, asked for at `requestedAt`. */
+  const starting = (start: Record<string, unknown>) => project(null, { starts: [{ id: 's1', request: { conversationId: 'g1', machineId: 'm', name: 'Builder' },
+    dispatched: false, harnessId: null, error: null, requestedAt: NOW - 9 * MINUTE, ...start }] })
+
+  it('waits queued while its start is not launched, and is orphaned 10 minutes after it was asked for, waking the Lead once', () => {
+    const queued = starting({})
+    expect(wakes(sweepLiveness(queued, NOW))).toEqual([])
+    expect(task(queued).liveness).toEqual({ state: 'waiting', why: 'queued', since: NOW - 9 * MINUTE })
+    const stale = starting({ requestedAt: NOW - 10 * MINUTE })
+    expect(wakes(sweepLiveness(stale, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent has not started for 10 minutes.')
+    expect(task(stale).liveness).toEqual({ state: 'orphaned', why: 'unstarted', since: NOW - 10 * MINUTE })
+    expect(wakes(sweepLiveness(stale, NOW + MINUTE))).toEqual([])
+  })
+
+  it('stays queued while the Lead keeps acting on it: 10 minutes run from its last action', () => {
+    const retried = starting({ requestedAt: NOW - 25 * MINUTE })
+    task(retried).leadAction = { kind: 'route', at: NOW - 2 * MINUTE }
+    expect(wakes(sweepLiveness(retried, NOW))).toEqual([])
+    expect(task(retried).liveness).toEqual({ state: 'waiting', why: 'queued', since: NOW - 25 * MINUTE })
+  })
+
+  it('waits while its launched start is being prepared, and is orphaned when the start fails, told by the failure notice alone', () => {
+    const launched = starting({ dispatched: true, dispatchedAt: NOW - MINUTE })
+    sweepLiveness(launched, NOW)
+    expect(task(launched).liveness).toEqual({ state: 'waiting', why: 'starting', since: NOW - MINUTE })
+    const failed = starting({ dispatched: true, dispatchedAt: NOW - MINUTE, error: 'Mac could not prepare it' })
+    expect(wakes(sweepLiveness(failed, NOW))).toEqual([])
+    expect(task(failed).liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: NOW })
+  })
+
+  it('lists every task that stalled in one wake-up, and none for finished work or a Buddy\'s start', () => {
+    const state = project({ progressAt: NOW - 40 * MINUTE })
+    state.conversations.push({ ...structuredClone(task(state)), id: 'g2', number: 8, title: 'Second', assignment: { ...task(state).assignment!, id: 'a2', status: 'reconciling' } },
+      { ...structuredClone(task(state)), id: 'g3', number: 9, title: 'Finished', assignment: { ...task(state).assignment!, id: 'a3', status: 'done' } })
+    state.starts = [{ id: 'b1', request: { conversationId: 'g3', machineId: 'm', name: 'Buddy', buddyOf: { personId: 'p', generation: 'g' } },
+      dispatched: false, harnessId: null, error: null, requestedAt: 0 } as unknown as AgentStart]
+    const rows = wakes(sweepLiveness(state, NOW))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.source!.tasks).toEqual([{ conversationId: 'g1', state: 'quiet', why: 'silent' }, { conversationId: 'g2', state: 'orphaned', why: 'removed' }])
+    expect(rows[0]!.text.startsWith('2 tasks need you:\n')).toBe(true)
+    expect(state.conversations.find(c => c.id === 'g3')!.liveness).toBeUndefined()
+    expect(state.conversations.find(c => c.id === 'lead')!.liveness).toBeUndefined()
+  })
+
+  it('clears its state once its work is finished', () => {
+    const state = project({ progressAt: NOW - 40 * MINUTE })
+    sweepLiveness(state, NOW)
+    task(state).assignment!.status = 'done'
+    sweepLiveness(state, NOW + MINUTE)
+    expect(task(state).liveness).toBeUndefined()
   })
 })

@@ -117,7 +117,8 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
-  /** When a person asked for it: only a Buddy's start keeps it, which fails if its machine never takes it (liveness.ts). */
+  /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
+   *  task's start never launched leaves the task orphaned (liveness.ts). */
   requestedAt?: number
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
@@ -222,6 +223,20 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
+  liveness?: TaskLiveness
+  /** The Lead's last action on its task: an assignment, route, start or post here (commands.ts). */
+  leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+}
+/** `working`: its agent reported progress in the last 30 minutes. `waiting`: on a person (`personId`), a review, its stated
+ *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes. `orphaned`: nobody holds it — its
+ *  agent was removed or lost it, or its start failed or never launched. `since`: when that began, as first recorded; a
+ *  working task's last progress is its assignment's `progressAt`. */
+export interface TaskLiveness {
+  state: 'working' | 'waiting' | 'quiet' | 'orphaned'
+  why: 'progress' | 'person' | 'review' | 'blocked' | 'revision' | 'queued' | 'starting' | 'silent' | 'removed' | 'lost' | 'start-failed' | 'unstarted'
+  since: number
+  personId?: string
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
