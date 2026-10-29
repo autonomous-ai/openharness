@@ -3,7 +3,7 @@ import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, swarmGridName, withoutCr
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
-import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { agentTarget, broken } from './rules.js'
@@ -178,6 +178,22 @@ describe('Super Tab collaboration policy', () => {
     f.add('worker')
     f.state.machines![0]!.observation!.stoppedHarnessIds = ['worker']
     expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
+  })
+
+  it('counts a finished start\'s harness only while its agent or its host says it runs', () => {
+    const f = fixture()
+    const pool = { machineId: 'host', name: 'Host', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      generation: 'pool', cwd: '/work', engines: ['codex'], maxAgents: 2, paused: false }
+    f.state.machines = [pool]
+    // A read keeps finished starts until they expire: one whose harness is long gone takes no slot.
+    f.state.starts = [{ poolGeneration: 'pool', id: 'old', creationId: 'super-old', actorKey: 'person:owner', contributorId: 'owner',
+      membershipGeneration: f.state.people[0]!.generation, machineOwnerId: 'owner', hostGrant: null, harnessId: 'gone', dispatched: true,
+      error: null, poolSettled: true, request: { conversationId: 'lead', machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/work/lead',
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }]
+    expect(machineSlots(f.state, pool)).toBe(0)
+    // Started but not yet settled, it still holds its slot.
+    f.state.starts[0]!.poolSettled = false
+    expect(machineSlots(f.state, pool)).toBe(1)
   })
 
   it('a person withdrawing a stuck stop keeps its native slot until the host reports stopping', () => {
@@ -712,6 +728,50 @@ describe('the Lead\'s last action on a task', () => {
     const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
     f.run({ type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' }, f.leadActor, { contribution: f.contribution, now: 7000 })
     expect(task().liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: 7000 })
+  })
+})
+
+// The Lead's ruling, 2026-10-29: the project chat and the Leads chat carry only what people read or decide on, and agent
+// bookkeeping (routing, an agent joined or ready) is no one's there; a task's chat keeps it as its record.
+describe('agent bookkeeping in the chats people read', () => {
+  const shown = (row: { source?: Record<string, unknown>; recipients: string[] }) => !agentOnly(row.source, row.recipients)
+  const open = (patch: Record<string, unknown> = {}) => ({ id: 'd1', conversationId: 'lead', record: record(), final: null, override: null, assignmentId: null, outcome: null, ...patch }) as unknown as RouteDecision
+
+  it('keeps routing lines out of the project chat, and in a task\'s chat as its record', () => {
+    const f = routed(), group = f.group()
+    const routing = (conversationId: string) => f.run({ type: 'route.record', conversationId, decision: record() } as Command, f.leadActor, {}).messages
+    expect(routing('lead').map(shown)).toEqual([false])
+    expect(routing(group).map(shown)).toEqual([true])
+    // The Lead choosing otherwise than its route, on a start or an assignment.
+    const request = { conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', name: 'Builder', cwd: '/repo', worktree: false,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const started = f.run({ type: 'agent.start', request, routeDecisionId: 'd1', overrideReason: 'Sonnet is enough here.' }, f.leadActor, { routeDecision: open(), contribution: f.contribution })
+    expect(started.messages.filter(m => m.text.startsWith('Lead started')).map(shown)).toEqual([false])
+    f.define(group)
+    const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, routeDecisionId: 'd1', overrideReason: 'It knows the code.' }, f.leadActor,
+      { routeDecision: open({ conversationId: group }) })
+    expect(assigned.messages.filter(m => m.text.startsWith('Lead assigned')).map(shown)).toEqual([true])
+    // A person's choice is theirs to read wherever it is written.
+    const decision = { id: 'd2', conversationId: 'lead', record: record(), final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision
+    expect(f.run({ type: 'route.override', decisionId: 'd2', candidateId: 'c1', reason: 'Quota.' }, undefined, { routeDecision: decision }).messages.map(shown)).toEqual([true])
+  })
+
+  it('keeps an agent\'s joined and ready lines out of the project chat, and in a task\'s chat', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const lines = (conversationId: string, harnessId: string) => {
+      const request = { conversationId, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(conversationId) }).result.startId as string
+      f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
+      f.state.starts!.find(s => s.id === startId)!.poolGeneration = 'pool-1'
+      const joined = f.run({ type: 'agent.started', startId, harnessId, configuration: { ...config, engine: 'claude' } }, actor, { contribution }).messages
+      const ready = f.run({ type: 'agent.startSettled', startId, warning: null }, actor, { contribution }).messages
+      return [...joined, ...ready].map(m => [m.text, shown(m)])
+    }
+    expect(lines('lead', 'in-lead')).toEqual([['Builder joined. Preparing its model.', false], ['Builder is ready for an assignment.', false]])
+    expect(lines(group, 'in-task')).toEqual([['Builder joined. Preparing its model.', true], ['Builder is ready for an assignment.', true]])
   })
 })
 
@@ -1527,6 +1587,9 @@ describe('Reviewer role', () => {
       expect(toReviewer.text).toBe(`${review.brief}\n\nAcceptance checks:\n- Verdict with the reviewed revision`)
       const toLead = effects.messages.filter(m => m.conversationId === review.id && m.recipients.includes(lead))
       expect(toLead.map(m => m.text)).toEqual(['Review opened by itself for #1: Second reviewer reviews it. Cancel it here if it is not needed.'])
+      // The Lead's wake is its alone (review of #2225); the review's brief and its Reviewer's assignment stay the people's record.
+      expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.recipients, agentOnly(m.source, m.recipients)]))
+        .toEqual([[[], false], [[fresh], false], [[lead], true]])
       // Every row of it is the Swarm's own, written as the project's Lead as its other notices are, never as the Engineer.
       expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.author.kind, m.author.id, m.source?.kind]))
         .toEqual([['agent', lead, 'auto-review'], ['agent', lead, 'auto-review'], ['agent', lead, 'auto-review']])
@@ -1595,8 +1658,8 @@ describe('Reviewer role', () => {
       for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
       const effects = markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment).toBeNull()
-      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
-        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => [m.text, agentOnly(m.source, m.recipients)]))
+        .toEqual([['Review opened by itself for #1, but no Reviewer is free. Route it and start one.', true]])
     })
 
     it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {
@@ -2864,6 +2927,8 @@ describe('other projects\' work for Leads', () => {
     const alert = created.messages.find(m => m.conversationId === alerts())!
     expect(alert).toMatchObject({ author: { id: lead }, recipients: [docs.lead],
       source: { kind: 'overlap', conversationIds: [group, roster.group] } })
+    // The two Leads' to settle (Ken, 2026-10-29): people in the Leads chat do not read it.
+    expect(agentOnly(alert.source, alert.recipients)).toBe(true)
     expect(alert.text).toBe(`"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change `
       + 'desktop/lib/super_tabs/roster.dart. Agree an order or a split here, then each tell your own project.')
     // The same pair is not alerted again.
@@ -3468,6 +3533,11 @@ describe('stepping up from a cheap model', () => {
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.find(m => m.recipients.includes(f.lead))!.text)
       .toBe(`#${g().number} stepped up to attempt 2: its first review said Ready no. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
+    // Ken, 2026-10-29: each its recipient's alone; people read the step on the task's status line and its record.
+    for (const to of [kimi, f.lead]) {
+      const row = effects.messages.find(m => m.recipients.includes(to) && /stepped/.test(m.text))!
+      expect(agentOnly(row.source, row.recipients)).toBe(true)
+    }
     // The next attempt may not go back to the grid; a stronger model takes the carry-over in its brief and the step in its record.
     f.run({ type: 'agent.release', agentId: kimi, decision: 'stop' }, f.leadActor)
     const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: group, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, f.leadActor)
