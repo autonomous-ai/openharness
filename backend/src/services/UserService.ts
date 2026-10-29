@@ -44,54 +44,11 @@ interface SsoUserInput {
   signUpAttribution?: SignInAttribution
 }
 
-/** How long a user row read by email serves sign-ins on this server (DB optimization roadmap, Phase 2 item 7: every
- *  signed-in request and web-socket upgrade read the same user twice). Every write this service makes forgets the
- *  row at once; a write on another server is seen here within this window. */
-export const USER_ROW_TTL_MS = 5_000
-/** Rows kept at most; past it the oldest go first. Each is one account signed in within the last few seconds. */
-const USER_ROW_MAX = 10_000
-
-interface KeptUserRow {
-  at: number
-  row: Promise<User | null>
-  /** Set once the read answers, so a write by id can forget it. */
-  id?: string
-}
-
-// Keyed by normalized email. A read in flight is kept too, so requests arriving together share one read.
-const userRowsByEmail = new Map<string, KeptUserRow>()
-
-function forgetUserRow(by: { email?: string; id?: string }): void {
-  if (by.email) userRowsByEmail.delete(normalizeUserEmail(by.email))
-  // A read still in flight has no id yet and may be that account's: forget it too.
-  if (by.id) for (const [email, kept] of userRowsByEmail) if (kept.id === by.id || kept.id === undefined) userRowsByEmail.delete(email)
-}
-
-function readUserByEmail(email: string): Promise<User | null> {
-  const now = Date.now()
-  const kept = userRowsByEmail.get(email)
-  if (kept && now - kept.at < USER_ROW_TTL_MS) return kept.row
-  if (kept) userRowsByEmail.delete(email)
-  const entry: KeptUserRow = { at: now, row: prisma.user.findUnique({ where: { email } }) }
-  // An account that is not there yet, or a failed read, is not kept: the next sign-in asks again.
-  entry.row.then(
-    (row) => {
-      if (!row) { if (userRowsByEmail.get(email) === entry) userRowsByEmail.delete(email); return }
-      entry.id = row.id
-    },
-    () => { if (userRowsByEmail.get(email) === entry) userRowsByEmail.delete(email) },
-  )
-  userRowsByEmail.set(email, entry)
-  while (userRowsByEmail.size > USER_ROW_MAX) userRowsByEmail.delete(userRowsByEmail.keys().next().value!)
-  return entry.row
-}
-
 async function mergeProdProvisionalUser(provisional: User, user: User): Promise<void> {
   if (provisional.id === user.id) return
   if (!isProvisionalUserEmail(provisional.email)) {
     throw new Error('Production SSO subject is already assigned to another user')
   }
-  forgetUserRow({ id: provisional.id, email: provisional.email })
   await prisma.$transaction([
     prisma.deviceBinding.updateMany({
       where: { userId: provisional.id },
@@ -109,23 +66,21 @@ export const userService = {
     return prisma.user.findUnique({ where: { externalId } })
   },
 
-  /** SSO identity lookup. All callers must normalize through this boundary. Served from a row read on this server
-   *  within USER_ROW_TTL_MS, so a sign-in reads its user once: for identity checks only, never for fresh data. */
+  /** SSO identity lookup. All callers must normalize through this boundary. */
   findByEmail(email: string): Promise<User | null> {
-    return readUserByEmail(normalizeUserEmail(email))
-  },
-
-  /** Test seam: forget every kept user row. */
-  forgetCachedUsers(): void {
-    userRowsByEmail.clear()
+    return prisma.user.findUnique({ where: { email: normalizeUserEmail(email) } })
   },
 
   /**
    * Mirror an authenticated SSO profile. Email is the account identity; the selected environment
    * decides which SSO subject field is refreshed. Production additionally claims a device-created
    * provisional row whose externalId already equals the authenticated subject.
+   *
+   * `looked`: what the caller's own lookup just found for this profile — the row by email, else (production) the
+   * provisional row by subject, else null — so a sign-in reads its user once (DB optimization roadmap, Phase 2
+   * item 7). Read in this same request, never kept: another server may change the account at any moment.
    */
-  async upsertFromSso(input: SsoUserInput): Promise<User> {
+  async upsertFromSso(input: SsoUserInput, looked?: { existing: User | null }): Promise<User> {
     const externalId = input.externalId.trim()
     const em = normalizeUserEmail(input.email)
     if (!externalId || !em) throw new Error('SSO profile is missing its subject or email')
@@ -133,9 +88,9 @@ export const userService = {
       ? { signUpAttribution: { ...input.signUpAttribution, recordedAt: new Date() } }
       : {}
     const wantAdmin = input.roles?.includes('admin') || ADMIN_EMAILS.has(em)
-    let existing = await readUserByEmail(em)
+    let existing = looked ? looked.existing : await prisma.user.findUnique({ where: { email: em } })
 
-    if (!existing && input.autonomousEnv === 'prod') {
+    if (!looked && !existing && input.autonomousEnv === 'prod') {
       const byExternal = await prisma.user.findUnique({ where: { externalId } })
       if (byExternal && isProvisionalUserEmail(byExternal.email)) existing = byExternal
     }
@@ -168,13 +123,10 @@ export const userService = {
       // SSO profile auth runs on every control-plane request. Avoid turning that validation into a
       // write-per-request DB hot path when the mirrored user record is already current.
       if (Object.keys(data).length === 0) return existing
-      const updated = await prisma.user.update({
+      return prisma.user.update({
         where: { id: existing.id },
         data,
       })
-      forgetUserRow({ id: existing.id, email: existing.email })
-      forgetUserRow({ email: em })
-      return updated
     }
 
     const data = {
@@ -191,13 +143,11 @@ export const userService = {
     } catch (err) {
       // REST and web-ws validate the same fresh token concurrently. Unique email/prod-subject indexes
       // elect one creator; the loser re-reads and applies the same idempotent mirror update.
-      forgetUserRow({ email: em })
       const racedByEmail = await prisma.user.findUnique({ where: { email: em } })
       if (racedByEmail) return this.upsertFromSso(input)
       if (input.autonomousEnv === 'prod') {
         const racedByExternal = await prisma.user.findUnique({ where: { externalId } })
         if (racedByExternal && isProvisionalUserEmail(racedByExternal.email)) {
-          forgetUserRow({ email: racedByExternal.email })
           return this.upsertFromSso(input)
         }
         if (racedByExternal) {
@@ -274,7 +224,6 @@ export const userService = {
       },
       data: { googleSub, googleSubCheckedAt: readAt },
     })
-    if (count === 1) forgetUserRow({ id: userId })
     return count === 1
   },
 
@@ -307,9 +256,8 @@ export const userService = {
   },
 
   async update(id: string, input: { name?: string; password?: string; role?: string; autonomousEnv?: AutonomousEnvironment }): Promise<User> {
-    const current = await prisma.user.findUnique({ where: { id } })
-    if (!current) throw new NotFoundError('User')
-    const updated = await prisma.user.update({
+    if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
+    return prisma.user.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -318,14 +266,10 @@ export const userService = {
         ...(input.password ? { passwordHash: hashPassword(input.password) } : {}),
       },
     })
-    forgetUserRow({ id, email: current.email })
-    return updated
   },
 
   async remove(id: string): Promise<void> {
-    const current = await prisma.user.findUnique({ where: { id } })
-    if (!current) throw new NotFoundError('User')
+    if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
     await prisma.user.delete({ where: { id } })
-    forgetUserRow({ id, email: current.email })
   },
 }

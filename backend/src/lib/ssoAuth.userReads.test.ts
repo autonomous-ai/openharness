@@ -2,17 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The real user service over a fake database: these tests count the user reads one signed-in request costs
 // (DB optimization roadmap, Phase 2 item 7).
+// Nothing is reused across requests: another server may have changed the account in between (demoted an admin,
+// deleted it, moved it to the other environment), and that must apply on the very next request.
 const findUnique = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
-const updateMany = vi.hoisted(() => vi.fn())
-const remove = vi.hoisted(() => vi.fn())
+const create = vi.hoisted(() => vi.fn())
 
 vi.mock('./prisma.js', () => ({
-  prisma: { user: { findUnique, update, updateMany, delete: remove } },
+  prisma: { user: { findUnique, update, create } },
 }))
 
 import { authenticateAccessToken, clearSsoProfileCache } from './ssoAuth.js'
-import { USER_ROW_TTL_MS, userService } from '../services/UserService.js'
 
 function profileFetch(id: string, email: string): void {
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => new Response(
@@ -39,23 +39,22 @@ const stored = (over: Record<string, unknown> = {}): Record<string, unknown> => 
 const emailReads = (): number => findUnique.mock.calls.filter(([args]) => 'email' in (args as { where: object }).where).length
 
 describe('user reads per signed-in request', () => {
+  /** What the database holds for the account right now; a test changes it as another server would. */
+  let row: Record<string, unknown> | null
+
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(new Date('2026-10-29T03:00:00Z'))
     profileFetch('prod-sub-1', 'owner@example.com')
+    row = stored()
     findUnique.mockImplementation(async ({ where }: { where: { id?: string; email?: string } }) =>
-      (where.email === 'owner@example.com' || where.id === 'u1' ? stored() : null))
-    update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => stored(data))
-    updateMany.mockResolvedValue({ count: 1 })
-    remove.mockResolvedValue({})
+      (row && (where.email === row.email || where.id === row.id) ? row : null))
+    update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...row, ...data }))
+    create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'u-new', ...data }))
   })
 
   afterEach(() => {
-    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.clearAllMocks()
     clearSsoProfileCache()
-    userService.forgetCachedUsers()
   })
 
   it('reads the user once for one request', async () => {
@@ -63,66 +62,35 @@ describe('user reads per signed-in request', () => {
     expect(emailReads()).toBe(1)
   })
 
-  it('reads the user once for two requests that arrive together', async () => {
-    await Promise.all([authenticateAccessToken('a.e30.c', 'prod'), authenticateAccessToken('a.e30.c', 'prod')])
+  it('reads the user once for a request that updates the account', async () => {
+    profileFetch('prod-sub-2', 'owner@example.com')
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ sub: 'u1' })
+    expect(update).toHaveBeenCalledOnce()
     expect(emailReads()).toBe(1)
   })
 
-  it('does not read the user again for a request a few seconds later, and reads it again after that', async () => {
+  it('reads the user again for the next request', async () => {
     await authenticateAccessToken('a.e30.c', 'prod')
-    vi.setSystemTime(Date.now() + USER_ROW_TTL_MS - 1)
-    await authenticateAccessToken('a.e30.c', 'prod')
-    expect(emailReads()).toBe(1)
-
-    vi.setSystemTime(Date.now() + 2)
     await authenticateAccessToken('a.e30.c', 'prod')
     expect(emailReads()).toBe(2)
   })
 
-  it('does not keep an account that is not there yet, so its first sign-in finds the row it creates', async () => {
-    findUnique.mockResolvedValue(null)
-    await expect(userService.findByEmail('new@example.com')).resolves.toBeNull()
-    findUnique.mockResolvedValue(stored({ id: 'u-new', email: 'new@example.com' }))
-    await expect(userService.findByEmail('new@example.com')).resolves.toMatchObject({ id: 'u-new' })
-    expect(emailReads()).toBe(2)
-  })
-
-  it('does not keep a failed read', async () => {
-    findUnique.mockRejectedValueOnce(new Error('db down'))
-    await expect(userService.findByEmail('owner@example.com')).rejects.toThrow('db down')
-    await expect(userService.findByEmail('owner@example.com')).resolves.toMatchObject({ id: 'u1' })
-  })
-
-  it('serves a role or environment change made on this server at once', async () => {
-    await authenticateAccessToken('a.e30.c', 'prod')
-    findUnique.mockImplementation(async ({ where }: { where: { id?: string; email?: string } }) =>
-      (where.id === 'u1' || where.email === 'owner@example.com' ? stored({ role: 'admin' }) : null))
-    await userService.update('u1', { role: 'admin' })
-
+  it('serves an admin demoted on another server as a user on the next request', async () => {
+    row = stored({ role: 'admin' })
     await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ role: 'admin' })
+    row = stored({ role: 'user' })
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.toMatchObject({ role: 'user' })
   })
 
-  it('refuses a request at once after the account moved to the other environment on this server', async () => {
+  it('refuses the next request after another server moved the account to the other environment', async () => {
     await authenticateAccessToken('a.e30.c', 'prod')
-    findUnique.mockImplementation(async ({ where }: { where: { id?: string; email?: string } }) =>
-      (where.id === 'u1' || where.email === 'owner@example.com' ? stored({ autonomousEnv: 'stag' }) : null))
-    await userService.update('u1', { autonomousEnv: 'stag' })
-
+    row = stored({ autonomousEnv: 'stag' })
     await expect(authenticateAccessToken('a.e30.c', 'prod')).rejects.toMatchObject({ code: 'AUTONOMOUS_ENV_MISMATCH' })
   })
 
-  it('reads the user again after the account is deleted on this server', async () => {
+  it('never serves an account another server deleted', async () => {
     await authenticateAccessToken('a.e30.c', 'prod')
-    await userService.remove('u1')
-    findUnique.mockResolvedValue(null)
-
-    await expect(userService.findByEmail('owner@example.com')).resolves.toBeNull()
-  })
-
-  it('reads the user again after a Google subject is recorded, so the next request does not check it again', async () => {
-    await userService.findByEmail('owner@example.com')
-    await userService.recordGoogleSubject('u1', 'g-1', new Date())
-    await userService.findByEmail('owner@example.com')
-    expect(emailReads()).toBe(2)
+    row = null
+    await expect(authenticateAccessToken('a.e30.c', 'prod')).resolves.not.toMatchObject({ sub: 'u1' })
   })
 })
