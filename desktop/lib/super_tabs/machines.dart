@@ -114,6 +114,9 @@ class SuperTabMachines extends StatefulWidget {
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
 }
 
+/// The engines whose allowance a machine row shows, in this order.
+const _chipEngines = ['claude', 'codex'];
+
 class _MachineChoice {
   const _MachineChoice({
     required this.id,
@@ -514,6 +517,586 @@ class _MachinePickerState extends State<_MachinePicker> {
   }
 }
 
+/// Adds a machine of the reader's to the Swarm through the Add machine form,
+/// for Add a Buddy. Resolves to the added machine's id, null when it was not.
+Future<String?> showAddMachine(
+  BuildContext context,
+  SuperTabController c,
+  AppNotifier app, {
+  Future<MachineResources?> Function(String machineId)? readLocal,
+}) => _contributeDialog(
+  context,
+  c,
+  app,
+  sampleOf: (_) => null,
+  canRemove: (_) => false,
+  removeReason: (_) => null,
+  remove: (_) {},
+  readLocal: readLocal,
+);
+
+/// Why [m] cannot be added to the Swarm now, in the Add machine form's words;
+/// null when it can.
+({IconData icon, String message})? _machineUnavailable(
+  MachineState m, {
+  required bool inSwarm,
+}) {
+  if (inSwarm) {
+    return (icon: AppIcons.circleCheck, message: 'Already in this Swarm');
+  }
+  if (m.needsLink) {
+    return (
+      icon: AppIcons.unlink,
+      message: 'Not linked. Link this computer from Machines.',
+    );
+  }
+  if (m.isOffline) {
+    return (
+      icon: AppIcons.cloudOff,
+      message: 'Offline. Open Harness on this computer to add it.',
+    );
+  }
+  return null;
+}
+
+/// Why this computer cannot be added to the Swarm from here, as the Add
+/// machine form says it; null when it can.
+String? thisComputerRefusal(AppNotifier app, SuperTabController c) {
+  final here = app.machineStates.values
+      .where((m) => m.isLocalMachine)
+      .firstOrNull;
+  if (here == null || here.belongsToOtherAccount) {
+    return 'No computer is connected to this account yet.';
+  }
+  final inSwarm = (c.snapshot?.machines ?? const <Map<String, dynamic>>[]).any(
+    (m) => m['machineId'] == here.machine.machineId,
+  );
+  return _machineUnavailable(here, inSwarm: inSwarm)?.message;
+}
+
+/// The Add machine form, or with [existing] that machine's settings: one
+/// place for the Machines panel and for Add a Buddy. Resolves to the machine's
+/// id once it was added or saved, null when the person cancelled or it could
+/// not be. The panel's own knowledge comes in as callbacks: [sampleOf] a
+/// reading it already holds, [canRemove], [removeReason] and [remove] for
+/// Remove from this Swarm, and [readLocal] in place of
+/// [AppNotifier.readMachineResources].
+Future<String?> _contributeDialog(
+  BuildContext context,
+  SuperTabController c,
+  AppNotifier app, {
+  Map<String, dynamic>? existing,
+  _MachineView? view,
+  required MachineResources? Function(String machineId) sampleOf,
+  required bool Function(String machineId) canRemove,
+  required String? Function(String machineId) removeReason,
+  required void Function(_MachineView view) remove,
+  Future<MachineResources?> Function(String machineId)? readLocal,
+}) async {
+  final isConfigure = existing != null;
+  final existingId = existing?['machineId'] as String?;
+  bool isExisting(MachineState m) =>
+      existingId != null && m.machine.machineId == existingId;
+  // "Already in this tab" means already CONTRIBUTED — an agent already
+  // running there (unconfirmed) does not count, or a freshly created tab
+  // whose lead runs on this Mac could never contribute it. `_ids` (agents
+  // too) is for the machine-card panel below, not this dialog.
+  final contributed = {
+    for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
+      m['machineId'] as String,
+  };
+  // Unavailable computers stay inspectable in the picker, but another
+  // account's computers must never be offered for contribution. One choice
+  // per computer: a Mac's Harness Team account in this Swarm is part of its
+  // Mac's row, and joins and leaves with it (SuperTabSnapshot.placeOf).
+  bool ownRow(MachineState m) =>
+      (c.snapshot?.placeOf(m.machine.machineId) ?? m.machine.machineId) ==
+      m.machine.machineId;
+  List<MachineState> ownedMachines() => app.machineStates.values
+      .where((m) => !m.belongsToOtherAccount && ownRow(m))
+      .toList();
+  ({IconData icon, String message})? unavailable(MachineState m) =>
+      _machineUnavailable(
+        m,
+        inSwarm: !isExisting(m) && contributed.contains(m.machine.machineId),
+      );
+
+  bool canSelect(MachineState? m) =>
+      m != null && !m.belongsToOtherAccount && unavailable(m) == null;
+  final addable = ownedMachines().where(canSelect).toList();
+  String labelFor(MachineState m) => m.isLocalMachine
+      ? 'This Mac (${m.machine.displayName})'
+      : m.machine.displayName;
+  String? machineId =
+      existingId ??
+      addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
+      addable.firstOrNull?.machine.machineId;
+  String? error;
+  String? added;
+  var busy = false;
+  String? setupId;
+  // The agent slots the owner is choosing. A machine already in this Swarm
+  // starts at the number it has; a new one starts at what its total memory
+  // suggests, worked out here rather than by preparation (below).
+  int? storedSlots(String? id) {
+    final row = id == null
+        ? null
+        : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
+    final current = row?['maxAgents'];
+    return current is num ? current.toInt() : null;
+  }
+
+  // Readings this dialog has taken itself, keyed by machine. The panel's own
+  // samples stand in for a machine it already reads.
+  final suggestions = <String, int>{};
+  final maximums = <String, int>{};
+
+  /// What this machine's own memory says, once a reading has answered. Null
+  /// while one is still coming, or when it failed.
+  int? memorySuggestion(String? id) =>
+      id == null ? null : suggestions[id] ?? _suggestedAgentSlots(sampleOf(id));
+
+  int maximumFor(String? id) => id == null
+      ? _agentSlotsMin
+      : maximums[id] ??
+            _maxAgentSlots(sampleOf(id)) ??
+            _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
+
+  int slotsFor(String? id) {
+    final stored = storedSlots(id);
+    if (stored != null) return _clampAgentSlots(stored);
+    return memorySuggestion(id) ?? _agentSlotsMin;
+  }
+
+  var slots = slotsFor(machineId);
+  var slotsEdited = false;
+
+  // Machine settings: As memory allows, or At most a number (Dee,
+  // 2026-10-29). Memory is known from this dialog's reading, the panel's
+  // sample, or what the machine last reported to the Swarm.
+  MachineResources? settingsResources() =>
+      (existingId == null ? null : sampleOf(existingId)) ?? view?.resources;
+  int? memoryMaximum() =>
+      maximums[existingId] ?? _maxAgentSlots(settingsResources());
+
+  // Until the owner touches either, both follow what is known: a stored
+  // limit at or above the maximum is as memory allows, and one below it is
+  // the owner's own. With the maximum unknown a stored number is kept, and
+  // a machine with no number of its own starts at At most its suggestion,
+  // as Add machine does (review of #2084).
+  bool? memoryEdited;
+  int? atMostEdited;
+  bool memoryChoice() {
+    if (memoryEdited != null) return memoryEdited!;
+    final stored = storedSlots(existingId);
+    final maximum = memoryMaximum();
+    return stored != null && maximum != null && stored >= maximum;
+  }
+
+  // With nothing known, every machine may offer four.
+  int atMostMaximum() =>
+      memoryMaximum() ??
+      _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsFloor);
+  int atMostValue() {
+    if (atMostEdited != null) return atMostEdited!;
+    final stored = storedSlots(existingId);
+    final maximum = memoryMaximum();
+    if (stored != null && (maximum == null || stored < maximum)) {
+      return _clampAgentSlots(stored);
+    }
+    final suggested =
+        suggestions[existingId] ?? _suggestedAgentSlots(settingsResources());
+    return (suggested ?? maximum ?? stored ?? _agentSlotsFloor).clamp(
+      _agentSlotsMin,
+      atMostMaximum(),
+    );
+  }
+
+  /// Why this machine's settings cannot be saved from here, in settings'
+  /// own words; null when they can.
+  String? settingsUnavailable() {
+    final m = app.stateOf(existingId!);
+    if (m == null) {
+      return 'This computer can’t reach that machine. Sign in to Harness '
+          'there with this account to change its settings.';
+    }
+    // The machine by name: "this computer" is the one you're on.
+    final name = superTabMachineName(m.machine.displayName);
+    if (m.belongsToOtherAccount) {
+      return '$name is signed in to another account.';
+    }
+    if (m.needsLink) return 'Not linked. Link $name from Machines.';
+    if (m.isOffline) {
+      return 'Offline. Open Harness on $name to change its settings.';
+    }
+    return null;
+  }
+
+  // As memory allows saves the machine's maximum: its own figure from
+  // setup (it measured the machine just now), else the one known here,
+  // else what an older Harness's setup offered.
+  int memoryLimit(Map<String, dynamic> prepared) {
+    final offeredMaximum = prepared['maxAvailableAgents'];
+    if (offeredMaximum is num) return _clampAgentSlots(offeredMaximum);
+    final offered = prepared['maxAgents'];
+    return memoryMaximum() ??
+        (offered is num
+            ? _clampAgentSlots(offered)
+            : storedSlots(existingId) ?? _agentSlotsFloor);
+  }
+
+  // The open dialog and its own setState, once it is built: a reading
+  // answers while the form is open, and the field has to repaint when it
+  // does. Both are read only while the dialog is still there — one that
+  // arrives after it closed has nothing to repaint.
+  BuildContext? dialog;
+  void Function(void Function())? repaint;
+  final reading = <String>{};
+
+  /// Start the field where this machine's own memory says, without asking
+  /// preparation: preparation sets the project up, probes engines and takes
+  /// one of its 32 setup slots, and opening a form the owner may cancel is
+  /// no reason to do that. A configured machine still needs its RAM reading
+  /// for the stepper limit, but its chosen number is never replaced.
+  Future<void> suggestSlots() async {
+    final id = machineId;
+    if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
+      return;
+    }
+    MachineResources? resources;
+    try {
+      resources = await (readLocal ?? app.readMachineResources)(id);
+    } catch (_) {
+      return;
+    }
+    final suggested = _suggestedAgentSlots(resources);
+    // The picker may have moved on to another machine, whose own reading is
+    // the one that belongs in the field now — or the dialog may have closed.
+    if (suggested == null || machineId != id || dialog?.mounted != true) {
+      return;
+    }
+    suggestions[id] = suggested;
+    maximums[id] = _maxAgentSlots(resources)!;
+    // Repaint the limit, but never replace a number the owner chose.
+    repaint?.call(() {
+      if (!slotsEdited && storedSlots(id) == null) slots = suggested;
+    });
+  }
+
+  await showAppDialog<void>(
+    context: context,
+    builder: (context) => SuperTabDialogScope(
+      controller: c,
+      child: ListenableBuilder(
+        listenable: app,
+        builder: (context, _) => StatefulBuilder(
+          builder: (context, update) {
+            dialog = context;
+            repaint = update;
+            // Not awaited: the form is usable immediately, and the number
+            // only has to be there by the time the owner reads it. Each
+            // machine is read once, so a rebuild does not read again.
+            unawaited(suggestSlots());
+            Future<void> save() async {
+              if (busy ||
+                  !c.canWrite ||
+                  machineId == null ||
+                  !canSelect(app.stateOf(machineId!))) {
+                return;
+              }
+              final selected = machineId!;
+              // Settings save what is on screen now: preparation below may
+              // learn a different maximum, and that must not turn the
+              // owner's At most into As memory allows (review of #2084).
+              final atMost = isConfigure && !memoryChoice()
+                  ? atMostValue()
+                  : null;
+              update(() {
+                busy = true;
+                error = null;
+              });
+              try {
+                setupId ??= superTabOperationId();
+                final deadline = DateTime.now().add(const Duration(minutes: 5));
+                Map<String, dynamic> prepared;
+                while (true) {
+                  if (!context.mounted || !c.canWrite) return;
+                  prepared = await app.superTabMachineRequest(selected, {
+                    'action': 'prepareContribution',
+                    'tabId': c.tabId,
+                    'scope': 'swarm',
+                    'operationId': setupId,
+                  });
+                  if (prepared['state'] == 'ready' &&
+                      prepared['scope'] == 'swarm') {
+                    break;
+                  }
+                  if (prepared['state'] != 'preparing') {
+                    throw const SuperTabFailure(
+                      'UPDATE_REQUIRED',
+                      'Update Harness on this machine, then try again.',
+                    );
+                  }
+                  if (DateTime.now().isAfter(deadline)) {
+                    throw const SuperTabFailure(
+                      'SETUP_PENDING',
+                      'Project setup is still running. Try again to check its progress.',
+                    );
+                  }
+                  await Future<void>.delayed(const Duration(seconds: 1));
+                }
+                if (!context.mounted || !c.canWrite) return;
+                final machine = app.stateOf(selected);
+                final engines =
+                    (prepared['engines'] as List?)
+                        ?.whereType<String>()
+                        .where((engine) => _chipEngines.contains(engine))
+                        .toSet()
+                        .toList() ??
+                    <String>[];
+                if (engines.isEmpty) {
+                  throw const SuperTabFailure(
+                    'NO_SWARM_ENGINE',
+                    'Install Claude Code or Codex on this machine, then try again.',
+                  );
+                }
+                // A machine with no number of its own whose reading failed,
+                // or had not answered yet, is showing the floor rather than
+                // a suggestion. The owner never chose that, so send what
+                // preparation offered instead — the number the field would
+                // have shown had the reading arrived.
+                final offered = prepared['maxAgents'];
+                final offeredMaximum = prepared['maxAvailableAgents'];
+                if (offeredMaximum is num) {
+                  maximums[selected] = _clampAgentSlots(offeredMaximum);
+                }
+                if (!slotsEdited &&
+                    storedSlots(selected) == null &&
+                    memorySuggestion(selected) == null &&
+                    offered is num) {
+                  slots = _clampAgentSlots(offered);
+                }
+                // An earlier lost reply leaves an uncertain attempt holding
+                // its own receipt, and only one action may be in flight:
+                // check that one first, then send the number the owner is
+                // looking at — the stored attempt cannot know it was changed.
+                if (c.pendingCommand?['type'] == 'machine.contribute') {
+                  // If that attempt cannot be confirmed, its own error is
+                  // the one worth showing: it says why it is still unclear.
+                  if (await c.retry() == null) {
+                    if (!context.mounted) return;
+                    throw SuperTabFailure(
+                      c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+                      c.operationError ??
+                          'The earlier attempt is still not confirmed. '
+                              'Try again to check it.',
+                    );
+                  }
+                  if (!context.mounted || !c.canWrite) return;
+                }
+                final result = await c.command({
+                  'type': 'machine.contribute',
+                  'machineId': selected,
+                  'name': machine!.machine.displayName,
+                  'cwd': prepared['cwd'],
+                  if (prepared['scope'] != null) 'scope': prepared['scope'],
+                  'engines': engines,
+                  'maxAgents': !isConfigure
+                      ? slots
+                      : atMost ?? memoryLimit(prepared),
+                });
+                if (result == null) {
+                  throw SuperTabFailure(
+                    'CONTRIBUTION_FAILED',
+                    c.operationError ?? 'Could not add this machine.',
+                  );
+                }
+                await app.wakeSuperTabHost(selected);
+                // This Mac, added while its person is here: macOS asks once
+                // for the Harness Team account (cli/src/team/autoSetup.ts).
+                if (app.stateOf(selected)?.isLocalMachine == true) {
+                  unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
+                }
+                added = selected;
+                if (context.mounted) Navigator.pop(context);
+              } catch (failure) {
+                if (context.mounted) {
+                  update(() {
+                    busy = false;
+                    error = failure.toString();
+                    if (failure is! SuperTabFailure ||
+                        failure.code != 'SETUP_PENDING') {
+                      setupId = null;
+                    }
+                  });
+                }
+              }
+            }
+
+            final own = ownedMachines();
+            final canSave =
+                machineId != null && canSelect(app.stateOf(machineId!));
+            if (isConfigure) {
+              final current = app.stateOf(existingId!);
+              final why = settingsUnavailable();
+              return SuperTabDetailDialog(
+                title: superTabMachineName(
+                  current?.machine.displayName ??
+                      existing['name'] as String? ??
+                      existingId,
+                ),
+                body: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _AgentsLimit(
+                      memory: memoryChoice(),
+                      value: atMostValue(),
+                      maximum: atMostMaximum(),
+                      busy: busy,
+                      onMemory: () => update(() => memoryEdited = true),
+                      onAtMost: (next) => update(() {
+                        memoryEdited = false;
+                        atMostEdited = next;
+                      }),
+                    ),
+                    // Why it cannot be removed, in words rather than a dimmed button alone.
+                    if (view != null && canRemove(view.id))
+                      if (removeReason(view.id) case final reason?) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Text(reason, style: DesktopChrome.metadata()),
+                      ],
+                    if (!canSave && why != null) ...[
+                      const SizedBox(height: grid.AppDesktop.controlGap),
+                      Text(why, style: DesktopChrome.metadata()),
+                    ],
+                    if (error != null) ...[
+                      const SizedBox(height: grid.AppDesktop.controlGap),
+                      Text(error!, style: DesktopChrome.metadata()),
+                    ],
+                  ],
+                ),
+                // One clear action at the right; the rarer one quiet at the
+                // left, as in the machine's details.
+                leadingActions: [
+                  if (view != null && canRemove(view.id))
+                    TextButton(
+                      style: superTabQuietAction,
+                      onPressed: busy || removeReason(view.id) != null
+                          ? null
+                          : () {
+                              Navigator.pop(context);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                remove(view);
+                              });
+                            },
+                      child: const Text('Remove from this Swarm'),
+                    ),
+                ],
+                actions: [
+                  FilledButton(
+                    onPressed: busy || !canSave ? null : save,
+                    child: Text(busy ? 'Saving…' : 'Save'),
+                  ),
+                ],
+              );
+            }
+            return SuperTabDetailDialog(
+              title: 'Add machine',
+              body: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (own.isNotEmpty)
+                    _MachinePicker(
+                      value: machineId,
+                      busy: busy,
+                      choices: [
+                        for (final m in own)
+                          _MachineChoice(
+                            id: m.machine.machineId,
+                            label: labelFor(m),
+                            unavailable: unavailable(m),
+                          ),
+                      ],
+                      onChanged: (id) {
+                        if (busy || !canSelect(app.stateOf(id))) return;
+                        update(() {
+                          machineId = id;
+                          setupId = null;
+                          error = null;
+                          // Another machine has its own number: the one it
+                          // already offers, or its own suggestion.
+                          slots = slotsFor(id);
+                          slotsEdited = false;
+                        });
+                        unawaited(suggestSlots());
+                      },
+                    )
+                  else
+                    Text(
+                      'No computer is connected to this account yet.',
+                      style: DesktopChrome.text(),
+                    ),
+                  const SizedBox(height: 16),
+                  if (own.isNotEmpty) ...[
+                    Text(
+                      "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+                      'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
+                      style: DesktopChrome.text(),
+                    ),
+                  ] else ...[
+                    Text(
+                      'To add another computer, install Harness on it and sign in with '
+                      'this account, or approve a device with no screen from Machines.',
+                      style: DesktopChrome.text(),
+                    ),
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          app.requestMachines();
+                        },
+                        child: const Text('Open Machines'),
+                      ),
+                    ),
+                  ],
+                  if (own.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _AgentSlots(
+                      value: slots,
+                      maximum: maximumFor(machineId),
+                      busy: busy,
+                      onChanged: (next) => update(() {
+                        slots = next;
+                        slotsEdited = true;
+                      }),
+                    ),
+                  ],
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(error!, style: DesktopChrome.metadata()),
+                  ],
+                ],
+              ),
+              actions: [
+                if (own.isNotEmpty)
+                  FilledButton(
+                    onPressed: busy || !canSave ? null : save,
+                    child: Text(busy ? 'Preparing…' : 'Add machine'),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    ),
+  );
+  return added;
+}
+
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
   String? _selectedMachineId;
@@ -642,524 +1225,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }) async {
     final app = widget.app;
     if (app == null) return;
-    final isConfigure = existing != null;
-    final existingId = existing?['machineId'] as String?;
-    bool isExisting(MachineState m) =>
-        existingId != null && m.machine.machineId == existingId;
-    // "Already in this tab" means already CONTRIBUTED — an agent already
-    // running there (unconfirmed) does not count, or a freshly created tab
-    // whose lead runs on this Mac could never contribute it. `_ids` (agents
-    // too) is for the machine-card panel below, not this dialog.
-    final contributed = {
-      for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
-        m['machineId'] as String,
-    };
-    // Unavailable computers stay inspectable in the picker, but another
-    // account's computers must never be offered for contribution. One choice
-    // per computer: a Mac's Harness Team account in this Swarm is part of its
-    // Mac's row, and joins and leaves with it (SuperTabSnapshot.placeOf).
-    bool ownRow(MachineState m) =>
-        (c.snapshot?.placeOf(m.machine.machineId) ?? m.machine.machineId) ==
-        m.machine.machineId;
-    List<MachineState> ownedMachines() => app.machineStates.values
-        .where((m) => !m.belongsToOtherAccount && ownRow(m))
-        .toList();
-    ({IconData icon, String message})? unavailable(MachineState m) {
-      if (!isExisting(m) && contributed.contains(m.machine.machineId)) {
-        return (icon: AppIcons.circleCheck, message: 'Already in this Swarm');
-      }
-      if (m.needsLink) {
-        return (
-          icon: AppIcons.unlink,
-          message: 'Not linked. Link this computer from Machines.',
-        );
-      }
-      if (m.isOffline) {
-        return (
-          icon: AppIcons.cloudOff,
-          message: 'Offline. Open Harness on this computer to add it.',
-        );
-      }
-      return null;
-    }
-
-    bool canSelect(MachineState? m) =>
-        m != null && !m.belongsToOtherAccount && unavailable(m) == null;
-    final addable = ownedMachines().where(canSelect).toList();
-    String labelFor(MachineState m) => m.isLocalMachine
-        ? 'This Mac (${m.machine.displayName})'
-        : m.machine.displayName;
-    String? machineId =
-        existingId ??
-        addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
-        addable.firstOrNull?.machine.machineId;
-    String? error;
-    var busy = false;
-    String? setupId;
-    // The agent slots the owner is choosing. A machine already in this Swarm
-    // starts at the number it has; a new one starts at what its total memory
-    // suggests, worked out here rather than by preparation (below).
-    int? storedSlots(String? id) {
-      final row = id == null
-          ? null
-          : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
-      final current = row?['maxAgents'];
-      return current is num ? current.toInt() : null;
-    }
-
-    // Readings this dialog has taken itself, keyed by machine. The panel's own
-    // samples stand in for a machine it already reads.
-    final suggestions = <String, int>{};
-    final maximums = <String, int>{};
-
-    /// What this machine's own memory says, once a reading has answered. Null
-    /// while one is still coming, or when it failed.
-    int? memorySuggestion(String? id) => id == null
-        ? null
-        : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
-
-    int maximumFor(String? id) => id == null
-        ? _agentSlotsMin
-        : maximums[id] ??
-              _maxAgentSlots(_samples[id]?.$1) ??
-              _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
-
-    int slotsFor(String? id) {
-      final stored = storedSlots(id);
-      if (stored != null) return _clampAgentSlots(stored);
-      return memorySuggestion(id) ?? _agentSlotsMin;
-    }
-
-    var slots = slotsFor(machineId);
-    var slotsEdited = false;
-
-    // Machine settings: As memory allows, or At most a number (Dee,
-    // 2026-10-29). Memory is known from this dialog's reading, the panel's
-    // sample, or what the machine last reported to the Swarm.
-    MachineResources? settingsResources() =>
-        _samples[existingId]?.$1 ?? view?.resources;
-    int? memoryMaximum() =>
-        maximums[existingId] ?? _maxAgentSlots(settingsResources());
-
-    // Until the owner touches either, both follow what is known: a stored
-    // limit at or above the maximum is as memory allows, and one below it is
-    // the owner's own. With the maximum unknown a stored number is kept, and
-    // a machine with no number of its own starts at At most its suggestion,
-    // as Add machine does (review of #2084).
-    bool? memoryEdited;
-    int? atMostEdited;
-    bool memoryChoice() {
-      if (memoryEdited != null) return memoryEdited!;
-      final stored = storedSlots(existingId);
-      final maximum = memoryMaximum();
-      return stored != null && maximum != null && stored >= maximum;
-    }
-
-    // With nothing known, every machine may offer four.
-    int atMostMaximum() =>
-        memoryMaximum() ??
-        _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsFloor);
-    int atMostValue() {
-      if (atMostEdited != null) return atMostEdited!;
-      final stored = storedSlots(existingId);
-      final maximum = memoryMaximum();
-      if (stored != null && (maximum == null || stored < maximum)) {
-        return _clampAgentSlots(stored);
-      }
-      final suggested =
-          suggestions[existingId] ?? _suggestedAgentSlots(settingsResources());
-      return (suggested ?? maximum ?? stored ?? _agentSlotsFloor).clamp(
-        _agentSlotsMin,
-        atMostMaximum(),
-      );
-    }
-
-    /// Why this machine's settings cannot be saved from here, in settings'
-    /// own words; null when they can.
-    String? settingsUnavailable() {
-      final m = app.stateOf(existingId!);
-      if (m == null) {
-        return 'This computer can’t reach that machine. Sign in to Harness '
-            'there with this account to change its settings.';
-      }
-      // The machine by name: "this computer" is the one you're on.
-      final name = superTabMachineName(m.machine.displayName);
-      if (m.belongsToOtherAccount) {
-        return '$name is signed in to another account.';
-      }
-      if (m.needsLink) return 'Not linked. Link $name from Machines.';
-      if (m.isOffline) {
-        return 'Offline. Open Harness on $name to change its settings.';
-      }
-      return null;
-    }
-
-    // As memory allows saves the machine's maximum: its own figure from
-    // setup (it measured the machine just now), else the one known here,
-    // else what an older Harness's setup offered.
-    int memoryLimit(Map<String, dynamic> prepared) {
-      final offeredMaximum = prepared['maxAvailableAgents'];
-      if (offeredMaximum is num) return _clampAgentSlots(offeredMaximum);
-      final offered = prepared['maxAgents'];
-      return memoryMaximum() ??
-          (offered is num
-              ? _clampAgentSlots(offered)
-              : storedSlots(existingId) ?? _agentSlotsFloor);
-    }
-
-    // The open dialog and its own setState, once it is built: a reading
-    // answers while the form is open, and the field has to repaint when it
-    // does. Both are read only while the dialog is still there — one that
-    // arrives after it closed has nothing to repaint.
-    BuildContext? dialog;
-    void Function(void Function())? repaint;
-    final reading = <String>{};
-
-    /// Start the field where this machine's own memory says, without asking
-    /// preparation: preparation sets the project up, probes engines and takes
-    /// one of its 32 setup slots, and opening a form the owner may cancel is
-    /// no reason to do that. A configured machine still needs its RAM reading
-    /// for the stepper limit, but its chosen number is never replaced.
-    Future<void> suggestSlots() async {
-      final id = machineId;
-      if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
-        return;
-      }
-      MachineResources? resources;
-      try {
-        resources = await (widget.readLocal ?? app.readMachineResources)(id);
-      } catch (_) {
-        return;
-      }
-      final suggested = _suggestedAgentSlots(resources);
-      // The picker may have moved on to another machine, whose own reading is
-      // the one that belongs in the field now — or the dialog may have closed.
-      if (suggested == null || machineId != id || dialog?.mounted != true) {
-        return;
-      }
-      suggestions[id] = suggested;
-      maximums[id] = _maxAgentSlots(resources)!;
-      // Repaint the limit, but never replace a number the owner chose.
-      repaint?.call(() {
-        if (!slotsEdited && storedSlots(id) == null) slots = suggested;
-      });
-    }
-
-    await showAppDialog<void>(
-      context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        child: ListenableBuilder(
-          listenable: app,
-          builder: (context, _) => StatefulBuilder(
-            builder: (context, update) {
-              dialog = context;
-              repaint = update;
-              // Not awaited: the form is usable immediately, and the number
-              // only has to be there by the time the owner reads it. Each
-              // machine is read once, so a rebuild does not read again.
-              unawaited(suggestSlots());
-              Future<void> save() async {
-                if (busy ||
-                    !c.canWrite ||
-                    machineId == null ||
-                    !canSelect(app.stateOf(machineId!))) {
-                  return;
-                }
-                final selected = machineId!;
-                // Settings save what is on screen now: preparation below may
-                // learn a different maximum, and that must not turn the
-                // owner's At most into As memory allows (review of #2084).
-                final atMost = isConfigure && !memoryChoice()
-                    ? atMostValue()
-                    : null;
-                update(() {
-                  busy = true;
-                  error = null;
-                });
-                try {
-                  setupId ??= superTabOperationId();
-                  final deadline = DateTime.now().add(
-                    const Duration(minutes: 5),
-                  );
-                  Map<String, dynamic> prepared;
-                  while (true) {
-                    if (!context.mounted || !c.canWrite) return;
-                    prepared = await app.superTabMachineRequest(selected, {
-                      'action': 'prepareContribution',
-                      'tabId': c.tabId,
-                      'scope': 'swarm',
-                      'operationId': setupId,
-                    });
-                    if (prepared['state'] == 'ready' &&
-                        prepared['scope'] == 'swarm') {
-                      break;
-                    }
-                    if (prepared['state'] != 'preparing') {
-                      throw const SuperTabFailure(
-                        'UPDATE_REQUIRED',
-                        'Update Harness on this machine, then try again.',
-                      );
-                    }
-                    if (DateTime.now().isAfter(deadline)) {
-                      throw const SuperTabFailure(
-                        'SETUP_PENDING',
-                        'Project setup is still running. Try again to check its progress.',
-                      );
-                    }
-                    await Future<void>.delayed(const Duration(seconds: 1));
-                  }
-                  if (!context.mounted || !c.canWrite) return;
-                  final machine = app.stateOf(selected);
-                  final engines =
-                      (prepared['engines'] as List?)
-                          ?.whereType<String>()
-                          .where((engine) => _chipEngines.contains(engine))
-                          .toSet()
-                          .toList() ??
-                      <String>[];
-                  if (engines.isEmpty) {
-                    throw const SuperTabFailure(
-                      'NO_SWARM_ENGINE',
-                      'Install Claude Code or Codex on this machine, then try again.',
-                    );
-                  }
-                  // A machine with no number of its own whose reading failed,
-                  // or had not answered yet, is showing the floor rather than
-                  // a suggestion. The owner never chose that, so send what
-                  // preparation offered instead — the number the field would
-                  // have shown had the reading arrived.
-                  final offered = prepared['maxAgents'];
-                  final offeredMaximum = prepared['maxAvailableAgents'];
-                  if (offeredMaximum is num) {
-                    maximums[selected] = _clampAgentSlots(offeredMaximum);
-                  }
-                  if (!slotsEdited &&
-                      storedSlots(selected) == null &&
-                      memorySuggestion(selected) == null &&
-                      offered is num) {
-                    slots = _clampAgentSlots(offered);
-                  }
-                  // An earlier lost reply leaves an uncertain attempt holding
-                  // its own receipt, and only one action may be in flight:
-                  // check that one first, then send the number the owner is
-                  // looking at — the stored attempt cannot know it was changed.
-                  if (c.pendingCommand?['type'] == 'machine.contribute') {
-                    // If that attempt cannot be confirmed, its own error is
-                    // the one worth showing: it says why it is still unclear.
-                    if (await c.retry() == null) {
-                      if (!context.mounted) return;
-                      throw SuperTabFailure(
-                        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
-                        c.operationError ??
-                            'The earlier attempt is still not confirmed. '
-                                'Try again to check it.',
-                      );
-                    }
-                    if (!context.mounted || !c.canWrite) return;
-                  }
-                  final result = await c.command({
-                    'type': 'machine.contribute',
-                    'machineId': selected,
-                    'name': machine!.machine.displayName,
-                    'cwd': prepared['cwd'],
-                    if (prepared['scope'] != null) 'scope': prepared['scope'],
-                    'engines': engines,
-                    'maxAgents': !isConfigure
-                        ? slots
-                        : atMost ?? memoryLimit(prepared),
-                  });
-                  if (result == null) {
-                    throw SuperTabFailure(
-                      'CONTRIBUTION_FAILED',
-                      c.operationError ?? 'Could not add this machine.',
-                    );
-                  }
-                  await app.wakeSuperTabHost(selected);
-                  // This Mac, added while its person is here: macOS asks once
-                  // for the Harness Team account (cli/src/team/autoSetup.ts).
-                  if (app.stateOf(selected)?.isLocalMachine == true) {
-                    unawaited(
-                      app.offerTeamAccount('contribute', tabId: c.tabId),
-                    );
-                  }
-                  if (context.mounted) Navigator.pop(context);
-                } catch (failure) {
-                  if (context.mounted) {
-                    update(() {
-                      busy = false;
-                      error = failure.toString();
-                      if (failure is! SuperTabFailure ||
-                          failure.code != 'SETUP_PENDING') {
-                        setupId = null;
-                      }
-                    });
-                  }
-                }
-              }
-
-              final own = ownedMachines();
-              final canSave =
-                  machineId != null && canSelect(app.stateOf(machineId!));
-              if (isConfigure) {
-                final current = app.stateOf(existingId!);
-                final why = settingsUnavailable();
-                return SuperTabDetailDialog(
-                  title: superTabMachineName(
-                    current?.machine.displayName ??
-                        existing['name'] as String? ??
-                        existingId,
-                  ),
-                  body: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _AgentsLimit(
-                        memory: memoryChoice(),
-                        value: atMostValue(),
-                        maximum: atMostMaximum(),
-                        busy: busy,
-                        onMemory: () => update(() => memoryEdited = true),
-                        onAtMost: (next) => update(() {
-                          memoryEdited = false;
-                          atMostEdited = next;
-                        }),
-                      ),
-                      // Why it cannot be removed, in words rather than a dimmed button alone.
-                      if (view != null && _canRemove(view.id))
-                        if (_removeReason(view.id) case final reason?) ...[
-                          const SizedBox(height: grid.AppDesktop.controlGap),
-                          Text(reason, style: DesktopChrome.metadata()),
-                        ],
-                      if (!canSave && why != null) ...[
-                        const SizedBox(height: grid.AppDesktop.controlGap),
-                        Text(why, style: DesktopChrome.metadata()),
-                      ],
-                      if (error != null) ...[
-                        const SizedBox(height: grid.AppDesktop.controlGap),
-                        Text(error!, style: DesktopChrome.metadata()),
-                      ],
-                    ],
-                  ),
-                  // One clear action at the right; the rarer one quiet at the
-                  // left, as in the machine's details.
-                  leadingActions: [
-                    if (view != null && _canRemove(view.id))
-                      TextButton(
-                        style: superTabQuietAction,
-                        onPressed: busy || _removeReason(view.id) != null
-                            ? null
-                            : () {
-                                Navigator.pop(context);
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  if (mounted) unawaited(_remove(view));
-                                });
-                              },
-                        child: const Text('Remove from this Swarm'),
-                      ),
-                  ],
-                  actions: [
-                    FilledButton(
-                      onPressed: busy || !canSave ? null : save,
-                      child: Text(busy ? 'Saving…' : 'Save'),
-                    ),
-                  ],
-                );
-              }
-              return SuperTabDetailDialog(
-                title: 'Add machine',
-                body: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (own.isNotEmpty)
-                      _MachinePicker(
-                        value: machineId,
-                        busy: busy,
-                        choices: [
-                          for (final m in own)
-                            _MachineChoice(
-                              id: m.machine.machineId,
-                              label: labelFor(m),
-                              unavailable: unavailable(m),
-                            ),
-                        ],
-                        onChanged: (id) {
-                          if (busy || !canSelect(app.stateOf(id))) return;
-                          update(() {
-                            machineId = id;
-                            setupId = null;
-                            error = null;
-                            // Another machine has its own number: the one it
-                            // already offers, or its own suggestion.
-                            slots = slotsFor(id);
-                            slotsEdited = false;
-                          });
-                          unawaited(suggestSlots());
-                        },
-                      )
-                    else
-                      Text(
-                        'No computer is connected to this account yet.',
-                        style: DesktopChrome.text(),
-                      ),
-                    const SizedBox(height: 16),
-                    if (own.isNotEmpty) ...[
-                      Text(
-                        "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
-                        'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
-                        style: DesktopChrome.text(),
-                      ),
-                    ] else ...[
-                      Text(
-                        'To add another computer, install Harness on it and sign in with '
-                        'this account, or approve a device with no screen from Machines.',
-                        style: DesktopChrome.text(),
-                      ),
-                      const SizedBox(height: 4),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            app.requestMachines();
-                          },
-                          child: const Text('Open Machines'),
-                        ),
-                      ),
-                    ],
-                    if (own.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _AgentSlots(
-                        value: slots,
-                        maximum: maximumFor(machineId),
-                        busy: busy,
-                        onChanged: (next) => update(() {
-                          slots = next;
-                          slotsEdited = true;
-                        }),
-                      ),
-                    ],
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(error!, style: DesktopChrome.metadata()),
-                    ],
-                  ],
-                ),
-                actions: [
-                  if (own.isNotEmpty)
-                    FilledButton(
-                      onPressed: busy || !canSave ? null : save,
-                      child: Text(busy ? 'Preparing…' : 'Add machine'),
-                    ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
+    await _contributeDialog(
+      context,
+      c,
+      app,
+      existing: existing,
+      view: view,
+      sampleOf: (id) => _samples[id]?.$1,
+      canRemove: _canRemove,
+      removeReason: _removeReason,
+      remove: (v) {
+        if (mounted) unawaited(_remove(v));
+      },
+      readLocal: widget.readLocal,
     );
   }
 
@@ -1207,9 +1285,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : '${minutes ~/ 1440}d';
   }
 
-  /// The engines whose allowance a machine row shows, in this order.
-  static const _chipEngines = ['claude', 'codex'];
-
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
     final app = widget.app, snapshot = c.snapshot!;
@@ -1219,7 +1294,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // their own computer. Actions stay the Mac's; the backend changes its team account with it.
     final team = snapshot.teamPoolOf(id);
     final teamId = team?['machineId'] as String?;
-    final agents = snapshot.agents
+    final agents = snapshot.teamAgents
         .where((a) => snapshot.placeOf(a.machineId) == id)
         .toList();
     final contributor =

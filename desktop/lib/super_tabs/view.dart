@@ -27,8 +27,10 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'model.dart';
-import 'pm_chat.dart';
 import 'workgroup_name.dart';
+import 'message_link.dart';
+import 'message_link_swarms.dart';
+import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
@@ -64,6 +66,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onChooseAgentTerminal,
+    this.linkSwarms,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -80,6 +83,10 @@ class SuperTabView extends StatefulWidget {
   final AppNotifier? app;
   final VoidCallback? onNewProject;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
+
+  /// How a message link reaches the account's other Swarms. Without it, and
+  /// without an [app], a link into another Swarm is not followed.
+  final SwarmLinkSwarms? linkSwarms;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -165,11 +172,24 @@ class _SuperTabViewState extends State<SuperTabView>
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
 
-  /// Your own message reads You, in the row and in the quote of it.
-  String _shownAuthor(SuperTabController c, SuperTabMessage message) =>
-      message.authorId == c.accountId && !message.fromAgent
-      ? 'You'
-      : _authorName(message);
+  /// Your own message reads You, in the row and in the quote of it. In your
+  /// Buddy chat the PM's private lines read as lines to you, "River (PM) →
+  /// you": the PM writes there but cannot read it (Lead, 10-29).
+  String _shownAuthor(SuperTabController c, SuperTabMessage message) {
+    if (message.authorId == c.accountId && !message.fromAgent) return 'You';
+    // The controller's own snapshot names the author: a preview may be of
+    // another Swarm's message.
+    final name = c.snapshot?.authorName(message) ?? message.authorName;
+    final snapshot = c.snapshot;
+    final project = snapshot?.projectFor(message.conversationId);
+    final chat = project == null ? null : c.buddyChat(project.id);
+    return message.fromAgent &&
+            chat?.id == message.conversationId &&
+            snapshot!.conversation(project!.leadConversationId)?.leadId ==
+                message.authorId
+        ? '$name (PM) → you'
+        : name;
+  }
 
   @override
   void initState() {
@@ -177,7 +197,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
-    c.pmChatOpener = _openPmChat;
+    c.buddyChatOpener = _openBuddyChat;
     _registerDial();
     _changed();
   }
@@ -205,11 +225,11 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
-      if (oldWidget.controller.pmChatOpener == _openPmChat) {
-        oldWidget.controller.pmChatOpener = null;
+      if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
+        oldWidget.controller.buddyChatOpener = null;
       }
       c.addListener(_changed);
-      c.pmChatOpener = _openPmChat;
+      c.buddyChatOpener = _openBuddyChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
       }
@@ -235,6 +255,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _changed() {
     if (!mounted) return;
     _takeNotice();
+    _takeMessageRequest();
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
@@ -406,7 +427,10 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
-    if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
+    for (final source in _linkSources) {
+      source.removeListener(_linkSourceChanged);
+    }
+    if (c.buddyChatOpener == _openBuddyChat) c.buddyChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
@@ -1119,26 +1143,21 @@ class _SuperTabViewState extends State<SuperTabView>
       c.select(id);
       _closeSidebar();
     },
-    onOpenPmChat: (projectId) => unawaited(_openPmChat(projectId)),
+    onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
 
-  /// Opens [projectId]'s PM chat in front of Notifications, pull requests and
-  /// a terminal: the sidebar's way in and ⇧⌘K's ([SuperTabController.pmChatOpener]).
-  Future<bool> _openPmChat(String projectId) {
+  /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
+  /// pull requests and a terminal, opening it on the server when they have
+  /// none yet: the sidebar's way in and ⇧⌘K's
+  /// ([SuperTabController.buddyChatOpener]).
+  Future<bool> _openBuddyChat(String projectId) {
     setState(() {
       _showNotifications = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
-    if (c.buddiesOn && c.buddyChat(projectId) == null) {
-      // No Buddy here yet: the shortcut offers to add one.
-      if (c.canWrite) {
-        unawaited(showAddBuddy(context, c, projectId: projectId));
-      }
-      return Future.value(false);
-    }
-    return c.openPmChat(projectId);
+    return c.openBuddyChat(projectId);
   }
 
   /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
@@ -1162,6 +1181,151 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
+  /// [messageId] of [id], read from the pages held, then what arrived after
+  /// them, then older pages, up to 50 (5,000 messages); null when it is not
+  /// among them. A message newer than what was read earlier is after it, so
+  /// the first read is up to the latest, its own even with a poll's read under
+  /// way (that one may hold rows below a reader scrolled up); the rest go back.
+  Future<SuperTabMessage?> _findMessage(String id, String messageId) async {
+    SuperTabMessage? held() =>
+        c.messages(id).where((m) => m.id == messageId).firstOrNull;
+    var message = held();
+    for (var page = 0; message == null && page < 50; page++) {
+      final older = page > 0;
+      if (older && !c.hasOlder(id)) break;
+      await (older ? c.loadMessages(id, older: true) : c.showLatest(id));
+      if (!mounted) return null;
+      message = held();
+    }
+    return message;
+  }
+
+  /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
+  void _takeMessageRequest() {
+    final request = c.messageRequest;
+    if (request == null || c.snapshot == null) return;
+    c.messageRequest = null;
+    unawaited(_openMessage(request.conversationId, request.messageId));
+  }
+
+  /// Opens [id] at [messageId], lit. The backend decides what this reader may
+  /// read, so a message they may not read and one that is gone are both
+  /// "unavailable", with nothing of the conversation shown.
+  Future<void> _openMessage(String id, String messageId) async {
+    void say(String text) =>
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(text)));
+    final request = ++_jumpRequest;
+    // A closed conversation is asked for by id: the backend says whether this
+    // reader may read it, and a refusal looks like a message that is gone.
+    final readable = await c.loadGroup(id);
+    if (!mounted || request != _jumpRequest || c.accessRevoked) return;
+    // The app may open another chat for it (an old Chat with PM, with Buddies
+    // on): that is not this message, so the reader stays where they are.
+    if (!readable || c.landsOn(id) != id) {
+      say('Message unavailable');
+      return;
+    }
+    final message = await _findMessage(id, messageId);
+    if (!mounted ||
+        request != _jumpRequest ||
+        c.accessRevoked ||
+        c.snapshot?.conversation(id) == null) {
+      return;
+    }
+    if (message == null) {
+      say(
+        c.hasOlder(id)
+            ? 'This message is too far back to open.'
+            : 'Message unavailable',
+      );
+      return;
+    }
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    c.select(id);
+    final shownBy = _rowShowing(id, messageId) ?? messageId;
+    setState(() {
+      _showNotifications = false;
+      _showPullRequests = false;
+      _back = null;
+      _target = shownBy;
+      // Stop following the end: the linked message is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(messageId);
+      },
+    );
+    _focus.requestFocus();
+  }
+
+  /// The Swarms of the account a link may point into, besides this one.
+  late final SwarmLinkSwarms? _linkSwarms =
+      widget.linkSwarms ??
+      (widget.app == null ? null : AppLinkSwarms(widget.app!));
+
+  /// The other Swarms' controllers this view hears from, for their previews.
+  final _linkSources = <SuperTabController>{};
+
+  void _linkSourceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// The controller that reads [tabId] for a preview: this Swarm's, or one
+  /// already loaded here. None is loaded for a preview, so a Swarm the account
+  /// closed is never left polling.
+  SuperTabController? _linkSource(String tabId) {
+    if (tabId == c.tabId) return c;
+    final other = _linkSwarms?.loaded(tabId);
+    if (other != null && _linkSources.add(other)) {
+      other.addListener(_linkSourceChanged);
+    }
+    return other;
+  }
+
+  /// What [link] points at for the preview under a message that says it. The
+  /// Swarm it names reads it with its own session, so the server decides.
+  SuperTabLinkTarget _linkTarget(SwarmMessageLink link) {
+    final controller = _linkSource(link.tabId);
+    if (controller == null) {
+      return _linkSwarms?.read(link, _linkSourceChanged) ??
+          const SuperTabLinkTarget.unavailable();
+    }
+    final target = controller.linkTarget(link);
+    if (target == null) return const SuperTabLinkTarget.unavailable();
+    final message = target.message;
+    if (message == null) return const SuperTabLinkTarget.loading();
+    return SuperTabLinkTarget.message(
+      message,
+      author: _shownAuthor(controller, message),
+    );
+  }
+
+  /// Opens [link]: here, or in the other Swarm of the account it names.
+  void _openLink(SwarmMessageLink link) {
+    if (link.tabId == c.tabId) {
+      c.openMessageLink(link);
+      return;
+    }
+    final swarms = _linkSwarms;
+    final opened = swarms?.open(link) ?? Future.value(false);
+    unawaited(
+      opened.then((ok) {
+        if (ok || !mounted) return;
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
+      }),
+    );
+  }
+
   /// Opens the conversation a tag is in, at its message, replying to it. What
   /// is held is looked in first, then what arrived after it, then older pages,
   /// until the message is among them; one that is not found says so, and the
@@ -1169,20 +1333,8 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? held() =>
-        c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
-    var message = held();
-    // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
-    // is after it, so the first read is up to the latest, its own even with
-    // a poll's read under way (that one may hold rows below a reader scrolled
-    // up); the rest go back.
-    for (var page = 0; message == null && page < 50; page++) {
-      final older = page > 0;
-      if (older && !c.hasOlder(id)) break;
-      await (older ? c.loadMessages(id, older: true) : c.showLatest(id));
-      if (!mounted) return;
-      message = held();
-    }
+    final message = await _findMessage(id, mention.messageId);
+    if (!mounted) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
@@ -1199,8 +1351,8 @@ class _SuperTabViewState extends State<SuperTabView>
     _showNotifications = false;
     c.select(id);
     setState(() {
-      if (c.canWrite && c.selected?.archived == false) _replies[id] = message!;
-      _target = message!.id;
+      if (c.canWrite && c.selected?.archived == false) _replies[id] = message;
+      _target = message.id;
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
@@ -1405,10 +1557,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// The reader's own private chat with its project's Product Manager.
-  bool _isPmChat(SuperTabConversation group) =>
-      c.pmChat(group.projectId)?.id == group.id;
-
   /// Whom a Buddy's proposal speaks for, by name; null for other messages.
   String? _proposalOwner(SuperTabMessage message) =>
       message.proposalOwnerId == null
@@ -1447,8 +1595,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
         : group.id == c.snapshot!.leadsConversationId
         ? '# $kProductManagersChannel'
-        : _isPmChat(group)
-        ? kChatWithPm
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null
@@ -1472,9 +1618,6 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (group.id == snapshot.leadsConversationId) {
       return 'Message #$kProductManagersChannel';
-    }
-    if (_isPmChat(group)) {
-      return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
     }
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
@@ -1965,6 +2108,13 @@ class _SuperTabViewState extends State<SuperTabView>
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
+      link: SwarmMessageLink(
+        tabId: c.tabId,
+        conversationId: message.conversationId,
+        messageId: message.id,
+      ),
+      linkTarget: _linkTarget,
+      onOpenLink: _openLink,
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);
@@ -2357,11 +2507,9 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null && _isBuddyChat(group))
-          SuperTabBuddyBar(controller: c, chat: group),
-        // The reader's own chat with the PM shows what the PM asked them;
-        // with Buddies on, their Buddy chat does instead.
-        if (group != null &&
-            (c.buddiesOn ? _isBuddyChat(group) : _isPmChat(group)))
+          SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+        // The reader's own Buddy chat shows what the PM asked them.
+        if (group != null && _isBuddyChat(group))
           SuperTabDecisionsPanel(
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
@@ -2388,8 +2536,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? 'Discuss the plan with your product manager.'
                           : _buddyName(group) != null
                           ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
-                          : _isPmChat(group)
-                          ? 'Only you and the Product Manager read this chat.'
                           : 'Start the conversation.',
                       textAlign: TextAlign.center,
                       style: DesktopChrome.text(color: DesktopChrome.muted),
@@ -2585,14 +2731,14 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.operationError != null && !errorInRow)
+        if (c.composerError(c.selectedId) != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    c.operationError!,
+                    c.composerError(c.selectedId)!,
                     style: DesktopChrome.control(),
                   ),
                 ),

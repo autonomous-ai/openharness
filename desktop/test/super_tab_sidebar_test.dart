@@ -254,7 +254,7 @@ void main() {
   }
 
   testWidgets('reads like a chat app: utilities, Projects A to Z with their '
-      'workgroups and # product-managers, Direct messages, then Machines', (
+      'workgroups and # product-managers, Buddies, then Machines', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -282,9 +282,9 @@ void main() {
       find.text('No workgroups yet'),
       find.byKey(const ValueKey('super-group-lead')),
       find.byKey(const ValueKey('super-group-offline')),
-      find.text('Direct messages'),
-      find.byKey(const ValueKey('super-pm-chat-lead')),
-      find.byKey(const ValueKey('super-pm-chat-empty')),
+      find.text('Buddies'),
+      find.byKey(const ValueKey('super-buddy-lead')),
+      find.byKey(const ValueKey('super-buddy-empty')),
       find.text('Machines'),
     ];
     for (var i = 1; i < order.length; i++) {
@@ -308,7 +308,7 @@ void main() {
       findsNothing,
     );
     expect(
-      inRow('super-pm-chat-lead', find.text('(web-project)')),
+      inRow('super-buddy-lead', find.text('(web-project)')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);

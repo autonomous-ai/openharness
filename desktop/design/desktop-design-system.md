@@ -231,6 +231,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Dialog outer radius | 20 |
 | Popover outer radius | 16 |
 | Field / inset row / pane radius | 10 |
+| Sidebar row gap (`listRowGap`) | 2 |
+| Count badge: capsule, text inset from its ends (`badgeInset`) | 5 |
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
 | Tab close target (square) | 28 |
