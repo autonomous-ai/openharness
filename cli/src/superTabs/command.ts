@@ -6,7 +6,7 @@ import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/da
 import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
-import { insideFolder, uploadAttachments, type UploadTarget } from './attach.js'
+import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
@@ -202,7 +202,7 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, String(daemon.machineId))
   const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  const files = insideFolder(paths, folder)
+  const files = readInsideFolder(paths, folder)
   const state = object(object((await scoped({ action: 'status' })).value).state)
   const projectId = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)?.projectId
   const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId

@@ -159,7 +159,7 @@ it('parses propose with up to 5 --attach files, always as a proposal', () => {
   }
 })
 it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded to its chat, beside the files its owner sent', async () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs')
+  const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')), outside = mkdtempSync(join(tmpdir(), 'buddy-outside-'))
@@ -170,6 +170,13 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     writeFileSync(join(outside, 'secret.txt'), 'not the Buddy\'s')
     symlinkSync(join(outside, 'secret.txt'), join(folder, 'link.txt'))
     for (const dir of ['.git', '.harness']) { mkdirSync(join(folder, dir)); writeFileSync(join(folder, dir, 'config'), 'token') }
+    // The same records in other letters: one folder on a case-insensitive Mac, their own on Linux.
+    for (const dir of ['.GIT', '.Harness']) {
+      try { mkdirSync(join(folder, dir)) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+      writeFileSync(join(folder, dir, 'config'), 'token')
+    }
+    // A second name inside the folder for a file outside it.
+    linkSync(join(outside, 'secret.txt'), join(folder, 'hard.txt'))
     const calls: Array<Record<string, unknown>> = []
     let frames: unknown[] = [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }]
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
@@ -197,7 +204,8 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
 
     // Outside its folder, through a link, or in its repository's and Harness's own records: refused before any upload.
     calls.length = 0
-    for (const path of [join(outside, 'secret.txt'), join(folder, 'link.txt'), join(folder, '.git', 'config'), join(folder, '.harness', 'config'), folder]) {
+    for (const path of [join(outside, 'secret.txt'), join(folder, 'link.txt'), join(folder, 'hard.txt'), join(folder, '.git', 'config'),
+      join(folder, '.harness', 'config'), join(folder, '.GIT', 'config'), join(folder, '.Harness', 'config'), folder]) {
       expect(await propose(path), path).toBe(1)
       expect(error()).toContain('Attach only files inside your folder')
     }
@@ -229,6 +237,41 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     expect(await propose(join(folder, 'plan.md'), join(folder, 'docs', 'shot.png'))).toBe(0)
     expect(calls.at(-1)).toMatchObject({ command: { attachmentIds: ['owner-log', 'f1', 'f2'] } })
     expect(fetch).toHaveBeenCalledTimes(2)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+it('sends a proposal file\'s bytes as they were when checked, even if the path then turns into a link out of the folder', async () => {
+  const { mkdtempSync, writeFileSync, symlinkSync, unlinkSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')), outside = mkdtempSync(join(tmpdir(), 'buddy-outside-'))
+  try {
+    writeFileSync(join(folder, 'plan.md'), '# Plan\n')
+    writeFileSync(join(outside, 'secret.txt'), 'outside bytes')
+    const frames = [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }]
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: frames }
+      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] } } }
+      if (payload.step === 'sent') {
+        // After the check, before the upload: the checked name now points outside.
+        unlinkSync(join(folder, 'plan.md'))
+        symlinkSync(join(outside, 'secret.txt'), join(folder, 'plan.md'))
+        return { ok: true, value: { agentId: 'buddy', attachmentIds: null } }
+      }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const sent: string[] = []
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(await ((init!.body as FormData).get('file') as File).text())
+      return new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 })
+    })
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const json = JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask', goal: 'G', scope: 'S', priority: 'normal' })
+    expect(await superTabCommand([...prefix, 'propose', 'op', json, '--attach', join(folder, 'plan.md')], deps)).toBe(0)
+    expect(sent).toEqual(['# Plan\n'])
   } finally {
     rmSync(folder, { recursive: true, force: true })
     rmSync(outside, { recursive: true, force: true })

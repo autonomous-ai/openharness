@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { openAsBlob, realpathSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openAsBlob, openSync, readSync, realpathSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, relative, sep } from 'node:path'
 import { localCredentialHeaders } from '../lib/localCredential.js'
@@ -30,14 +30,17 @@ const value = (answer: Record<string, unknown>) => {
 /** One file of `post --attach`, multipart to this computer's daemon, which streams it on to the backend with the account's
  * token (lib/superTabAttachmentProxy.ts). Its own deadline, not a service answer's half minute: on a slow uplink 10 MB
  * takes longer, and the daemon ends it once no bytes move. */
-async function uploadOne(path: string, target: UploadTarget, agentId: string, fetcher: typeof fetch): Promise<string> {
-  const info = await stat(path)
-  if (!info.isFile()) throw new Error(`${path} is not a file.`)
-  if (info.size > MAX_ATTACHMENT_BYTES) throw new Error(`${basename(path)} is over the ${formatSize(MAX_ATTACHMENT_BYTES)} limit (${info.size} bytes).`)
+async function uploadOne(file: string | CheckedFile, target: UploadTarget, agentId: string, fetcher: typeof fetch): Promise<string> {
   const form = new FormData()
   form.append('conversationId', target.conversationId)
-  // Read from disk as it is sent, never whole.
-  form.append('file', await openAsBlob(path, { type: mimeOf(path) }), basename(path))
+  if (typeof file === 'string') {
+    const info = await stat(file)
+    if (!info.isFile()) throw new Error(`${file} is not a file.`)
+    if (info.size > MAX_ATTACHMENT_BYTES) throw new Error(`${basename(file)} is over the ${formatSize(MAX_ATTACHMENT_BYTES)} limit (${info.size} bytes).`)
+    // Read from disk as it is sent, never whole.
+    form.append('file', await openAsBlob(file, { type: mimeOf(file) }), basename(file))
+  } else form.append('file', new Blob([file.bytes], { type: file.type }), file.name)
+  const name = typeof file === 'string' ? basename(file) : file.name
   const response = await fetcher(`http://127.0.0.1:${target.port}/api/super-tabs/${target.tabId}/attachments?asAgentId=${agentId}`, {
     method: 'POST', body: form, signal: AbortSignal.timeout(UPLOAD_MS),
     // The local API's write gate, and its credential over TCP.
@@ -46,7 +49,7 @@ async function uploadOne(path: string, target: UploadTarget, agentId: string, fe
   const body = object(await response.json().catch(() => ({})))
   const attachment = object(object(body.data).attachment)
   if (!response.ok || typeof attachment.id !== 'string') {
-    throw new Error(String(object(body.error).message ?? body.message ?? `Could not upload ${basename(path)} (HTTP ${response.status}).`))
+    throw new Error(String(object(body.error).message ?? body.message ?? `Could not upload ${name} (HTTP ${response.status}).`))
   }
   return attachment.id
 }
@@ -56,27 +59,44 @@ async function uploadOne(path: string, target: UploadTarget, agentId: string, fe
 export interface UploadTarget { tabId: string; conversationId: string; sentIn?: string; port: number; dataDir: string }
 
 /** Folders in a Buddy's folder that are not the project's files: its repository's records, its remote's credentials among
- *  them, and Harness's own. */
+ *  them, and Harness's own. Compared in lower case: on a case-insensitive Mac `.GIT` is the same folder. */
 const RECORDS = new Set(['.git', '.harness'])
 
-/** A Buddy's proposal files, each as the real file it names: only what lies inside its own folder, the one place it may
- *  read (lib/buddyGuard.ts), never under its repository's or Harness's records, and never through a link out of it. */
-export function insideFolder(paths: string[], folder: string): string[] {
-  const root = realpathSync(folder)
+/** A file read once, after its checks, and sent as those bytes. */
+export interface CheckedFile { name: string; type: string; bytes: Buffer }
+
+/**
+ * A Buddy's proposal files, each read from the one descriptor its checks were made on (security review of #2103): only a
+ * regular file inside its own folder, the one place it may read (lib/buddyGuard.ts), never under its repository's or
+ * Harness's records. The last name is opened without following a link; the file must have that one name (a hard link
+ * would give a file outside a second name inside), and the real path's file must be the one opened, so a name swapped
+ * for a link after the check is refused or never read. Each is at most a chat file's size, so read whole.
+ */
+export function readInsideFolder(paths: string[], folder: string): CheckedFile[] {
+  const root = realpathSync.native(folder)
   return paths.map(path => {
-    let real: string
-    try { real = realpathSync(path) } catch { throw new Error(`${path} is not a file.`) }
-    const inside = relative(root, real)
-    if (!inside || inside.startsWith('..') || isAbsolute(inside) || RECORDS.has(inside.split(sep)[0]!)) {
-      throw new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat by its id.`)
+    const outside = () => new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat by its id.`)
+    let fd: number
+    try { fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)) } catch (error) {
+      throw (error as NodeJS.ErrnoException).code === 'ELOOP' ? outside() : new Error(`${path} is not a file.`)
     }
-    return real
+    try {
+      const opened = fstatSync(fd), real = realpathSync.native(path), inside = relative(root, real), named = lstatSync(real)
+      if (!inside || inside.startsWith('..') || isAbsolute(inside) || RECORDS.has(inside.split(sep)[0]!.toLowerCase())) throw outside()
+      if (!opened.isFile()) throw new Error(`${path} is not a file.`)
+      if (opened.nlink !== 1 || named.ino !== opened.ino || named.dev !== opened.dev) throw outside()
+      if (opened.size > MAX_ATTACHMENT_BYTES) throw new Error(`${basename(path)} is over the ${formatSize(MAX_ATTACHMENT_BYTES)} limit (${opened.size} bytes).`)
+      const bytes = Buffer.alloc(opened.size)
+      let read = 0
+      for (let got = -1; read < bytes.length && got !== 0; read += got) got = readSync(fd, bytes, read, bytes.length - read, read)
+      return { name: basename(real), type: mimeOf(real), bytes: bytes.subarray(0, read) }
+    } finally { closeSync(fd) }
   })
 }
 
 /** Uploads each file of `post --attach` and answers the ids `message.send` names. Repeating a post whose message already
  * went out uploads nothing and names that message's files, so the send returns its receipt. */
-export async function uploadAttachments(paths: string[], operationId: string, target: UploadTarget, request: Request,
+export async function uploadAttachments(paths: Array<string | CheckedFile>, operationId: string, target: UploadTarget, request: Request,
   fetcher: typeof fetch = fetch): Promise<string[]> {
   const earlier = value(await request({ action: 'attachment', step: 'sent', conversationId: target.sentIn ?? target.conversationId, operationId }))
   if (Array.isArray(earlier.attachmentIds)) return earlier.attachmentIds.map(String)
