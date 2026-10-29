@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -86,6 +87,22 @@ void main() {
     addTearDown(chat.dispose);
     await chat.load();
     return (swarm: swarm, reader: reader, chat: chat);
+  }
+
+  /// Takes each reply as the backend does — written under its operation id —
+  /// and has the chat's next read bring it back with m1 and m2.
+  void readsBack(FakeSwarm swarm, {bool Function()? lost}) {
+    final rows = [message('m1', 1), message('m2', 2, root: 'm1')];
+    swarm.routes[commands] = (body) {
+      if (lost?.call() ?? false) throw StateError('connection reset');
+      final id = body!['operationId'] as String;
+      rows.add(message(id, rows.length + 1, root: 'm1'));
+      return {'ok': true};
+    };
+    swarm.routes[messages] = (_) => {
+      'messages': rows.reversed.toList(),
+      'next': null,
+    };
   }
 
   SwarmThread open(SwarmConversation chat, [String root = 'm1']) {
@@ -248,11 +265,7 @@ void main() {
         'messages': [message('m1', 1)],
         'next': null,
       };
-      r.swarm.routes[commands] = (_) => {'ok': true};
-      r.swarm.routes['$messages?after=2'] = (_) => {
-        'messages': <Object>[],
-        'next': null,
-      };
+      readsBack(r.swarm);
       final t = open(r.chat);
       await t.load();
 
@@ -293,9 +306,13 @@ void main() {
         'next': null,
       };
       final answer = Completer<Object?>();
-      r.swarm.routes[commands] = (_) => answer.future;
+      String? sent;
+      r.swarm.routes[commands] = (body) {
+        sent = body!['operationId'] as String;
+        return answer.future;
+      };
       r.swarm.routes['$messages?after=2'] = (_) => {
-        'messages': [message('m3', 3, root: 'm1')],
+        'messages': [message(sent!, 3, root: 'm1')],
         'next': null,
       };
       final t = open(r.chat);
@@ -312,7 +329,53 @@ void main() {
       await sending;
 
       expect(t.pending, isNull);
-      expect([for (final m in t.replies) m.id], ['m2', 'm3']);
+      expect([for (final m in t.replies) m.id], ['m2', sent]);
+    });
+
+    test('taken by the backend and not read back yet, it stays on its way '
+        'until a read brings it', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      String? sent;
+      r.swarm.routes[commands] = (body) {
+        sent = body!['operationId'] as String;
+        return {'ok': true};
+      };
+      var reads = 0;
+      r.swarm.routes['$messages?after=2'] = (_) => switch (reads++) {
+        // The read after the post fails; the next one has not got it yet.
+        0 => throw StateError('offline'),
+        1 => {'messages': <Object>[], 'next': null},
+        _ => {
+          'messages': [message(sent!, 3, root: 'm1')],
+          'next': null,
+        },
+      };
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'On it';
+
+      expect(await t.send(), isTrue, reason: 'the backend took it');
+
+      expect(t.pending, 'On it');
+      expect(t.confirmed, isTrue);
+      expect(t.unconfirmed, isFalse, reason: 'not to be sent again');
+      t.draft = 'And another';
+      expect(t.canSend, isFalse);
+      expect(await t.send(), isFalse);
+      expect(r.swarm.commands, hasLength(1));
+
+      await r.chat.load();
+      expect(t.pending, 'On it');
+
+      await r.chat.load();
+      expect(t.pending, isNull);
+      expect(t.confirmed, isFalse);
+      expect([for (final m in t.replies) m.id], ['m2', sent]);
+      expect(t.canSend, isTrue);
     });
 
     test('refused goes back to the box, with Also send as it was', () async {
@@ -347,12 +410,7 @@ void main() {
         'next': null,
       };
       var lost = true;
-      r.swarm.routes[commands] = (_) =>
-          lost ? throw StateError('connection reset') : {'ok': true};
-      r.swarm.routes['$messages?after=2'] = (_) => {
-        'messages': <Object>[],
-        'next': null,
-      };
+      readsBack(r.swarm, lost: () => lost);
       final t = open(r.chat);
       await t.load();
       t.draft = 'Once only';
@@ -449,6 +507,155 @@ void main() {
       expect(t.messages, isEmpty);
       expect(t.draft, isEmpty);
       expect(t.error, isNull, reason: 'the page says it is not open');
+    });
+
+    for (final code in ['FORBIDDEN', 'NOT_FOUND']) {
+      test('a reply refused with $code drops the thread as a refused read '
+          'does, and the chat reads again', () async {
+        final r = await rig();
+        r.swarm.routes[thread] = (_) => {
+          'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+          'next': null,
+        };
+        final t = open(r.chat);
+        await t.load();
+        r.swarm.routes[commands] = (_) =>
+            throw SuperTabFailure(code, 'Not yours.', statusCode: 403);
+        final before = r.swarm.paths.length;
+        t.draft = 'Secret plan';
+        t.alsoSend = true;
+
+        expect(await t.send(), isFalse);
+        await settle();
+
+        expect(t.state, SwarmChatState.lost);
+        expect(t.messages, isEmpty);
+        expect(t.draft, isEmpty, reason: 'not put back in the box');
+        expect(t.alsoSend, isFalse);
+        expect(t.pending, isNull);
+        expect(t.error, isNull, reason: 'the page says it is not open');
+        expect(r.chat.threadDraft('m1'), isEmpty);
+        expect(
+          r.swarm.paths.skip(before).where((p) => p.startsWith(messages)),
+          isNotEmpty,
+          reason: 'the chat reads again',
+        );
+      });
+    }
+
+    test(
+      'a reaction whose read of the thread is refused drops the thread',
+      () async {
+        final r = await rig();
+        r.swarm.routes[thread] = (_) => {
+          'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+          'next': null,
+        };
+        final t = open(r.chat);
+        await t.load();
+        r.swarm.routes[commands] = (_) => {'ok': true};
+        r.swarm.routes[thread] = (_) => throw const SuperTabFailure(
+          'FORBIDDEN',
+          'Not yours.',
+          statusCode: 403,
+        );
+
+        expect(
+          await t.react(t.replies.single, SuperTabReactionEmoji.rocket),
+          isTrue,
+        );
+        await settle();
+
+        expect(t.state, SwarmChatState.lost);
+        expect(t.messages, isEmpty);
+      },
+    );
+
+    test('a refused reaction has the chat read again, and a chat refused '
+        'there drops the thread', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      r.swarm.routes[commands] = (_) => throw refused;
+      r.swarm.routes[messages] = (_) => throw refused;
+
+      expect(
+        await t.react(t.replies.single, SuperTabReactionEmoji.rocket),
+        isFalse,
+      );
+      await settle();
+
+      expect(r.chat.state, SwarmChatState.lost);
+      expect(t.state, SwarmChatState.lost);
+      expect(t.messages, isEmpty);
+    });
+
+    test('a reply refused after its thread closed puts nothing back', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      final answer = Completer<Object?>();
+      r.swarm.routes[commands] = (_) => answer.future;
+      final t = SwarmThread(r.chat, 'm1');
+      await t.load();
+      t.draft = 'Too late';
+      final sending = t.send();
+      await settle();
+
+      t.dispose();
+      answer.completeError(
+        const SuperTabFailure(
+          'ARCHIVED',
+          'This chat is archived.',
+          statusCode: 409,
+        ),
+      );
+
+      expect(await sending, isFalse);
+      expect(r.chat.threadDraft('m1'), isEmpty);
+    });
+
+    test('a reply refused after access went puts nothing back', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      final answer = Completer<Object?>();
+      r.swarm.routes[commands] = (_) => answer.future;
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'Secret plan';
+      t.alsoSend = true;
+      final sending = t.send();
+      await settle();
+
+      r.reader.revoke();
+      answer.completeError(
+        const SuperTabFailure(
+          'ARCHIVED',
+          'This chat is archived.',
+          statusCode: 409,
+        ),
+      );
+
+      expect(await sending, isFalse);
+      expect(t.state, SwarmChatState.lost);
+      expect(t.draft, isEmpty);
+      expect(t.alsoSend, isFalse);
+      expect(t.error, isNull);
+      expect(r.chat.threadDraft('m1'), isEmpty);
     });
 
     test('taken out of the chat, the thread hides what it read', () async {

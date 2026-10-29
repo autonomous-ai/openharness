@@ -161,8 +161,13 @@ class SwarmThread extends ChangeNotifier {
   /// "Sending…" and then [unconfirmed], until it is read back.
   String? get pending => (_pending?['command'] as Map?)?['text'] as String?;
 
+  /// The backend took the reply on its way, which no read has brought back
+  /// yet: it stays on its way, and is not sent again.
+  bool get confirmed => _confirmed;
+  bool _confirmed = false;
+
   /// A reply was sent and not confirmed: [send] retries it.
-  bool get unconfirmed => _pending != null && !sending;
+  bool get unconfirmed => _pending != null && !sending && !_confirmed;
 
   /// The box may send now: there is text, and no reply is under way.
   bool get canSend =>
@@ -186,6 +191,7 @@ class SwarmThread extends ChangeNotifier {
       }
       _listed = listed;
     }
+    _settle();
     notifyListeners();
   }
 
@@ -214,8 +220,30 @@ class SwarmThread extends ChangeNotifier {
     _alsoSend = false;
     _pending = null;
     _sent = null;
+    _confirmed = false;
     error = null;
     if (held) _tell();
+  }
+
+  /// The backend refused [failure] as a chat that is not the person's: the
+  /// thread keeps nothing, as when access is revoked, and the chat learns it
+  /// from a read of its own. False for any other refusal.
+  bool _refusedChat(SuperTabFailure failure) {
+    if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) return false;
+    _lose();
+    unawaited(chat.load());
+    return true;
+  }
+
+  /// A confirmed reply read back shows as its row, no longer on its way.
+  void _settle() {
+    if (!_confirmed) return;
+    final id = _pending?['operationId'];
+    if (!messages.any((m) => m.id == id)) return;
+    _pending = null;
+    _sent = null;
+    _confirmed = false;
+    _composer.changed();
   }
 
   /// Reads the thread: from its newest reply back through [pagesOnOpen]
@@ -296,14 +324,10 @@ class SwarmThread extends ChangeNotifier {
       _read = true;
       error = _readError = null;
       chat.keepThreads(threads);
+      _settle();
     } on SuperTabFailure catch (failure) {
       if (!current()) return;
-      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
-        _lose();
-        // The chat learns it too, from a read of its own.
-        unawaited(chat.load());
-        return;
-      }
+      if (_refusedChat(failure)) return;
       error = failure.message;
       if (!earlier) _readError = error;
     } catch (_) {
@@ -319,13 +343,19 @@ class SwarmThread extends ChangeNotifier {
 
   /// Adds the person's [emoji] to [message], or takes it back (the chat's
   /// [SwarmConversation.react]), then reads the thread's newest page again:
-  /// a reply the chat has not read shows the backend's counts too.
+  /// a reply the chat has not read shows the backend's counts too. A refused
+  /// reaction has the chat read again, which tells whether it is still open.
   Future<bool> react(
     SuperTabMessage message,
     SuperTabReactionEmoji emoji,
   ) async {
     final done = await chat.react(message, emoji);
-    if (done && !_disposed && _read) await _reread();
+    if (_disposed) return done;
+    if (done && _read) {
+      await _reread();
+    } else if (!done && chat.error != null) {
+      unawaited(chat.load());
+    }
     return done;
   }
 
@@ -354,7 +384,12 @@ class SwarmThread extends ChangeNotifier {
         rows.values.toList()..sort(superTabMessageOrder),
       );
       chat.keepThreads(answer['threads']);
+      _settle();
       notifyListeners();
+    } on SuperTabFailure catch (failure) {
+      if (_disposed || epoch != _epoch) return;
+      // Any other refusal keeps the counts read before.
+      _refusedChat(failure);
     } catch (_) {
       // The counts read before stay; the next open reads them again.
     }
@@ -365,7 +400,7 @@ class SwarmThread extends ChangeNotifier {
   /// leaves the box at once and shows as [pending] until it is read back.
   /// True once the backend took it.
   Future<bool> send() async {
-    if (sending || _disposed || !canPost) return false;
+    if (sending || _confirmed || _disposed || !canPost) return false;
     var pending = _pending;
     if (pending == null) {
       final text = _draft.trim();
@@ -390,13 +425,19 @@ class SwarmThread extends ChangeNotifier {
     sending = true;
     error = null;
     _tell();
+    // An answer that comes back after the thread closed, or after what it
+    // held was dropped, changes nothing: no text back in a box, no read.
+    final epoch = _epoch;
+    bool current() => !_disposed && epoch == _epoch;
     try {
       await reader.request(
         'POST',
         '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
         body: pending,
       );
+      if (current()) _confirmed = true;
     } on SuperTabFailure catch (failure) {
+      if (!current() || _refusedChat(failure)) return false;
       // A definitive refusal made no change: the text goes back to the box
       // to correct. A lost answer keeps its receipt, so a retry is the same
       // reply.
@@ -408,18 +449,19 @@ class SwarmThread extends ChangeNotifier {
       error = failure.message;
       return false;
     } catch (_) {
+      if (!current()) return false;
       error = 'Your reply is not confirmed. Send again to check it.';
       return false;
     } finally {
       sending = false;
       if (!_disposed) _tell();
     }
+    if (!current()) return true;
     unawaited(reader.refresh());
-    // Shown as on its way until the chat's read brings it back.
+    // On its way until a read brings it back: this one, or the chat's next.
     await chat.load();
-    if (_disposed || !identical(_pending, pending)) return true;
-    _pending = null;
-    _sent = null;
+    if (!current() || !identical(_pending, pending)) return true;
+    _settle();
     _tell();
     return true;
   }

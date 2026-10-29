@@ -579,7 +579,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         text: text,
         files: const [],
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
-        sending: t.sending,
+        // Taken by the backend and not read back yet: still on its way.
+        sending: t.sending || t.confirmed,
         quote: null,
         onSendAgain: () => unawaited(t.send()),
       ),

@@ -1340,8 +1340,8 @@ void main() {
 
     /// River's question with two replies in its thread, Nova's only there
     /// and Nova's also sent to the chat; then a message of Nova's own. A
-    /// reply sent comes back in the page and on the line, in both when also
-    /// sent.
+    /// reply sent comes back in the page under its operation id, as the
+    /// backend writes it, and on the line; in both when also sent.
     FakeSwarm threaded({List<Map<String, dynamic>>? members}) {
       final page = [
         message('m1', 1, author: 'agent-lead', text: root, thread: 'm1'),
@@ -1383,7 +1383,7 @@ void main() {
         final command = body!['command'] as Map<String, dynamic>;
         page.add(
           message(
-            'm5',
+            body['operationId'] as String,
             5,
             author: me,
             text: command['text'] as String,
@@ -1562,8 +1562,11 @@ void main() {
       );
 
       await back(tester);
+      final sent = fake.calls
+          .lastWhere((call) => call.path == commands)
+          .body!['operationId'];
       expect(find.text('Ship it as drawn.'), findsOneWidget);
-      expect(key('swarm-replied-in-thread-m5'), findsOneWidget);
+      expect(key('swarm-replied-in-thread-$sent'), findsOneWidget);
     });
 
     testWidgets('a notification of a reply only in its thread opens the '
@@ -1621,6 +1624,31 @@ void main() {
 
       expect(find.text('This chat is not open to you.'), findsOneWidget);
       for (final text in [root, onlyThere, alsoHere, 'Half a reply']) {
+        expect(find.text(text), findsNothing, reason: text);
+      }
+      expect(key('swarm-thread-chat-title'), findsNothing);
+      expect(key('swarm-thread-box'), findsNothing);
+    });
+
+    testWidgets('a reply refused as the chat is no longer the person\'s '
+        'leaves nothing of the thread on screen', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      fake.routes[commands] = (_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+
+      await tester.enterText(key('swarm-thread-field'), 'Secret plan');
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+      for (final text in [root, onlyThere, alsoHere, 'Secret plan']) {
         expect(find.text(text), findsNothing, reason: text);
       }
       expect(key('swarm-thread-chat-title'), findsNothing);
