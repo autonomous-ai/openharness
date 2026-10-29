@@ -9,8 +9,9 @@ import { describe, expect, it } from 'vitest'
 // readBy, invitedSwarms.ts, pageReads.ts, swarmRows.ts) with a plan test. This test finds every Prisma call on a hot Swarm
 // collection (every SuperTab and Swarm model of the schema) whose filter uses one of those operators, also through a delegate
 // alias. The ones there were when it was written are allowed (hotFilters.allowed.json) and that list may only shrink: a new
-// one fails here. It reads source, not types: a filter a helper function builds and returns (parts/load.ts `or`) is not
-// followed.
+// one fails here. It reads source, not types: a call on a receiver it cannot tell (an imported name, another object's field, a
+// call's result) is listed as `unresolved` for review rather than passed, and a filter a helper function builds and returns
+// (parts/load.ts `or`) is not followed.
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const ALLOWED = join(import.meta.dirname, 'hotFilters.allowed.json')
@@ -35,41 +36,82 @@ export interface HotFilter { file: string; line: number; call: string; operator:
 const nameOf = (name: ts.PropertyName | ts.MemberName): string | undefined =>
   ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isPrivateIdentifier(name) ? name.text : undefined
 
-/** The hot delegate a type names: `Prisma.SwarmGroupDelegate`, `typeof db.swarmGroup`, `PrismaClient['swarmGroup']`. */
-function hotType(type: ts.TypeNode | undefined): string | undefined {
-  for (const word of type?.getText().match(/\w+/g) ?? []) {
-    if (HOT.has(word)) return word
-    const model = word.endsWith('Delegate') ? word.slice(0, -'Delegate'.length) : undefined
-    if (model && MODELS.has(model)) return model[0]!.toLowerCase() + model.slice(1)
+/** Every model's delegate, hot or not: a receiver named one of these is known to be that collection. */
+const DELEGATES = new Set([...readFileSync(SCHEMA, 'utf8').matchAll(/^model\s+(\w+)\s*\{/gm)].map(match => match[1]![0]!.toLowerCase() + match[1]!.slice(1)))
+/** A receiver the lint cannot tell is a hot delegate or not: its calls are listed for review like a hot one's. */
+const UNRESOLVED = 'unresolved'
+
+/**
+ * What a type says the value is: a hot delegate (`Prisma.SwarmGroupDelegate`, `typeof db.swarmGroup`,
+ * `PrismaClient['swarmGroup']`), another model's delegate (undefined), or nothing it can tell (UNRESOLVED).
+ */
+function typeReceiver(type: ts.TypeNode): string | undefined {
+  let other = false
+  for (const word of type.getText().match(/\w+/g) ?? []) {
+    const delegate = word.endsWith('Delegate') ? word[0]!.toLowerCase() + word.slice(1, -'Delegate'.length) : word
+    if (HOT.has(delegate)) return delegate
+    if (DELEGATES.has(delegate)) other = true
+  }
+  return other ? undefined : UNRESOLVED
+}
+
+/** Combines what the branches of a conditional may be: hot if any is, else unresolved if any is. */
+const either = (...receivers: Array<string | undefined>) => receivers.find(r => r && r !== UNRESOLVED) ?? receivers.find(r => r === UNRESOLVED)
+
+/** What a declared name holds: by its delegate property when destructured, its type, else its initializer. */
+function boundReceiver(bound: Binding | ts.PropertyDeclaration, seen: Set<ts.Node>): string | undefined {
+  if (ts.isBindingElement(bound)) {
+    const property = bound.propertyName ? nameOf(bound.propertyName as ts.PropertyName) : ts.isIdentifier(bound.name) ? bound.name.text : undefined
+    if (property && HOT.has(property)) return property
+    if (property && DELEGATES.has(property)) return undefined
+    return bound.initializer ? hotReceiver(bound.initializer, seen) : UNRESOLVED
+  }
+  if (bound.type) return typeReceiver(bound.type)
+  return bound.initializer ? hotReceiver(bound.initializer, seen) : UNRESOLVED
+}
+
+/** The field `name` of the class holding `at`: a property, or a constructor parameter property. */
+function classField(name: string, at: ts.Node): ts.PropertyDeclaration | ts.ParameterDeclaration | undefined {
+  let owner: ts.Node | undefined = at.parent
+  while (owner && !ts.isClassLike(owner)) owner = owner.parent
+  if (!owner) return undefined
+  for (const member of (owner as ts.ClassLikeDeclaration).members) {
+    if (ts.isPropertyDeclaration(member) && nameOf(member.name) === name) return member
+    if (ts.isConstructorDeclaration(member)) {
+      const parameter = member.parameters.find(p => ts.isIdentifier(p.name) && p.name.text === name && ts.getModifiers(p)?.length)
+      if (parameter) return parameter
+    }
   }
   return undefined
 }
 
 /**
- * The hot collection a call's receiver is, if any: `x.swarmGroup`, `x['swarmGroup']`, `delegate(tx, kind)`, or a name bound to
- * one (`const groups = db.swarmGroup`, `const { swarmGroup: groups } = db`, a parameter typed as a hot delegate), followed
- * through aliases and conditionals.
+ * The hot collection a call's receiver is: `x.swarmGroup`, `x['swarmGroup']`, `delegate(tx, kind)`, or a name bound to one
+ * (`const groups = db.swarmGroup`, `const { swarmGroup: groups } = db`, a parameter or field typed as a hot delegate),
+ * followed through aliases and conditionals. Undefined when it is surely another collection; UNRESOLVED when the lint cannot
+ * tell (an imported name, a field of another object, a call's result), so that call is listed for review rather than passed.
  */
 function hotReceiver(receiver: ts.Expression, seen = new Set<ts.Node>()): string | undefined {
   const inner = unwrap(receiver)
-  if (seen.has(inner)) return undefined
+  if (seen.has(inner)) return UNRESOLVED
   seen.add(inner)
-  if (ts.isPropertyAccessExpression(inner) && HOT.has(inner.name.text)) return inner.name.text
-  if (ts.isElementAccessExpression(inner) && ts.isStringLiteralLike(inner.argumentExpression) && HOT.has(inner.argumentExpression.text)) {
-    return inner.argumentExpression.text
+  if (ts.isPropertyAccessExpression(inner)) {
+    const name = inner.name.text
+    if (HOT.has(name)) return name
+    if (DELEGATES.has(name)) return undefined
+    const field = inner.expression.kind === ts.SyntaxKind.ThisKeyword ? classField(name, inner) : undefined
+    return field ? boundReceiver(field, seen) : UNRESOLVED
   }
-  if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) && inner.expression.text === PART_DELEGATE) return 'part'
-  if (ts.isConditionalExpression(inner)) return hotReceiver(inner.whenTrue, seen) ?? hotReceiver(inner.whenFalse, seen)
-  if (ts.isBinaryExpression(inner)) return hotReceiver(inner.left, seen) ?? hotReceiver(inner.right, seen)
-  if (!ts.isIdentifier(inner)) return undefined
+  if (ts.isElementAccessExpression(inner)) {
+    const key = ts.isStringLiteralLike(inner.argumentExpression) ? inner.argumentExpression.text : undefined
+    return key && HOT.has(key) ? key : key && DELEGATES.has(key) ? undefined : UNRESOLVED
+  }
+  if (ts.isCallExpression(inner)) return ts.isIdentifier(inner.expression) && inner.expression.text === PART_DELEGATE ? 'part' : UNRESOLVED
+  if (ts.isConditionalExpression(inner)) return either(hotReceiver(inner.whenTrue, seen), hotReceiver(inner.whenFalse, seen))
+  if (ts.isBinaryExpression(inner)) return either(hotReceiver(inner.left, seen), hotReceiver(inner.right, seen))
+  if (!ts.isIdentifier(inner)) return UNRESOLVED
   const bound = declaration(inner.text, inner)
-  if (!bound) return undefined
-  if (ts.isBindingElement(bound)) {
-    const property = bound.propertyName ? nameOf(bound.propertyName as ts.PropertyName) : ts.isIdentifier(bound.name) ? bound.name.text : undefined
-    if (property && HOT.has(property)) return property
-    return bound.initializer ? hotReceiver(bound.initializer, seen) : undefined
-  }
-  return hotType(bound.type) ?? (bound.initializer ? hotReceiver(bound.initializer, seen) : undefined)
+  return bound ? boundReceiver(bound, seen) : UNRESOLVED
 }
 
 function unwrap(node: ts.Expression): ts.Expression {
@@ -84,31 +126,39 @@ type Binding = ts.VariableDeclaration | ts.BindingElement | ts.ParameterDeclarat
 const scopes = (node: ts.Node): boolean => ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node) || ts.isCaseBlock(node)
   || ts.isCatchClause(node) || ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node) || ts.isFunctionLike(node)
   || ts.isClassLike(node)
+/** Where a `var` lands: its function, or the file. */
+const hoists = (node: ts.Node): boolean => ts.isSourceFile(node) || ts.isFunctionLike(node) || ts.isModuleBlock(node)
+const isVar = (node: Binding): boolean => !ts.isParameter(node) && !(ts.getCombinedNodeFlags(node) & ts.NodeFlags.BlockScoped)
 
 /**
- * The nearest declaration of `name` (a `const`/`let`, a destructured name or a parameter) before `at` whose scope encloses
- * `at`: the scopes holding `at` are searched from the innermost out, each for its own declarations only, so a declaration
- * in a sibling block or a nested function never shadows the one in force at `at`.
+ * The nearest declaration of `name` (a `const`/`let`/`var`, a destructured name or a parameter) before `at` whose scope
+ * encloses `at`: the scopes holding `at` are searched from the innermost out, each for its own declarations only, so a
+ * declaration in a sibling block or a nested function never shadows the one in force at `at`. A `var` belongs to its
+ * function (or the file), so a function searches its nested blocks for `var`s.
  */
 function declaration(name: string, at: ts.Node): Binding | undefined {
   for (let scope: ts.Node | undefined = at.parent; scope; scope = scope.parent) {
     if (!scopes(scope)) continue
     let found: Binding | undefined
-    const visit = (node: ts.Node) => {
+    const visit = (node: ts.Node, nested: boolean) => {
       if (node.pos > at.pos) return
       if ((ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.name.text === name
-        && node.end <= at.pos) found = node
-      // An inner scope's declarations are not in force here (an inner scope holding `at` was searched already).
-      if (scopes(node)) return
-      ts.forEachChild(node, visit)
+        && node.end <= at.pos && (!nested || isVar(node))) found = node
+      // An inner function's declarations are never in force here; an inner block's only when they are `var`s of this function.
+      if (ts.isFunctionLike(node) || ts.isClassLike(node)) return
+      if (scopes(node)) {
+        if (!hoists(scope!)) return
+        nested = true
+      }
+      ts.forEachChild(node, child => visit(child, nested))
     }
-    ts.forEachChild(scope, visit)
+    ts.forEachChild(scope, child => visit(child, false))
     if (found) return found
   }
   return undefined
 }
 
-/** The initializer of the nearest `const`/`let` named `name` declared before `at`. */
+/** The initializer of the nearest `const`/`let`/`var` named `name` declared before `at`. */
 function declared(name: string, at: ts.Node): ts.Expression | undefined {
   const bound = declaration(name, at)
   return bound && ts.isVariableDeclaration(bound) ? bound.initializer : undefined
@@ -253,6 +303,46 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(found.map(f => [f.call, f.operator])).toEqual([['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'in'], ['superTabMessage.findMany', 'in']])
   })
 
+  it('resolves a var to its function, also from a nested block', () => {
+    const found = hotFilters('fixture.ts', `
+      async function read() {
+        { var groups = db.swarmGroup }
+        await groups.findMany({ where: { key: { in: ids } } })
+        if (flag) { var keys = { in: ids } }
+        await db.swarmHead.findMany({ where: { key: keys } })
+      }
+      async function other() { await groups.count({ where: { key: { in: ids } } }) }
+      function scoped() { { var machines = db.machine } return machines.findMany({ where: { machineId: { in: ids } } }) }
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([['swarmGroup.findMany', 'in'], ['swarmHead.findMany', 'in'], ['unresolved.count', 'in']])
+  })
+
+  it('lists a call on a receiver it cannot resolve for review, and passes one surely on another collection', () => {
+    const found = hotFilters('fixture.ts', `
+      import { groups } from './elsewhere'
+      await groups.findMany({ where: { key: { in: ids } } })
+      await repo.groups.findMany({ where: { key: { in: ids } } })
+      await pick(tx).findMany({ where: { key: { in: ids } } })
+      await db[model].findMany({ where: { key: { in: ids } } })
+      async function typed(table: SomeTable) { await table.findMany({ where: { key: { in: ids } } }) }
+      await groups.findMany({ where: { key } })
+      class Store {
+        private groups = db.swarmGroup
+        constructor(private machines: Prisma.MachineDelegate, private runs: typeof db.superTabRun) {}
+        async read() {
+          await this.groups.findMany({ where: { key: { in: ids } } })
+          await this.machines.findMany({ where: { machineId: { in: ids } } })
+          await this.runs.count({ where: { id: { in: ids } } })
+          await this.db.machine.findMany({ where: { machineId: { in: ids } } })
+          await (flag ? this.db.machine : this.other).findMany({ where: { id: { in: ids } } })
+        }
+      }
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([
+      ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'],
+      ['swarmGroup.findMany', 'in'], ['superTabRun.count', 'in'], ['unresolved.findMany', 'in']])
+  })
+
   it('covers every SuperTab and Swarm model in the schema', () => {
     const schema = readFileSync(SCHEMA, 'utf8')
     const models = hotModels(schema)
@@ -270,7 +360,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     const allowed = JSON.parse(readFileSync(ALLOWED, 'utf8')) as Record<string, number>
     const added = Object.entries(current).filter(([key, count]) => count > (allowed[key] ?? 0))
       .map(([key, count]) => `${key}: ${count} (allowed ${allowed[key] ?? 0})`)
-    expect(added, 'A Prisma in/has filter on a hot Swarm collection is sent as $expr, which no index bounds. Read through a named index (parts/indexed.ts readBy) with a plan test instead.').toEqual([])
+    expect(added, 'A Prisma in/has filter on a hot Swarm collection is sent as $expr, which no index bounds. Read through a named index (parts/indexed.ts readBy) with a plan test instead. An `unresolved` call is one whose collection this test cannot tell: name the delegate (db.swarmGroup, or a parameter typed Prisma.XDelegate), or list it after checking it is not a hot collection.').toEqual([])
     const fewer = Object.entries(allowed).filter(([key, count]) => count > (current[key] ?? 0)).map(([key, count]) => `${key}: ${current[key] ?? 0} (listed ${count})`)
     expect(fewer, 'Fewer uses than listed: lower them in hotFilters.allowed.json (UPDATE_HOT_FILTERS=1 rewrites it).').toEqual([])
   })
