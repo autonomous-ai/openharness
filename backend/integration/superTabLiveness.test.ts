@@ -489,6 +489,27 @@ describe('work that loses its owner', () => {
     expect((await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.map(m => m.id)).toEqual(expect.arrayContaining(rows.filter(m => m.conversationId === 'lead').map(m => m.id)))
   })
 
+  // Re-check of #2177: such copies stored before the mark carry none. One whose Lead copy reached the Lead is that same
+  // notice and stays hidden; a reply someone wrote in its thread while it was shown reads in the chat.
+  it('hides a task chat\'s copy stored without the mark when its Lead copy reached the Lead, and keeps replies under it', async () => {
+    const f = await swarm()
+    const { group, harness } = await withoutLead(f)
+    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
+    const copy = (await f.lostRows()).find(m => m.conversationId === group && m.text.includes('lost its task'))!
+    const { recipientsOnly: _mark, ...source } = copy.source as Record<string, unknown>
+    expect(_mark).toBe(true)
+    await db.superTabMessage.update({ where: { id: copy.id }, data: { source: source as Prisma.InputJsonValue } })
+    const id = randomUUID().replaceAll('-', '').slice(0, 24)
+    await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: group, sequence: copy.sequence + 1, author: { kind: 'person', id: owner.sub, name: owner.email },
+      text: 'Who takes this?', replyTo: copy.id, thread: copy.id, recipientIds: [], mentions: [] } })
+    const page = await f.timed.messages(owner, f.tab, group, {})
+    expect(page.messages.map(m => m.id)).not.toContain(copy.id)
+    expect(await f.timed.messages(owner, f.tab, group, { messageId: copy.id })).toMatchObject({ messages: [] })
+    const reply = page.messages.find(m => m.id === id)!
+    expect(reply.thread ?? reply.id).toBe(reply.id)
+    expect(page.threads.map(t => t.id)).not.toContain(copy.id)
+  })
+
   it('lets the Lead assign the lost work to another agent, and keeps the old one fenced', async () => {
     const f = await swarm()
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
