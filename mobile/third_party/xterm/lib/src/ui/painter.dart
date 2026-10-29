@@ -37,6 +37,63 @@ double symbolFontSizeForCell({
   return fontSize * cellWidth / symbolAdvance;
 }
 
+/// Where a Powerline separator's ink starts and ends across its glyph, as
+/// fractions of an em from the glyph's origin; null for any other code point.
+///
+/// A separator joins the coloured cells on either side of it, so it is
+/// stretched to fill its cell edge to edge and top to bottom. Scaled like an
+/// icon, it covered about 60% of the row and stopped short of its neighbours.
+/// Each glyph sits in its em differently (U+E0B0 at the left, U+E0B2 at the
+/// right, U+E0B8 across it), so the painter needs its ink, not its advance.
+(double, double)? powerlineSeparatorInk(int codePoint) {
+  final ink = _powerlineSeparatorInk[codePoint];
+  if (ink == null) return null;
+  return (ink.$1 / _symbolUnitsPerEm, ink.$2 / _symbolUnitsPerEm);
+}
+
+/// Horizontal ink of the Powerline and Powerline Extra separators in the
+/// bundled Symbols Nerd Font Mono 3.5.1, in font units. Its line, ascent plus
+/// descent, is exactly one em, so an em tall is the cell's height.
+const _symbolUnitsPerEm = 2048;
+const _powerlineSeparatorInk = <int, (int, int)>{
+  0xE0B0: (-122, 1325), // left hard divider
+  0xE0B1: (0, 1433), // left soft divider
+  0xE0B2: (724, 2171), // right hard divider
+  0xE0B3: (615, 2048), // right soft divider
+  0xE0B4: (-122, 1097), // right half circle thick
+  0xE0B5: (0, 1023), // right half circle thin
+  0xE0B6: (951, 2171), // left half circle thick
+  0xE0B7: (1024, 2048), // left half circle thin
+  0xE0B8: (-101, 2048), // lower left triangle
+  0xE0B9: (0, 2047), // backslash separator
+  0xE0BA: (1, 2150), // lower right triangle
+  0xE0BB: (1, 2048), // forward slash separator
+  0xE0BC: (-101, 2048), // upper left triangle
+  0xE0BD: (0, 2047), // forward slash separator (redundant)
+  0xE0BE: (1, 2150), // upper right triangle
+  0xE0BF: (1, 2048), // backslash separator (redundant)
+  0xE0C0: (-101, 2048), // flame thick
+  0xE0C1: (0, 2049), // flame thin
+  0xE0C2: (0, 2150), // flame thick mirrored
+  0xE0C3: (1, 2049), // flame thin mirrored
+  0xE0C4: (61, 1769), // pixelated squares small
+  0xE0C5: (280, 1987), // pixelated squares small mirrored
+  0xE0C6: (61, 1609), // pixelated squares big
+  0xE0C7: (439, 1987), // pixelated squares big mirrored
+  0xE0C8: (-101, 2048), // ice waveform
+  0xE0CA: (1, 2150), // ice waveform mirrored
+  0xE0CC: (-40, 1718), // honeycomb
+  0xE0CD: (0, 1770), // honeycomb outline
+  0xE0CE: (0, 2047), // lego separator
+  0xE0CF: (52, 1996), // lego separator thin
+  0xE0D0: (0, 1906), // lego block facing
+  0xE0D1: (0, 1510), // lego block sideways
+  0xE0D2: (-40, 1407), // trapezoid top bottom
+  0xE0D4: (642, 2089), // trapezoid top bottom mirrored
+  0xE0D6: (-101, 1346), // right hard divider inverse
+  0xE0D7: (703, 2150), // left hard divider inverse
+};
+
 /// Encapsulates the logic for painting various terminal elements.
 class TerminalPainter {
   TerminalPainter({
@@ -377,9 +434,16 @@ class TerminalPainter {
         underline: cellFlags & CellFlags.underline != 0,
       );
       if (_symbolFace(charCode)) {
+        // Read first for every icon: it drops paragraphs laid out before the
+        // face resolved.
+        final iconFontSize = _symbolFontSize;
+        final separator = powerlineSeparatorInk(charCode) != null;
         style = style.copyWith(
           fontFamily: _textStyle.symbolFontFamily,
-          fontSize: _symbolFontSize,
+          // A separator is laid out one em tall, the em the cell's height,
+          // and stretched across the cell when painted.
+          fontSize: separator ? _separatorFontSize : iconFontSize,
+          height: separator ? 1.0 : null,
           // A missing icon stays on the text face rather than a blank.
           fontFamilyFallback: [
             _textStyle.fontFamily,
@@ -415,16 +479,32 @@ class TerminalPainter {
         _cellSize.width * span,
         _cellSize.height,
       );
-      final dx = (cell.width - paragraph.maxIntrinsicWidth) / 2;
-      final dy = (cell.height - paragraph.height) / 2;
       canvas.save();
       canvas.clipRect(cell);
-      canvas.drawParagraph(paragraph, offset.translate(dx, dy));
+      final ink = powerlineSeparatorInk(charCode);
+      if (ink != null) {
+        // The em down the cell, the ink across it.
+        final (left, right) = ink;
+        final em = paragraph.height;
+        canvas.translate(cell.left, cell.top);
+        canvas.scale(cell.width / ((right - left) * em), cell.height / em);
+        canvas.drawParagraph(paragraph, Offset(-left * em, 0));
+      } else {
+        final dx = (cell.width - paragraph.maxIntrinsicWidth) / 2;
+        final dy = (cell.height - paragraph.height) / 2;
+        canvas.drawParagraph(paragraph, offset.translate(dx, dy));
+      }
       canvas.restore();
       return;
     }
     canvas.drawParagraph(paragraph, offset);
   }
+
+  /// The font size whose em, scaled, is the cell's height.
+  double get _separatorFontSize =>
+      _textStyle.fontSize *
+      _cellSize.height /
+      _textScaler.scale(_textStyle.fontSize);
 
   /// The icon face, at a size that fits one cell. Null until the bundled face
   /// has actually resolved: a probe taken before it loads measures the text

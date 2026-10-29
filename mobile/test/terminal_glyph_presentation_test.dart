@@ -101,7 +101,66 @@ void main() {
       );
     },
   );
+
+  test('Powerline separators carry their ink; other icons do not', () {
+    final (left, right) = powerlineSeparatorInk(0xE0B0)!;
+    expect(left, lessThan(0));
+    expect(right, closeTo(0.65, 0.01));
+    // The branch symbol beside them is an icon, fitted like any other.
+    expect(powerlineSeparatorInk(0xE0A0), isNull);
+    expect(powerlineSeparatorInk(0xF07B), isNull);
+  });
+
+  test('a Powerline separator covers its cell from top to bottom', () async {
+    await _loadIconFace();
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(
+        fontSize: 14.0,
+        symbolFontFamily: 'Symbols Nerd Font Mono',
+      ),
+      textScaler: TextScaler.noScaling,
+    );
+    final cell = painter.cellSize;
+    final rows = cell.height.ceil();
+    final outside = cell.width.ceil();
+
+    // U+E0B0 points right: its flat edge is the cell's left edge and its
+    // point reaches the right one.
+    final arrow = await _raster(painter, _iconCell(0xE0B0), columns: 2);
+    final leftEdge = arrow.where((pixel) => pixel.x == 0).toList();
+    expect(leftEdge, hasLength(rows));
+    expect(leftEdge.map((pixel) => pixel.argb >>> 24), everyElement(isNonZero));
+    expect(leftEdge[rows ~/ 2].argb >>> 24, 0xFF);
+    expect(
+      arrow.any((pixel) => pixel.x == outside - 1 && pixel.argb != 0),
+      isTrue,
+    );
+    expect(
+      arrow.where((pixel) => pixel.x >= outside).map((pixel) => pixel.argb),
+      everyElement(0),
+    );
+
+    // U+E0B2 points left, its flat edge the cell's right edge.
+    final mirrored = await _raster(painter, _iconCell(0xE0B2), columns: 2);
+    final rightEdge = mirrored
+        .where((pixel) => pixel.x == cell.width.floor() - 1)
+        .map((pixel) => pixel.argb >>> 24);
+    expect(rightEdge, hasLength(rows));
+    expect(rightEdge, everyElement(isNonZero));
+    expect(
+      mirrored.where((pixel) => pixel.x >= outside).map((pixel) => pixel.argb),
+      everyElement(0),
+    );
+  });
 }
+
+CellData _iconCell(int codePoint) => CellData(
+  foreground: 0,
+  background: 0,
+  flags: 0,
+  content: codePoint | (1 << CellContent.widthShift),
+);
 
 Future<void> _loadIconFace() async {
   TestWidgetsFlutterBinding.ensureInitialized();
