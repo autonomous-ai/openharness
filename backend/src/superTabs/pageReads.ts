@@ -32,11 +32,14 @@ export async function pageDeliveries(tx: Transaction, tabId: string, messageIds:
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
 }
 
+/** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
+export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+
 /** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
  *  messages' sequences only when there are ties. */
 export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentId: string): Promise<SuperTabDelivery[]> {
   // By the agent index (parts/indexed.ts): Prisma sent `status: { in }` as an $expr $or, planned as one scan per status.
-  const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: { $in: ['queued', 'claimed', 'uncertain'] } } },
+  const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: { $in: [...OPEN_DELIVERY] } } },
     { $sort: { createdAt: 1 } }, { $limit: 100 }])
   return inConversationOrder(tx, tabId, rows.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
 }
