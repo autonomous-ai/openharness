@@ -31,6 +31,7 @@ import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_live_card.dart';
+import 'swarm_message_link.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
@@ -576,9 +577,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         nameOf: (kind, id) => _reactorName(c, kind, id),
         onReact: view.canPost ? (emoji) => unawaited(t.react(m, emoji)) : null,
       ),
-      onLongPress: view.canPost
-          ? () => unawaited(_pickThreadReaction(c, t, m.id))
-          : null,
+      onLongPress: () => unawaited(_pickThreadReaction(c, t, m.id)),
     );
   }
 
@@ -1020,6 +1019,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
+      react: c.canPost,
+      link: _linkTo(c, id),
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
@@ -1035,10 +1036,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
+      react: c.canPost,
+      link: _linkTo(c, id),
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
   }
+
+  /// Message [id]'s link, the one Desktop copies.
+  SwarmMessageLink _linkTo(SwarmConversation c, String id) => SwarmMessageLink(
+    tabId: c.reader.tabId,
+    conversationId: c.id,
+    messageId: id,
+  );
 
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
@@ -1253,9 +1263,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     ? (emoji) => unawaited(c.react(m, emoji))
                     : null,
               ),
-              onLongPress: view.canPost
-                  ? () => unawaited(_pickReaction(c, m.id))
-                  : null,
+              onLongPress: () => unawaited(_pickReaction(c, m.id)),
               below: answerIn == null
                   ? null
                   : _AnswerIn(

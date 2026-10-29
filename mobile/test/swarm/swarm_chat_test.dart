@@ -1629,6 +1629,105 @@ void main() {
     });
   });
 
+  group('Copy link to message', () {
+    late List<String> copied;
+
+    setUp(() {
+      copied = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String);
+            }
+            return null;
+          });
+    });
+    tearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    testWidgets('the long-press sheet copies the link Desktop copies, and '
+        'says so', (tester) async {
+      final fake = backend([message('m1', 1, text: 'Plan')]);
+      await pump(tester, fake);
+
+      await tester.longPress(find.text('Plan'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsOneWidget);
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m1']);
+      expect(key('swarm-copy-link'), findsNothing, reason: 'sheet closed');
+      expect(find.text('Link copied'), findsOneWidget);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a person who cannot post still copies the link; the sheet '
+        'offers no reactions', (tester) async {
+      final fake = backend(
+        [message('m1', 1, text: 'Plan')],
+        members: [person(me, role: 'viewer')],
+      );
+      await pump(tester, fake);
+
+      await tester.longPress(find.text('Plan'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsNothing);
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m1']);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a reply in a thread copies its own link: its id alone '
+        'places it', (tester) async {
+      final fake = backend(
+        [
+          message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
+          message('m2', 2, text: 'In thread', thread: 'm1', replyTo: 'm1'),
+        ],
+        threads: [
+          {
+            'id': 'm1',
+            'replies': 1,
+            'lastSequence': 2,
+            'lastAt': DateTime.utc(2026, 10, 27, 1, 2).toIso8601String(),
+            'authors': [
+              {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+            ],
+            'people': <String>[],
+          },
+        ],
+      );
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': [
+          message('m2', 2, text: 'In thread', thread: 'm1', replyTo: 'm1'),
+          message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
+        ],
+        'next': null,
+        'threads': <Object>[],
+      };
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(
+        find.descendant(
+          of: key('swarm-thread-messages'),
+          matching: find.text('In thread'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m2']);
+    });
+  });
+
   group('threads', () {
     const parts = '/api/super-tabs/$tab/parts';
     const root = 'Can you check the drawer mockup?';
