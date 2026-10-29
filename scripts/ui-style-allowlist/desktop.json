@@ -27,7 +27,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/machines.dart": {
-    "edge-insets": 16,
+    "edge-insets": 14,
     "border-radius": 5
   },
   "desktop/lib/super_tabs/message_receipt.dart": {

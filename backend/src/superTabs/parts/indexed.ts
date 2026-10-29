@@ -36,6 +36,11 @@ export const NAMED_INDEX = {
     invited: { autonomousEnv: 1, invitedEmails: 1, _id: 1 },
     /** A member's Swarms in id order: Swarm lists and Workspace removals. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
+    /** A machine's Swarms, newest first, and those that still list it for cleanup: the host poll. */
+    machines: { autonomousEnv: 1, machineIds: 1, updatedAt: 1 },
+    cleanup: { autonomousEnv: 1, cleanupMachineIds: 1, updatedAt: 1 },
+    /** Swarms by id. */
+    id: { _id: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },

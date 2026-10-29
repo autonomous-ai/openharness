@@ -451,7 +451,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('People'), findsOneWidget);
+      expect(find.text('Humans'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
       await tester.scrollUntilVisible(
         member,

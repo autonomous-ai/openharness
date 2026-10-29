@@ -1055,8 +1055,9 @@ model SuperTab {
   @@index([autonomousEnv, memberIds, id])
   /// By id within an address: the invitation list reads the first 100 in id order (superTabs/invitedSwarms.ts).
   @@index([autonomousEnv, invitedEmails, id])
-  @@index([autonomousEnv, machineIds])
-  @@index([autonomousEnv, cleanupMachineIds])
+  /// A machine's Swarms, newest first: the host poll's lookup, once a second per host (superTabs/swarmRows.ts machineSwarms).
+  @@index([autonomousEnv, machineIds, updatedAt])
+  @@index([autonomousEnv, cleanupMachineIds, updatedAt])
 }
 
 // A terminal retains its history when removed from a roster. These bindings

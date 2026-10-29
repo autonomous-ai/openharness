@@ -29,8 +29,7 @@ typedef SwarmThreadRow = Widget Function(
   required VoidCallback onTap,
 });
 
-/// Draws the person's reply on its way: "Sending…", then "Not confirmed"
-/// with Send again.
+/// Draws the person's reply on its way: "Sending…", then "Not sent · Retry"
 typedef SwarmThreadPending = Widget Function(SwarmThread thread, String text);
 
 /// One thread of a chat, full screen as Slack Mobile opens one: its root at

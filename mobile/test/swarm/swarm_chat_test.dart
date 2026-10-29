@@ -675,6 +675,11 @@ void main() {
     expect(key('swarm-pending'), findsOneWidget);
     expect(find.text('Sending…'), findsOneWidget);
     expect(find.text('On it'), findsOneWidget);
+    // Under the message, as Slack shows it, not beside the name.
+    expect(
+      tester.getTopLeft(find.text('Sending…')).dy,
+      greaterThan(tester.getBottomLeft(find.text('On it')).dy),
+    );
 
     fake.routes['$messages?after=1'] = (_) => {
       'messages': [message('m2', 2, author: me, text: 'On it', minute: 5)],
@@ -688,8 +693,26 @@ void main() {
     expect(find.text('On it'), findsOneWidget);
   });
 
-  testWidgets('a post whose answer was lost says it is not confirmed, and '
-      'Send again sends the same post', (tester) async {
+  testWidgets('a post lost to an unknown failure says to Retry, the word '
+      'under it', (tester) async {
+    final fake = backend([message('m1', 1)]);
+    fake.routes[commands] = (_) => throw StateError('socket closed');
+    await pump(tester, fake);
+
+    await tester.enterText(find.byType(TextField), 'On it');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(
+      find.text('Your message was not sent. Retry to check it.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a post whose answer was lost reads Not sent under it, and '
+      'Retry sends the same post', (tester) async {
     final fake = backend([message('m1', 1)]);
     var lost = true;
     fake.routes[commands] = (_) => lost
@@ -702,8 +725,23 @@ void main() {
     await tester.tap(key('swarm-send'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Not confirmed'), findsOneWidget);
-    expect(key('swarm-resend-post'), findsOneWidget);
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(find.text('Not confirmed'), findsNothing);
+    expect(
+      tester.getTopLeft(find.text('Not sent')).dy,
+      greaterThan(tester.getBottomLeft(find.text('On it')).dy),
+    );
+    expect(
+      find.descendant(
+        of: key('swarm-resend-post'),
+        matching: find.text('Retry'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(key('swarm-resend-post')).height,
+      greaterThanOrEqualTo(44),
+    );
 
     lost = false;
     await tester.tap(key('swarm-resend-post'));
@@ -716,7 +754,7 @@ void main() {
           call.body!['operationId'],
     };
     expect(receipts, hasLength(1));
-    expect(find.text('Not confirmed'), findsNothing);
+    expect(find.text('Not sent'), findsNothing);
   });
 
   testWidgets('a refused post says why and puts its text back in the field', (
@@ -804,14 +842,14 @@ void main() {
       await tester.tap(key('swarm-send'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Not confirmed'), findsOneWidget);
+      expect(find.text('Not sent'), findsOneWidget);
       expect(composer(tester), up);
 
       lost = false;
       await tester.tap(key('swarm-resend-post'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Not confirmed'), findsNothing);
+      expect(find.text('Not sent'), findsNothing);
       expect(composer(tester), down);
     });
 
@@ -1549,6 +1587,45 @@ void main() {
 
       await back(tester);
       expect(key('swarm-reply-bar'), findsNothing);
+    });
+
+    testWidgets('a message that is only a code block still opens its thread: '
+        'a tap on the code shows Reply, Copy only copies', (tester) async {
+      const code = '```\nflutter test\n```';
+      final page = [message('m5', 5, text: code, thread: 'm5')];
+      final fake = backend(page);
+      fake.routes['$messages?thread=m5'] = (_) => {
+        'messages': page,
+        'next': null,
+        'threads': <Object>[],
+      };
+      await pump(tester, fake);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (_) async => null);
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      // Copy does its own thing: no Reply.
+      await tester.tap(find.text('Copy'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-reply-m5'), findsNothing);
+
+      await tester.tap(find.text('flutter test'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-reply-m5'),
+          matching: find.text('Reply in thread'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-reply-m5'));
+      await tester.pumpAndSettle();
+
+      expect(fake.paths, contains('$messages?thread=m5'));
+      expect(inThread('flutter test'), findsOneWidget);
     });
 
     testWidgets('Replied in thread opens the thread it was written in', (
