@@ -1,0 +1,531 @@
+import 'dart:async';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_reader.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_thread.dart';
+
+import 'swarm_fixture.dart';
+
+/// One thread of a chat on the phone (the desktop's thread panel): read
+/// through the chat's own path, replies that arrive later with the chat's
+/// reads, and a reply that goes to its root, to the chat too with Also send.
+void main() {
+  const messages = '/api/super-tabs/$tab/conversations/g1/messages';
+  const thread = '$messages?thread=m1';
+  const commands = '/api/super-tabs/$tab/commands';
+
+  Map<String, dynamic> message(
+    String id,
+    int sequence, {
+    String? root,
+    bool also = false,
+    String conversationId = 'g1',
+  }) => {
+    'id': id,
+    'conversationId': conversationId,
+    'text': 'text of $id',
+    'sequence': sequence,
+    'author': {'kind': 'agent', 'id': 'agent-builder', 'name': 'Builder'},
+    'createdAt': '2026-10-27T01:00:00.000Z',
+    'thread': root ?? id,
+    if (also) 'alsoInChat': true,
+  };
+
+  Map<String, dynamic> line(String root, int replies, int last) => {
+    'id': root,
+    'replies': replies,
+    'lastSequence': last,
+    'lastAt': '2026-10-27T01:05:00.000Z',
+    'authors': [
+      {'kind': 'agent', 'id': 'agent-builder', 'name': 'Builder'},
+    ],
+    'people': [me],
+  };
+
+  /// A Swarm with conversation g1 at [sequence] while [listed] says so, its
+  /// chat read with [chatRows]: root m1 and its first reply unless told.
+  Future<({FakeSwarm swarm, SwarmReader reader, SwarmConversation chat})> rig({
+    int sequence = 2,
+    String role = 'owner',
+    int? number,
+    List<Map<String, dynamic>>? chatRows,
+    bool Function()? listed,
+  }) async {
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(
+        groups: [
+          if (listed?.call() ?? true)
+            groupData(
+              'g1',
+              title: 'Fix login',
+              number: number,
+              agentIds: ['agent-lead', 'agent-builder'],
+              lastMessageSequence: sequence,
+            ),
+        ],
+      ),
+      'members': [part(me, 1, person(me, role: role))],
+    };
+    swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    swarm.routes[messages] = (_) => {
+      'messages': chatRows ?? [message('m1', 1), message('m2', 2, root: 'm1')],
+      'next': null,
+      'threads': [line('m1', 1, 2)],
+    };
+    final reader = SwarmReader(
+      tabId: tab,
+      accountId: me,
+      request: swarm.request,
+    );
+    addTearDown(reader.dispose);
+    await reader.refresh();
+    final chat = SwarmConversation(reader, 'g1');
+    addTearDown(chat.dispose);
+    await chat.load();
+    return (swarm: swarm, reader: reader, chat: chat);
+  }
+
+  SwarmThread open(SwarmConversation chat, [String root = 'm1']) {
+    final t = SwarmThread(chat, root);
+    addTearDown(t.dispose);
+    return t;
+  }
+
+  test('opening reads the thread through the chat\'s own path: its root, '
+      'then its replies', () async {
+    final r = await rig();
+    r.swarm.routes[thread] = (_) => {
+      'messages': [
+        message('m1', 1),
+        message('m2', 2, root: 'm1'),
+        message('m3', 3, root: 'm1', also: true),
+      ],
+      'next': null,
+      'threads': [line('m1', 2, 3)],
+    };
+    final t = open(r.chat);
+    expect(t.state, SwarmChatState.loading);
+
+    await t.load();
+
+    expect(r.swarm.paths.last, thread);
+    expect(t.state, SwarmChatState.loaded);
+    expect(t.rootMessage?.id, 'm1');
+    expect([for (final m in t.replies) m.id], ['m2', 'm3']);
+    expect(t.count, 2, reason: 'as its line says');
+    expect(r.chat.thread('m1')?.replies, 2, reason: 'the chat\'s line moved');
+    expect(t.hasEarlier, isFalse);
+  });
+
+  test('a long thread reads five pages on opening, its root by itself, then '
+      'earlier replies a page at a time', () async {
+    // The chat holds only its newest message: the root is far back.
+    final r = await rig(sequence: 200, chatRows: [message('m200', 200)]);
+    r.swarm.routes[thread] = (_) => {
+      'messages': [message('m100', 100, root: 'm1')],
+      'next': {'sequence': 100, 'id': 'm100'},
+      'threads': [line('m1', 99, 100)],
+    };
+    for (var top = 100; top > 90; top--) {
+      r.swarm.routes['$thread&before=$top&beforeId=m$top'] = (_) => {
+        'messages': [message('m${top - 1}', top - 1, root: 'm1')],
+        'next': {'sequence': top - 1, 'id': 'm${top - 1}'},
+      };
+    }
+    r.swarm.routes['$messages?messageId=m1'] = (_) => {
+      'messages': [message('m1', 1)],
+      'next': null,
+    };
+    final t = open(r.chat);
+
+    await t.load();
+
+    expect(
+      r.swarm.paths.where((p) => p.startsWith(thread)),
+      hasLength(SwarmThread.pagesOnOpen),
+    );
+    expect(
+      [for (final m in t.replies) m.id],
+      ['m96', 'm97', 'm98', 'm99', 'm100'],
+    );
+    expect(t.rootMessage?.id, 'm1');
+    expect(t.hasEarlier, isTrue);
+    expect(t.count, 99);
+
+    await t.loadEarlier();
+
+    expect(
+      r.swarm.paths.where((p) => p.startsWith(thread)),
+      hasLength(SwarmThread.pagesOnOpen + 1),
+    );
+    expect(t.replies.map((m) => m.id), contains('m95'));
+    expect(t.readingEarlier, isFalse);
+  });
+
+  test('its root is not read by itself when the chat has it', () async {
+    final r = await rig();
+    r.swarm.routes[thread] = (_) => {
+      'messages': [message('m2', 2, root: 'm1')],
+      'next': null,
+    };
+    final t = open(r.chat);
+
+    await t.load();
+
+    expect(r.swarm.paths.where((p) => p.contains('messageId=')), isEmpty);
+    expect(t.rootMessage?.id, 'm1');
+  });
+
+  test('replies that arrive later come with the chat\'s own reads', () async {
+    final r = await rig();
+    r.swarm.routes[thread] = (_) => {
+      'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+      'next': null,
+    };
+    final t = open(r.chat);
+    await t.load();
+    var told = 0;
+    t.addListener(() => told++);
+    r.swarm.routes['$messages?after=2'] = (_) => {
+      'messages': [message('m3', 3, root: 'm1')],
+      'next': null,
+      'threads': [line('m1', 2, 3)],
+    };
+
+    await r.chat.load();
+
+    expect([for (final m in t.replies) m.id], ['m2', 'm3']);
+    expect(t.count, 2);
+    expect(told, greaterThan(0));
+  });
+
+  test('rows of another conversation or another thread in an answer are '
+      'left out', () async {
+    final r = await rig();
+    r.swarm.routes[thread] = (_) => {
+      'messages': [
+        message('m1', 1),
+        message('x1', 5, root: 'm1', conversationId: 'g-private'),
+        message('x2', 6, root: 'm9'),
+      ],
+      'next': null,
+    };
+    final t = open(r.chat);
+
+    await t.load();
+
+    expect([for (final m in t.messages) m.id], ['m1', 'm2']);
+  });
+
+  test('a root from another chat finds nothing here, as one that is gone '
+      'does', () async {
+    final r = await rig();
+    r.swarm.routes['$messages?thread=elsewhere'] = (_) => {
+      'messages': <Object>[],
+      'next': null,
+    };
+    r.swarm.routes['$messages?messageId=elsewhere'] = (_) => {
+      'messages': <Object>[],
+      'next': null,
+    };
+    final t = open(r.chat, 'elsewhere');
+
+    await t.load();
+
+    expect(t.state, SwarmChatState.loaded);
+    expect(t.rootMessage, isNull);
+    expect(t.messages, isEmpty);
+  });
+
+  group('a reply', () {
+    test('goes to the root with no one named, and to the chat too only with '
+        'Also send', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      r.swarm.routes[commands] = (_) => {'ok': true};
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': <Object>[],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+
+      t.draft = '  Looks good  ';
+      expect(t.canSend, isTrue);
+      expect(await t.send(), isTrue);
+      t.draft = 'Shipping it';
+      t.alsoSend = true;
+      expect(await t.send(), isTrue);
+
+      expect(r.swarm.commands, [
+        {
+          'type': 'message.send',
+          'conversationId': 'g1',
+          'text': 'Looks good',
+          'replyTo': 'm1',
+          'recipientIds': <String>[],
+        },
+        {
+          'type': 'message.send',
+          'conversationId': 'g1',
+          'text': 'Shipping it',
+          'replyTo': 'm1',
+          'recipientIds': <String>[],
+          'alsoSend': true,
+        },
+      ]);
+      expect(t.draft, isEmpty);
+      expect(t.alsoSend, isFalse, reason: 'each reply asks again');
+      expect(t.pending, isNull);
+      expect(r.chat.threadDraft('m1'), isEmpty);
+    });
+
+    test('shows as on its way until the chat\'s read brings it back', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      final answer = Completer<Object?>();
+      r.swarm.routes[commands] = (_) => answer.future;
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [message('m3', 3, root: 'm1')],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'On it';
+
+      final sending = t.send();
+      await settle();
+      expect(t.pending, 'On it');
+      expect(t.sending, isTrue);
+      expect(t.draft, isEmpty);
+
+      answer.complete({'ok': true});
+      await sending;
+
+      expect(t.pending, isNull);
+      expect([for (final m in t.replies) m.id], ['m2', 'm3']);
+    });
+
+    test('refused goes back to the box, with Also send as it was', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      r.swarm.routes[commands] = (_) => throw const SuperTabFailure(
+        'ARCHIVED',
+        'This chat is archived.',
+        statusCode: 409,
+      );
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'Too late';
+      t.alsoSend = true;
+
+      expect(await t.send(), isFalse);
+
+      expect(t.draft, 'Too late');
+      expect(t.alsoSend, isTrue);
+      expect(t.pending, isNull);
+      expect(t.error, 'This chat is archived.');
+      expect(r.chat.threadDraft('m1'), 'Too late');
+    });
+
+    test('whose answer was lost is sent again as the same reply', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      var lost = true;
+      r.swarm.routes[commands] = (_) =>
+          lost ? throw StateError('connection reset') : {'ok': true};
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': <Object>[],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'Once only';
+
+      expect(await t.send(), isFalse);
+      expect(t.unconfirmed, isTrue);
+      expect(t.pending, 'Once only');
+      expect(t.error, contains('not confirmed'));
+
+      lost = false;
+      expect(await t.send(), isTrue);
+
+      final posts = [
+        for (final call in r.swarm.calls)
+          if (call.path == commands) call.body!['operationId'],
+      ];
+      expect(posts, hasLength(2));
+      expect(posts.toSet(), hasLength(1));
+      expect(t.pending, isNull);
+    });
+
+    test('a viewer cannot reply', () async {
+      final r = await rig(role: 'viewer');
+      final t = open(r.chat);
+      t.draft = 'Hello';
+      expect(t.canPost, isFalse);
+      expect(t.canSend, isFalse);
+      expect(await t.send(), isFalse);
+      expect(r.swarm.commands, isEmpty);
+    });
+  });
+
+  test('the draft stays with its thread while the chat is open', () async {
+    final r = await rig();
+    final first = SwarmThread(r.chat, 'm1')..draft = 'Half a reply';
+    first.dispose();
+
+    expect(open(r.chat).draft, 'Half a reply');
+    expect(open(r.chat, 'm9').draft, isEmpty);
+  });
+
+  test('Also send names the chat as the desktop does', () async {
+    final work = await rig(number: 12);
+    expect(open(work.chat).alsoSendLabel, 'Also send to the workgroup');
+    final chat = await rig();
+    expect(open(chat.chat).alsoSendLabel, 'Also send to the chat');
+  });
+
+  group('privacy', () {
+    test('access taken away while the thread is open drops its rows, its '
+        'draft and an answer on its way', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+      t.draft = 'Secret plan';
+      final late = Completer<Object?>();
+      r.swarm.routes[thread] = (_) => late.future;
+      final reading = t.load();
+      await settle();
+
+      r.reader.revoke();
+      late.complete({
+        'messages': [message('m1', 1), message('m4', 4, root: 'm1')],
+        'next': null,
+      });
+      await reading;
+      await settle();
+
+      expect(t.state, SwarmChatState.lost);
+      expect(t.messages, isEmpty);
+      expect(t.draft, isEmpty);
+      expect(r.chat.threadDraft('m1'), isEmpty);
+      expect(t.canSend, isFalse);
+    });
+
+    test('a chat refused to the person refuses its thread alike, showing '
+        'nothing', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      final t = open(r.chat);
+      t.draft = 'Hello';
+
+      await t.load();
+
+      expect(t.state, SwarmChatState.lost);
+      expect(t.messages, isEmpty);
+      expect(t.draft, isEmpty);
+      expect(t.error, isNull, reason: 'the page says it is not open');
+    });
+
+    test('taken out of the chat, the thread hides what it read', () async {
+      var listed = true;
+      final r = await rig(listed: () => listed);
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+        'next': null,
+      };
+      final t = open(r.chat);
+      await t.load();
+      expect(t.messages, isNotEmpty);
+      listed = false;
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+
+      await r.reader.refresh();
+      await settle();
+
+      expect(t.messages, isEmpty);
+      expect(t.state, isNot(SwarmChatState.loaded));
+    });
+
+    test('a failed read says so, is not left loading, and reads again when '
+        'asked', () async {
+      final r = await rig();
+      var fails = true;
+      r.swarm.routes[thread] = (_) => fails
+          ? throw StateError('offline')
+          : {
+              'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+              'next': null,
+            };
+      final t = open(r.chat);
+
+      await t.load();
+
+      expect(t.error, 'Could not load the thread. Try again.');
+      expect(r.swarm.paths.where((p) => p.startsWith(thread)), hasLength(1));
+      await settle();
+      expect(
+        r.swarm.paths.where((p) => p.startsWith(thread)),
+        hasLength(1),
+        reason: 'no read of its own again',
+      );
+
+      fails = false;
+      await t.load();
+
+      expect(t.error, isNull);
+      expect(t.state, SwarmChatState.loaded);
+      expect([for (final m in t.replies) m.id], ['m2']);
+    });
+
+    test('earlier replies that fail say so and can be asked again', () async {
+      final r = await rig();
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
+        'next': {'sequence': 2, 'id': 'm2'},
+      };
+      for (var top = 2; top < 10; top++) {
+        // Five pages on opening, each ending where it began.
+        r.swarm.routes['$thread&before=$top&beforeId=m$top'] = (_) => {
+          'messages': <Object>[],
+          'next': {'sequence': 2, 'id': 'm2'},
+        };
+      }
+      final t = open(r.chat);
+      await t.load();
+      expect(t.hasEarlier, isTrue);
+      r.swarm.routes['$thread&before=2&beforeId=m2'] = (_) =>
+          throw StateError('offline');
+
+      await t.loadEarlier();
+
+      expect(t.error, 'Could not load earlier replies. Try again.');
+      expect(t.readingEarlier, isFalse);
+      expect(t.hasEarlier, isTrue);
+    });
+  });
+}
