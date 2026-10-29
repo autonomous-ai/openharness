@@ -361,3 +361,5 @@ Daily reports keep these populations separate, show unmatched outcomes and measu
 compare only mature periods. See [measurement definitions and runtime bounds](../docs/product-measurement.md).
 Deploy this additive allowlist before releasing the new clients. This change does not add identity
 markers or make installation counts comparable to people-based DAU or retention benchmarks.
+
+<!-- CI reuse demo (#1107): unrelated base move, never merged to main. -->
