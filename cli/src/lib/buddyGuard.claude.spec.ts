@@ -241,7 +241,7 @@ describe.skipIf(!hasClaude).each([
     const drop = (name: string, bytes: string | Buffer) => { const path = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-${name}`); writeFileSync(path, bytes); return path }
     sent = drop('build.log', `${SENT}\n`)
     const picture = drop('screen.png', PICTURE), otherChat = drop('notes.txt', `${OTHER_CHAT}\n`)
-    allowBuddyReads(buddyReadsOf('session'), { files: [sent, picture], links: [] })
+    allowBuddyReads(buddyReadsOf('session'), { session: 'harness', files: [sent, picture], links: [] })
     allowed.readSent.input.file_path = sent
     allowed.readPicture.input.file_path = picture
     refused.readOtherChat.input.file_path = otherChat

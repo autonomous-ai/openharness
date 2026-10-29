@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
+  writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
@@ -45,8 +46,9 @@ const KEPT_MS = 24 * 60 * 60 * 1000
  * Outside its folder it reads only what its person sent it in their Buddy chat (Tony, 10-30: his Buddy could open neither
  * the screenshot he sent it nor an Artifact he linked). The host lists those for this Buddy alone (`allowBuddyReads`
  * below, superTabs/host.ts), out of the project, so no commit or pull can add to the list. Read opens a listed file by the
- * exact path the Buddy was handed, while it is still the one file Harness downloaded there; the Artifact tool reads a
- * listed link with its read action alone.
+ * exact path the Buddy was handed, while it is still the one file Harness downloaded there and still holds the bytes it
+ * held when listed (its SHA-256); the Artifact tool reads a listed link with its read action alone. The guard judges the
+ * file when it answers and Claude Code opens it afterwards, as for its folder: bytes written into it in between are read.
  *
  * Plain JavaScript with node's own modules only, written into the Buddy's folder with that folder's real path and run by
  * Harness's node: the tests run this exact text (lib/buddyGuard.spec.ts, and Claude Code itself in
@@ -54,7 +56,8 @@ const KEPT_MS = 24 * 60 * 60 * 1000
  */
 export const buddyGuardSource = (root: string, reads: BuddyReads): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
-import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 // The Buddy's folder, as its real path: what it reads stays in it.
@@ -175,18 +178,36 @@ function listed(kind) {
   } catch { return [] }
 }
 
-// Whether [path] is a file its person sent: listed by that exact path, in the downloads folder, and still the one file
-// Harness downloaded there (its device, inode and size), with no other name. A link, a hard link (a second name for it)
-// or another file put in its place would read something its person did not send.
+// Whether [stat] is the one file the list names: a regular file with no other name, of the same device, inode and size.
+const same = (stat, file) => stat.isFile() && stat.nlink === 1n && String(stat.dev) === file.dev && String(stat.ino) === file.ino
+  && String(stat.size) === file.size
+
+// Whether [path] is a file its person sent: listed by that exact path, in the downloads folder, still the one file Harness
+// downloaded there (its device, inode and size), with no other name, and still holding the bytes it held when the host
+// listed it. A link, a hard link (a second name for it) or another file put in its place would read something its person
+// did not send; so would other bytes written into it, which keep its inode and can keep its size (security reviews 1 and
+// 2 of #2248: 'OWNER' written over with 'OTHER' was read).
 function attached(path) {
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || dirname(path) !== DROPS) return false
   const file = listed('files').find((entry) => entry.path === path)
-  if (!file) return false
+  if (!file || typeof file.sha256 !== 'string') return false
+  let fd
   try {
-    const stat = lstatSync(path, { bigint: true })
-    return stat.isFile() && stat.nlink === 1n && String(stat.dev) === file.dev && String(stat.ino) === file.ino
-      && String(stat.size) === file.size && realpathSync(path) === join(realpathSync(DROPS), basename(path))
-  } catch { return false }
+    if (!same(lstatSync(path, { bigint: true }), file) || realpathSync(path) !== join(realpathSync(DROPS), basename(path))) return false
+    // Its bytes, read from the file just checked: opened without following a link, and checked again as opened.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const opened = fstatSync(fd, { bigint: true })
+    if (!same(opened, file)) return false
+    // No more than its listed size: a file still being written to is not read on and on.
+    const hash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024)
+    let total = 0n
+    for (let read; (read = readSync(fd, chunk, 0, chunk.length, null)) > 0;) {
+      total += BigInt(read)
+      if (total > opened.size) return false
+      hash.update(chunk.subarray(0, read))
+    }
+    return hash.digest('hex') === file.sha256
+  } catch { return false } finally { if (fd !== undefined) closeSync(fd) }
 }
 
 // A claude.ai Artifact link as the host lists it (artifactLink in lib/buddyGuard.ts), or null: https, claude.ai or
@@ -282,15 +303,21 @@ process.stdin.on('end', () => {
 })
 `
 
-/** The list for one Buddy session, by its Swarm skill's key: in Harness's data folder, never in the Buddy's own folder,
- *  where a commit or a pull could put one. */
+/** Where every Buddy session's list is kept: Harness's data folder, never a Buddy's own folder, where a commit or a pull
+ *  could put one. */
+const listsDir = () => join(env.ADAPTER_DATA_DIR, 'buddy-reads')
+
+/** The list for one Buddy session, by its Swarm skill's key. */
 export function buddyReadsOf(key: string): BuddyReads {
-  return { file: join(env.ADAPTER_DATA_DIR, 'buddy-reads', `${createHash('sha256').update(key).digest('hex')}.json`), drops: PASTE_DROPS_DIR }
+  return { file: join(listsDir(), `${createHash('sha256').update(key).digest('hex')}.json`), drops: PASTE_DROPS_DIR }
 }
 
 /** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
 const MAX_FILES = 100
 const MAX_LINKS = 50
+/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES): no download is larger, so nothing larger
+ *  is read whole to be listed. */
+const MAX_BYTES = 10 * 1024 * 1024
 
 /** A claude.ai Artifact link as the guard compares it (`artifactLink` in the guard above, the same rules), or null. */
 function artifactLink(text: string): string | null {
@@ -316,19 +343,45 @@ export function artifactLinks(text: string): string[] {
   return [...found].slice(0, MAX_LINKS)
 }
 
-interface ListedFile { path: string; dev: string; ino: string; size: string; at: number }
+interface ListedFile { path: string; dev: string; ino: string; size: string; sha256: string; at: number }
 interface ListedLink { url: string; at: number }
-interface List { version: 1; files: ListedFile[]; links: ListedLink[] }
+/** `session`: the native session the host delivered these to, whose lists go when the Swarm ends it (`forgetBuddyReads`). */
+interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[] }
 
-function heldList(file: string): List {
+/** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. */
+function heldList(file: string, session: string): List {
+  const none: List = { version: 1, session, files: [], links: [] }
   try {
-    const held = JSON.parse(readFileSync(file, 'utf8')) as { files?: unknown; links?: unknown }
+    const held = JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown; files?: unknown; links?: unknown }
+    if (held.session !== session) return none
     const entries = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : []
-    return { version: 1,
-      files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size']
+    return { version: 1, session,
+      files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size', 'sha256']
         .every(field => typeof entry[field] === 'string') && Number.isFinite(entry.at)),
       links: entries(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string' && Number.isFinite(entry.at)) }
-  } catch { return { version: 1, files: [], links: [] } }
+  } catch { return none }
+}
+
+/** [path] as a listed file: one regular file with no other name, at most a download's size, by its device, inode, size and
+ *  the SHA-256 of its bytes, all read from the one file opened (never through a link); null for anything else. */
+function listedFile(path: string, at: number): ListedFile | null {
+  let fd: number | undefined
+  try {
+    const named = lstatSync(path, { bigint: true })
+    if (!named.isFile() || named.nlink !== 1n || named.size > MAX_BYTES) return null
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const stat = fstatSync(fd, { bigint: true })
+    if (!stat.isFile() || stat.nlink !== 1n || stat.dev !== named.dev || stat.ino !== named.ino || stat.size > MAX_BYTES) return null
+    // No more than the size it opened at: the host's loop waits on this, and a file still being written to is not read on.
+    const hash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024)
+    let total = 0n
+    for (let read; (read = readSync(fd, chunk, 0, chunk.length, null)) > 0;) {
+      total += BigInt(read)
+      if (total > stat.size) return null
+      hash.update(chunk.subarray(0, read))
+    }
+    return { path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), sha256: hash.digest('hex'), at }
+  } catch { return null } finally { if (fd !== undefined) closeSync(fd) }
 }
 
 /** Best-effort, as the downloads' own prune is (lib/pasteDropFiles.ts): the lists of Buddy sessions nothing has written to
@@ -343,28 +396,26 @@ function sweep(dir: string, now: number): void {
 }
 
 /**
- * Lists for one Buddy the files and Artifact links its person sent it in their own Buddy chat (superTabs/host.ts decides
- * that), before the message reaches it. Each file is listed by its path with its device, inode and size, and only as one
- * regular file in the downloads folder with no other name: what the guard checks again when the Buddy opens it. Entries
- * last a day. The host's poll loop is the only writer, and it writes synchronously, so two deliveries never interleave;
- * the guard reads a whole old list or a whole new one, never a part (a rename).
+ * Lists for one Buddy session the files and Artifact links its person sent it in their own Buddy chat (superTabs/host.ts
+ * decides that), before the message reaches it. Each file is listed by its path with its device, inode, size and SHA-256,
+ * and only as one regular file in the downloads folder with no other name: what the guard checks again when the Buddy
+ * opens it. Entries last a day, or until the Swarm ends the session. The host's poll loop is the only writer, and it
+ * writes synchronously, so two deliveries never interleave; the guard reads a whole old list or a whole new one, never a
+ * part (a rename).
  */
-export function allowBuddyReads(reads: BuddyReads, sent: { files: readonly string[]; links: readonly string[] }, now = Date.now()): void {
-  const files = sent.files.flatMap((path): ListedFile[] => {
-    if (dirname(path) !== reads.drops) return []
-    try {
-      const stat = lstatSync(path, { bigint: true })
-      return stat.isFile() && stat.nlink === 1n ? [{ path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), at: now }] : []
-    } catch { return [] }
+export function allowBuddyReads(reads: BuddyReads, sent: { session: string; files: readonly string[]; links: readonly string[] }, now = Date.now()): void {
+  const files = sent.files.flatMap(path => {
+    const file = dirname(path) === reads.drops ? listedFile(path, now) : null
+    return file ? [file] : []
   })
   const links = sent.links.flatMap((url): ListedLink[] => artifactLink(url) === url ? [{ url, at: now }] : [])
   if (!files.length && !links.length) return
   const dir = dirname(reads.file)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   sweep(dir, now)
-  const held = heldList(reads.file)
+  const held = heldList(reads.file, sent.session)
   const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
-  const list: List = { version: 1,
+  const list: List = { version: 1, session: sent.session,
     files: [...fresh(held.files).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
     links: [...fresh(held.links).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) }
   const temporary = `${reads.file}.${randomUUID()}.tmp`
@@ -374,6 +425,25 @@ export function allowBuddyReads(reads: BuddyReads, sent: { files: readonly strin
   } catch (error) {
     rmSync(temporary, { force: true })
     throw error
+  }
+}
+
+/**
+ * Deletes the lists of [session], once the Swarm has ended it: its Buddy removed, its person gone from the Swarm, or its
+ * chat purged with its project (Lead, 10-30). Each list names its session, so a session no longer running here is found
+ * too. A list that cannot be read is left: it allows nothing (the guard refuses it), and the day's sweep takes it.
+ */
+export function forgetBuddyReads(session: string, dir = listsDir()): void {
+  let names: string[]
+  try { names = readdirSync(dir) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    let named: unknown
+    try { named = (JSON.parse(readFileSync(join(dir, name), 'utf8')) as { session?: unknown }).session } catch { continue }
+    if (named === session) rmSync(join(dir, name), { force: true })
   }
 }
 

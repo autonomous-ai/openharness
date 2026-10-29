@@ -1,9 +1,10 @@
+import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { buddyReadsOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyReadsOf } from '../lib/buddyGuard.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
@@ -1000,9 +1001,15 @@ describe('Super Tab attachments in delivered input', () => {
 describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   const LINK = 'https://claude.ai/artifact/abc-123'
   const person = { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'g' }
-  const buddyAgent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', machineOwnerId: 'peer', projectId: 'app',
+  // The id the server gave the agent this host started in session 'harness' (backend commands.ts: stableId(machineId,
+  // harnessId)), the session the roster names it on.
+  const AGENT = createHash('sha256').update(JSON.stringify(['machine-1', 'harness'])).digest('hex').slice(0, 24)
+  // As the server shapes the Swarm for a Buddy (backend model.ts agentWithoutMachine, read/views.ts): no machine and no
+  // session id, its own included (security review 1 of #2248: a fixture naming them hid that the success path never ran).
+  const buddyAgent = { id: AGENT, harnessId: '', machineId: '', machineOwnerId: 'peer', projectId: 'app',
     buddyOf: { personId: 'peer', generation: 'g' } }
-  const buddyChat = { id: 'chat', kind: 'buddy', projectId: 'app', title: 'Buddy', leadId: null, agentIds: ['agent'], buddyOwnerId: 'peer' }
+  const buddyChat = { id: 'chat', kind: 'buddy', projectId: 'app', title: 'Buddy', leadId: null, agentIds: [AGENT], buddyOwnerId: 'peer' }
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
   const key = 'buddy-session'
   const picture = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 3, url: 'https://cdn.example.test/x' }
   const listed = () => existsSync(buddyReadsOf(key).file) ? JSON.parse(readFileSync(buddyReadsOf(key).file, 'utf8')) : null
@@ -1011,6 +1018,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   /** A Buddy's delivery of [message] from its chat, its Swarm read as it holds [agents] and [conversations]. */
   function buddyOn(message: Record<string, unknown> = {}, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {}) {
     const t = setup({ conversationId: 'chat', text: `Have a look: ${LINK}?v=2`, author: person, attachments: [picture], ...message }, claim)
+    t.row.agent.id = AGENT
     t.from(String(message.conversationId ?? 'chat'))
     vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key } } as never)
     const state = { agents: read.agents ?? [buddyAgent], conversations: read.conversations ?? [buddyChat] }
@@ -1039,7 +1047,8 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     const { host, shot, delivered } = buddyOn()
     await host.tick()
     const stat = lstatSync(shot, { bigint: true })
-    const list = { version: 1, files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3', at: expect.any(Number) }],
+    const list = { version: 1, session: 'harness',
+      files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3', sha256: sha256('png'), at: expect.any(Number) }],
       links: [{ url: LINK, at: expect.any(Number) }] }
     expect(delivered).toHaveLength(1)
     expect(delivered[0]!.list).toEqual(list)
@@ -1056,12 +1065,11 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     ['its person from an earlier membership', { author: { ...person, membershipGeneration: 'before' } }, {}, {}],
     ['a message with no author', { author: undefined }, {}, {}],
     ['another conversation it is in', { conversationId: 'group' },
-      { conversations: [buddyChat, { id: 'group', projectId: 'app', title: 'Work', leadId: 'lead-agent', agentIds: ['agent'] }] }, {}],
+      { conversations: [buddyChat, { id: 'group', projectId: 'app', title: 'Work', leadId: 'lead-agent', agentIds: [AGENT] }] }, {}],
     ['another person\'s Buddy chat', {}, { conversations: [{ ...buddyChat, buddyOwnerId: 'sam' }] }, {}],
     ['its chat once archived', {}, { conversations: [{ ...buddyChat, archived: true }] }, {}],
     ['a Buddy chat it is not in', {}, { conversations: [{ ...buddyChat, agentIds: [] }] }, {}],
     ['a Buddy chat of another project', {}, { conversations: [{ ...buddyChat, projectId: 'web' }] }, {}],
-    ['its agent id on another session', {}, { agents: [{ ...buddyAgent, harnessId: 'elsewhere' }] }, {}],
     ['its agent id on another person\'s Buddy', {}, { agents: [{ ...buddyAgent, buddyOf: { personId: 'sam', generation: 'g' } }] }, {}],
     ['its agent id on an agent that is no Buddy', {}, { agents: [{ ...buddyAgent, buddyOf: undefined }] }, {}],
     ['an agent its read does not show', {}, { agents: [] }, {}],
@@ -1085,6 +1093,44 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect(delivered[0]!.text).not.toContain('Artifact links your owner sent here:')
     expect(delivered[0]!.text).toContain(`Your owner sent Artifact links (${LINK}), but you run on a computer that is not theirs, so you cannot `
       + 'open them here. Tell them so in one line, and ask for screenshots or the text instead.')
+  })
+
+  // Security review 1 of #2248: which agent a session is, this host knows from the agent it started there; the Buddy's own
+  // read names no session. A session id reused for another agent, or its agent moved to another session here (a model
+  // switch), lists nothing: the Buddy is told of the file, and its guard refuses it.
+  it.each([
+    ['a session this host did not start as that agent (a reused session id)', (t: ReturnType<typeof setup>) => { t.row.agent.id = 'agent' },
+      { agents: [{ ...buddyAgent, id: 'agent' }], conversations: [{ ...buddyChat, agentIds: ['agent'] }] }],
+    ['its agent on another of this machine\'s sessions', (t: ReturnType<typeof setup>) => { t.row.agent.harnessId = 'replacement' }, {}],
+  ])('lists nothing for %s, reads nothing for it, and still delivers the message', async (_, change, read) => {
+    const { t, host, delivered, reads } = buddyOn({}, read)
+    change(t)
+    await host.tick()
+    expect(delivered).toHaveLength(1)
+    expect([listed(), reads]).toEqual([null, []])
+  })
+
+  // Review 2 of #2248: the whole path on this machine, faking only the server. The launch writes the Buddy's guard; its
+  // person's message in its chat comes with the Swarm as the server shapes it for a Buddy; the host lists what came with
+  // it; and the guard then opens that exact file, and no other of Harness's downloads.
+  it('lets the guard its launch wrote open the file its person sent, and no other download', async () => {
+    const { host, shot, delivered } = buddyOn()
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    prepareSwarmSkill(folder, { role: 'buddy', key })
+    const other = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(other, 'png')
+    const read = (path: string) => {
+      const run = spawnSync(process.execPath, [join(folder, '.claude', 'buddy-guard.mjs')], { encoding: 'utf8', timeout: 10_000,
+        input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: path }, cwd: folder }) })
+      return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+    }
+    expect(read(shot)).toBe('deny')
+    await host.tick()
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]!.text).toContain(shot)
+    expect(read(shot)).toBe('allow')
+    expect(read(other)).toBe('deny')
+    rmSync(other)
   })
 
   it('lists a message\'s files alone, and names no Artifact link when it sent none', async () => {
@@ -2421,6 +2467,24 @@ describe('closing the sessions the backend ends', () => {
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
     expect(t.commands).toHaveLength(1)
+  })
+
+  // Lead, 10-30: a Buddy removed, its person gone from the Swarm, or its chat purged with its project: the Swarm ends its
+  // session, and what its person sent it is listed no longer, rather than for the rest of the day. Its session need not run.
+  it('forgets what a Buddy\'s person sent it once the Swarm ends its session, and keeps other sessions\' lists', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(shot, 'png')
+    allowBuddyReads(buddyReadsOf('ended-buddy'), { session: 'harness', files: [shot], links: [] })
+    allowBuddyReads(buddyReadsOf('other-buddy'), { session: 'other', files: [shot], links: [] })
+    await t.poll()
+    expect(existsSync(buddyReadsOf('ended-buddy').file)).toBe(true)
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    expect(existsSync(buddyReadsOf('ended-buddy').file)).toBe(false)
+    expect(existsSync(buddyReadsOf('other-buddy').file)).toBe(true)
+    for (const file of [buddyReadsOf('other-buddy').file, shot]) rmSync(file)
   })
 
   it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {

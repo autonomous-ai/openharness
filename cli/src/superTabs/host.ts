@@ -5,7 +5,7 @@ import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf } from './attachments.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
@@ -34,7 +34,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { allowBuddyReads, artifactLinks, buddyReadsOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, artifactLinks, buddyReadsOf, forgetBuddyReads } from '../lib/buddyGuard.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -178,6 +178,10 @@ const END_RETRY_MAX_MS = 10 * 60_000
 const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
 const endingKey = (target: HostAgent) => `${target.tabId}:${target.agent.id}:${target.agent.harnessId}`
+/** The id the backend gives the agent a machine's native session joins as, whether started for the Swarm or added to it
+ *  (backend commands.ts, `stableId(machineId, harnessId)`): this host's own record of which agent each of its sessions is. */
+const agentIdOf = (machineId: string, harnessId: string) =>
+  createHash('sha256').update(JSON.stringify([machineId, harnessId])).digest('hex').slice(0, 24)
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.next`
@@ -281,7 +285,7 @@ export class SuperTabHost {
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
-  private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
+  private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number; forgotten?: boolean }>()
   /** Deliveries withheld from an agent that leads nothing, each said once. */
   private readonly unreadable = new Set<string>()
   /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
@@ -833,12 +837,21 @@ export class SuperTabHost {
   /** Deleting a project left its Lead's session running, and removing an agent left its session behind (owner, 2026-10-23:
    *  no zombie agents). The backend marks the session; this closes it, keeping its conversation, and says so once. */
   private endSession(target: HostAgent): void {
-    const close = this.core.agents.closeMember
-    if (!close || this.stopped) return
+    if (this.stopped) return
     const { tabId, agent } = target
     const key = endingKey(target)
     const state = this.endings.get(key) ?? { running: false, closed: false, acked: false, failures: 0, retryAt: 0 }
     this.endings.set(key, state)
+    // What a Buddy's person sent it stays listed no longer than its session (Lead, 10-30): its Buddy removed, its person gone
+    // from the Swarm, or its chat purged with its project all end it here. Before the close, which may wait or fail; a list
+    // that cannot be deleted is said and tried again at the next roster.
+    if (!state.forgotten) {
+      try { forgetBuddyReads(agent.harnessId); state.forgotten = true } catch (error) {
+        this.log(`Could not delete what session ${agent.harnessId.slice(0, 8)}'s person sent it: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const close = this.core.agents.closeMember
+    if (!close) return
     if (state.running || state.acked || this.now() < state.retryAt) return
     state.running = true
     void (async () => {
@@ -1126,7 +1139,7 @@ export class SuperTabHost {
     const links = artifactLinks(message.text)
     const key = this.isBuddy(entry) && (files.paths.length || links.length) ? this.core.agents.byAgent(entry.harnessId)?.swarmSkill?.key : undefined
     const own = key ? await this.fromOwnPerson(entry, message, result.buddyNews === true) : null
-    const sent = key && own ? { key, files: files.paths, links: own.onTheirMachine ? links : [] } : null
+    const sent = key && own ? { key, session: entry.harnessId, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     const elsewhere = own && !own.onTheirMachine ? links : []
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
@@ -1155,19 +1168,25 @@ export class SuperTabHost {
   }
 
   /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its
-   *  guard lets it read (lib/buddyGuard.ts). Read as the Buddy now, never from the delivery alone. Not its person's own: news
-   *  from outside its chat (the server marks it), the PM's private lines there, another person's message, another chat, an
-   *  archived one, and its agent id on another session, as another person's Buddy, or from an earlier membership.
+   *  guard lets it read (lib/buddyGuard.ts). Which agent the session is comes from this host: the id the backend gave the
+   *  agent this machine's session joined as. The Swarm as the Buddy reads it now decides the rest, never the delivery alone;
+   *  it names no session or machine of the Buddy's own (backend model.ts agentWithoutMachine), so it cannot say which
+   *  session it is (security review 1 of #2248: the success path compared that blank id and never ran). Not its person's
+   *  own: news from outside its chat (the server marks it), the PM's private lines there, another person's message, another
+   *  chat, an archived one, a session id reused for another agent or its agent moved to another session here, another
+   *  person's Buddy, and an earlier membership.
    *  `onTheirMachine`: the Buddy runs on its person's own machine, whose Claude sign-in the Artifact tool reads as; on
    *  anybody else's it would read their artifacts, so a link is listed only there. */
   private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<{ onTheirMachine: boolean } | null> {
     const author = object(message.author)
     if (buddyNews || author.kind !== 'person' || !identifier(author.id)) return null
+    // A Buddy moved to another of this machine's sessions keeps its first session's id: it lists nothing until started again.
+    if (entry.agentId !== agentIdOf(this.machineId, entry.harnessId)) return null
     const { state } = await this.sources.reads.read(entry.tabId, entry.agentId)
     const agent = (Array.isArray(state.agents) ? state.agents.map(object) : []).find(a => a.id === entry.agentId)
     const chat = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(c => c.id === message.conversationId)
     const owner = object(agent?.buddyOf)
-    const own = !!agent && !!chat && agent.harnessId === entry.harnessId && owner.personId === author.id
+    const own = !!agent && !!chat && owner.personId === author.id
       && typeof owner.generation === 'string' && owner.generation === author.membershipGeneration
       && chat.kind === 'buddy' && chat.buddyOwnerId === author.id && chat.archived !== true
       && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId) && chat.projectId === agent.projectId
