@@ -58,7 +58,8 @@ export interface Derived {
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
   /** Every contributed machine the reader can see. */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown } }>
+  /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
+  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */

@@ -385,6 +385,22 @@ describe('Super Tab collaboration policy', () => {
     expect(() => visibleState(f.state, peer)).toThrow('no longer have access')
   })
 
+  // Review of #2188: Desktop adds the accepting computer to the Swarm only when the accept made the person a member. One
+  // who joined by link on another computer while this invitation waited is a member already, and says so.
+  it('says whether the accept made the person a member, and as what', () => {
+    const f = fixture()
+    const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
+    expect(f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer).result)
+      .toEqual({ conversationId: 'lead', alreadyMember: false, role: 'collaborator' })
+    const again = f.run({ type: 'invite.create', email: 'late@example.com', role: 'collaborator', conversationId: 'lead' })
+    const late = { kind: 'person' as const, userId: 'late', email: 'late@example.com' }
+    // Joined by link elsewhere first, as a viewer: the invitation it still had changes nothing.
+    f.state.people.push({ id: 'late', email: 'late@example.com', role: 'viewer', generation: 'link' })
+    expect(f.run({ type: 'invite.accept', inviteId: again.result.inviteId as string }, late).result)
+      .toEqual({ conversationId: 'lead', alreadyMember: true, role: 'viewer' })
+    expect(f.state.people.filter(p => p.id === 'late')).toHaveLength(1)
+  })
+
   it('requires the addressed account to accept an unexpired invitation and keeps other invitations private', () => {
     const f = fixture()
     const invited = f.run({ type: 'invite.create', email: 'PEER@example.com', role: 'collaborator', conversationId: 'lead' })
@@ -1089,6 +1105,19 @@ it('requires the exact stop request for host acknowledgement and prevents promot
   expect(() => f.add('worker', 'owner', group, true)).toThrow('stopping')
 })
 
+// Swarm autonomous-harness, 2026-10-29: a Builder started by hand never got a task, and its Lead could not stop it ("this
+// worker has no finished assignment to release"); only a person by hand could.
+it('lets the Lead stop a worker that never had an assignment, but keep only one with finished work, and never a Buddy', () => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+  const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)).toThrow('no finished assignment to keep')
+  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, leadActor)
+  expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'stop', releaseId: expect.any(String) })
+  const buddy = f.add('buddy', 'owner', group)
+  f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
+  expect(() => f.run({ type: 'agent.release', agentId: buddy, decision: 'stop' }, leadActor)).toThrow('never released')
+})
+
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
   teamMachine(f, 'peer')
@@ -1605,13 +1634,15 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.assign', conversationId: next, agentId: builder, ...via }, leadActor, decisionIn(next))
   })
 
-  it('lets the Lead keep or stop a Reviewer that never had work, but not such a Builder', () => {
+  it('lets the Lead keep or stop a Reviewer that never had work, and only stop such a Builder', () => {
     const { f, leadActor, reviewer, builder } = reviewed()
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'keep' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'keep')
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'stop')
-    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, leadActor)).toThrow('no finished assignment')
+    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'keep' }, leadActor)).toThrow('no finished assignment')
+    f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, leadActor)
+    expect(f.state.agents.find(a => a.id === builder)).toHaveProperty('workDecision', 'stop')
   })
 
   it('keeps the group\'s idle Reviewers when its work ends, waiting for no decision, and counts adding one to a group as reuse', () => {
@@ -2889,17 +2920,17 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('refuses a person, a non-Lead agent and another project’s Lead', () => {
+  it('refuses a non-Lead agent, another project’s Lead and any tag in the Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
-    expect(() => f.run(send(group, ['peer']))).toThrow('Only a project’s Lead can tag people.')
+    expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     expect(() => f.run(send(group, ['peer']), as(worker))).toThrow('Only a project’s Lead can tag people.')
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('A Lead can tag people only in its own project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('Nobody is tagged in the Leads conversation.')
   })
 
   it('refuses a person who cannot read the conversation or is not in the Swarm', () => {
     const { f, secret } = swarm()
-    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer@example.com cannot read this conversation.')
+    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer cannot read this conversation.')
     expect(() => f.run(send(secret.conversationId, ['stranger']), as(secret.lead))).toThrow('Tag a person in this Swarm.')
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
