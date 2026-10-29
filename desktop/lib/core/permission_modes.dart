@@ -86,7 +86,7 @@ const Map<String, List<PermissionMode>> kEnginePermissionModes = {
 const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
   'claude': [
     PermissionMode(
-      'dontAsk',
+      'buddy',
       'Reads only, never asks',
       'Runs its read tools and commands, refuses the rest without asking',
     ),

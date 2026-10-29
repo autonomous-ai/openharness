@@ -637,7 +637,7 @@ void main() {
           id: 'a1',
           name: 'Multiply',
           engine: 'claude',
-          permissionMode: 'dontAsk',
+          permissionMode: 'buddy',
         ),
       ];
       (f.server.state['agents'] as List)[1]['configuration'] = {

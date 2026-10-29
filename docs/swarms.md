@@ -208,7 +208,11 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
   commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`). The guard's refusal
   outranks any allow rule in the machine owner's own settings or the project's checked-in ones, and a guard that
-  cannot run refuses the call. File editing is turned off, and the files in its own copy of the project are read-only.
+  cannot run refuses the call. It reads only its own folder's settings and starts no MCP server, so nothing from the
+  person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
+  in it: a hook a teammate commits would otherwise run with the person's credentials. Harness's own session, turn and
+  Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
+  in its own copy of the project are read-only.
   A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
   Harness GitHub App's token.
 - The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without

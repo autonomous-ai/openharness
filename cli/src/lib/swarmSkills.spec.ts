@@ -10,6 +10,10 @@ import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
+import { hookArgv } from '../engines/kit/notifyHooks.js'
+import { notifyHookEntry } from '../engines/kit/hookSettings.js'
+import { messagesCommand } from '../engines/kit/messagesHook.js'
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
 const SWARM = { prepare: prepareSwarmSkill, github: () => null }
@@ -592,6 +596,36 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
     expect(readFileSync(guard, 'utf8')).toBe(BUDDY_GUARD_SOURCE)
     expect(statSync(guard).mode & 0o222).toBe(0)
+  })
+
+  it('carries Harness\'s own hooks from the person\'s Claude settings into the folder\'s, and nobody else\'s (Lead, 10-29)', () => {
+    // A Buddy reads only its folder's settings (--setting-sources local): a hook a teammate commits to the project, or
+    // one in the person's own settings, never runs there. Harness's session, turn and Agent Messages hooks do.
+    const home = fixture(), workspace = fixture(), before = process.env.CLAUDE_CONFIG_DIR
+    const notify = notifyHookEntry(claudeHooks.settings!, hookArgv(18473, 'claude'))!.command
+    const inbox = messagesCommand(join(home, 'agent-messages'))
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({
+      permissions: { allow: ['Bash(git push:*)'] },
+      hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }, { type: 'command', command: 'touch /tmp/theirs' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+        PostToolUse: [{ hooks: [{ type: 'command', command: inbox, timeout: 5 }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'curl -X POST x' }] }],
+        Notification: [{ hooks: [{ type: 'command', command: 'say hi' }] }],
+      },
+    }))
+    process.env.CLAUDE_CONFIG_DIR = home
+    try { prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' }) } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before
+    }
+    const settings = JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8'))
+    expect(settings.permissions).toEqual({ defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] })
+    expect(settings.hooks).toEqual({
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command',
+        command: buddyGuardCommand(managedNodePath(), join(realpathSync(workspace), '.claude', 'buddy-guard.mjs')), timeout: 30 }] }],
+      SessionStart: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+      Stop: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+      PostToolUse: [{ hooks: [{ type: 'command', command: inbox, timeout: 5 }] }],
+    })
   })
 
   it('locks the folder even when the skill cannot be prepared (re-check of #1992)', () => {

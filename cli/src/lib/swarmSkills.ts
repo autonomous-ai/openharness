@@ -2,6 +2,9 @@
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { isMessagesCommand } from '../engines/kit/messagesHook.js'
+import { isManagedHook } from '../engines/kit/notifyHooks.js'
+import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -627,14 +630,40 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 
-/** Claude Code's settings in a Buddy's folder (it launches in dontAsk mode, superTabs/start.ts): its guard answers every
- *  tool call, allowing only reads and its Super Tab commands (lib/buddyGuard.ts), and editing is denied outright. The
- *  folder's local settings outrank the person's own, which may turn hooks off. */
+/** Claude Code's settings in a Buddy's folder, the only ones it reads (it launches with `--setting-sources local` in dontAsk
+ *  mode, engines/claude/launch.ts `buddy`): its guard answers every tool call, allowing only reads and its Super Tab
+ *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
 const buddyClaudeSettings = (guard: string) => ({
   permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
   disableAllHooks: false,
-  hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
+  hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }],
+    ...harnessClaudeHooks() },
 })
+
+/**
+ * Harness's own Claude Code hooks, as the launch just wrote them to the person's settings (core/agents/create.ts prepares
+ * hooks before the Swarm's skill): the session, turn and Agent Messages hooks that mark a Buddy's activity, and none of
+ * anybody else's. The Buddy does not read the person's settings, so they are carried here; a relaunch carries them again.
+ * Missing or unreadable settings carry none: the Buddy still runs, guarded, without activity marks.
+ */
+function harnessClaudeHooks(): Record<string, unknown[]> {
+  let settings: { hooks?: Record<string, unknown> }
+  try {
+    settings = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json'), 'utf8'))
+  } catch { return {} }
+  const ours = (hook: unknown) => !!hook && typeof hook === 'object' && (isManagedHook(hook as Parameters<typeof isManagedHook>[0])
+    || isMessagesCommand((hook as { command?: unknown }).command))
+  const carried: Record<string, unknown[]> = {}
+  for (const [event, blocks] of Object.entries(settings?.hooks ?? {})) {
+    if (event === 'PreToolUse' || !Array.isArray(blocks)) continue
+    const kept = blocks.flatMap((block: { matcher?: unknown; hooks?: unknown }) => {
+      const hooks = Array.isArray(block?.hooks) ? block.hooks.filter(ours) : []
+      return hooks.length ? [{ ...(typeof block.matcher === 'string' ? { matcher: block.matcher } : {}), hooks }] : []
+    })
+    if (kept.length) carried[event] = kept
+  }
+  return carried
+}
 
 /**
  * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
