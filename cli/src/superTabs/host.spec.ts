@@ -2521,6 +2521,35 @@ describe('closing the sessions the backend ends', () => {
     expect(t.commands).toHaveLength(1)
   })
 
+  // Diego, 10-30: removing an agent or deleting its project left its worktree to the weekly sweep, up to a week later. It goes
+  // once its close is acknowledged, under the stopped worker's own rules (machines.ts removeStoppedWorktree).
+  it('removes the ended session\'s worktree only once its close is acknowledged, and a failed removal is only logged', async () => {
+    const removeWorktree = vi.spyOn(ContributedMachines.prototype, 'removeStoppedWorktree').mockRejectedValue(new Error('git refused'))
+    try {
+      const t = lifeFixture([ended()])
+      const backend = t.core.account.backend
+      let refused = 1
+      const removalsAtAck: number[] = []
+      t.core.account.backend = async (method, path, body) => {
+        if ((body as any)?.command?.type !== 'agent.sessionClosed') return backend(method, path, body)
+        removalsAtAck.push(removeWorktree.mock.calls.length)
+        return refused-- > 0 ? { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } } : backend(method, path, body)
+      }
+      await t.poll()
+      // Not acknowledged: the worktree stays.
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('down'))
+      expect(removeWorktree).not.toHaveBeenCalled()
+      await t.poll(5_000)
+      await vi.waitFor(() => expect(removeWorktree).toHaveBeenCalledWith('tab', 'harness'))
+      expect(removalsAtAck).toEqual([0, 0])
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Kept the worktree of an ended session: git refused'))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(removeWorktree).toHaveBeenCalledTimes(1)
+      expect(t.closeMember).toHaveBeenCalledTimes(1)
+      expect(t.commands).toHaveLength(1)
+    } finally { removeWorktree.mockRestore() }
+  })
+
   // Lead, 10-30: a Buddy removed, its person gone from the Swarm, or its chat purged with its project: the Swarm ends its
   // session, and what its person sent it is listed no longer, rather than for the rest of the day. Its session need not run.
   it('forgets what a Buddy\'s person sent it once the Swarm ends its session, and keeps other sessions\' lists', async () => {
