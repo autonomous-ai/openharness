@@ -30,7 +30,7 @@ class SuperTabAvatar extends StatelessWidget {
     this.size = 30,
     this.now,
   }) : identity = 'person:${person.id}',
-       name = superTabPersonName(person.email),
+       name = person.username,
        picture = person.avatar,
        engine = null,
        status = person.status,

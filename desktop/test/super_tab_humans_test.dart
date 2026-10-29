@@ -247,7 +247,7 @@ void main() {
       // The line starts where the name does.
       expect(
         tester.getTopLeft(part('meta', 'peer')).dx,
-        tester.getTopLeft(nameIn('peer', 'Dee')).dx,
+        tester.getTopLeft(nameIn('peer', 'dee')).dx,
       );
       await close(tester, controller);
     },
@@ -279,7 +279,7 @@ void main() {
       // After the name, before the points; the numeral stays.
       expect(
         tester.getTopLeft(crown('peer')).dx,
-        greaterThan(tester.getTopLeft(nameIn('peer', 'Dee')).dx),
+        greaterThan(tester.getTopLeft(nameIn('peer', 'dee')).dx),
       );
       expect(
         tester.getTopRight(crown('peer')).dx,
@@ -472,7 +472,7 @@ void main() {
     final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
     Finder line(String text) =>
         find.descendant(of: waiting, matching: find.text(text));
-    expect(line('3 agents are waiting on Ken'), findsOneWidget);
+    expect(line('3 agents are waiting on ken'), findsOneWidget);
     expect(line('1 agent is waiting on you'), findsOneWidget);
     await close(tester, controller);
   });
@@ -537,18 +537,17 @@ void main() {
   );
 
   testWidgets(
-    "names each person by display name, else their email's first part",
+    'names each person by their username, never the account display name',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       Finder within(String id, String text) =>
           find.descendant(of: person(id), matching: find.text(text));
-      expect(nameIn('peer', 'Dee'), findsOneWidget);
-      expect(within('owner', 'Ken'), findsOneWidget);
-      // A server from before names: the email's first part, as before.
+      expect(nameIn('peer', 'dee'), findsOneWidget);
+      expect(within('owner', 'ken'), findsOneWidget);
       expect(within('scholes', 'scholes'), findsOneWidget);
-      expect(find.text('dee'), findsNothing);
+      expect(find.text('Dee'), findsNothing);
       // On hover the whole name, which a long one needs when it is cut, then the email.
-      expect(find.byTooltip('Dee\ndee@example.com'), findsOneWidget);
+      expect(find.byTooltip('dee\ndee@example.com'), findsOneWidget);
 
       await close(tester, controller);
     },
@@ -631,7 +630,7 @@ void main() {
       final dialog = find.byType(SuperTabDetailDialog);
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
-      expect(inDialog('Dee'), findsOneWidget);
+      expect(inDialog('dee'), findsOneWidget);
       // Who they are on one line under the name (Ken, 2026-10-28).
       expect(inDialog('dee@example.com · Can collaborate'), findsOneWidget);
       // This week's points in words, and last week's beside them rather than a difference.

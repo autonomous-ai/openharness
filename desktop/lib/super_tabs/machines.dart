@@ -1481,7 +1481,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app?.stateOf(id)?.machine.displayName ??
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
         (agentsOnly && person != null
-            ? "${superTabPersonName(person.email)}'s computer"
+            ? "${person.username}'s computer"
             : 'Unavailable machine');
     final configured = (reading?['engines'] as List?)
         ?.whereType<String>()
@@ -1665,7 +1665,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
         if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
-        if (person != null) 'Owned by ${superTabPersonName(person.email)}',
+        if (person != null) 'Owned by ${person.username}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
           'CPU ${available(value!.cpuPercent!)} free',
@@ -1982,7 +1982,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.email,
+                owner: person?.username,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
@@ -2778,7 +2778,7 @@ class _MachineLine extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
-                message: 'Owned by ${superTabPersonName(owner.email)}',
+                message: 'Owned by ${owner.username}',
                 child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),

@@ -612,8 +612,8 @@ class ConversationServer {
     };
   }
 
-  /// A person's own status or avatar, or an agent's avatar, as the backend
-  /// stores it (profile.ts).
+  /// A person's own status, username or avatar, or an agent's avatar, as the
+  /// backend stores it (profile.ts, usernames.ts).
   void _profile(Map command, String reader) {
     final (key, id) = command['type'] == 'agent.avatar'
         ? ('agents', command['agentId'])
@@ -636,6 +636,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.username')
+              'username': (command['username'] as String?)?.toLowerCase()
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -773,6 +775,7 @@ class ConversationServer {
         }
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');

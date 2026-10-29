@@ -1,5 +1,6 @@
 import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
+import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -168,6 +169,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
+  z.object({ type: z.literal('member.username'), username: z.string().max(64).nullable() }).strict(),
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
@@ -443,7 +445,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
+  // So does choosing one's own username (usernames.ts).
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -585,7 +588,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -1801,6 +1804,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
       break
+    case 'member.username':
+      setUsername(state, actor, command.username)
+      break
     case 'agent.avatar':
       setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
       break
@@ -2187,6 +2193,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
   assignAgentDisplayNames(state.agents)
+  keepUsernames(original, state)
   // The size limit is per stored part now (parts/commit.ts PART_LIMIT_BYTES); a Swarm as a whole has none.
   // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.
   for (const draft of effects.messages) {

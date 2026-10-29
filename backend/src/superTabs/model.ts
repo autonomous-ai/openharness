@@ -3,6 +3,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { withAvatarView } from './profile.js'
+import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
@@ -17,6 +18,8 @@ export interface Person {
   status?: import('./profile.js').PersonStatus
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  username?: string
 }
 export interface AgentConfiguration {
   engine: string
@@ -628,7 +631,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
-  visible.people = visible.people.map(withAvatarView) as Person[]
+  // Each person as the Swarm names them (usernames.ts), their default included.
+  const names = swarmUsernames(state)
+  visible.people = visible.people.map(p => ({ ...withAvatarView(p), username: names.get(p.id) })) as Person[]
   visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {

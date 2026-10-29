@@ -2920,17 +2920,17 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('refuses a person, a non-Lead agent and another project’s Lead', () => {
+  it('refuses a non-Lead agent, another project’s Lead and any tag in the Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
-    expect(() => f.run(send(group, ['peer']))).toThrow('Only a project’s Lead can tag people.')
+    expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     expect(() => f.run(send(group, ['peer']), as(worker))).toThrow('Only a project’s Lead can tag people.')
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('A Lead can tag people only in its own project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('Nobody is tagged in the Leads conversation.')
   })
 
   it('refuses a person who cannot read the conversation or is not in the Swarm', () => {
     const { f, secret } = swarm()
-    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer@example.com cannot read this conversation.')
+    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer cannot read this conversation.')
     expect(() => f.run(send(secret.conversationId, ['stranger']), as(secret.lead))).toThrow('Tag a person in this Swarm.')
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
