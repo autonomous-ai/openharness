@@ -8,10 +8,12 @@ import 'swarm_home_list.dart';
 
 /// What the person chose for Swarm Home on this phone (Tony, 2026-10-29):
 /// the projects pinned at its top ([pins]), and the one Swarm it shows
-/// ([swarmId]; none shows them all). Neither the server nor the desktop has
-/// pins, so they stay on this phone, under the account ([store]): ids only,
-/// nothing read of a Swarm, and at most [keptPins]. A Swarm the account no
-/// longer has takes its pins and its choice with it ([keepOnly]).
+/// ([swarmId]; none shows them all); and when they last left the app
+/// ([seenAt]), what While you were away counts from. Neither the server nor
+/// the desktop has pins, so they stay on this phone, under the account
+/// ([store]): ids and a time only, nothing read of a Swarm, and at most
+/// [keptPins]. A Swarm the account no longer has takes its pins and its
+/// choice with it ([keepOnly]).
 class SwarmHomePrefs extends ChangeNotifier {
   SwarmHomePrefs({required this.accountId, this.store}) {
     unawaited(_load());
@@ -35,6 +37,11 @@ class SwarmHomePrefs extends ChangeNotifier {
   String? get swarmId => _swarmId;
   String? _swarmId;
 
+  /// When the person last left the app ([seen]); null before, as on a new
+  /// phone.
+  DateTime? get seenAt => _seenAt;
+  DateTime? _seenAt;
+
   /// Something was chosen before the choices were read back: it is kept
   /// with what was read, and written only then, so as not to write over it.
   bool _touched = false;
@@ -50,6 +57,7 @@ class SwarmHomePrefs extends ChangeNotifier {
   Set<String>? _swarms;
 
   /// The choices were read back (or there is nowhere to read them from).
+  bool get loaded => _loaded;
   late bool _loaded = store == null;
   bool _disposed = false;
 
@@ -82,6 +90,16 @@ class SwarmHomePrefs extends ChangeNotifier {
     if (_swarmId == swarmId) return;
     _swarmId = swarmId;
     _changed();
+  }
+
+  /// The person leaves the app at [at]: kept, the later time standing over
+  /// an earlier one, and written. Home does not draw it, so it tells no
+  /// one.
+  void seen(DateTime at) {
+    if (_disposed || !at.isAfter(_seenAt ?? DateTime(0))) return;
+    _seenAt = at;
+    _touched = true;
+    if (_loaded) unawaited(_save());
   }
 
   /// The account's Swarms are [swarmIds]: the pins and the choice of any
@@ -127,8 +145,8 @@ class SwarmHomePrefs extends ChangeNotifier {
     }
     if (_disposed) return;
     _loaded = true;
-    final (pins, swarmId) = text == null
-        ? (const <String>[], null)
+    final (pins, swarmId, seenAt) = text == null
+        ? (const <String>[], null, null)
         : _decode(text);
     // Chosen meanwhile: the pins pinned join those read, oldest first, those
     // taken off stay off, and a Swarm chosen stands.
@@ -138,6 +156,10 @@ class SwarmHomePrefs extends ChangeNotifier {
       ..addAll(pins.where((key) => !_unpinned.contains(key)))
       ..addAll(mine);
     if (!_shownChosen) _swarmId = swarmId;
+    // Left meanwhile: the later time stands.
+    if (seenAt != null && seenAt.isAfter(_seenAt ?? DateTime(0))) {
+      _seenAt = seenAt;
+    }
     _unpinned.clear();
     // Swarms the account lost meanwhile take what was read of them too.
     final kept = _swarms;
@@ -146,19 +168,23 @@ class SwarmHomePrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  static (List<String>, String?) _decode(String text) {
+  static (List<String>, String?, DateTime?) _decode(String text) {
     try {
       final json = jsonDecode(text);
-      if (json is! Map) return (const [], null);
+      if (json is! Map) return (const [], null, null);
       return (
         [
           for (final pin in json['pins'] is List ? json['pins'] as List : [])
             if (pin is String && pin.contains('/')) pin,
         ],
         json['swarm'] is String ? json['swarm'] as String : null,
+        switch (json['seen']) {
+          final int ms when ms > 0 => DateTime.fromMillisecondsSinceEpoch(ms),
+          _ => null,
+        },
       );
     } on FormatException {
-      return (const [], null);
+      return (const [], null, null);
     }
   }
 
@@ -166,7 +192,7 @@ class SwarmHomePrefs extends ChangeNotifier {
     final store = this.store;
     if (store == null) return;
     try {
-      if (_pins.isEmpty && _swarmId == null) {
+      if (_pins.isEmpty && _swarmId == null && _seenAt == null) {
         await store.delete(_key);
       } else {
         await store.write(
@@ -174,6 +200,7 @@ class SwarmHomePrefs extends ChangeNotifier {
           jsonEncode({
             'pins': [..._pins],
             'swarm': ?_swarmId,
+            'seen': ?_seenAt?.millisecondsSinceEpoch,
           }),
         );
       }
