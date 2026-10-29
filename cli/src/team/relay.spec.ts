@@ -8,7 +8,7 @@ import type { TeamConfig } from './config.js'
 import {
   publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
   teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
-  CODEX_CLIENT_VERSION_FALLBACK,
+  CODEX_CLIENT_VERSION_FALLBACK, dropUnofferedModel,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
@@ -343,6 +343,30 @@ describe('Codex\'s home for the relay', () => {
     const fetch = answer()
     await prepareCodexHome(join(root, '.codex'), grant, { fetch: fetch as never, version: () => null, now: () => 0 })
     expect(String((fetch.mock.calls[0] as unknown[])[0])).toContain(`client_version=${CODEX_CLIENT_VERSION_FALLBACK}`)
+  })
+
+  // 2026-10-29: a /model switch saved gpt-5.5 in Mac Auto's Team account, and Codex 0.164 then opened on "Meet GPT-6 Sol"
+  // before its session started, so every Codex start there failed at 3 minutes.
+  it('takes out a saved default model the owner is not offered, once the owner\'s list is read', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    const config = join(dir, 'config.toml')
+    writeFileSync(config, 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
+    await prepareCodexHome(dir, grant, { fetch: answer() as never, version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
+    // An offered one stays; nothing is taken out without a list, or from a table.
+    writeFileSync(config, "model = 'gpt-6-astra' # chosen\n")
+    expect(dropUnofferedModel(config, new Set(['gpt-6-astra']))).toBe(false)
+    writeFileSync(config, 'model = "gpt-5.5"\n')
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-5.5"\n')
+    expect(dropUnofferedModel(config, new Set())).toBe(false)
+    writeFileSync(config, '[profiles.x]\nmodel = "gpt-5.5"\n')
+    expect(dropUnofferedModel(config, new Set(['gpt-6.1-sol']))).toBe(false)
+    expect(dropUnofferedModel(join(dir, 'missing.toml'), new Set(['gpt-6.1-sol']))).toBe(false)
+    writeFileSync(config, 'model = "gpt-5.5"\n')
+    expect(dropUnofferedModel(config, new Set(['gpt-6.1-sol']))).toBe(true)
+    expect(statSync(config).mode & 0o777).toBe(0o600)
   })
 
   it('reads the relay\'s left-over sign-in as Codex not signed in', async () => {
