@@ -166,6 +166,45 @@ describe('a worker left idle', () => {
     expect((await reviewerOf()).workDecision).toBe('stop')
   })
 
+  it('is kept, as a Reviewer, while it was active in the last 15 minutes in a review group now asleep: a message, its progress or its loss', async () => {
+    // The Lead's poll reads asleep review groups only when they can still keep a Reviewer (store.ts fullDeliveries): each
+    // way of being active there must still count, and stop counting 15 minutes later.
+    const cases: Array<[string, (data: Record<string, unknown>, at: number) => Record<string, unknown>]> = [
+      ['a message', (data, at) => ({ ...data, lastActivityAt: new Date(at).toISOString() })],
+      ['its progress', (data, at) => ({ ...data, assignment: { ...data.assignment as object, progressAt: at } })],
+      ['its loss', (data, at) => ({ ...data, assignment: { ...data.assignment as object, lost: { reason: 'no progress', at } } })],
+    ]
+    for (const [name, active] of cases) {
+      const f = await swarm()
+      // It reviews the parser, whose work is already cancelled: no re-check can come.
+      const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
+        checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+      const reviewerHarness = randomUUID()
+      const reviewer = await f.add(review, 'test-host', reviewerHarness, 'Reviewer')
+      await f.started(reviewer, { role: 'reviewer' })
+      const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+      await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
+      await f.execute({ type: 'conversation.archive', conversationId: review, archived: true })
+      await f.delivered()
+      // Quiet for an hour by its messages, then active 10 minutes ago the way this case says, and asleep.
+      const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
+      const quiet = { ...part.data as Record<string, unknown>, dormant: true, lastActivityAt: new Date(f.clock.now - 60 * MINUTE).toISOString() }
+      f.clock.now += 20 * MINUTE
+      const data = active(quiet, f.clock.now - 10 * MINUTE)
+      await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: new Date(String(data.lastActivityAt)), data: data as object } })
+      const reviewerOf = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
+      const poll = async () => {
+        await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
+        await f.timed.deliveries(host, f.tab, f.lead)
+      }
+      await poll()
+      expect((await reviewerOf()).workDecision, name).not.toBe('stop')
+      f.clock.now += 5 * MINUTE
+      await poll()
+      expect((await reviewerOf()).workDecision, name).toBe('stop')
+    }
+  })
+
   it('is kept once the owner turned tidying off', async () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })

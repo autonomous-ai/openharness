@@ -16,6 +16,7 @@ import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
+import { IDLE_STOP_MS } from '../src/superTabs/tidy.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -95,9 +96,9 @@ async function scene() {
 }
 
 /** One read as the profiler saw it: its command and every getMore (they share a query hash). */
-interface Read { shape: string; plans: string[]; multiPlanned: boolean; planningMicros: number; docsExamined: number; returned: number }
+interface Read { shape: string; plans: string[]; multiPlanned: boolean; planningMicros: number; docsExamined: number; returned: number; bytes: number }
 interface Row { ns: string; op: string; match?: unknown; planSummary?: string; docsExamined?: number; nreturned?: number; queryHash?: string
-  fromMultiPlanner?: boolean; planningTimeMicros?: number; command?: { filter?: unknown; q?: unknown } }
+  fromMultiPlanner?: boolean; planningTimeMicros?: number; responseLength?: number; command?: { filter?: unknown; q?: unknown } }
 
 /** The SwarmGroup reads `run` sends, with the plan cache emptied first: a read the planner would serve from its cache in a
  *  test is planned again in prod whenever the cache misses. */
@@ -113,20 +114,21 @@ async function profiled(run: () => Promise<unknown>): Promise<Read[]> {
     await db.$runCommandRaw({ profile: 0 })
   }
   const stages = [{ $match: { ns: { $regex: '\\.SwarmGroup$' }, op: { $in: ['command', 'getmore', 'query'] } } },
-    { $project: { ...PROFILE_STAGES[0]!.$project, op: 1, queryHash: 1, fromMultiPlanner: 1, planningTimeMicros: 1 } }]
+    { $project: { ...PROFILE_STAGES[0]!.$project, op: 1, queryHash: 1, fromMultiPlanner: 1, planningTimeMicros: 1, responseLength: 1 } }]
   const rows = (await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: stages, cursor: { batchSize: 100000 } }) as unknown as
     { cursor: { firstBatch: Row[] } }).cursor.firstBatch
   const reads = new Map<string, Read>()
   for (const row of rows) {
     const id = row.queryHash ?? `${reads.size}`
     const filter = row.match ?? row.command?.filter ?? row.command?.q
-    const read = reads.get(id) ?? { shape: '', plans: [], multiPlanned: false, planningMicros: 0, docsExamined: 0, returned: 0 }
+    const read = reads.get(id) ?? { shape: '', plans: [], multiPlanned: false, planningMicros: 0, docsExamined: 0, returned: 0, bytes: 0 }
     if (filter !== undefined && !read.shape) read.shape = queryShape(filter)
     if (row.planSummary && !read.plans.includes(row.planSummary)) read.plans.push(row.planSummary)
     read.multiPlanned ||= !!row.fromMultiPlanner
     read.planningMicros += Number(row.planningTimeMicros ?? 0)
     read.docsExamined += Number(row.docsExamined ?? 0)
     read.returned += Number(row.nreturned ?? 0)
+    read.bytes += Number(row.responseLength ?? 0)
     reads.set(id, read)
   }
   return [...reads.values()]
@@ -270,19 +272,29 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     clock = MIGRATED + 60_000
     const expected = s.quietLead.filter(r => r.lastActivityAt.getTime() >= clock - DAY).length
     const all = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
-    const reads = where(all, ['tabId', 'dormant', 'lastActivityAt'])
+    const reads = where(all, ['tabId', 'dormant', 'lastActivityAt', 'projectId'])
     expect(reads).toHaveLength(1)
     expectIndexed(reads)
     expect(reads[0]!.returned).toBe(expected)
     expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(expected)
-    // The same poll reads the quiet conversations its project's kept Reviewer is in (every quiet one here), through the
-    // Reviewer's conversations: no index has both.
+    // The same poll reads the quiet conversations its project's kept Reviewer is in, through the Reviewer's conversations: no
+    // index has both. Only those active in the last 15 minutes can still keep it (tidy.ts); none reviews open work here.
     const asleep = where(all, ['tabId', 'dormant', 'agentIds'])
     expect(asleep).toHaveLength(1)
     expectIndexed(asleep)
-    expect(asleep[0]!.returned).toBe(s.quietLead.length + s.quietOther.length)
+    const recent = [...s.quietLead, ...s.quietOther].filter(r => r.lastActivityAt.getTime() > clock - IDLE_STOP_MS).length
+    expect(asleep[0]!.returned).toBe(recent)
     const its = await db.swarmGroup.count({ where: { tabId: s.tabId, agentIds: { has: s.reviewer } } })
     expect(asleep[0]!.docsExamined, JSON.stringify(asleep)).toBeLessThanOrEqual(its)
+  })
+
+  it('a Lead\'s poll reads none of the briefs or checks of the quiet conversations its Reviewers are in (Diego, 10-29)', async () => {
+    clock = MIGRATED + 60_000
+    const reads = where(await profiled(() => store.deliveries(owner, s.tabId, s.lead)), ['tabId', 'dormant', 'agentIds'])
+    expect(reads).toHaveLength(1)
+    // Each conversation here has a 2000-byte brief: a row that carried one, or its checks, would pass this alone.
+    expect(reads[0]!.returned).toBeGreaterThan(0)
+    expect(reads[0]!.bytes / reads[0]!.returned, JSON.stringify(reads)).toBeLessThan(500)
   })
 
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {
