@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, sameData, visibilityChanged } from './commit.js'
+import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -70,6 +71,49 @@ describe('what a write tells host reads (review round 1)', () => {
     const machineOf = new Map([['leaving', 'm1'], ['staying', 'm2']])
     expect(hostMarker('group', group(['leaving', 'staying'], 'm3'), group(['staying']), machineOf, 9)).toEqual({ host: { hostMachineIds: ['m1', 'm2', 'm3'] } })
     expect(hostMarker('agent', {}, {}, machineOf, 9)).toEqual({})
+  })
+})
+
+describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
+  // Mac A lends a pool and runs agent a1; the team account B follows Mac A; Mac C runs agent c1 only.
+  const swarm = () => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    state.machines = [{ machineId: 'A' }, { machineId: 'B', hostMachineId: 'A' }] as never
+    state.agents = [{ id: 'a1', machineId: 'A' }, { id: 'c1', machineId: 'C' }] as never
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+  const tell = (writes: PartWrite[]) => hostsToTell(writes, swarm(), swarm()).sort()
+
+  it('tells every host of the Swarm when its head or members change', () => {
+    expect(tell([update('head', 'head', {})])).toEqual(['A', 'B', 'C'])
+    expect(tell([update('member', 'owner', {})])).toEqual(['A', 'B', 'C'])
+  })
+
+  it('tells only the machine an agent or a start is on', () => {
+    expect(tell([update('agent', 'c1', { machineId: 'C' })])).toEqual(['C'])
+    expect(tell([update('start', 's', { request: { machineId: 'A' } })])).toEqual(['A'])
+  })
+
+  it('tells the machines a group\'s marker names, and none for a group write without one', () => {
+    expect(tell([update('group', 'g', {}, { hostMachineIds: ['C'] })])).toEqual(['C'])
+    expect(tell([update('group', 'g', {})])).toEqual([])
+  })
+
+  it('tells a machine whose settings changed, the Mac it follows and the team accounts that follow it, never for its reading alone', () => {
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'B', { machineId: 'B', contribution: { hostMachineId: 'A' } }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
+  })
+
+  it('tells nobody for touches or progress', () => {
+    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }, update('progress', 'p', {})])).toEqual([])
+  })
+
+  it('tells a machine the commit removed from the Swarm', () => {
+    const after = swarm()
+    after.agents = after.agents.filter(a => a.machineId !== 'C')
+    expect(hostsToTell([update('head', 'head', {})], swarm(), after).sort()).toEqual(['A', 'B', 'C'])
   })
 })
 

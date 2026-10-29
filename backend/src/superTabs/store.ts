@@ -260,7 +260,13 @@ export interface SuperTabStoreHooks {
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
+  /** A commit changed what these machines' hosts read (parts/commit.ts hostsToTell): each machine's daemon socket tells its
+   *  host to read its Swarm changes now (lib/swarmHostPushes.ts). Called after the write commits; it must not throw. */
+  hostsChanged?: (change: HostsChanged) => void
 }
+
+/** Which machines' hosts should read a Swarm's changes, and the commit's time. */
+export interface HostsChanged { tabId: string; machineIds: string[]; lastChangedAt: number }
 
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
@@ -573,8 +579,11 @@ export class SuperTabStore {
   }
 
   /** Writes what changed between the loaded state and `next`, and touches the parts the change relied on. */
-  private save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
-    return commitParts(tx, loaded, next, { stamp, touches })
+  private async save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
+    const committed = await commitParts(tx, loaded, next, { stamp, touches })
+    const told = this.hooks.hostsChanged
+    if (told && committed.hosts.length) afterCommit(tx, () => told({ tabId: loaded.parts.tabId, machineIds: committed.hosts, lastChangedAt: stamp }))
+    return committed
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
