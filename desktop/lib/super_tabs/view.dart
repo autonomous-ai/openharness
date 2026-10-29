@@ -31,6 +31,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'model.dart';
+import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
 import 'message_link_swarms.dart';
@@ -1539,8 +1540,16 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
-  List<SuperTabMessage> _shownMessages(String id) =>
-      c.messages(id).where((m) => _shown(m) && m.inMainStream).toList();
+  List<SuperTabMessage> _shownMessages(String id) {
+    final messages = c.messages(id);
+    final answered = answeredPromptAlerts(
+      messages,
+      (agentId) => c.snapshot?.agent(agentId),
+    );
+    return messages
+        .where((m) => _shown(m) && m.inMainStream && !answered.contains(m.id))
+        .toList();
+  }
 
   /// A message waiting for an agent is never announced; notices older
   /// backends stored stay hidden, in the list and as a reply's quote.
