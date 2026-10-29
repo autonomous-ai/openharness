@@ -15,7 +15,8 @@ export interface DropOptions {
   /** Checked before each write: an aborted run returns what it has done, not done. */
   signal?: AbortSignal
 }
-/** Counts and sizes only: nothing that names a Swarm or shows its content. */
+/** Counts and sizes only: nothing that names a Swarm or shows its content. `kept` and `keptBytes` are 0 when `ok` is false: they are
+ *  not read then. */
 export interface DropReport {
   ok: boolean; swarms: number; unmigrated: number; kept: number; keptBytes: number; removed: number; batches: number
   /** Removals the database refused. The run stops at the first batch with one, or that removes nothing. */
@@ -36,10 +37,12 @@ async function count(db: PrismaClient, query: object): Promise<number> {
 
 export async function dropLegacyStates(db: PrismaClient, { apply = false, batch = DEFAULT_BATCH, pause, signal }: DropOptions = {}): Promise<DropReport> {
   const [swarms, unmigrated] = [await count(db, {}), await count(db, UNMIGRATED)]
+  // While a Swarm is still in one row nothing is removed, so the old states are not read (summing them reads every one whole).
+  if (unmigrated) return { ok: false, swarms, unmigrated, kept: 0, keptBytes: 0, removed: 0, batches: 0, writeErrors: 0, done: false }
   const [size] = (await db.$runCommandRaw({ aggregate: 'SuperTab', cursor: {}, pipeline: [{ $match: KEPT },
     { $group: { _id: null, kept: { $sum: 1 }, keptBytes: { $sum: { $bsonSize: '$legacyState' } } } }] }) as unknown as Batch<{ kept: number; keptBytes: number }>).cursor.firstBatch
-  const report = { ok: unmigrated === 0, swarms, unmigrated, kept: size?.kept ?? 0, keptBytes: size?.keptBytes ?? 0, removed: 0, batches: 0, writeErrors: 0, done: unmigrated === 0 && !size?.kept }
-  if (!report.ok || !apply) return report
+  const report = { ok: true, swarms, unmigrated, kept: size?.kept ?? 0, keptBytes: size?.keptBytes ?? 0, removed: 0, batches: 0, writeErrors: 0, done: !size?.kept }
+  if (!apply) return report
   while (!signal?.aborted) {
     const ids = (await db.$runCommandRaw({ find: 'SuperTab', filter: KEPT, projection: { _id: 1 }, limit: batch }) as unknown as Batch<{ _id: string }>)
       .cursor.firstBatch.map(row => row._id)

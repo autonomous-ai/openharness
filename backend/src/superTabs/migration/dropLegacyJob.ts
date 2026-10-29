@@ -25,10 +25,12 @@ export interface JobOptions {
   signal?: AbortSignal
 }
 
-const sleeper = (signal?: AbortSignal) => (ms: number) => new Promise<void>(resolve => {
-  const timer = setTimeout(resolve, ms)
+/** Waits `ms`, or until `signal` aborts; either way its timer and its stop listener are gone. */
+export const sleeper = (signal?: AbortSignal) => (ms: number) => new Promise<void>(resolve => {
+  const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve() }
+  const timer = setTimeout(finish, ms)
   timer.unref()
-  signal?.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+  signal?.addEventListener('abort', finish, { once: true })
 })
 
 /** Tries until no Swarm keeps an old state, or `signal` aborts (then it returns the last report, or an empty one). */
@@ -48,10 +50,10 @@ export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH,
 }
 
 /** Starts the removal in the background; the returned function stops it. */
-export function startLegacyDrop(db: PrismaClient, delayMs = START_DELAY_MS): () => void {
+export function startLegacyDrop(db: PrismaClient, delayMs = START_DELAY_MS, batch = JOB_BATCH): () => void {
   const control = new AbortController()
   const wait = sleeper(control.signal)
-  void wait(delayMs).then(() => dropLegacyUntilDone(db, { signal: control.signal, wait, pause: () => wait(PAUSE_MS),
+  void wait(delayMs).then(() => dropLegacyUntilDone(db, { batch, signal: control.signal, wait, pause: () => wait(PAUSE_MS),
     log: line => 'failed' in line ? logger.warn('[legacy-drop] failed', line) : logger.info('[legacy-drop] run', line) }))
   return () => control.abort()
 }

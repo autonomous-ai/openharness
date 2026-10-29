@@ -65,9 +65,22 @@ describe('removing the old state migrated Swarms keep (Stability 2.1)', () => {
     await legacySwarm()
 
     for (const apply of [false, true]) {
-      expect(await dropLegacyStates(db, { apply })).toEqual({ ok: false, swarms: 2, unmigrated: 1, kept: 1, keptBytes: OLD_STATE_BYTES, removed: 0, batches: 0, writeErrors: 0, done: false })
+      expect(await dropLegacyStates(db, { apply })).toEqual({ ok: false, swarms: 2, unmigrated: 1, kept: 0, keptBytes: 0, removed: 0, batches: 0, writeErrors: 0, done: false })
     }
     expect(await kept(migrated)).toEqual(OLD_STATE)
+  })
+
+  it('sums the kept old states only when it may remove them: a refused run reads no old state', async () => {
+    await empty()
+    await migratedSwarm()
+    await legacySwarm()
+    const commands: string[] = []
+    const watching = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
+      ? (command: object) => { commands.push(Object.keys(command)[0]!); return target.$runCommandRaw(command as never) }
+      : Reflect.get(target, key, target) }) as PrismaClient
+
+    expect(await dropLegacyStates(watching, { apply: true })).toMatchObject({ ok: false, kept: 0, keptBytes: 0 })
+    expect(commands).toEqual(['count', 'count'])
   })
 
   it('counts a Swarm whose row predates the format field as not migrated', async () => {
@@ -222,7 +235,7 @@ describe('the automatic removal after a release', () => {
     expect([await kept(first), await kept(second)].filter(state => state === null)).toHaveLength(1)
   })
 
-  it('runs by itself once started, and stops when asked', async () => {
+  it('runs by itself once started', async () => {
     await empty()
     const ids = [await migratedSwarm(), await migratedSwarm()]
 
@@ -232,10 +245,23 @@ describe('the automatic removal after a release', () => {
     } finally {
       stop()
     }
-    // After stop, a Swarm that keeps a state again is left alone.
-    const late = await migratedSwarm()
-    await new Promise(resolve => setTimeout(resolve, 300))
-    expect(await kept(late)).toEqual(OLD_STATE)
+  })
+
+  it('stops in the middle of a backlog when asked, leaving the rest alone', async () => {
+    await empty()
+    const ids = [await migratedSwarm(), await migratedSwarm(), await migratedSwarm()]
+    const removed = async () => (await Promise.all(ids.map(kept))).filter(state => state === null).length
+
+    const stop = startLegacyDrop(db, 0, 1)
+    await vi.waitFor(async () => expect(await removed()).toBeGreaterThan(0), { timeout: 10_000 })
+    stop()
+    // The pause between writes is cut short by the stop, and no further write follows it.
+    const atStop = await removed()
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+
+    expect(atStop).toBeLessThan(3)
+    expect(await removed()).toBeLessThanOrEqual(atStop + 1)
+    expect(await removed()).toBeLessThan(3)
   })
 
   it('never loads a kept old state into the rows the store and the host poll read', async () => {
