@@ -18,8 +18,9 @@
  *   a team daemon to start it again.
  * - Every step checks what is there, so a second run repairs a first one that stopped part-way.
  */
+import { VERSION_FOLDER } from '../lib/windows/cliVersions.js'
 import { TEAM_ENGINES } from './engines.js'
-import { SENTINEL_NAME, checkName, checkPort } from './layout.js'
+import { SENTINEL_NAME, TeamInputError, checkName, checkPort } from './layout.js'
 import type { RemoveScriptInput, SetupScriptInput, TeamPlistInput } from './script.js'
 import {
   SID, WINDOWS_TEAM_CONFIG_FILE, WINDOWS_TEAM_HANDOFF_DIR, WINDOWS_TEAM_HANDOFF_FILE, WINDOWS_TEAM_SHARED_DIR, WINDOWS_TEAM_SHARED_MARK,
@@ -166,15 +167,22 @@ const PRELUDE = [
 const parent = (path: string): string => path.slice(0, path.lastIndexOf('\\'))
 const leaf = (path: string): string => path.slice(path.lastIndexOf('\\') + 1)
 
+/** A CLI version folder's name, as the Windows install names one (lib/windows/cliVersions.ts). */
+function checkCliVersion(version: string): string {
+  if (!VERSION_FOLDER.test(version)) throw new TeamInputError(`the installed CLI is not in a version folder: ${JSON.stringify(version)}`)
+  return checkName(version, 'CLI version folder')
+}
+
 /**
  * What the team account runs, as itself, to copy the staged runtime into its own home: the PowerShell twin of
  * ./script.ts `TEAM_COPY`, with the same targets. A runtime folder already there is kept: its name is its Node version,
  * and a teammate's agent may be running its node.exe, which Windows would not let anyone replace. It runs from the stage
  * folder, whose name is made at run time: the folder it is in is the stage.
  */
-export function windowsTeamCopyScript(input: { home: string; nodeName: string; ptyName?: string | null }): string {
+export function windowsTeamCopyScript(input: { home: string; nodeName: string; cliVersion: string; ptyName?: string | null }): string {
   const home = checkWindowsPath(input.home, 'team home')
   const nodeName = checkName(input.nodeName, 'Node runtime folder')
+  const cliVersion = checkCliVersion(input.cliVersion)
   const ptyName = input.ptyName ? checkName(input.ptyName, 'terminal host version') : ''
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -197,13 +205,27 @@ export function windowsTeamCopyScript(input: { home: string; nodeName: string; p
     "$node = Join-Path $target 'node.exe'",
     "[IO.File]::WriteAllText((Join-Path $rt 'current-node.next'), \"$node`r`n\")",
     "Move-Item -LiteralPath (Join-Path $rt 'current-node.next') -Destination (Join-Path $rt 'current-node') -Force",
-    "foreach ($f in @('cli.js', 'notify.mjs', 'package.json')) {",
-    "  $from = Join-Path $Stage \"cli\\$f\"",
-    '  if (Test-Path -LiteralPath $from) {',
-    '    Copy-Item -LiteralPath $from -Destination (Join-Path $cli ".$f.next") -Force',
-    '    Move-Item -LiteralPath (Join-Path $cli ".$f.next") -Destination (Join-Path $cli $f) -Force',
-    '  }',
+    // The CLI as the owner's install lays it out (lib/windows/installLayout.ts): a version folder, `cli\current` naming
+    // it, and the stable `cli\notify.mjs` hook command lines name. The Windows updater writes a new version folder and
+    // repoints `current`, and the task reads `current` at each start (./windowsScript.ts teamTaskXml): a flat
+    // `cli\cli.js` was never updated. A repair puts the owner's version in and points `current` at it, whatever else is
+    // there. A folder of that version held open (a core still running from it) is the same build, and is kept.
+    `$CliVersion = ${ps(cliVersion)}`,
+    '$cliTarget = Join-Path $cli $CliVersion',
+    'if (Test-Path -LiteralPath "$cliTarget.next") { Remove-Item -LiteralPath "$cliTarget.next" -Recurse -Force }',
+    "Copy-Item -LiteralPath (Join-Path $Stage 'cli') -Destination \"$cliTarget.next\" -Recurse",
+    '$old = $null',
+    'if (Test-Path -LiteralPath $cliTarget) { $old = "$cliTarget.old-" + [guid]::NewGuid().ToString(\'N\'); try { Move-Item -LiteralPath $cliTarget -Destination $old } catch { $old = $null } }',
+    'if (Test-Path -LiteralPath $cliTarget) { Remove-Item -LiteralPath "$cliTarget.next" -Recurse -Force } else { Move-Item -LiteralPath "$cliTarget.next" -Destination $cliTarget }',
+    'if ($old) { Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue }',
+    "[IO.File]::WriteAllText((Join-Path $cli 'current.next'), \"$CliVersion`r`n\")",
+    "Move-Item -LiteralPath (Join-Path $cli 'current.next') -Destination (Join-Path $cli 'current') -Force",
+    "if (Test-Path -LiteralPath (Join-Path $Stage 'cli\\notify.mjs')) {",
+    "  Copy-Item -LiteralPath (Join-Path $Stage 'cli\\notify.mjs') -Destination (Join-Path $cli '.notify.mjs.next') -Force",
+    "  Move-Item -LiteralPath (Join-Path $cli '.notify.mjs.next') -Destination (Join-Path $cli 'notify.mjs') -Force",
     '}',
+    // What an earlier setup laid down flat: nothing should run it any more.
+    "foreach ($f in @('cli.js', 'package.json')) { Remove-Item -LiteralPath (Join-Path $cli $f) -Force -ErrorAction SilentlyContinue }",
     // The terminal host every agent runs in (lib/ptyHost/launch.ts `ptyHostBinary`: `runtime\pty\<current-pty>`). Its
     // updater replaces only a host that is there (lib/windows/ptyPayload.ts `ptyUpdateWanted`) and the account has no
     // installer, so the owner's is laid down for it, as tmux is on a Mac; a version already there is kept, as the Node one.
@@ -221,8 +243,9 @@ export function windowsTeamCopyScript(input: { home: string; nodeName: string; p
     "  [IO.File]::WriteAllText((Join-Path $ptyRoot 'current-pty.next'), \"$PtyName`r`n\")",
     "  Move-Item -LiteralPath (Join-Path $ptyRoot 'current-pty.next') -Destination (Join-Path $ptyRoot 'current-pty') -Force",
     '}',
-    // The launcher the installer writes, so `harness` works in the team account's own terminals.
-    "[IO.File]::WriteAllText((Join-Path $bin 'harness.cmd.next'), \"@`\"$node`\" `\"$(Join-Path $cli 'cli.js')`\" %*`r`n\")",
+    // A launcher, so `harness` works in the team account's own terminals: the build `cli\current` names, read each time.
+    "$launcher = @('@setlocal', \"@set /p V=<`\"$(Join-Path $cli 'current')`\"\", \"@`\"$node`\" `\"$cli\\%V%\\cli.js`\" %*\") -join \"`r`n\"",
+    "[IO.File]::WriteAllText((Join-Path $bin 'harness.cmd.next'), \"$launcher`r`n\")",
     "Move-Item -LiteralPath (Join-Path $bin 'harness.cmd.next') -Destination (Join-Path $bin 'harness.cmd') -Force",
     'exit 0',
     '',
@@ -286,6 +309,8 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
   const nodeDir = checkWindowsPath(input.nodeRuntimeDir, 'Node runtime')
   const nodeName = checkName(leaf(nodeDir), 'Node runtime folder')
   const cliDir = checkWindowsPath(input.cliDir, 'installed CLI')
+  // The owner's `cli\<current>`: the team account gets that version, under the same name.
+  const cliVersion = checkCliVersion(leaf(cliDir))
   const ptyDir = input.ptyDir ? checkWindowsPath(input.ptyDir, 'terminal host') : null
   const ptyName = ptyDir ? checkName(leaf(ptyDir), 'terminal host version') : null
   // Not used here: the owner's own process mints the sign-in code after this script (step 8), and the terminal host is
@@ -502,7 +527,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     "[void][IO.Directory]::CreateDirectory((Join-Path $RT 'cli'))",
     "foreach ($f in @('cli.js', 'notify.mjs', 'package.json')) { $from = Join-Path $CLI_SRC $f; if (Test-Path -LiteralPath $from) { Copy-Plain $from (Join-Path $RT \"cli\\$f\") } }",
     "if ($PTY_SRC -and (Test-Path -LiteralPath (Join-Path $PTY_SRC 'harness-pty.exe'))) { Copy-Plain $PTY_SRC (Join-Path $RT 'pty') }",
-    `$copyScript = ${hereString(windowsTeamCopyScript({ home, nodeName, ptyName }))}`,
+    `$copyScript = ${hereString(windowsTeamCopyScript({ home, nodeName, cliVersion, ptyName }))}`,
     "[IO.File]::WriteAllText((Join-Path $RT 'copy.ps1'), $copyScript)",
     '$asScript = { param($file) "`"$POWERSHELL`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$file`"" }',
     "$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15",
@@ -587,7 +612,8 @@ export function teamTaskXml(input: TeamPlistInput & { ownerSid?: string }): stri
   const user = checkWindowsUser(input.user, 'team account')
   const home = checkWindowsPath(input.home, 'team home')
   const node = checkWindowsPath(input.node, 'team Node')
-  const cli = checkWindowsPath(input.cli, 'team CLI')
+  // The CLI folder (`.harness\cli`), whose `current` names the version folder to run.
+  const cli = checkWindowsPath(input.cli, 'team CLI folder')
   const port = checkPort(input.port)
   const paths = windowsTeamPaths(home)
   const environment = {
@@ -597,9 +623,14 @@ export function teamTaskXml(input: TeamPlistInput & { ownerSid?: string }): stri
     ...checkWindowsEnv(input.env),
   }
   const sets = Object.entries(environment).map(([name, value]) => `set "${name}=${value}"`).join(' & ')
-  const run = (args: string) => `"${node}" "${cli}" ${args} >>"${paths.log}" 2>&1`
-  const start = `/d /s /c "${sets} & ${run(`team __start "${WINDOWS_TEAM_HANDOFF_FILE}"`)}"`
-  const daemon = `/d /s /c "${sets} & for /l %i in (0,0,1) do ((${run('__harnessd')} && exit 0) & ping -n 11 127.0.0.1 >nul)"`
+  // The build `cli\current` names, read as each action starts and again before each restart, as harness-launch.exe
+  // reads it for the owner: the Windows updater writes a new version folder and repoints `current`, so the next start
+  // runs the update. `!V!` with delayed expansion (/v:on), read when the command runs, where `%V%` would be read once,
+  // when cmd.exe parses the line. Nothing else on the line may hold a `!` (checkWindowsPath, ENV_VALUE).
+  const current = `set /p V=<"${cli}\\current"`
+  const run = (args: string) => `"${node}" "${cli}\\!V!\\cli.js" ${args} >>"${paths.log}" 2>&1`
+  const start = `/d /v:on /s /c "${sets} & ${current} & ${run(`team __start "${WINDOWS_TEAM_HANDOFF_FILE}"`)}"`
+  const daemon = `/d /v:on /s /c "${sets} & for /l %i in (0,0,1) do (${current} & (${run('__harnessd')} && exit 0) & ping -n 11 127.0.0.1 >nul)"`
   const exec = (args: string) => `    <Exec>
       <Command>%SystemRoot%\\System32\\cmd.exe</Command>
       <Arguments>${xml(args)}</Arguments>

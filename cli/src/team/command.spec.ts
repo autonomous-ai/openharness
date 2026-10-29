@@ -804,9 +804,12 @@ describe('on Windows', () => {
     expect(Object.keys(files!).sort()).toEqual(['team.json', 'team.xml'])
     expect(files!['team.xml']).toContain('<UserId>harnessteam</UserId>')
     expect(files!['team.xml']).toContain(`(A;;FRFX;;;${WIN_SID})`)
+    // The task runs the version `cli\current` names, as the owner's launcher does; setup lays the owner's version down.
+    expect(files!['team.xml']).toContain('set /p V=&lt;&quot;C:\\Users\\harnessteam\\.harness\\cli\\current&quot;')
+    expect(script).toContain("$CliVersion = '0.4.97'")
     expect(JSON.parse(files!['team.json']!)).toMatchObject({ owner: 'DELL', ownerSid: WIN_SID, ownerHome: WIN_HOME, home: 'C:\\Users\\harnessteam',
       sentinel: `${WIN_HOME}\\.harness-team-privacy`, statusFile: WIN_STATUS, label: '\\Harness\\Harness Team',
-      node: `C:\\Users\\harnessteam\\.harness\\runtime\\${NODE}\\node.exe`, cli: 'C:\\Users\\harnessteam\\.harness\\cli\\cli.js' })
+      node: `C:\\Users\\harnessteam\\.harness\\runtime\\${NODE}\\node.exe`, cli: 'C:\\Users\\harnessteam\\.harness\\cli\\0.4.97\\cli.js' })
     // After the prompt, as the owner: a fresh code, written to the handover folder, then the task.
     expect(f.post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', hostMachineId: 'm1' }, { authorization: 'Bearer x' })
     expect(handed).toEqual([CODE])

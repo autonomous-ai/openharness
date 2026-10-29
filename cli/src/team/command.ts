@@ -356,12 +356,16 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   // Windows' Node runtime keeps node.exe at its top, not in bin/.
   const team = windows ? windowsTeamPaths(layout.home) : teamPaths(layout.home)
   const teamNode = windows ? `${team.runtime}\\${nodeName}\\node.exe` : `${team.runtime}/${nodeName}/bin/node`
+  // Windows lays the CLI down in version folders, as the owner's install does: the owner's version now (the config names
+  // its cli.js), and the task runs whichever one `cli\current` names when it starts (./windowsScript.ts teamTaskXml).
+  const teamCli = windows ? `${team.cli}\\${installed.cliDir.slice(installed.cliDir.lastIndexOf('\\') + 1)}\\cli.js` : team.cliJs
+  const serviceCli = windows ? team.cli : team.cliJs
   const config: TeamConfig = {
     version: 1, user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome, ...ownerSid ? { ownerSid } : {},
     sentinel: `${ownerHome}${sep}${SENTINEL_NAME}`, port: TEAM_PORT, label: layout.service.label, plist: layout.service.file,
-    statusFile: layout.statusFile, node: teamNode, cli: team.cliJs, env: carried, createdAt: new Date(deps.now()).toISOString(),
+    statusFile: layout.statusFile, node: teamNode, cli: teamCli, env: carried, createdAt: new Date(deps.now()).toISOString(),
   }
-  const service = scripts.service({ user: TEAM_USER, home: layout.home, node: teamNode, cli: team.cliJs, port: TEAM_PORT, env: carried,
+  const service = scripts.service({ user: TEAM_USER, home: layout.home, node: teamNode, cli: serviceCli, port: TEAM_PORT, env: carried,
     ...ownerSid ? { ownerSid } : {} })
   const repair = deps.readConfig() !== null || await deps.accountExists(TEAM_USER)
   // Linux: sudo in a terminal, which works over SSH too; polkit's dialog otherwise (Desktop's offer), when there is a desktop.

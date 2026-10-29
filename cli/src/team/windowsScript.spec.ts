@@ -26,7 +26,7 @@ const removeInput = (over: Partial<RemoveScriptInput> = {}): RemoveScriptInput =
 const task = (over: Partial<TeamPlistInput> = {}): TeamPlistInput => ({
   user: 'harnessteam', home: 'C:\\Users\\harnessteam',
   node: 'C:\\Users\\harnessteam\\.harness\\runtime\\node-v22.23.2-win32-x64\\node.exe',
-  cli: 'C:\\Users\\harnessteam\\.harness\\cli\\cli.js', port: 18493, env: {}, ...over,
+  cli: 'C:\\Users\\harnessteam\\.harness\\cli', port: 18493, env: {}, ...over,
 })
 
 const at = (script: string, needle: string): number => {
@@ -212,19 +212,41 @@ describe('the Windows setup script', () => {
 
 describe('the scripts the team account runs itself', () => {
   it('copies the staged runtime and CLI into its own home, through a next folder, keeping a runtime already there', () => {
-    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64' })
+    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', cliVersion: '0.4.97' })
     expect(script).toContain('$Stage = $PSScriptRoot')
     expect(script).toContain("$TeamHome = 'C:\\Users\\harnessteam'")
     expect(script).toContain("$NodeName = 'node-v22.23.2-win32-x64'")
-    expect(script).toContain("foreach ($f in @('cli.js', 'notify.mjs', 'package.json'))")
     expect(script).toContain('current-node')
-    expect(script).toContain('harness.cmd')
     expect(script).toContain('if (-not (Test-Path -LiteralPath $target))')
     expect(script).toContain("$PtyName = ''")
   })
 
+  it('lays the CLI down as the owner\'s install is laid out: a version folder, `current` naming it, the stable notify.mjs', () => {
+    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', cliVersion: '0.4.97' })
+    expect(script).toContain("$CliVersion = '0.4.97'")
+    // The owner's version, put in whole through a next folder, then `current` repointed at it (a repair does the same).
+    expect(script).toContain('$cliTarget = Join-Path $cli $CliVersion')
+    expect(script).toContain("Copy-Item -LiteralPath (Join-Path $Stage 'cli') -Destination \"$cliTarget.next\" -Recurse")
+    expect(script).toContain("[IO.File]::WriteAllText((Join-Path $cli 'current.next'), \"$CliVersion`r`n\")")
+    expect(script).toContain("Move-Item -LiteralPath (Join-Path $cli 'current.next') -Destination (Join-Path $cli 'current') -Force")
+    expect(script).toContain("Copy-Item -LiteralPath (Join-Path $Stage 'cli\\notify.mjs') -Destination (Join-Path $cli '.notify.mjs.next') -Force")
+    // The flat files an earlier setup laid down are taken away, so nothing runs them by mistake.
+    expect(script).toContain("foreach ($f in @('cli.js', 'package.json')) { Remove-Item -LiteralPath (Join-Path $cli $f) -Force -ErrorAction SilentlyContinue }")
+    // Its own terminals' `harness` reads `current` too.
+    expect(script).toContain('@setlocal')
+    expect(script).toContain('set /p V=<')
+    expect(() => windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22', cliVersion: '..' })).toThrow()
+    expect(() => windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22', cliVersion: 'latest' })).toThrow()
+  })
+
+  it('stages the owner\'s current version, named by its folder', () => {
+    const script = buildWindowsSetupScript(input())
+    expect(script).toContain("$CliVersion = '0.4.97'")
+    expect(() => buildWindowsSetupScript(input({ cliDir: `${OWNER_HOME}\\.harness\\cli` }))).toThrow(/version folder/)
+  })
+
   it('lays the owner\'s terminal host down for the account, which has no installer, keeping a version already there', () => {
-    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', ptyName: '0.2.4' })
+    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', cliVersion: '0.4.97', ptyName: '0.2.4' })
     expect(script).toContain("$PtyName = '0.2.4'")
     expect(script).toContain('if (-not (Test-Path -LiteralPath $ptyTarget)) {')
     expect(script).toContain("-Destination (Join-Path $ptyRoot 'current-pty') -Force")
@@ -243,7 +265,7 @@ describe('the scripts the team account runs itself', () => {
   })
 
   it.skipIf(!pwsh)('parse', () => {
-    parses(windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64' }))
+    parses(windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', cliVersion: '0.4.97' }))
     parses(windowsTeamEnginesScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', packages: ['@openai/codex'] }))
   })
 })
@@ -260,11 +282,16 @@ describe('the team daemon\'s task', () => {
     expect(xml).not.toMatch(/harness(-launch)?\.exe/i)
     const commands = [...xml.matchAll(/<Command>([^<]*)<\/Command>/g)].map((m) => m[1])
     expect(commands).toEqual(['%SystemRoot%\\System32\\cmd.exe', '%SystemRoot%\\System32\\cmd.exe'])
-    const args = [...xml.matchAll(/<Arguments>([^<]*)<\/Arguments>/g)].map((m) => m[1]!.replaceAll('&quot;', '"').replaceAll('&amp;', '&').replaceAll('&gt;', '>'))
-    expect(args[0]).toContain('"C:\\Users\\harnessteam\\.harness\\runtime\\node-v22.23.2-win32-x64\\node.exe" "C:\\Users\\harnessteam\\.harness\\cli\\cli.js" team __start "C:\\ProgramData\\Harness\\Team\\handoff\\team-handoff" >>"C:\\Users\\harnessteam\\.harness\\cli\\data\\harness.log" 2>&1')
-    expect(args[1]).toContain('"C:\\Users\\harnessteam\\.harness\\cli\\cli.js" __harnessd >>"C:\\Users\\harnessteam\\.harness\\cli\\data\\harness.log" 2>&1')
+    const args = [...xml.matchAll(/<Arguments>([^<]*)<\/Arguments>/g)].map((m) => m[1]!.replaceAll('&quot;', '"').replaceAll('&amp;', '&').replaceAll('&gt;', '>').replaceAll('&lt;', '<'))
+    // The build `cli\current` names, read as each action starts, as harness-launch.exe reads it for the owner: the
+    // Windows updater writes a new version folder and repoints `current`, and the next start runs it.
+    const current = 'set /p V=<"C:\\Users\\harnessteam\\.harness\\cli\\current"'
+    expect(args[0]).toContain(`${current} & "C:\\Users\\harnessteam\\.harness\\runtime\\node-v22.23.2-win32-x64\\node.exe" "C:\\Users\\harnessteam\\.harness\\cli\\!V!\\cli.js" team __start "C:\\ProgramData\\Harness\\Team\\handoff\\team-handoff" >>"C:\\Users\\harnessteam\\.harness\\cli\\data\\harness.log" 2>&1`)
+    expect(args[1]).toContain('"C:\\Users\\harnessteam\\.harness\\cli\\!V!\\cli.js" __harnessd >>"C:\\Users\\harnessteam\\.harness\\cli\\data\\harness.log" 2>&1')
+    // Read again on every restart, inside the loop: an update takes effect at the next one.
+    expect(args[1]).toContain(`for /l %i in (0,0,1) do (${current} & (`)
     for (const line of args) {
-      expect(line.startsWith('/d /s /c "')).toBe(true)
+      expect(line.startsWith('/d /v:on /s /c "')).toBe(true)
       expect(line).toContain('set "PORT=18493"')
       expect(line).toContain('set "ADAPTER_DATA_DIR=C:\\Users\\harnessteam\\.harness\\cli\\data"')
       expect(line).toContain('set "BACKEND_WS_URL=wss://example.invalid/ws"')
@@ -272,7 +299,6 @@ describe('the team daemon\'s task', () => {
     }
     // Again after a crash, ten seconds apart, and not after a clean exit, as launchd's KeepAlive (Task Scheduler's own
     // restart does not see an action's exit code).
-    expect(args[1]).toContain('for /l %i in (0,0,1) do ((')
     expect(args[1]).toContain('&& exit 0) & ping -n 11 127.0.0.1 >nul)')
   })
 
