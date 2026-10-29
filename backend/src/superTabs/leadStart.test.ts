@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine, MachinePrivacy } from './machines.js'
-import type { LeadContext } from './leadStart.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
-// A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B): on another person's Mac it
-// runs only in that Mac's Harness Team account, never as the Mac's owner; with no machine free it waits for one.
+// A project's Product Manager started by the Swarm on the machine its person names (Dee, 10-29, option B; Ken, 10-29): on
+// another person's Mac it runs in that Mac's Harness Team account when the account takes it, else on the Mac as its owner.
 
 const NOW = 50_000_000
 const MINUTE = 60_000
@@ -71,7 +70,7 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO })
   })
 
-  it('on a teammate\'s Mac, runs in that Mac\'s Harness Team account and its folder, never as the Mac\'s owner', () => {
+  it('on a teammate\'s Mac, runs in that Mac\'s Harness Team account and its folder', () => {
     const f = swarm()
     f.lead('mate-mac')
     expect(f.state.starts).toEqual([expect.objectContaining({ machineOwnerId: 'mate',
@@ -79,32 +78,66 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-team', machineName: 'MacBook Pro' })
   })
 
-  it('is refused with the Team account\'s own reason, and records nothing', () => {
+  it('on a teammate\'s Mac whose Team account cannot take it now, runs on the Mac itself, as its owner', () => {
     const f = swarm()
     f.machine('mate-team').observation = reading('team', FAILED)
-    expect(refusal(() => f.lead('mate-mac'))).toMatchObject({ code: 'PRIVACY_CHECK_FAILED', status: 403,
-      message: 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.' })
-    f.machine('mate-team').observation = { ...reading('team', PASSED), receivedAt: NOW - 10 * MINUTE }
-    expect(refusal(() => f.lead('mate-mac'))?.code).toBe('MACHINE_OFFLINE')
-    expect(f.state.starts ?? []).toEqual([])
-    expect(f.project().lead).toBeUndefined()
+    f.lead('mate-mac')
+    expect(f.state.starts).toEqual([expect.objectContaining({ machineOwnerId: 'mate', contributorId: 'mate',
+      request: expect.objectContaining({ machineId: 'mate-mac', cwd: `/swarm/${f.app.projectId}` }) })])
+    expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-mac', machineName: 'MacBook Pro' })
+    // Offline, or paused, the same.
+    const offline = swarm()
+    offline.machine('mate-team').observation = { ...reading('team', PASSED), receivedAt: NOW - 10 * MINUTE }
+    expect(offline.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+    const paused = swarm()
+    paused.machine('mate-team').paused = true
+    expect(paused.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
   })
 
-  it('needs a Team account on another person\'s machine even while the Swarm does not yet require one', () => {
-    // A worker would still run as the Mac's owner here; a Product Manager holds people's private chats, so it never does.
-    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+  it('on a teammate\'s Mac added as they joined, runs only in its Team account', () => {
+    const f = swarm()
+    f.machine('mate-mac').teamAccountOnly = true
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-team' })
+    const failing = swarm()
+    failing.machine('mate-mac').teamAccountOnly = true
+    failing.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => failing.lead('mate-mac'))?.code).toBe('PRIVACY_CHECK_FAILED')
+    const none = swarm()
+    none.machine('mate-mac').teamAccountOnly = true
+    none.state.machines = none.state.machines!.filter(m => m.machineId !== 'mate-team')
+    expect(refusal(() => none.lead('mate-mac'))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(none.state.starts ?? []).toEqual([])
+  })
+
+  it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {
+    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
     const f = swarm()
     f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team')
-    expect(refusal(() => f.lead('mate-mac'))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
-    // With no GitHub App the Team account takes no work, so the Mac would run it itself: refused too.
-    expect(refusal(() => swarm().lead('mate-mac', {}, owner, { teamAccountsIdle: true }))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+    // With no GitHub App the Team account takes no work: the Mac runs it itself.
+    expect(swarm().lead('mate-mac', {}, owner, { teamAccountsIdle: true }).result).toMatchObject({ machineId: 'mate-mac' })
+  })
+
+  it('named in a Team account itself, is refused with the account\'s own reason, and records nothing', () => {
+    const f = swarm()
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => f.lead('mate-team'))).toMatchObject({ code: 'PRIVACY_CHECK_FAILED', status: 403,
+      message: 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.' })
+    f.machine('mate-team').observation = { ...reading('team', PASSED), receivedAt: NOW - 10 * MINUTE }
+    expect(refusal(() => f.lead('mate-team'))?.code).toBe('MACHINE_OFFLINE')
     expect(f.state.starts ?? []).toEqual([])
+    expect(f.project().lead).toBeUndefined()
   })
 
   it('is refused on a machine whose Harness is too old to start a Product Manager', () => {
     const f = swarm()
     f.machine('mate-team').observation = reading('team', PASSED, false)
-    expect(refusal(() => f.lead('mate-mac'))).toMatchObject({ code: 'HOST_OUTDATED',
+    // Its Team account's host is too old: the Mac takes it.
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+    const g = swarm()
+    g.machine('mate-team').observation = reading('team', PASSED, false)
+    g.machine('mate-mac').observation = reading('computer', undefined, false)
+    expect(refusal(() => g.lead('mate-mac'))).toMatchObject({ code: 'HOST_OUTDATED',
       message: 'Update Harness on MacBook Pro to run a Product Manager there.' })
   })
 
@@ -117,6 +150,28 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(refusal(() => f.lead('owner-mac', {}, mate))?.code).toBe('NOT_FOUND')
     f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'public', memberIds: [] })
     expect(refusal(() => f.lead('owner-mac', {}, mate))?.code).toBe('PROJECT_OWNER_REQUIRED')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('is refused on a teammate\'s Mac once they left the Swarm, or while it is being removed, and records nothing', () => {
+    const left = swarm()
+    left.run({ type: 'member.remove', userId: 'mate' })
+    expect(refusal(() => left.lead('mate-mac'))?.code).toBe('CONTRIBUTION_REVOKED')
+    expect(left.state.starts ?? []).toEqual([])
+    const removing = swarm()
+    removing.machine('mate-mac').removal = { id: 'r1', state: 'cleaning', requestedAt: new Date(NOW).toISOString() }
+    removing.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => removing.lead('mate-mac'))?.code).toBe('MACHINE_REMOVED')
+    expect(removing.state.starts ?? []).toEqual([])
+  })
+
+  it('refuses a private project it cannot read exactly as one that does not exist, naming neither', () => {
+    const f = swarm()
+    const hidden = refusal(() => f.lead('mate-mac', {}, mate))
+    const unknown = refusal(() => f.run({ type: 'lead.start', projectId: 'no-such-project', machineId: 'mate-mac', engine: 'claude', repositoryUrl: REPO }, mate))
+    expect(hidden).toMatchObject({ code: 'NOT_FOUND' })
+    expect([unknown?.code, unknown?.status, unknown?.message]).toEqual([hidden?.code, hidden?.status, hidden?.message])
+    expect(hidden?.message).not.toContain('App')
     expect(f.state.starts ?? []).toEqual([])
   })
 
@@ -194,107 +249,88 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   })
 })
 
-describe('a Product Manager waiting for a machine', () => {
-  const full = (f: ReturnType<typeof swarm>, machineId: string) => { f.machine(machineId).maxAgents = 0 }
-  const place = async (f: ReturnType<typeof swarm>, context: Partial<LeadContext> = {}) => {
-    const { placeWaitingLeads } = await import('./leadStart.js')
-    // Placed on a machine's reading: the machines report as of then.
-    for (const m of f.state.machines!) if (m.observation) m.observation = { ...m.observation, receivedAt: context.now ?? NOW }
-    const teamMachines = f.state.machines!.filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
-    return placeWaitingLeads(f.state, { now: NOW, teamMachines, ...context })
+// Security reviews 1 and 2 of #2228: the Team account was chosen before checking it could run the requested engine, so a
+// busy account, or one with that engine signed out or not offered, refused the start though the Mac itself could run it.
+describe('where a Product Manager on a teammate\'s Mac runs, for its engine', () => {
+  /** Another project's agent in the Mac's Team account. */
+  function busy(f: ReturnType<typeof swarm>) {
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+    const group = f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    f.run({ type: 'agent.add', conversationId: group, machineId: 'mate-team', harnessId: 'web-worker', name: 'Builder', configuration: config, lead: false }, owner,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } })
   }
+  const signedOut = (engine: string): Reading => ({ ...reading('team', PASSED),
+    readiness: { engines: [{ engine, installed: true, signedIn: false }] } } as unknown as Reading)
 
-  it('starts at once on a free machine, the project owner\'s own first', () => {
+  it('a Team account busy with another project\'s agents leaves it to the Mac itself, with the engine the Mac runs', () => {
     const f = swarm()
-    const asked = f.lead(null)
-    expect(asked.result).toMatchObject({ machineId: 'owner-mac' })
-    expect(f.project().lead).toMatchObject({ status: 'starting', chosen: null, machineId: 'owner-mac' })
+    f.machine('mate-team').engines = ['codex']
+    f.machine('mate-mac').engines = ['claude']
+    busy(f)
+    expect(f.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    const g = swarm()
+    g.machine('mate-team').engines = ['codex']
+    g.machine('mate-mac').engines = ['claude']
+    busy(g)
+    // Codex runs only in the busy account: refused for the Mac's reason, and nothing recorded.
+    expect(refusal(() => g.lead('mate-mac', { engine: 'codex' }))?.code).toBe('ENGINE_NOT_OFFERED')
+    expect((g.state.starts ?? []).filter(s => s.request.leadFor)).toEqual([])
   })
 
-  it('then the free Team machine', () => {
-    const f = swarm()
-    full(f, 'owner-mac')
-    expect(f.lead(null).result).toMatchObject({ machineId: 'mate-team' })
+  it('a Team account with the engine signed out, or not offering it, leaves it to the Mac itself', () => {
+    const out = swarm()
+    out.machine('mate-team').observation = signedOut('claude')
+    expect(out.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    const offered = swarm()
+    offered.machine('mate-team').engines = ['codex']
+    expect(offered.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    // The engine it runs still goes to the Team account.
+    expect(swarm().lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-team' })
   })
 
-  it('with none free, waits and says so, then starts on the first one that frees up', async () => {
+  it('a Mac added as its person joined still runs it only in its Team account, refused when that cannot run the engine', () => {
     const f = swarm()
-    full(f, 'owner-mac')
-    f.machine('mate-team').observation = reading('team', FAILED)
-    const asked = f.lead(null)
-    expect(asked.result).toMatchObject({ waiting: true })
-    expect(asked.result).not.toHaveProperty('startId')
+    f.machine('mate-mac').teamAccountOnly = true
+    f.machine('mate-team').observation = signedOut('claude')
+    expect(refusal(() => f.lead('mate-mac', { engine: 'claude' }))?.code).toBe('ENGINE_UNAVAILABLE')
     expect(f.state.starts ?? []).toEqual([])
-    expect(f.project().lead).toMatchObject({ status: 'waiting', chosen: null })
-    expect(asked.messages.map(m => m.text)).toEqual(['Waiting for a machine to start the Product Manager.'])
-    // Nothing free yet: nothing changes.
-    expect(await place(f)).toEqual([])
-    expect(f.project().lead?.status).toBe('waiting')
-    f.machine('owner-mac').maxAgents = 4
-    expect(await place(f)).toEqual([f.app.projectId])
-    expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac' })
-    expect(f.state.starts).toEqual([expect.objectContaining({ actorKey: 'person:owner', request: expect.objectContaining({ machineId: 'owner-mac' }) })])
   })
 
-  it('placed from the queue and failed there, waits for another machine and tries that one last', async () => {
+  it('New Project reads the same decision for each engine before the project exists, naming no other project', async () => {
+    const { leadChoices } = await import('./leadStart.js')
     const f = swarm()
-    const startId = f.lead(null).result.startId as string
-    f.run({ type: 'agent.startFailed', startId, error: 'Out of disk.' }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
-    expect(f.project().lead).toMatchObject({ status: 'waiting', reason: 'Its machine could not prepare or launch it.', skipped: ['owner-mac'] })
-    expect(await place(f, { now: NOW + MINUTE })).toEqual([f.app.projectId])
-    expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-team' })
-  })
-
-  // Security review 1 of #2089: a queued Product Manager that kept failing was placed again at every machine reading, each
-  // failure a row in its conversation.
-  it('failing again and again, waits longer each time, gives up after three, and says so once', async () => {
-    const { LEAD_QUEUE_ATTEMPTS } = await import('./leadStart.js')
-    expect(LEAD_QUEUE_ATTEMPTS).toBe(3)
-    const f = swarm()
-    const fail = (startId: string, now: number) => f.run({ type: 'agent.startFailed', startId, error: 'Out of disk.' }, owner,
-      { now, contribution: { machineOwnerId: f.state.starts!.find(s => s.id === startId)!.machineOwnerId, contributorId: f.state.starts!.find(s => s.id === startId)!.contributorId, hostGrant: null } })
-    const said = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => m.conversationId === f.app.conversationId).map(m => m.text)
-    let startId = f.lead(null).result.startId as string
-    expect(said(fail(startId, NOW))).toEqual([])
-    expect(f.project().lead).toMatchObject({ status: 'waiting', failures: 1, retryAt: NOW + MINUTE })
-    // Not before its time, then on the next free machine.
-    expect(await place(f, { now: NOW + MINUTE - 1 })).toEqual([])
-    expect(await place(f, { now: NOW + MINUTE })).toEqual([f.app.projectId])
-    startId = f.project().lead!.startId!
-    expect(said(fail(startId, NOW + MINUTE))).toEqual([])
-    expect(f.project().lead).toMatchObject({ status: 'waiting', failures: 2, retryAt: NOW + 3 * MINUTE })
-    expect(await place(f, { now: NOW + 3 * MINUTE })).toEqual([f.app.projectId])
-    startId = f.project().lead!.startId!
-    expect(said(fail(startId, NOW + 3 * MINUTE))).toEqual(['The Product Manager could not start after 3 tries. The last one: Its machine could not prepare or launch it. Start it again when a machine is ready.'])
-    expect(f.project().lead).toMatchObject({ status: 'failed', failures: 3 })
-    expect(await place(f, { now: NOW + 60 * MINUTE })).toEqual([])
-  })
-
-  it('is dropped when the person who asked left the Swarm, and waits while the Swarm is paused', async () => {
-    const f = swarm()
-    full(f, 'owner-mac'); full(f, 'mate-team')
-    f.lead(null)
-    f.machine('owner-mac').maxAgents = 4
-    f.state.paused = true
-    expect(await place(f)).toEqual([])
-    f.state.paused = false
-    f.state.people.find(p => p.id === 'owner')!.generation = 'rejoined'
-    expect(await place(f)).toEqual([])
-    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'The person who asked for it left the Swarm.' })
-  })
-
-  it('asked for again while waiting, takes the new request', () => {
-    const f = swarm()
-    full(f, 'owner-mac'); full(f, 'mate-team')
-    f.lead(null, { model: 'sonnet' })
-    f.lead(null, { model: 'opus' })
-    expect(f.project().lead).toMatchObject({ status: 'waiting', request: expect.objectContaining({ model: 'opus' }) })
+    f.machine('mate-team').engines = ['codex']
+    f.machine('mate-mac').engines = ['claude']
+    const context = { now: NOW, teamMachines: ['mate-team'] }
+    // The owner's own machines are left to Desktop; the Team account row is read through its Mac.
+    expect(Object.keys(leadChoices(f.state, 'owner', context))).toEqual(['mate-mac'])
+    expect(leadChoices(f.state, 'owner', context)['mate-mac']).toEqual({ claude: { machineId: 'mate-mac' }, codex: { machineId: 'mate-team' } })
+    busy(f)
+    const choices = leadChoices(f.state, 'owner', context)['mate-mac']!
+    expect(choices.claude).toEqual({ machineId: 'mate-mac' })
+    expect(choices.codex).toEqual({ refused: 'Codex isn’t offered on MacBook Pro.' })
+    expect(JSON.stringify(choices)).not.toContain('Web')
+    // The same answer the start gives.
+    expect(refusal(() => f.lead('mate-mac', { engine: 'codex' }))?.message).toBe('Codex isn’t offered on MacBook Pro.')
   })
 })
 
-// R2 (Lead, #895): a Team account runs every teammate's work as one macOS user, its folders holding other projects' clones.
-// Typing in a Product Manager there is a shell that reads them, so nobody types in it through the Swarm; its project's owner
-// may watch it, and the Mac's owner neither watches nor types. On the project owner's own machine nothing changes.
+describe('the machine a Product Manager starts on', () => {
+  it('is always named by its person: with none named it is refused, and nothing is recorded', () => {
+    const f = swarm()
+    expect(refusal(() => f.lead(null))).toMatchObject({ code: 'MACHINE_REQUIRED', status: 400, message: 'Choose the machine the Product Manager runs on.' })
+    expect(f.state.starts ?? []).toEqual([])
+    expect(f.project().lead).toBeUndefined()
+  })
+
+  it('full, refuses it rather than placing it on another', () => {
+    const f = swarm()
+    f.machine('owner-mac').maxAgents = 0
+    expect(refusal(() => f.lead('owner-mac'))?.code).toBe('MACHINE_FULL')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+})
+
 describe('the terminal of a Product Manager in a Team account', () => {
   async function running(machineId: string) {
     const f = swarm()
@@ -366,6 +402,52 @@ describe('the terminal of a Product Manager in a Team account', () => {
   })
 })
 
+// The trust change Ken chose (10-29): with no Team account able to take it, a teammate's Mac runs the Product Manager in
+// its owner's own account. That owner can read whatever the Product Manager reads on their Mac. Project members watch its
+// terminal live whichever account it runs in (Lead's ruling on #2228).
+describe('the terminal of a Product Manager on a teammate\'s Mac, as its owner', () => {
+  async function running(visibility: 'private' | 'public') {
+    const f = swarm()
+    if (visibility === 'public') f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'public', memberIds: [] })
+    f.machine('mate-team').observation = reading('team', FAILED)
+    const startId = f.lead('mate-mac').result.startId as string
+    const contribution = { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null }
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { contribution }).result.agentId as string
+    const { canWatchAgent } = await import('./projects.js')
+    const agent = f.state.agents.find(a => a.id === pm)!
+    const code = (actor: Actor, command: Command) => refusal(() => f.run(command, actor))?.code ?? 'ok'
+    return { agent, watch: (actor: Actor) => canWatchAgent(f.state, actor, agent),
+      screen: (actor: Actor) => code(actor, { type: 'agent.screen', agentId: pm, scrollback: 50 }),
+      input: (actor: Actor) => code(actor, { type: 'agent.input', agentId: pm, text: 'ls ~' }) }
+  }
+
+  it('runs on the Mac itself, outside any Team account', async () => {
+    const t = await running('private')
+    expect(t.agent).toMatchObject({ machineId: 'mate-mac', machineOwnerId: 'mate' })
+    expect((t.agent as { teamAccount?: boolean }).teamAccount).toBeUndefined()
+  })
+
+  it('its project\'s owner watches its terminal live, but neither types in it nor reads its screen in another person\'s account', async () => {
+    for (const visibility of ['private', 'public'] as const) {
+      const t = await running(visibility)
+      expect(t.watch(owner)).toBe(true)
+      expect(t.screen(owner)).toBe('TERMINAL_PRIVATE')
+      expect(t.input(owner)).toBe('TERMINAL_PRIVATE')
+    }
+  })
+
+  it('the Mac\'s owner reaches it through the Swarm only when they may read the project: a private one they are not in shows them nothing', async () => {
+    const hidden = await running('private')
+    expect(hidden.watch(mate)).toBe(false)
+    expect(hidden.screen(mate)).toBe('AGENT_UNAVAILABLE')
+    expect(hidden.input(mate)).toBe('AGENT_UNAVAILABLE')
+    const open = await running('public')
+    expect(open.watch(mate)).toBe(true)
+    expect(open.screen(mate)).toBe('ok')
+    expect(open.input(mate)).toBe('ok')
+  })
+})
+
 // Every agent in a Team account runs as one macOS user and can read the others' files, the Product Manager's saved
 // sessions with people's private chats among them. So a Team account hosting a Product Manager serves only its project.
 describe('a Team account hosting a Product Manager', () => {
@@ -388,10 +470,10 @@ describe('a Team account hosting a Product Manager', () => {
   it('is not where a Product Manager goes while another project\'s agents run there', () => {
     const f = swarm(), web = other(f)
     web.start()
-    expect(refusal(() => f.lead('mate-mac'))).toMatchObject({ code: 'TEAM_ACCOUNT_BUSY',
+    expect(refusal(() => f.lead('mate-team'))).toMatchObject({ code: 'TEAM_ACCOUNT_BUSY',
       message: 'The Harness Team account on MacBook Pro runs other projects\' agents, so it cannot host this Product Manager now.' })
-    // From the queue it goes to the next free machine instead.
-    expect(f.lead(null).result).toMatchObject({ machineId: 'owner-mac' })
+    // Named by its Mac, the Mac takes it itself.
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
   })
 
   it('holds an agent added by hand as it holds a start', () => {

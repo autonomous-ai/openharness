@@ -121,6 +121,7 @@ bool queue(action_t action) { if (queue_full) return false; queued = action; ret
 '''
 # The Swarm's data and lookups, for the Lead a face voice turn goes to.
 harness += source[source.index('enum { SUPERTAB_RECAP_GET'):source.index('static const char *swarm_fixed_text(')]
+harness += function('swarm_voice_id')
 harness += function('voice_lead')
 # and whose engine it listens with: the Buddy's on a Swarm's Buddy side.
 for name in ['swarm_side_slot', 'swarm_side_buddy', 'swarm_on_buddy', 'swarm_voice_engine']:
@@ -168,9 +169,14 @@ int main(void) {
         assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile") && !sw.voice_buddy);
         done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
         assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
-        // Words for the Swarm chat are always reviewed, a plain tap included, by a daemon that posts a reviewed draft there.
+        // Words for the Swarm chat go as any harness's do (Diego's dial, 2026-10-29: "like the other agents"): a tap sends
+        // them, and only a held stop reviews them, by a daemon that posts a reviewed draft there.
         reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
         dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); done();
+        assert(!reviews && !s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
+        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
         assert(reviews == 1 && s.voice_review && s.voice_waiting);
         discard(); finish_audio();
         // On the Buddy side the turn is pinned to it when it starts, with the Buddy's engine; a later side change moves neither.
@@ -198,6 +204,21 @@ int main(void) {
         dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
         assert(!reviews && !s.voice_review && s.voice_waiting);
         discard(); finish_audio();
+        // Diego's dial, 2026-10-29: the openharness Lead ran on another Mac, so the face named no one and a tap did nothing.
+        // A Lead on another machine (web, L2) is named by its Swarm id to a daemon that posts in its chat; an older daemon
+        // would hand that id to the pane focused in the window, so it is named to none.
+        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L2");
+        assert(!swarm_voice_id()[0]);
+        host_features |= CABLE_FEATURE_SWARM_REMOTE;
+        assert(!strcmp(swarm_voice_id(), "L2"));
+        action_t remote = {.kind = A_VOICE}; strcpy(remote.id, swarm_voice_id());
+        dispatch(remote); work(queued);
+        assert(recording && s.view == VOICE && s.voice_swarm && !strcmp(started_for, "L2"));
+        assert(!strcmp(s.voice_engine, "claude") && !strcmp(s.voice_target, "web"));
+        done(); assert(!reviews && !s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
+        // A Lead here is still named by its harness.
+        strcpy(sw.lead, "L1"); assert(!strcmp(swarm_voice_id(), "h1"));
         // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
         strcpy(s.agents[0].engine, "claude"); begin();
         assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));
@@ -301,6 +322,8 @@ int main(void) {
     assert(s.voice_retry_until==1); now=1; habitat_tick(); assert(!s.voice_retry_until);
     begin(); done(); finish_audio(); ui_voice_error("Didn't catch that");
     ui_set_connected(false); assert(!s.voice_retry_until);
+    // The daemon a link drops forgets the Swarm Lead open here: the next one is told again (test_touch_ui.py).
+    sw.opened = true; ui_set_connected(false); assert(!sw.opened);
 
     reset(); begin(); now = 601000; habitat_tick();
     assert(stops == 1 && s.voice_waiting);
