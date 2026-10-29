@@ -305,11 +305,17 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
     const f = await swarm()
     const ours = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
     const theirs = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, owner)).result.conversationId)
-    const other = new SuperTabStore(db, () => Date.now())
+    // A barrier before each first write: both renames have read the names in use (and found Sparky free) before either
+    // writes. Attempts after a conflict pass it at once.
+    let arrived = 0, release!: () => void
+    const bothRead = new Promise<void>(resolve => { release = resolve })
+    const barrier = () => { if (++arrived === 2) release(); return bothRead }
+    const [one, two] = [0, 1].map(() => new SuperTabStore(beforeFirstWrite(db, barrier), () => Date.now()))
     const settled = await Promise.allSettled([
-      f.store.execute(peer, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: ours, name: 'Sparky' } }),
-      other.execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: theirs, name: 'Sparky' } }),
+      one!.execute(peer, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: ours, name: 'Sparky' } }),
+      two!.execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: theirs, name: 'Sparky' } }),
     ])
+    expect(arrived).toBeGreaterThanOrEqual(2)
     expect(settled.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
     expect(String((settled.find(r => r.status === 'rejected') as PromiseRejectedResult).reason)).toContain('taken')
     const named = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: [ours, theirs] } }, select: { data: true } })
