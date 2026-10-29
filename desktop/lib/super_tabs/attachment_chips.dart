@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/open_in_browser.dart';
@@ -16,8 +17,8 @@ import 'attachment_viewer.dart';
 import 'model.dart';
 
 /// The files a message carries, as Slack shows them: each picture on the
-/// attachments host in place (`attachment_image.dart`), every other file one
-/// chip. A chip only names its file, and a click opens it — a text file in a
+/// attachments host in place (`attachment_image.dart`, on a computer), every
+/// other file one chip. A chip only names its file, and a click opens it — a text file in a
 /// viewer that fetches it then, anything else in the browser.
 class SuperTabAttachments extends StatelessWidget {
   const SuperTabAttachments(this.attachments, {super.key});
@@ -29,7 +30,9 @@ class SuperTabAttachments extends StatelessWidget {
     final pictures = <(SuperTabAttachment, Uri)>[];
     final chips = <SuperTabAttachment>[];
     for (final file in attachments) {
-      final url = file.isImage ? attachmentLink(file.url) : null;
+      // A browser's fetch follows a redirect off the attachments host, so
+      // there a picture stays a chip that opens in a new tab.
+      final url = file.isImage && !kIsWeb ? attachmentLink(file.url) : null;
       url == null ? chips.add(file) : pictures.add((file, url));
     }
     return Column(

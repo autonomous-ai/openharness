@@ -169,11 +169,19 @@ void main() {
             'image/png',
             url: 'http://cdn.harness.autonomous.ai/a2/plain.png',
           ),
+          // A look-alike host: the name must match exactly.
+          _file(
+            'a3',
+            'near.png',
+            'image/png',
+            url: 'https://cdn.harness.autonomous.ai.evil.example/a3/near.png',
+          ),
         ],
       );
 
       expect(find.byKey(const ValueKey('super-attachment:a1')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-attachment:a2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-attachment:a3')), findsOneWidget);
       expect(find.byType(Image), findsNothing);
       expect(loaded, isEmpty);
       await close(tester, c);
