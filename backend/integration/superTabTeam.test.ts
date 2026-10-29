@@ -775,6 +775,35 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
       cwd: '/team/lead', worktree: true, requirements } })).rejects.toMatchObject({ code: 'TEAM_ACCOUNT_HELD' })
   })
 
+  // Review of #2142: the hold outlives its removal through the store's saves and loads, and only its host's confirmed close,
+  // sent once its session data is deleted, releases it (commands.ts agent.sessionClosed).
+  it('stays held for its project after its removal until its host confirms the close, across saves and loads', async () => {
+    const f = await fixture()
+    const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const startId = String((await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })).result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const harnessId = `team-pm-${randomUUID()}`
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId, configuration: config })).result.agentId)
+    await hostRun(f.tab, { type: 'agent.startSettled', startId, warning: null })
+    // A Product Manager leaves with its project.
+    await run(f.tab, { type: 'project.delete', projectId })
+    const start = () => run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
+      cwd: '/team/lead', worktree: true, requirements } }).then(() => 'started', (error: { code?: string }) => error.code)
+    // Each command loads the Swarm from its stored parts: the hold is there each time.
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // No one else confirms it: not the Swarm's owner, nor anyone for another session.
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId: 'another' }, team)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    await run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, team)
+    expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
+  })
+
   it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {
     const f = await fixture()
     const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: '' })).result.projectId)

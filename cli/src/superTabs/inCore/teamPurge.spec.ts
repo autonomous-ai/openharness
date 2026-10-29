@@ -287,6 +287,7 @@ describe('a purge while its record cannot be read', () => {
 describe('the record of purges still to finish', () => {
   it('keeps them across restarts, and says when it cannot be read, so the account stays held (teamApps.ts)', async () => {
     const file = join(dir(), 'team-purges.json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const record = purgeRecord(file)
     record.put(target())
     record.put(target({ pastes: ['abc'] }))
@@ -312,7 +313,45 @@ describe('the record of purges still to finish', () => {
     expect(purgeRecord(file).unknown()).toBe(true)
     rmSync(`${file}.unreadable.1`)
     expect(purgeRecord(file).unknown()).toBe(false)
-    writeFileSync(file, '{"pm": 3}')
-    expect([purgeRecord(file).get('pm'), purgeRecord(file).unknown()]).toEqual([undefined, false])
+    warn.mockRestore()
+  })
+
+  it('sets a record of the wrong shape aside too, never dropping the purges it may name (security review 2 of #2142)', async () => {
+    const { rmSync } = await import('node:fs')
+    const file = join(dir(), 'team-purges.json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const entry = JSON.stringify(target())
+    for (const saved of ['3', 'null', '[]', '{"pm": 3}', `{"other": ${entry}}`, `{"pm": ${entry.replace('"engine":"claude"', '"engine":4')}}`,
+      `{"pm": ${entry.replace('"cwd":', '"cwd":7,"was":')}}`, `{"pm": ${entry.replace('}', ',"pastes":[1]}')}}`]) {
+      writeFileSync(file, saved)
+      expect([purgeRecord(file).unknown(), readFileSync(`${file}.unreadable`, 'utf8')]).toEqual([true, saved])
+      rmSync(`${file}.unreadable`)
+    }
+    // A record as this daemon writes it, older ones without codexHome included, is read as before.
+    writeFileSync(file, `{"pm": ${entry.replace(',"codexHome":null', '')}}`)
+    expect([purgeRecord(file).get('pm'), purgeRecord(file).unknown()]).toEqual([{ ...target(), codexHome: undefined }, false])
+    warn.mockRestore()
+  })
+
+  it('names where it was kept on every start while it is there, since the refusal points to the log (security review 2 of #2142)', async () => {
+    const { rmSync } = await import('node:fs')
+    const file = join(dir(), 'super-tabs', 'team-purges.json')
+    mkdirSync(join(file, '..'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const said = (paths: string) => `[super-tabs] the record of purges still to finish could not be read; kept aside at ${paths} until its owner clears it`
+    writeFileSync(file, '{')
+    purgeRecord(file)
+    purgeRecord(file)
+    writeFileSync(file, '[')
+    purgeRecord(file)
+    for (let n = 2; n <= 10; n++) writeFileSync(`${file}.unreadable.${n}`, '{')
+    purgeRecord(file)
+    // Cleared, it says nothing.
+    for (const n of ['', '.1', ...Array.from({ length: 9 }, (_, i) => `.${i + 2}`)]) rmSync(`${file}.unreadable${n}`)
+    purgeRecord(file)
+    const aside = `${file}.unreadable`
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
+      said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
+    warn.mockRestore()
   })
 })
