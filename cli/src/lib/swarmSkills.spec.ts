@@ -141,9 +141,34 @@ describe('built-in Swarm skills', () => {
     ['default', 'lead', '- When the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits.\n',
       '- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.\n'],
   ]
+  // Acknowledgements as reactions, as Slack bots do (Dee 10-29, Slack parity): every role, in both modes, in a section of its own
+  // right before the shared-machine rules, or before Requests and Done for each Lead; only the Lead adds 🚀 at a merge. A
+  // handoff such as "Ready for review" stays a post (Lead, 10-29): it opens the review.
+  const react = '- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.\n'
+  const substance = '- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").\n'
+  const rocket = '- When a group\'s pull request merges, react 🚀 to the message that assigned its work.\n'
+  const reactions = (role: 'lead' | 'dev' | 'review') => `## Reactions\n${react}${substance}${role === 'lead' ? rocket : ''}\n`
+  // Before a section that is last: after a blank line, without its own.
+  const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
+  // The Builder's 👀 replaces its "say that you took it" line, in both modes.
+  const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
+  const reactionTake: Array<['orchestration' | 'default', 'dev', string, string]> = [
+    ['orchestration', 'dev', took, '- Say in the group chat that you took it and what your first step is; mark it working.\n'],
+    ['default', 'dev', took, '- Say in the group that you took it and what you will do first; mark it working.\n'],
+  ]
+  it('has every role acknowledge with reactions and post only substance, the Lead adding 🚀 at a merge', () => {
+    for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
+      expect(text.split('## Reactions\n'), `${mode} ${role}`).toHaveLength(2)
+      expect(text.split(rocket), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(took), `${mode} ${role}`).toHaveLength(role === 'dev' ? 2 : 1)
+      expect(text, `${mode} ${role}`).not.toContain('that you took it and')
+    }
+  })
   // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
   const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
-    [...autoReview, ...failFast, ...stallWake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
   it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
     for (const [mode, , line, before] of stallWake) {
       expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
@@ -198,7 +223,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
       expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
-      expect(sha(approved(text, 'orchestration', role).replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(sha(approved(text, 'orchestration', role).replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '')
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
@@ -261,7 +286,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}${reactionsBefore('lead')}${requestsLast}`)).toBe(true)
   })
   it('gives each Builder and Reviewer skill its shared-machine rules in a section of their own: before the red flags, or last', () => {
     const lastBefore = { dev: '- Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.\n',
@@ -270,7 +295,7 @@ describe('built-in Swarm skills', () => {
       const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session' }).file, 'utf8')
       expect(orchestration, role).toContain(`\n\n${shared}## Red flags`)
       const plain = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' }).file, 'utf8')
-      expect(plain.endsWith(`${lastBefore[role]}${sharedLast}`), role).toBe(true)
+      expect(plain.endsWith(`${lastBefore[role]}${reactionsBefore(role)}${sharedLast}`), role).toBe(true)
     }
   })
   it('adds the update-request line right after each Lead skill\'s cadence rule', () => {
@@ -361,7 +386,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
     expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
-    expect(sha(approved(text, 'default', role).replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(sha(approved(text, 'default', role).replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '')
       .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)

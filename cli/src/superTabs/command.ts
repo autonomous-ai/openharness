@@ -26,7 +26,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
 const MAX_PROPOSAL_FILES = 5
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
@@ -78,6 +78,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     if (!second.trim() && !attach.length) throw new Error(USAGE)
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
+  } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
+    && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
+    // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.
+    Object.assign(payload, { action: 'command', operationId: positional[4],
+      command: { type: 'message.react', conversationId: first, messageId: second, emoji: third, on: positional.length === 5 } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
   } else if (action === 'propose' && identifier(first) && second) {

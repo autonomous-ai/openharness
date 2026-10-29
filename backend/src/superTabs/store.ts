@@ -365,7 +365,7 @@ const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a b
 /** Whether `actor` reads a row of a conversation they read: an agent-only notice is listed for its own recipient alone, and a
  *  Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it and why
  *  others could not (security review 2 of #2115). */
-const readsRow = (actor: Actor, buddy: boolean) => (m: SuperTabMessage): boolean =>
+const readsRow = (actor: Actor, buddy: boolean) => (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>): boolean =>
   (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))) && !(buddy && routingRow(m.source))
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
@@ -1923,8 +1923,20 @@ export class SuperTabStore {
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
-    // A Buddy's route rows are left out like an agent-only notice (readsRow), so no page is shorter.
-    const buddy = isBuddyReader(state, actor), reads = readsRow(actor, buddy)
+    // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
+    // and why others could not (security review 2 of #2115). Left out like an agent-only notice (readsRow), so no page is shorter.
+    const buddy = isBuddyReader(state, actor), readable = readsRow(actor, buddy)
+    // One thread is read only through a root this reader may read. A hidden root (an agent-only note to someone else; for a
+    // Buddy, a route row) reads as one that is not in this conversation, and as an exact message it may not see: an empty
+    // page, never its replies alone (review 2 of #2168). By its id, through the primary key.
+    if (cursor.thread) {
+      const root = await tx.superTabMessage.findFirst({ where: { tabId, conversationId, id: cursor.thread },
+        select: { id: true, source: true, recipientIds: true } })
+      // A task chat's copy of a Lead's notice stored before it was marked is read by no one either (pageReads.ts).
+      if (!root || !readable(root) || (await deliveredCopies(tx, tabId, [root])).size) {
+        return { messages: [], next: null, threads: [], reactionSeq: group.reactionSeq ?? 0 }
+      }
+    }
     const forward = cursor.after !== undefined
     // One thread: its root (its own thread) and its replies.
     const at = { tabId, conversationId, messageId: cursor.messageId, thread: cursor.thread }
@@ -1938,7 +1950,7 @@ export class SuperTabStore {
       const batch = await messagesPast(tx, at, edge, forward, 101)
       // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
       const copies = await deliveredCopies(tx, tabId, batch)
-      rows.push(...batch.filter(m => !copies.has(m.id) && reads(m)))
+      rows.push(...batch.filter(m => !copies.has(m.id) && readable(m)))
       if (batch.length < 101) break
       edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
     }
@@ -1947,17 +1959,24 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
-    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
-    const shown = buddy ? page.map(withoutMachineNames) : page
+    // What the page's rows point at that this reader may not see (an agent-only note to someone else; for a Buddy, a routing
+    // row): such a reply reads as a message of its own, with no thread or reply-to naming it and no reply line for it
+    // (review 1 of #2168). Rows on the page are readable already; the rest are read by id, at most two per row.
+    const onPage = new Set(page.map(m => m.id))
+    const pointed = [...new Set(page.flatMap(m => [m.thread, m.replyTo]).filter((id): id is string => !!id && !onPage.has(id)))]
+    // A task chat's copy of a Lead's notice stored before it was marked is read by no one (pageReads.ts deliveredCopies).
+    const pointedRows = pointed.length ? await tx.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: pointed } },
+      select: { id: true, source: true, recipientIds: true } }) : []
+    const pointedCopies = pointedRows.length ? await deliveredCopies(tx, tabId, pointedRows) : new Set<string>()
+    const hidden = new Set(pointedRows.filter(m => !readable(m) || pointedCopies.has(m.id)).map(m => m.id))
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
-    const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
+    const roots = [...new Set(page.flatMap(m => m.thread && !hidden.has(m.thread) ? [m.thread] : []))]
     const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
-    // A reply stored in the thread of a notice only its recipients read (the Lead answering a stalled alert before such
-    // replies started no thread, commands.ts) reads as one in the chat: nobody else can open that thread (review of #2177).
-    const hiddenRoots = new Set(threadRows.filter(row => row.id === row.thread && row.agentOnly).map(row => row.id))
-    const threads = threadRows.length ? threadSummaries(state, group, threadRows.filter(row => !hiddenRoots.has(row.thread))) : []
-    const inChat = (m: SuperTabMessage) => m.thread && m.thread !== m.id && hiddenRoots.has(m.thread) ? { ...m, thread: m.id } : m
-    return { messages: shown.map(inChat).map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    const threads = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing) : threadRows) : []
+    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
+    const shown = (buddy ? page.map(withoutMachineNames) : page).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
+      ? { ...m, ...(m.thread && hidden.has(m.thread) ? { thread: null } : {}), ...(m.replyTo && hidden.has(m.replyTo) ? { replyTo: null } : {}) } : m)
+    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
