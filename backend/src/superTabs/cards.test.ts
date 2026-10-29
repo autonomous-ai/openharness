@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { agentOnly, appendPullRequestUrls, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { bindPullRequestCards } from './cards.js'
+import { agentOnly, appendPullRequestUrls, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -15,7 +16,7 @@ function fixture() {
     state = effects.state
     // As the store does after every command: a shown message's links are the group's linked pull requests.
     for (const group of state.conversations) {
-      appendPullRequestUrls(group, effects.messages.filter(m => m.conversationId === group.id && !agentOnly(m.source)).map(m => m.text))
+      appendPullRequestUrls(group, effects.messages.filter(m => m.conversationId === group.id && !agentOnly(m.source, m.recipients)).map(m => m.text))
     }
     return effects
   }
@@ -60,6 +61,15 @@ describe('live cards', () => {
       { reply: { id: root.id, conversationId: id, author: root.author, createdAt: 1000, thread: root.id } })
     f.post(id, `Notice ${OTHER}`, f.as(builder), { agentOnly: true, recipientIds: [builder] })
     expect(f.group(id).cards?.pullRequests).toBeUndefined()
+  })
+
+  it('never makes a Lead-only notice a card, such as a resumed task notice, and reads its recipients', () => {
+    // Batch #2220: #2177 made agentOnly read the notice's recipients; a resumed task's notice to the Lead reaches card binding.
+    const group = { id: 'g' } as Conversation
+    const notice = { id: 'n', conversationId: 'g', text: `Resumed ${PR}`, recipients: ['lead'],
+      source: { kind: 'work-resumed', agentId: 'kai', assignmentId: 'a1' } } as unknown as MessageDraft
+    expect(() => bindPullRequestCards(group, notice)).not.toThrow()
+    expect(group.cards?.pullRequests).toBeUndefined()
   })
 
   it('records a merge on the card and posts the merged line in its thread, not the main chat', () => {

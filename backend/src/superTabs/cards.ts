@@ -27,7 +27,7 @@ export function bindTaskCard(group: Conversation, brief: MessageDraft): void {
 /** A main-chat row linking a pull request this group has no card for becomes its card. A thread reply or an agent-only
  *  notice never does: people read the main chat. */
 export function bindPullRequestCards(group: Conversation, message: MessageDraft): void {
-  if (message.thread || agentOnly(message.source) || !cardable(message)) return
+  if (message.thread || agentOnly(message.source, message.recipients) || !cardable(message)) return
   const known = new Set(group.cards?.pullRequests?.map(card => card.url))
   const fresh = pullRequestLinks(message.text).filter(url => !known.has(url))
   if (fresh.length) group.cards = { ...group.cards, pullRequests: [...group.cards?.pullRequests ?? [], ...fresh.map(url => ({ url, messageId: message.id }))] }
