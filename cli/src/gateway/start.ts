@@ -215,12 +215,12 @@ export function startGateway(host: GatewayHost): StartedGateway {
   )
   // The Share relay: a window here watching a harness someone shared with this account, over its own
   // socket to the backend (`/api/observer-ws`), signed in with the account's token. It finds the share
-  // among those the backend lists for this account first.
+  // among those the backend lists for this account first, a list kept a minute for this sign-in (sharing/relay.ts).
   const shareRelay = new HarnessShareRelay(host.tokens, env.BACKEND_WS_URL, host.autonomousEnv, async () => {
     const result = await accountHttp.backend('GET', '/api/harness-shares')
     if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
-  })
+  }, () => JSON.stringify([account.machineId, account.autonomousEnv ?? null, account.signIn?.epoch ?? null, account.signIn?.acct ?? null]))
   const windowRelay: Required<WindowRelay> = {
     acquire: (...args) => relayPool.acquire(...args),
     acquireIsolated: (...args) => relayPool.acquireIsolated(...args),

@@ -7,21 +7,45 @@
       "updatedAt": "2026-10-01T00:01:00.000Z",
       "inputTokens": 380,
       "outputTokens": 40,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "partial": {
       "totalTokens": 420,
       "updatedAt": "2026-10-01T00:01:30.000Z",
       "inputTokens": 380,
       "outputTokens": 40,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "completed": {
       "totalTokens": 630,
       "updatedAt": "2026-10-01T00:02:00.000Z",
       "inputTokens": 570,
       "outputTokens": 60,
-      "cachedTokens": 240
+      "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      }
     },
     "output-and-work": {
       "totalTokens": 630,
@@ -29,6 +53,14 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      },
       "output": {
         "linesAdded": 2,
         "linesRemoved": 0,
@@ -64,6 +96,14 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      },
       "output": {
         "linesAdded": 2,
         "linesRemoved": 0,
@@ -99,6 +139,14 @@
       "inputTokens": 390,
       "outputTokens": 20,
       "cachedTokens": 80,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 20,
+          "cacheRead": 80,
+          "cacheWrite": 10
+        }
+      },
       "work": {
         "current": [],
         "locations": [
@@ -125,21 +173,45 @@
       "updatedAt": "2026-10-01T00:05:00.000Z",
       "inputTokens": 290,
       "outputTokens": 40,
-      "cachedTokens": 80
+      "cachedTokens": 80,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 80,
+          "cacheWrite": 10
+        }
+      }
     },
     "codex-deltas": {
       "totalTokens": 250,
       "updatedAt": "2026-10-01T00:05:30.000Z",
       "inputTokens": 200,
       "outputTokens": 50,
-      "cachedTokens": 100
+      "cachedTokens": 100,
+      "models": {
+        "unknown": {
+          "input": 100,
+          "output": 50,
+          "cacheRead": 100,
+          "cacheWrite": 0
+        }
+      }
     },
     "codex-append": {
       "totalTokens": 380,
       "updatedAt": "2026-10-01T00:06:00.000Z",
       "inputTokens": 300,
       "outputTokens": 80,
-      "cachedTokens": 150
+      "cachedTokens": 150,
+      "models": {
+        "unknown": {
+          "input": 150,
+          "output": 80,
+          "cacheRead": 150,
+          "cacheWrite": 0
+        }
+      }
     },
     "codex-other-conversation": null,
     "notifications": [
@@ -158,6 +230,14 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      },
       "work": {
         "current": [],
         "locations": [
@@ -182,7 +262,15 @@
       "updatedAt": "2026-10-01T00:07:30.000Z",
       "inputTokens": 480,
       "outputTokens": 60,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "opencode/valid/cold": null,
     "opencode/valid": {
@@ -271,21 +359,45 @@
       "updatedAt": "2026-10-01T00:01:00.000Z",
       "inputTokens": 380,
       "outputTokens": 40,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "partial": {
       "totalTokens": 420,
       "updatedAt": "2026-10-01T00:01:30.000Z",
       "inputTokens": 380,
       "outputTokens": 40,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "completed": {
       "totalTokens": 630,
       "updatedAt": "2026-10-01T00:02:00.000Z",
       "inputTokens": 570,
       "outputTokens": 60,
-      "cachedTokens": 240
+      "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      }
     },
     "output-and-work": {
       "totalTokens": 630,
@@ -293,6 +405,14 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      },
       "output": {
         "linesAdded": 2,
         "linesRemoved": 0,
@@ -328,6 +448,14 @@
       "inputTokens": 570,
       "outputTokens": 60,
       "cachedTokens": 240,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 240,
+          "cacheWrite": 30
+        }
+      },
       "output": {
         "linesAdded": 2,
         "linesRemoved": 0,
@@ -363,6 +491,14 @@
       "inputTokens": 390,
       "outputTokens": 20,
       "cachedTokens": 80,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 20,
+          "cacheRead": 80,
+          "cacheWrite": 10
+        }
+      },
       "work": {
         "current": [],
         "locations": [
@@ -389,21 +525,45 @@
       "updatedAt": "2026-10-01T00:05:00.000Z",
       "inputTokens": 290,
       "outputTokens": 40,
-      "cachedTokens": 80
+      "cachedTokens": 80,
+      "models": {
+        "unknown": {
+          "input": 200,
+          "output": 40,
+          "cacheRead": 80,
+          "cacheWrite": 10
+        }
+      }
     },
     "codex-deltas": {
       "totalTokens": 250,
       "updatedAt": "2026-10-01T00:05:30.000Z",
       "inputTokens": 200,
       "outputTokens": 50,
-      "cachedTokens": 100
+      "cachedTokens": 100,
+      "models": {
+        "unknown": {
+          "input": 100,
+          "output": 50,
+          "cacheRead": 100,
+          "cacheWrite": 0
+        }
+      }
     },
     "codex-append": {
       "totalTokens": 380,
       "updatedAt": "2026-10-01T00:06:00.000Z",
       "inputTokens": 300,
       "outputTokens": 80,
-      "cachedTokens": 150
+      "cachedTokens": 150,
+      "models": {
+        "unknown": {
+          "input": 150,
+          "output": 80,
+          "cacheRead": 150,
+          "cacheWrite": 0
+        }
+      }
     },
     "codex-other-conversation": null,
     "notifications": [
@@ -422,6 +582,14 @@
       "inputTokens": 480,
       "outputTokens": 60,
       "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      },
       "work": {
         "current": [],
         "locations": [
@@ -446,7 +614,15 @@
       "updatedAt": "2026-10-01T00:07:30.000Z",
       "inputTokens": 480,
       "outputTokens": 60,
-      "cachedTokens": 160
+      "cachedTokens": 160,
+      "models": {
+        "unknown": {
+          "input": 300,
+          "output": 60,
+          "cacheRead": 160,
+          "cacheWrite": 20
+        }
+      }
     },
     "opencode/valid/cold": null,
     "opencode/valid": {

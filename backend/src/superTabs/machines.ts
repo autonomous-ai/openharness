@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
@@ -99,6 +100,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
+  /** Each running Swarm agent's token counts by model, as its session totals (costs/tokens.ts). An attempt's tokens are the
+   *  difference between its start and its end (routeDecisions.ts). Absent from hosts before it, whose attempts record none. */
+  harnessTokens: z.record(z.string().max(160), tokensByModelSchema).refine(v => Object.keys(v).length <= MAX_HARNESSES).optional(),
   /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
    *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
   harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),

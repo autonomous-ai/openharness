@@ -116,10 +116,10 @@ class SuperTabAgentInfo {
   String? get permission {
     final mode = _known(native?.permissionMode);
     if (mode == null) return null;
-    return permissionModesOf(agent.engine)
-            .where((choice) => choice.id == mode)
-            .firstOrNull
-            ?.label ??
+    return [
+          ...permissionModesOf(agent.engine),
+          ...?kLaunchOnlyPermissionModes[agent.engine],
+        ].where((choice) => choice.id == mode).firstOrNull?.label ??
         'Unrecognized setting';
   }
 
