@@ -18,6 +18,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
 import 'model.dart';
+import 'prompt_alerts.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -924,8 +925,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
     }
     final snapshot = c.reader.snapshot;
-    final messages = c.messages;
-    final from = (messages, view.decisions, c.hasOlder, _held.value);
+    final answered = answeredPromptAlerts(
+      c.messages,
+      (agentId) => snapshot?.agent(agentId),
+    );
+    final messages = answered.isEmpty
+        ? c.messages
+        : [
+            for (final m in c.messages)
+              if (!answered.contains(m.id)) m,
+          ];
+    // The notes hidden are part of what the rows were made from: a warning
+    // goes once its agent's prompt is answered, with no new message.
+    final from = (
+      c.messages,
+      view.decisions,
+      c.hasOlder,
+      _held.value,
+      answered.join(','),
+    );
     if (from != _madeFrom) {
       // Read back: the messages after the newest shown then wait below, and
       // so do decisions asked after it.
@@ -942,7 +960,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 if (!(need.decision.createdAt?.isAfter(last) ?? false)) need,
             ];
       _shown = _timeline(shown, asks, hasOlder: c.hasOlder).reversed.toList();
-      _byId = {for (final m in messages) m.id: m};
+      _byId = {for (final m in c.messages) m.id: m};
       _placeOf = {for (final (i, entry) in _shown.indexed) _keyOf(entry): i};
       _rows.removeWhere((key, _) => !_placeOf.containsKey(key));
       _madeFrom = from;
