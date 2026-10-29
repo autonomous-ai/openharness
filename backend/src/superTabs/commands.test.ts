@@ -1089,6 +1089,19 @@ it('requires the exact stop request for host acknowledgement and prevents promot
   expect(() => f.add('worker', 'owner', group, true)).toThrow('stopping')
 })
 
+// Swarm autonomous-harness, 2026-10-29: a Builder started by hand never got a task, and its Lead could not stop it ("this
+// worker has no finished assignment to release"); only a person by hand could.
+it('lets the Lead stop a worker that never had an assignment, but keep only one with finished work, and never a Buddy', () => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+  const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)).toThrow('no finished assignment to keep')
+  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, leadActor)
+  expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'stop', releaseId: expect.any(String) })
+  const buddy = f.add('buddy', 'owner', group)
+  f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
+  expect(() => f.run({ type: 'agent.release', agentId: buddy, decision: 'stop' }, leadActor)).toThrow('never released')
+})
+
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
   teamMachine(f, 'peer')
@@ -1605,13 +1618,15 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.assign', conversationId: next, agentId: builder, ...via }, leadActor, decisionIn(next))
   })
 
-  it('lets the Lead keep or stop a Reviewer that never had work, but not such a Builder', () => {
+  it('lets the Lead keep or stop a Reviewer that never had work, and only stop such a Builder', () => {
     const { f, leadActor, reviewer, builder } = reviewed()
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'keep' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'keep')
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'stop')
-    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, leadActor)).toThrow('no finished assignment')
+    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'keep' }, leadActor)).toThrow('no finished assignment')
+    f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, leadActor)
+    expect(f.state.agents.find(a => a.id === builder)).toHaveProperty('workDecision', 'stop')
   })
 
   it('keeps the group\'s idle Reviewers when its work ends, waiting for no decision, and counts adding one to a group as reuse', () => {
