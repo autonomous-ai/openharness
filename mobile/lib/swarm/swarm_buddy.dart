@@ -4,6 +4,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_start.dart';
 
 /// What the phone knows of Buddies (spec: Buddies, 10-28; in every Swarm
 /// since #2090, where they replaced Chat with PM): each person's Buddy chat in
@@ -237,29 +238,142 @@ bool swarmCanWrite(SwarmReader reader) =>
         ?.canWrite ??
     false;
 
-/// A machine a Buddy may start on, as Start your Buddy lists it.
-typedef SwarmBuddyMachine = ({String id, String name});
+/// A machine a Buddy may start on, as Start your Buddy lists it: one of the
+/// person's own. One outside the Swarm ([inSwarm] false) stays theirs: the
+/// server records it for their Buddies alone and never adds it to the Swarm
+/// (Dee, 10-29). An [away] one is listed but cannot be picked.
+typedef SwarmBuddyMachine = ({String id, String name, bool inSwarm, bool away});
 
-/// The person's own machines in the Swarm: a Buddy runs only there, like a
-/// Lead, whatever its engine (Ken, 10-28). Not a machine someone else shared
-/// with them, and not another person's; the backend refuses any other (the
-/// desktop's `buddyMachines`).
-List<SwarmBuddyMachine> swarmBuddyMachines(SwarmReader reader) => [
-  for (final m in reader.snapshot?.machines ?? const <Map<String, dynamic>>[])
-    if (m['hostMachineId'] == null &&
-        m['contributorId'] == reader.accountId &&
-        m['machineId'] is String)
-      (id: m['machineId'] as String, name: _machineName(m['name'])),
-];
+/// The menu's group of the person's own machines: the picker has only its
+/// heading, machine names and 'offline' (Dee, 10-29).
+const swarmBuddyOwnMachines = 'Your machines';
 
-/// The machine [machineId] by its name in the Swarm, as a Buddy's chat
-/// says what it runs on; "another machine" while the Swarm names none (the
-/// desktop's `buddyMachineName`).
-String swarmBuddyMachineName(SwarmReader reader, String machineId) =>
-    _machineName(
-      reader.snapshot?.pool(machineId)?['name'],
-      fallback: 'another machine',
+/// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
+const swarmBuddyMachineOffline = 'offline';
+
+/// What Start your Buddy says when none of the person's machines can take a
+/// Buddy now: none is signed in to their account, or all are offline (the
+/// desktop's words).
+const swarmBuddyNoMachine =
+    'Your Buddy runs on one of your own computers. Open Harness on one, '
+    'signed in to your account.';
+const swarmBuddyAllOffline =
+    'Your machines are offline. Open Harness on one of them to start your '
+    'Buddy there.';
+
+/// The person's own machines a Buddy may run on, like a Lead, whatever its
+/// engine (Ken, 10-28): those of their account ([computers]), in the Swarm or
+/// not, and those of theirs the Swarm lists. Never a machine someone shared
+/// with them, nor a Harness Team account; the backend refuses any other.
+/// Each by the name its person gave it; online ones first (the desktop's
+/// `buddyMachines`).
+List<SwarmBuddyMachine> swarmBuddyMachines(
+  SwarmReader reader, {
+  List<SwarmOwnComputer> computers = const [],
+}) {
+  final byId = <String, SwarmBuddyMachine>{};
+  for (final m in reader.snapshot?.machines ?? const <Map<String, dynamic>>[]) {
+    if (m['hostMachineId'] != null ||
+        m['contributorId'] != reader.accountId ||
+        m['machineId'] is! String) {
+      continue;
+    }
+    final id = m['machineId'] as String;
+    byId[id] = (
+      id: id,
+      name: _machineName(m['name']),
+      inSwarm: true,
+      away: false,
     );
+  }
+  for (final c in computers) {
+    final listed = byId[c.id];
+    byId[c.id] = (
+      id: c.id,
+      name: _machineName(c.name.isEmpty ? listed?.name : c.name),
+      inSwarm: listed != null,
+      away: c.away,
+    );
+  }
+  return [
+    ...byId.values.where((m) => !m.away),
+    ...byId.values.where((m) => m.away),
+  ];
+}
+
+/// The machine [machineId] by the name its person gave it, else its name in
+/// the Swarm, as a Buddy's chat says what it runs on; "another machine" while
+/// neither names it (the desktop's `buddyMachineName`). A machine of the
+/// person's own outside the Swarm is in no Swarm list (backend buddyOnly), so
+/// their account names it.
+String swarmBuddyMachineName(
+  SwarmReader reader,
+  String machineId, {
+  List<SwarmOwnComputer> computers = const [],
+}) {
+  final given = computers.where((c) => c.id == machineId).firstOrNull?.name;
+  return _machineName(
+    given != null && given.isNotEmpty
+        ? given
+        : reader.snapshot?.pool(machineId)?['name'],
+    fallback: 'another machine',
+  );
+}
+
+/// The setup a Buddy sends for [machineId], one of the person's own machines
+/// outside the Swarm: prepared there as Add machine prepares one (its folder
+/// and engines, `prepareContribution`), so the server records it for their
+/// Buddies alone (the desktop's `prepareBuddyMachine`). Asked again a second
+/// apart while it reports `preparing`, for up to five minutes; [setupId] names
+/// the setup, so asking again joins the one under way. A refusal throws.
+Future<Map<String, dynamic>> prepareSwarmBuddyMachine(
+  SwarmComputers computers,
+  SwarmReader reader,
+  SwarmBuddyMachine machine, {
+  required String setupId,
+  Duration pause = const Duration(seconds: 1),
+  Duration limit = const Duration(minutes: 5),
+}) async {
+  final deadline = DateTime.now().add(limit);
+  while (true) {
+    final prepared = await computers.ask(machine.id, {
+      'action': 'prepareContribution',
+      'tabId': reader.tabId,
+      'scope': 'swarm',
+      'operationId': setupId,
+    });
+    if (prepared['state'] == 'ready' && prepared['scope'] == 'swarm') {
+      final engines = [
+        for (final e in prepared['engines'] as List? ?? const [])
+          if (e == 'claude' || e == 'codex') e as String,
+      ];
+      if (engines.isEmpty) {
+        throw const SuperTabFailure(
+          'NO_SWARM_ENGINE',
+          'Install Claude Code or Codex on this computer, then try again.',
+        );
+      }
+      return {
+        'name': machine.name,
+        'cwd': prepared['cwd'],
+        'engines': engines.toSet().toList(),
+      };
+    }
+    if (prepared['state'] != 'preparing') {
+      throw const SuperTabFailure(
+        'UPDATE_REQUIRED',
+        'Update Harness on this computer, then try again.',
+      );
+    }
+    if (DateTime.now().isAfter(deadline)) {
+      throw const SuperTabFailure(
+        'SETUP_PENDING',
+        'Setup is still running on this computer. Try again to check it.',
+      );
+    }
+    await Future<void>.delayed(pause);
+  }
+}
 
 /// A machine's name without its `.local`, as the desktop shows it.
 String _machineName(Object? name, {String fallback = 'Your machine'}) {
@@ -315,12 +429,14 @@ Future<String?> startSwarmBuddy(
   required String projectId,
   required String machineId,
   required String engine,
+  Map<String, dynamic>? setup,
 }) async {
   final result = await _command(reader, {
     'type': 'buddy.create',
     'projectId': projectId,
     'machineId': machineId,
     'engine': engine,
+    'setup': ?setup,
   });
   await reader.refresh();
   return result['conversationId'] as String?;
@@ -352,17 +468,46 @@ class SwarmBuddyActions extends ChangeNotifier {
   /// What went wrong with the last one; null when it went through.
   String? get error => _error;
 
-  /// Starts the Buddy on [machineId] with [engine] ([startSwarmBuddy]).
-  Future<void> start({required String machineId, required String engine}) =>
-      _run(
-        () => startSwarmBuddy(
+  /// The setup under way for a machine outside the Swarm, kept between
+  /// tries so a setup still running is joined, not started again.
+  String? _setupId;
+
+  /// Starts the Buddy on [machineId] with [engine] ([startSwarmBuddy]). For
+  /// [machine], one of the person's own outside the Swarm, it is prepared
+  /// there first through [computers] ([prepareSwarmBuddyMachine]) and its
+  /// setup sent; nothing adds it to the Swarm.
+  Future<void> start({
+    required String machineId,
+    required String engine,
+    SwarmBuddyMachine? machine,
+    SwarmComputers? computers,
+  }) => _run(() async {
+    Map<String, dynamic>? setup;
+    if (machine != null && !machine.inSwarm && computers != null) {
+      final id = _setupId ??=
+          'buddy-setup-${DateTime.now().microsecondsSinceEpoch}';
+      try {
+        setup = await prepareSwarmBuddyMachine(
+          computers,
           reader,
-          projectId: projectId,
-          machineId: machineId,
-          engine: engine,
-        ),
-        "Couldn't start your Buddy. Try again.",
-      );
+          machine,
+          setupId: id,
+        );
+        _setupId = null;
+      } on SuperTabFailure catch (failure) {
+        if (failure.code != 'SETUP_PENDING') _setupId = null;
+        rethrow;
+      }
+      if (_disposed) return null;
+    }
+    return startSwarmBuddy(
+      reader,
+      projectId: projectId,
+      machineId: machineId,
+      engine: engine,
+      setup: setup,
+    );
+  }, "Couldn't start your Buddy. Try again.");
 
   /// Removes the Buddy ([removeSwarmBuddy]); its chat stays.
   Future<void> remove() => _run(

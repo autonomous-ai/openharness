@@ -7,6 +7,7 @@ import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
+import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 
 /// Buddies on the phone (spec: Buddies, 10-28; every Swarm since #2090): each
@@ -425,9 +426,45 @@ void main() {
       await r.refresh();
 
       expect(swarmBuddyMachines(r), [
-        (id: 'mac-1', name: 'Tonys-MacBook-Pro'),
-        (id: 'mac-4', name: 'Mac Studio'),
+        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
+        (id: 'mac-4', name: 'Mac Studio', inSwarm: true, away: false),
       ]);
+    });
+
+    // Dee, 10-29: a Buddy runs on any of the person's own computers without
+    // adding it to the Swarm; each by the name its person gave it.
+    test('are every computer of their own too, by its given name, online ones '
+        'first and offline ones last', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(machines: [pool('mac-1', 'Tonys-MacBook-Pro.local')]);
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(
+        swarmBuddyMachines(
+          r,
+          computers: [
+            (id: 'air', name: 'MacBook Air', away: true),
+            (id: 'mac-1', name: 'tropic', away: false),
+            (id: 'studio', name: 'Studio', away: false),
+          ],
+        ),
+        [
+          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
+          (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          (id: 'air', name: 'MacBook Air', inSwarm: false, away: true),
+        ],
+      );
+      expect(
+        swarmBuddyMachineName(
+          r,
+          'studio',
+          computers: [(id: 'studio', name: 'Studio', away: false)],
+        ),
+        'Studio',
+      );
     });
 
     test('are none before the Swarm is read', () {
@@ -549,6 +586,97 @@ void main() {
       expect(actions.busy, isFalse);
       expect(actions.error, isNull);
     });
+
+    test('on a computer of their own outside the Swarm prepares it there, '
+        'then starts the Buddy with its setup', () async {
+      final (swarm, r) = await read();
+      swarm.routes[commands] = (_) => {'result': <String, dynamic>{}};
+      final computers = FakeComputers(const []);
+      var asks = 0;
+      computers.answer = (_, payload) => ++asks == 1
+          ? {'ok': true, 'state': 'preparing'}
+          : {
+              'ok': true,
+              'state': 'ready',
+              'scope': 'swarm',
+              'cwd': '/home/me/swarm',
+              'engines': ['claude', 'pi'],
+            };
+      final actions = SwarmBuddyActions(r, project);
+      addTearDown(actions.dispose);
+
+      await actions.start(
+        machineId: 'studio',
+        engine: 'claude',
+        machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+        computers: computers,
+      );
+
+      expect(actions.error, isNull);
+      expect(computers.asked.map((a) => a.$1), ['studio', 'studio']);
+      expect(computers.asked.first.$2, {
+        'action': 'prepareContribution',
+        'tabId': tab,
+        'scope': 'swarm',
+        'operationId': computers.asked.last.$2['operationId'],
+      });
+      expect(swarm.commands, [
+        {
+          'type': 'buddy.create',
+          'projectId': project,
+          'machineId': 'studio',
+          'engine': 'claude',
+          'setup': {
+            'name': 'Studio',
+            'cwd': '/home/me/swarm',
+            'engines': ['claude'],
+          },
+        },
+      ]);
+    });
+
+    test('on a machine already in the Swarm sends no setup and asks the '
+        'computer nothing', () async {
+      final (swarm, r) = await read();
+      swarm.routes[commands] = (_) => {'result': <String, dynamic>{}};
+      final computers = FakeComputers(const []);
+      final actions = SwarmBuddyActions(r, project);
+      addTearDown(actions.dispose);
+
+      await actions.start(
+        machineId: 'mac-1',
+        engine: 'claude',
+        machine: (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
+        computers: computers,
+      );
+
+      expect(computers.asked, isEmpty);
+      expect(swarm.commands.single, isNot(contains('setup')));
+    });
+
+    test(
+      'a computer that cannot prepare says why and starts nothing',
+      () async {
+        final (swarm, r) = await read();
+        final computers = FakeComputers(const [])
+          ..answer = (_, _) => {'ok': true, 'state': 'unknown'};
+        final actions = SwarmBuddyActions(r, project);
+        addTearDown(actions.dispose);
+
+        await actions.start(
+          machineId: 'studio',
+          engine: 'claude',
+          machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          computers: computers,
+        );
+
+        expect(
+          actions.error,
+          'Update Harness on this computer, then try again.',
+        );
+        expect(swarm.commands, isEmpty);
+      },
+    );
 
     test('says why a start was refused, and forgets it once the next goes '
         'through', () async {

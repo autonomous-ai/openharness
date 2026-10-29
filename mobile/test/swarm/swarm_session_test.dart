@@ -107,48 +107,50 @@ void main() {
       ),
     ]);
 
-    test('each Swarm sends its chats\' files with the upload handed in',
-        () async {
-      await features.set(PhoneExperiment.swarm, true);
-      final sent = <String>[];
-      final h = SwarmHost(
-        accountId: () => account.value,
-        account: account,
-        request: backend().request,
-        upload:
-            ({
-              required tabId,
-              required conversationId,
-              required name,
-              required mime,
-              required bytes,
-              required cancel,
-              required onProgress,
-            }) async {
-              sent.add('$tabId/$conversationId/$name');
-              return {'attachment': <String, dynamic>{}};
-            },
-        notices: notices,
-        features: features,
-        homeCache: home,
-      );
-      addTearDown(h.dispose);
-      final inbox = h.session!.inbox..shown = true;
-      await until(() => inbox.reader('a') != null);
+    test(
+      'each Swarm sends its chats\' files with the upload handed in',
+      () async {
+        await features.set(PhoneExperiment.swarm, true);
+        final sent = <String>[];
+        final h = SwarmHost(
+          accountId: () => account.value,
+          account: account,
+          request: backend().request,
+          upload:
+              ({
+                required tabId,
+                required conversationId,
+                required name,
+                required mime,
+                required bytes,
+                required cancel,
+                required onProgress,
+              }) async {
+                sent.add('$tabId/$conversationId/$name');
+                return {'attachment': <String, dynamic>{}};
+              },
+          notices: notices,
+          features: features,
+          homeCache: home,
+        );
+        addTearDown(h.dispose);
+        final inbox = h.session!.inbox..shown = true;
+        await until(() => inbox.reader('a') != null);
 
-      final reader = inbox.reader('a')!;
-      await reader.upload(
-        tabId: reader.tabId,
-        conversationId: 'g9',
-        name: 'shot.jpg',
-        mime: 'image/jpeg',
-        bytes: Uint8List(1),
-        cancel: CancelToken(),
-        onProgress: (_) {},
-      );
+        final reader = inbox.reader('a')!;
+        await reader.upload(
+          tabId: reader.tabId,
+          conversationId: 'g9',
+          name: 'shot.jpg',
+          mime: 'image/jpeg',
+          bytes: Uint8List(1),
+          cancel: CancelToken(),
+          onProgress: (_) {},
+        );
 
-      expect(sent, ['a/g9/shot.jpg']);
-    });
+        expect(sent, ['a/g9/shot.jpg']);
+      },
+    );
 
     group('the photos drawn', () {
       setUp(() => features.set(PhoneExperiment.swarm, true));
@@ -549,6 +551,15 @@ void main() {
 
 /// The account's computers, told by hand.
 class _Computers extends ChangeNotifier implements SwarmComputers {
+  @override
+  List<SwarmOwnComputer> get own => const [];
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async => throw UnimplementedError();
+
   @override
   List<SwarmComputer>? computers = const [(name: 'Studio Mac', away: false)];
 
