@@ -211,7 +211,8 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   managed settings skip (`allowManagedHooksOnly`), leaves the call to dontAsk: it still runs the commands Claude Code
   itself counts as read-only and refuses everything else, so nothing can write. Its Super Tab commands are a Buddy's
   own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
-  `--agent`, `--port` or `--machine`.
+  `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
+  (18473) cannot run these commands, since reaching that daemon takes `--port`.
 - What a Buddy reads: the files in its own copy of the project (by real path, so a link out of it is out), the
   project's git history, the project's GitHub issues and pull requests through the person's own `gh` sign-in, its
   own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, and so are gh's
