@@ -431,10 +431,16 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
 /**
  * Deletes the lists of [session], once the Swarm has ended it: its Buddy removed, its person gone from the Swarm, or its
  * chat purged with its project (Lead, 10-30). Each list names its session, so a session no longer running here is found
- * too. A list that cannot be read is left: it allows nothing (the guard refuses it), and the day's sweep takes it.
- * One that cannot be deleted (a folder it cannot write to, say) is emptied in place, which needs only the file, so the
- * guard allows nothing meanwhile; it still throws, and the host tries again before it acknowledges the end (re-check 2
- * of #2248). The emptied list keeps its session, so the next try finds it.
+ * too, and another session's list stays. One that names no session goes as well, since whose it is cannot be told: not
+ * JSON, not a list, or a list from before lists named their session, which still allows its links. Deleting one of those
+ * only ever refuses.
+ *
+ * Anything it cannot finish throws, so the host tries again and does not acknowledge the end meanwhile (re-checks of
+ * #2248): a list it cannot read (re-check 1 of 116fa43a1: it was skipped, and allowed again once it could be read), which
+ * it keeps, as it may be another session's and the failure may pass (too many open files, say); and one it cannot delete
+ * (a folder it cannot write to), which it empties in place where it can, needing only the file, so the guard allows
+ * nothing meanwhile, keeping its session so the next try finds it. A list that went between the folder's read and its own
+ * counts too: the next try no longer finds it.
  */
 export function forgetBuddyReads(session: string, dir = listsDir()): void {
   let names: string[]
@@ -443,12 +449,18 @@ export function forgetBuddyReads(session: string, dir = listsDir()): void {
     throw error
   }
   let failed: unknown
+  // Only a list's own name: a .tmp is a write not yet renamed, which no guard reads.
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const file = join(dir, name)
+    let text: string
+    try { text = readFileSync(file, 'utf8') } catch (error) {
+      failed ??= error
+      continue
+    }
     let named: unknown
-    try { named = (JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown }).session } catch { continue }
-    if (named !== session) continue
+    try { named = (JSON.parse(text) as { session?: unknown } | null)?.session } catch { /* not JSON: it names no session */ }
+    if (typeof named === 'string' && named !== session) continue
     try { rmSync(file, { force: true }) } catch (error) {
       const empty: List = { version: 1, session, files: [], links: [] }
       try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }

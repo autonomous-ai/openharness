@@ -2525,6 +2525,41 @@ describe('closing the sessions the backend ends', () => {
     rmSync(shot)
   })
 
+  // Re-check 1 of 116fa43a1: a list that could not be read was skipped, the end acknowledged, and once the list could be
+  // read again it allowed its file again.
+  it('acknowledges a Buddy session\'s end only once a list it could not read is removed, and its guard allows nothing meanwhile', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(shot, 'png')
+    const reads = buddyReadsOf('unreadable-buddy')
+    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    const guard = join(folder, 'buddy-guard.mjs')
+    writeFileSync(guard, buddyGuardSource(folder, reads))
+    expect(guardReads(guard, folder, shot)).toBe('allow')
+    await t.poll()
+    // The list cannot be read for a while; its folder can.
+    chmodSync(reads.file, 0o000)
+    try {
+      expect(guardReads(guard, folder, shot)).toBe('deny')
+      t.rows.splice(0, 1, ended())
+      await t.poll()
+      await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(t.commands).toEqual([])
+      expect(existsSync(reads.file)).toBe(true)
+      expect(guardReads(guard, folder, shot)).toBe('deny')
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
+    } finally { if (existsSync(reads.file)) chmodSync(reads.file, 0o600) }
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.commands[0]).toMatchObject({ command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
+    expect(existsSync(reads.file)).toBe(false)
+    expect(guardReads(guard, folder, shot)).toBe('deny')
+    rmSync(shot)
+  })
+
   it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {
     const t = lifeFixture([leadRow({ lead: false })])
     await t.poll()

@@ -634,18 +634,39 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
 
   // Lead, 10-30: a Buddy removed, or its chat purged with its project, keeps nothing listed until the day is out. The Swarm
   // closes its session then (superTabs/host.ts endSession), and that session's lists go.
-  it('forgets the lists of a session the Swarm ended, and keeps every other', () => {
+  // Re-check 1 of 116fa43a1: whose a list is that names no session cannot be told, so it goes too. Not JSON, not a list,
+  // or a list from before lists named their session (which still allows its links): deleting one only ever refuses.
+  it('forgets the lists of a session the Swarm ended and those that name none, and keeps every other session\'s', () => {
     const theirs = { file: join(lists, 'theirs.json'), drops }
     allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
     allowBuddyReads(theirs, { session: 'harness-2', files: [later], links: [] })
-    writeFileSync(join(lists, 'unreadable.json'), '{"session": ')
+    writeFileSync(join(lists, 'broken.json'), '{"session": ')
+    writeFileSync(join(lists, 'null.json'), 'null')
+    writeFileSync(join(lists, 'nameless.json'), JSON.stringify({ version: 1, files: [], links: [{ url: 'https://claude.ai/artifact/a', at: Date.now() }] }))
     writeFileSync(join(lists, 'note.txt'), 'harness-1')
     expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
     forgetBuddyReads('harness-1', lists)
-    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json', 'unreadable.json'])
+    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json'])
     expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
     forgetBuddyReads('harness-1', lists)
-    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json', 'unreadable.json'])
+    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json'])
+  })
+
+  // Re-check 1 of 116fa43a1: a list that could not be read was skipped and the cleanup said it was done; once it could be
+  // read again, it allowed again. It may be another session's, and the failure may pass (too many open files), so it is
+  // not deleted blind: the cleanup fails, and is tried again.
+  it('fails while a list cannot be read, keeps it to try again, and removes it once it can; the guard allows nothing meanwhile', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    chmodSync(mine.file, 0o000)
+    try {
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(mine.file)).toBe(true)
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+    } finally { if (existsSync(mine.file)) chmodSync(mine.file, 0o600) }
+    forgetBuddyReads('harness-1', lists)
+    expect(existsSync(mine.file)).toBe(false)
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
   })
 
   // Re-check 2 of #2248: a list the host cannot delete must still allow nothing, and the failure must reach the host, which
