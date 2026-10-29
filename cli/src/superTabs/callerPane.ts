@@ -18,7 +18,7 @@ export interface PaneProbe {
 
 const NAMED_ANOTHER = 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.'
 
-export function runningPane(env: NodeJS.ProcessEnv, probe: PaneProbe = realProbe, platform: NodeJS.Platform = process.platform): { pane?: string; refused?: string } {
+export function runningPane(env: NodeJS.ProcessEnv, probe: PaneProbe = processProbe(env), platform: NodeJS.Platform = process.platform): { pane?: string; refused?: string } {
   if (platform === 'win32') return env.TMUX_PANE ? { pane: env.TMUX_PANE } : {}
   const panes = probe.panes(), ancestors = probe.ancestors()
   const byPid = new Map((panes ?? []).map(({ pane, pid }) => [pid, pane]))
@@ -28,19 +28,20 @@ export function runningPane(env: NodeJS.ProcessEnv, probe: PaneProbe = realProbe
   return pane ? { pane } : {}
 }
 
-const read = (command: string, args: string[]): string | null => {
-  try { return execFileSync(command, args, { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null }
+const read = (command: string, args: string[], env: NodeJS.ProcessEnv): string | null => {
+  try { return execFileSync(command, args, { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'], env }) } catch { return null }
 }
 
-const realProbe: PaneProbe = {
+/** tmux and ps as they run here, with [env]'s tmux server: the one this command's pane belongs to. */
+export const processProbe = (env: NodeJS.ProcessEnv = process.env): PaneProbe => ({
   panes: () => {
-    const out = read('tmux', ['list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'])
+    const out = read('tmux', ['list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], env)
     if (out === null) return null
     return out.split('\n').map(line => line.trim().split(' ')).filter(([pane, pid]) => /^%\d+$/.test(pane ?? '') && /^\d+$/.test(pid ?? ''))
       .map(([pane, pid]) => ({ pane: pane!, pid: Number(pid) }))
   },
   ancestors: () => {
-    const out = read('ps', ['-A', '-o', 'pid=,ppid='])
+    const out = read('ps', ['-A', '-o', 'pid=,ppid='], env)
     if (out === null) return null
     const parents = new Map(out.split('\n').map(line => line.trim().split(/\s+/).map(Number)).filter(([pid, ppid]) => pid! > 0 && ppid! >= 0)
       .map(([pid, ppid]) => [pid!, ppid!]))
@@ -48,4 +49,4 @@ const realProbe: PaneProbe = {
     for (let pid: number | undefined = process.pid; pid && pid > 0 && !chain.includes(pid); pid = parents.get(pid)) chain.push(pid)
     return chain
   },
-}
+})

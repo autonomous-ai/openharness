@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { resolve } from 'node:path'
 import { parseSuperTabArgs, superTabCommand } from './command.js'
+import type { Where } from '../agentClient/daemon.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const prefix = ['--tab', 'tab', '--agent', 'agent']
 it('keeps an explicit stable receipt for agent messages and arbitrary work commands', () => {
@@ -340,4 +341,48 @@ it('refuses a command that sets TMUX_PANE to another harness\'s pane, before it 
   const sent = request.mock.calls.at(-1) as unknown as [string, Record<string, unknown>]
   expect(sent[1]).toMatchObject({ action: 'status', agentId: 'builder' })
   expect(sent[1]).not.toHaveProperty('harnessId')
+})
+// The second review of #2087: from a Buddy's pane, --machine sent its request to the owner's other Mac, which knew no pane
+// there and served the agent it named. From a harness, the Swarm is reached through this computer's own Harness alone.
+it('refuses, from a harness, a --machine or --port other than this computer\'s own, and lets a person\'s terminal choose', async () => {
+  const opened: Where[] = []
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'buddy-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
+  const print = vi.fn()
+  const deps = { where: () => where, print, open: async (to: Where) => { opened.push(to); return { request, close: vi.fn(), machineId: to.machineId } as never } }
+  const elsewhere = [['--machine', 'macbook'], ['--port', '15000'], ['--port', '15000', '--machine', 'macbook']]
+  for (const flags of elsewhere) {
+    opened.length = 0
+    expect(await superTabCommand([...flags, '--tab', 'tab', '--agent', 'builder', 'status'], { ...deps, pane: '%42' })).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error)
+      .toBe('From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.')
+    // Only this computer's daemon was asked which harness the pane is.
+    expect(opened).toEqual([where])
+  }
+  // This computer's own values, as the delivered instructions write them.
+  expect(await superTabCommand(['--port', '14001', '--machine', 'machine', '--tab', 'tab', '--agent', 'builder', 'status'], { ...deps, pane: '%42' })).toBe(0)
+  // A pane that is no harness's, and a terminal outside tmux: the person's choice.
+  for (const pane of ['%9', undefined]) {
+    opened.length = 0
+    expect(await superTabCommand(['--machine', 'macbook', '--tab', 'tab', '--agent', 'builder', 'status'], { ...deps, pane })).toBe(0)
+    expect(opened.at(-1)).toMatchObject({ machineId: 'macbook' })
+  }
+})
+// Windows has no cheap check of a pty host pane (second review, item 4): while this computer runs a Buddy, an agent's shell
+// may not name an agent.
+it('refuses --agent from an agent\'s shell on Windows while this computer runs a Buddy, and leaves a person\'s terminal alone', async () => {
+  let buddiesHere = true
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { agents: [] }
+    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere } : { ok: true })
+  const print = vi.fn()
+  const deps = { where: () => where, print, platform: 'win32' as const, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
+  for (const env of [{ HARNESS_PANE: 'p1:%3' }, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }]) {
+    buddiesHere = true
+    expect(await superTabCommand([...prefix, 'status'], { ...deps, env })).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('This Windows computer runs a Buddy')
+    buddiesHere = false
+    expect(await superTabCommand([...prefix, 'status'], { ...deps, env })).toBe(0)
+  }
+  buddiesHere = true
+  expect(await superTabCommand([...prefix, 'status'], { ...deps, env: {} })).toBe(0)
 })

@@ -1,60 +1,65 @@
 import { expect, it, vi } from 'vitest'
-import { buddyRefusal } from './buddyPane.js'
+import { buddyRefusal, WINDOWS_BUDDY } from './buddyPane.js'
 
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
-const UNSURE = 'Harness could not confirm this harness\'s Swarm role just now, so it did not run this. Try again in a moment.'
+// This command runs in pane %42 (its process 700 is an ancestor); %7 is another harness's.
+const probe = () => ({ panes: vi.fn(() => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }]), ancestors: vi.fn(() => [900, 700, 1]) })
 
-/** The daemon of this machine: harness `buddy-harness` runs in pane %42, and the Swarm answers `role` for it. */
-function daemon(role: Record<string, unknown>) {
+/** This machine's daemon: harness `pane-harness` runs in pane %42, and the Swarm's service answers [check] for whether it,
+ *  or any harness here, is a Buddy. */
+function daemon(check: (payload: Record<string, unknown>) => Record<string, unknown>) {
   const close = vi.fn()
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
-    if (type === 'agents_list') return { agents: [{ id: 'buddy-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
-    if (type === 'super_tabs' && payload.action === 'swarmRole' && payload.harnessId === 'buddy-harness') return role
+    if (type === 'agents_list') return { agents: [{ id: 'pane-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
+    if (type === 'super_tabs' && payload.action === 'buddyCheck') return check(payload)
     return { error: 'UNSUPPORTED' }
   })
-  return { close, request, deps: { where: () => where, open: async () => ({ request, close, machineId: 'machine' }) } }
+  return { close, request, deps: { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), probe: probe(), env: {} } }
 }
+const swarm = (buddy: boolean, buddiesHere = buddy) => (payload: Record<string, unknown>) =>
+  payload.harnessId === undefined ? { ok: true, buddiesHere } : { ok: true, buddy: payload.harnessId === 'pane-harness' && buddy }
 
 // Security review of #2087: a Buddy's pane could reach the person's other sessions with harness send, new, tell and close.
-it('refuses a Buddy\'s pane', async () => {
-  const d = daemon({ ok: true, role: 'buddy', mode: 'orchestration' })
-  expect(await buddyRefusal({ ...d.deps, pane: '%42' })).toBe(BUDDY)
+it('refuses a Buddy\'s pane, as this computer\'s launch record says', async () => {
+  const d = daemon(swarm(true))
+  expect(await buddyRefusal(d.deps, 'darwin')).toBe(BUDDY)
+  expect(d.request).toHaveBeenCalledWith('super_tabs', { action: 'buddyCheck', harnessId: 'pane-harness' }, 10_000)
   expect(d.close).toHaveBeenCalledOnce()
 })
 
-it('lets Leads, Builders, Reviewers and harnesses in no Swarm go on', async () => {
-  for (const role of [{ ok: true, role: 'lead', mode: 'orchestration' }, { ok: true, role: 'dev', mode: 'default' }, { ok: true, role: 'review' }, { ok: true, role: null }]) {
-    expect(await buddyRefusal({ ...daemon(role).deps, pane: '%42' })).toBeNull()
+it('lets Leads, Builders, Reviewers, harnesses in no Swarm and a person\'s terminal go on', async () => {
+  expect(await buddyRefusal(daemon(swarm(false)).deps, 'darwin')).toBeNull()
+  const outside = daemon(swarm(true))
+  expect(await buddyRefusal({ ...outside.deps, probe: { panes: () => [], ancestors: () => [900, 1] } }, 'darwin')).toBeNull()
+})
+
+// The second review: with the Swarm off nothing may change, so whether it is on is settled before any pane is looked at.
+it('changes nothing with the Swarm off, or on a daemon from before the check: no pane is looked at, nobody refused', async () => {
+  for (const answer of [{ error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: false }, { error: 'UNSUPPORTED' }, { error: 'INVALID_REQUEST' }]) {
+    const d = daemon(() => answer)
+    expect(await buddyRefusal({ ...d.deps, env: { TMUX_PANE: '%7' } }, 'darwin')).toBeNull()
+    expect(d.deps.probe.panes).not.toHaveBeenCalled()
   }
 })
 
-it('asks nothing for a person\'s terminal or a pane that is no harness', async () => {
-  const d = daemon({ ok: true, role: 'buddy' })
-  expect(await buddyRefusal({ ...d.deps, pane: undefined })).toBeNull()
-  expect(await buddyRefusal({ ...d.deps, pane: '%9' })).toBeNull()
-  expect(d.request.mock.calls.some(([type]) => type === 'super_tabs')).toBe(false)
+it('leaves a daemon that is not running to the command, which says so as it always has', async () => {
+  expect(await buddyRefusal({ where: () => where, probe: probe(), env: {}, open: async () => { throw new Error('no daemon') } }, 'darwin')).toBeNull()
 })
 
-it('lets a computer with the Swarm off, or a daemon from before it, go on', async () => {
-  expect(await buddyRefusal({ ...daemon({ error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: false }).deps, pane: '%42' })).toBeNull()
-  expect(await buddyRefusal({ ...daemon({ error: 'UNSUPPORTED' }).deps, pane: '%42' })).toBeNull()
-})
-
-it('refuses when the Swarm is on but cannot say in time, or the daemon cannot be asked', async () => {
-  // The role lookup's own deadline passed: the answer carries no role.
-  for (const role of [{ ok: true }, { error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: true }, { error: 'SERVICE_FAILED' }]) {
-    expect(await buddyRefusal({ ...daemon(role).deps, pane: '%42' })).toBe(UNSURE)
-  }
-  expect(await buddyRefusal({ where: () => where, pane: '%42', open: async () => { throw new Error('no daemon') } })).toBe(UNSURE)
-})
-
-it('refuses a command that names another pane than the one it runs in', async () => {
-  const d = daemon({ ok: true, role: 'dev' })
-  const probe = { panes: () => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }], ancestors: () => [900, 700, 1] }
-  expect(await buddyRefusal({ ...d.deps, probe, env: { TMUX_PANE: '%7' } }))
+it('refuses a command that names another pane than the one it runs in, and finds the Buddy with TMUX_PANE unset', async () => {
+  const d = daemon(swarm(false))
+  expect(await buddyRefusal({ ...d.deps, env: { TMUX_PANE: '%7' } }, 'darwin'))
     .toBe('This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.')
-  // TMUX_PANE unset: the pane is still the one it runs in.
-  const buddy = daemon({ ok: true, role: 'buddy' })
-  expect(await buddyRefusal({ ...buddy.deps, probe, env: {} })).toBe(BUDDY)
+  expect(await buddyRefusal(daemon(swarm(true)).deps, 'darwin')).toBe(BUDDY)
+})
+
+// Windows has no cheap check of a pty host pane: while a Buddy runs on that computer, an agent's shell may not.
+it('fails closed on Windows while this computer runs a Buddy, for an agent\'s shell, and leaves a person\'s terminal alone', async () => {
+  const agentShells = [{ HARNESS_PANE: 'p1:%3' }, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }, { CODEX_THREAD_ID: 't' }]
+  for (const env of agentShells) {
+    expect(await buddyRefusal({ ...daemon(swarm(false, true)).deps, env }, 'win32')).toBe(WINDOWS_BUDDY)
+    expect(await buddyRefusal({ ...daemon(swarm(false, false)).deps, env }, 'win32')).toBeNull()
+  }
+  expect(await buddyRefusal({ ...daemon(swarm(false, true)).deps, env: {} }, 'win32')).toBeNull()
 })

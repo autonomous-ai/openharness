@@ -12,6 +12,9 @@ import { randomUUID } from 'node:crypto'
 import { runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
+import { agentShell, buddiesHere, WINDOWS_BUDDY } from './buddyPane.js'
+
+const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
 const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
@@ -99,24 +102,38 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 
 export async function superTabCommand(argv: readonly string[], deps: {
   where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
   const print = deps.print ?? console.log
   try {
-    const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
-    operationId = request.payload.operationId
+    const platform = deps.platform ?? process.platform, env = deps.env ?? process.env, open = deps.open ?? openDaemon
     // The pane this runs in, from its processes: TMUX_PANE is what the command says, and it may not name another harness's.
-    const running = 'pane' in deps ? { pane: deps.pane } : runningPane(deps.env ?? process.env, deps.probe)
+    const running = 'pane' in deps ? { pane: deps.pane } : runningPane(env, deps.probe, platform)
     if (running.refused) throw new Error(running.refused)
     const pane = running.pane
-    daemon = await (deps.open ?? openDaemon)(request.where)
+    const local = (deps.where ?? (() => whereFor(pane)))()
+    const request = parseSuperTabArgs(argv, local)
+    operationId = request.payload.operationId
+    // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
+    // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
+    if (pane && (request.where.port !== local.port || request.where.machineId !== local.machineId)) {
+      const home = await open(local)
+      try {
+        const listed = await home.request('agents_list')
+        if (callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, local.machineId)) throw new Error(ELSEWHERE)
+      } finally { home.close() }
+    }
+    daemon = await open(request.where)
+    // Windows has no cheap check of a pty host pane: while this computer runs a Buddy, an agent's shell names no agent.
+    if (platform === 'win32' && request.payload.agentId && agentShell(env) && await buddiesHere(daemon)) throw new Error(WINDOWS_BUDDY)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
     if (owners) {
       // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room
       // (Lead, 2026-10-28). So neither a Swarm agent on it (its pane, or --agent) nor an outside agent's shell may run
       // them with the owner's authority.
-      const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
+      const listed = request.payload.agentId || outsideCaller(env, request.where.machineId) ? null : await daemon.request('agents_list')
       if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, request.where.machineId)) {
         throw new Error(request.payload.action === 'backend' ? 'Remove a machine from your own terminal or from Desktop, not from an agent.'
           : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
@@ -147,7 +164,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
       const known = await scoped({ action: 'status' })
       if (known.error) result = known
       else {
-        const target = await (deps.open ?? openDaemon)(request.where, String(request.payload.targetMachineId))
+        const target = await open(request.where, String(request.payload.targetMachineId))
         try { result = { ok: true, ...await inspectCapacity(target, object(request.payload.request)) } }
         finally { target.close() }
       }
