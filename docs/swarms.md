@@ -188,8 +188,8 @@ product manager can see what its terminal shows.
 
 A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
 it asks what they want and why, offers two or three options with the one it recommends, and agrees the scope with
-them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority) in the project
-chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
+them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority, and up to five
+files such as a plan, spec, log or screenshot) in the project chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
 the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
 
 The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
@@ -210,6 +210,11 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
+  its real path on its own machine, so never through a link out of it, and never the repository's or Harness's own
+  records), or a file its owner sent in their Buddy chat. Each file has a chat file's limits (10 MB). The server accepts
+  a Buddy's file only in its own chat and only on a proposal, so it cannot post a file in the project chat any other way.
+  The files show on the proposal message like any message's files, for the product manager and every member.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
   stay there; the Buddy posts only what its owner asks it to send.
 - Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again

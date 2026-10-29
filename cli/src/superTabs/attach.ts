@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { openAsBlob } from 'node:fs'
+import { openAsBlob, realpathSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { basename, extname, isAbsolute, relative, sep } from 'node:path'
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { ATTACHMENT_TOTAL_MS } from '../lib/superTabAttachmentProxy.js'
 import { object } from './wire.js'
@@ -51,13 +51,34 @@ async function uploadOne(path: string, target: UploadTarget, agentId: string, fe
   return attachment.id
 }
 
-export interface UploadTarget { tabId: string; conversationId: string; port: number; dataDir: string }
+/** `sentIn`: where the message these files go with is written, when not where they are uploaded (a Buddy's proposal is
+ *  uploaded to its chat and posted in the project chat). */
+export interface UploadTarget { tabId: string; conversationId: string; sentIn?: string; port: number; dataDir: string }
+
+/** Folders in a Buddy's folder that are not the project's files: its repository's records, its remote's credentials among
+ *  them, and Harness's own. */
+const RECORDS = new Set(['.git', '.harness'])
+
+/** A Buddy's proposal files, each as the real file it names: only what lies inside its own folder, the one place it may
+ *  read (lib/buddyGuard.ts), never under its repository's or Harness's records, and never through a link out of it. */
+export function insideFolder(paths: string[], folder: string): string[] {
+  const root = realpathSync(folder)
+  return paths.map(path => {
+    let real: string
+    try { real = realpathSync(path) } catch { throw new Error(`${path} is not a file.`) }
+    const inside = relative(root, real)
+    if (!inside || inside.startsWith('..') || isAbsolute(inside) || RECORDS.has(inside.split(sep)[0]!)) {
+      throw new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat by its id.`)
+    }
+    return real
+  })
+}
 
 /** Uploads each file of `post --attach` and answers the ids `message.send` names. Repeating a post whose message already
  * went out uploads nothing and names that message's files, so the send returns its receipt. */
 export async function uploadAttachments(paths: string[], operationId: string, target: UploadTarget, request: Request,
   fetcher: typeof fetch = fetch): Promise<string[]> {
-  const earlier = value(await request({ action: 'attachment', step: 'sent', conversationId: target.conversationId, operationId }))
+  const earlier = value(await request({ action: 'attachment', step: 'sent', conversationId: target.sentIn ?? target.conversationId, operationId }))
   if (Array.isArray(earlier.attachmentIds)) return earlier.attachmentIds.map(String)
   if (typeof earlier.agentId !== 'string') throw new Error('Update Harness on this computer to attach files.')
   const ids: string[] = []
