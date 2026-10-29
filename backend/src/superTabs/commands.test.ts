@@ -2068,6 +2068,16 @@ describe('machine.remove', () => {
     expect(f.state.machines!.map(m => m.removal)).toEqual([undefined])
   })
 
+  // A settings save keeps a machine's pause (review of #2084), but nothing of a removed machine is kept.
+  it('starts a machine removed and added again unpaused, though its removal paused it', () => {
+    const { f, removalId } = cleaning()
+    expect(f.state.machines!.map(m => m.paused)).toEqual([true])
+    f.run(cleaned(removalId))
+    f.run({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: false })])
+  })
+
   it('lets the machine owner\'s host acknowledge after the owner left the Swarm', () => {
     const f = fixture()
     f.invite()
