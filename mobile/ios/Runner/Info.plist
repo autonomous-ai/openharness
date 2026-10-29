@@ -55,12 +55,18 @@
 	     which only adds its own when the app has none. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to the computers running Harness on your local network.</string>
-	<!-- Voice input, what tapping a terminal opens. Asked for on the first tap,
-	     not at launch. The microphone alone: the recording is transcribed by
-	     the Harness backend (`/api/voice/stt`, the dial's own path), not by the
-	     OS, so there is no Speech Recognition permission to ask for. -->
+	<!-- Voice input, what tapping a terminal's mic opens. Asked for on the
+	     first tap, not at launch. A terminal's recording is transcribed by the
+	     Harness backend (`/api/voice/stt`, the dial's own path), not by the OS. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk to an agent in a terminal instead of typing.</string>
+	<string>Talk instead of typing, in a terminal or a chat.</string>
+	<!-- A Swarm chat's mic: the phone's own recognizer, the keyboard's
+	     dictation, writes the words into the message box as they are said
+	     (`DictationChannel` in AppDelegate.swift). Asked for on its first tap,
+	     before the microphone. Refused, the chat records and the backend
+	     transcribes, as a terminal does. -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Show what you say in a chat's message box as you say it.</string>
 	<!-- Save Image and Save Video in the share sheet of a terminal's media
 	     preview (`phone/media_preview_page.dart`). Adding to the library is all
 	     it does, and iOS ends the app at that button when this string is

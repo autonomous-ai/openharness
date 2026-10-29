@@ -6,6 +6,7 @@ import '../notify/system_notices.dart';
 import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_choices.dart';
+import 'swarm_dictation.dart';
 import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_inbox.dart';
@@ -185,6 +186,7 @@ class SwarmHost extends ChangeNotifier {
     SwarmHomeCache? homeCache,
     this.uploadAvatar,
     this.voice,
+    this.dictation,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device() {
     account.addListener(_update);
@@ -221,6 +223,11 @@ class SwarmHost extends ChangeNotifier {
   /// terminal's speech-to-text; null where none can be heard, and the
   /// composer has no mic.
   final VoiceInputController Function()? voice;
+
+  /// The phone's own speech recognizer, which shows a chat's words as they
+  /// are said; null where there is none, and the mic records and has [voice]
+  /// transcribe the take.
+  final SwarmDictation? dictation;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -313,4 +320,11 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
   /// outside the shell or where none can be heard.
   static VoiceInputController Function()? voiceOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SwarmScope>()?.notifier?.voice;
+
+  /// The phone's own recognizer for a chat's mic ([SwarmHost.dictation]);
+  /// null outside the shell or where there is none.
+  static SwarmDictation? dictationOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<SwarmScope>()
+      ?.notifier
+      ?.dictation;
 }

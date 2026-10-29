@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import '../p2p/phone_terminal_p2p.dart';
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
+import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_page.dart';
 import '../swarm/swarm_profile.dart';
@@ -120,6 +122,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             transcriber: (wav, lang) =>
                 widget.notifier.api.transcribeVoice(wav, lang: lang),
           ),
+      // And first through the iPhone's own recognizer, the words in the box
+      // as they are said. Not in sample mode, which opens no microphone.
+      dictation: Platform.isIOS && VoiceInputScope.maybeOf(context) == null
+          ? SwarmChannelDictation()
+          : null,
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);

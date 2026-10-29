@@ -15,9 +15,13 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// Talking instead of typing in a Swarm chat (Tony, 10-28): the terminal's
-/// mic in the composer puts what was said into the message box, where it can
-/// be edited; only Send posts it. A long press on the mic picks the language.
+/// Talking instead of typing in a Swarm chat (Tony, 10-28), where the phone
+/// has no speech recognizer of its own to use: the terminal's mic in the
+/// composer records, and what the backend hears lands in the message box as
+/// the take ends; a second tap on the mic stops and sends what is in the box,
+/// and nothing but its 5-minute limit ends a take before that (Tony, 10-29). A
+/// long press on the mic picks the language. With the phone's recognizer:
+/// `swarm_chat_dictation_test`.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -120,8 +124,9 @@ void main() {
   String box(WidgetTester tester) =>
       tester.widget<TextField>(find.byType(TextField)).controller!.text;
 
-  testWidgets('the mic hears what is said into the message box, and sends '
-      'nothing', (tester) async {
+  testWidgets('a second tap stops the take and sends what it heard', (
+    tester,
+  ) async {
     await pump(tester);
     stt.replies.add('ship the fix today');
 
@@ -134,13 +139,15 @@ void main() {
     );
 
     await tapMic(tester);
+    await tester.pumpAndSettle();
     expect(recorder.recording, isFalse);
-    expect(box(tester), 'ship the fix today');
-    expect(fake.commands, isEmpty);
+    expect(fake.commands.single['text'], 'ship the fix today');
+    expect(box(tester), isEmpty);
   });
 
-  testWidgets('what is said joins what was typed, stays editable, and goes '
-      'only with Send', (tester) async {
+  testWidgets('what was typed goes with what is said, on the second tap', (
+    tester,
+  ) async {
     await pump(tester);
     await tester.enterText(find.byType(TextField), 'Nova:');
     await tester.pump();
@@ -148,20 +155,30 @@ void main() {
 
     await tapMic(tester);
     await tapMic(tester);
-    expect(box(tester), 'Nova: ship the fix');
-
-    await tester.enterText(find.byType(TextField), 'Nova: ship it tomorrow');
-    await tester.pump();
-    expect(fake.commands, isEmpty);
-
-    await tester.tap(key('swarm-send'));
     await tester.pumpAndSettle();
-    expect(fake.commands.single['text'], 'Nova: ship it tomorrow');
+
+    expect(fake.commands.single['text'], 'Nova: ship the fix');
+    expect(box(tester), isEmpty);
   });
 
-  testWidgets('a pause after speaking ends the take, as a second tap does', (
+  testWidgets('a second tap with nothing in the box sends nothing', (
     tester,
   ) async {
+    await pump(tester);
+
+    await tapMic(tester);
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+
+    expect(recorder.recording, isFalse);
+    expect(box(tester), isEmpty);
+    expect(fake.commands, isEmpty);
+    expect(find.text("Didn't catch that · tap the mic again"), findsOneWidget);
+  });
+
+  // Tony, 10-29: "listening continues until I tap".
+  testWidgets('a pause after speaking does not end the take: it records until '
+      'the tap, which sends', (tester) async {
     await pump(tester);
     stt.replies.add('looks good');
 
@@ -169,14 +186,13 @@ void main() {
     recorder.meter.value = 0.8;
     await tester.pump(const Duration(milliseconds: 500));
     recorder.meter.value = 0.02;
-    await tester.pump(const Duration(milliseconds: 2900));
-    expect(recorder.recording, isTrue, reason: 'three seconds of quiet');
-
-    await tester.pump(const Duration(milliseconds: 200));
-    await frames(tester);
-    expect(recorder.recording, isFalse);
-    expect(box(tester), 'looks good');
+    await tester.pump(const Duration(seconds: 30));
+    expect(recorder.recording, isTrue);
     expect(fake.commands, isEmpty);
+
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'looks good');
   });
 
   testWidgets('the take runs on through quiet before anything is said, and '
@@ -284,8 +300,8 @@ void main() {
     expect(find.semantics.byLabel('Done'), findsOne);
 
     tester.semantics.tap(find.semantics.byLabel('Done'));
-    await frames(tester);
-    expect(box(tester), 'on my way');
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'on my way');
 
     tester.semantics.longPress(find.semantics.byLabel('Talk'));
     await tester.pumpAndSettle();
@@ -352,9 +368,8 @@ void main() {
     );
   });
 
-  testWidgets('a take covered in its pause is thrown away, not transcribed', (
-    tester,
-  ) async {
+  testWidgets('a take covered after speaking is thrown away, not '
+      'transcribed', (tester) async {
     await pump(tester);
     stt.replies.add('said behind another screen');
     await tapMic(tester);
@@ -406,8 +421,8 @@ void main() {
   });
 
   // Review of #2014 at 42c8eac9c: the reviewer's probe, in its order.
-  testWidgets('a pause under a system prompt sends nothing; the take waits '
-      'for the app to be back', (tester) async {
+  testWidgets('quiet under a system prompt ends nothing; the take goes on '
+      'once the app is back, until the tap', (tester) async {
     addTearDown(
       () => tester.binding.handleAppLifecycleStateChanged(
         AppLifecycleState.resumed,
@@ -426,16 +441,15 @@ void main() {
     expect(recorder.recording, isTrue, reason: 'the take is kept');
 
     await lifecycle(tester, [AppLifecycleState.resumed]);
-    await tester.pump(const Duration(milliseconds: 2900));
-    expect(recorder.recording, isTrue, reason: 'the pause starts again');
-    await tester.pump(const Duration(milliseconds: 200));
-    await frames(tester);
-    expect(box(tester), 'said before Control Center');
-    expect(fake.commands, isEmpty);
+    await tester.pump(const Duration(seconds: 10));
+    expect(recorder.recording, isTrue);
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'said before Control Center');
   });
 
-  testWidgets('a pause already counting stops under a system prompt, and the '
-      'take goes if the app then goes away', (tester) async {
+  testWidgets('a take kept under a system prompt goes if the app then goes '
+      'away', (tester) async {
     addTearDown(
       () => tester.binding.handleAppLifecycleStateChanged(
         AppLifecycleState.resumed,
@@ -505,8 +519,8 @@ void main() {
     expect(box(tester), 'held over the limit');
   });
 
-  // Review of #2014 at 61a2bce93: the reviewer's probe, in its order — the
-  // pause ends the take in front, and a system prompt comes up while the
+  // Review of #2014 at 61a2bce93: the reviewer's probe, with the tap that
+  // ends a take now (Tony, 10-29) — a system prompt comes up while the
   // microphone is still closing.
   testWidgets('a take whose microphone closes under a system prompt is sent '
       'to be transcribed only once the app is back', (tester) async {
@@ -521,9 +535,7 @@ void main() {
     await tapMic(tester);
     recorder.meter.value = 0.8;
     await tester.pump(const Duration(milliseconds: 500));
-    recorder.meter.value = 0.02;
-    await tester.pump(const Duration(seconds: 4));
-    await frames(tester);
+    await tapMic(tester);
     expect(recorder.stops, 1);
     expect(stt.calls, isEmpty);
 
@@ -536,12 +548,12 @@ void main() {
       isEmpty,
       reason: 'checked again once the microphone has closed',
     );
-    expect(box(tester), isEmpty);
+    expect(fake.commands, isEmpty);
 
     await lifecycle(tester, [AppLifecycleState.resumed]);
+    await tester.pumpAndSettle();
     expect(stt.calls, hasLength(1));
-    expect(box(tester), 'said just before Control Center');
-    expect(fake.commands, isEmpty);
+    expect(fake.commands.single['text'], 'said just before Control Center');
   });
 
   testWidgets('a take that reaches its limit as a system prompt comes up '
@@ -629,7 +641,8 @@ void main() {
     expect(recorder.starts, 2);
     expect(recorder.recording, isTrue);
     await tapMic(tester);
-    expect(box(tester), 'second try');
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'second try');
   });
 
   testWidgets('a microphone allowed after the chat was covered never opens', (
@@ -672,8 +685,7 @@ void main() {
   });
 }
 
-/// A microphone that also says how loud it is: what the pause that ends a
-/// take listens to.
+/// A microphone that also says how loud it is, for the mic's bars.
 class _MeteredRecorder extends FakeVoiceRecorder implements VoiceLevelMeter {
   final meter = ValueNotifier<double>(0);
 
