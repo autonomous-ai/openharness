@@ -488,6 +488,7 @@ export class SuperTabStore {
    *  Swarm again to confirm (read/host.ts asks for a live account), so applyCommand drops their cleanups. */
   private async deletedMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
     const ids = [...new Set((state.machineCleanups ?? []).map(c => c.machineId))]
+    if (!ids.length) return []
     const live = new Set((await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
       select: { machineId: true } })).map(m => m.machineId))
     return ids.filter(id => !live.has(id))

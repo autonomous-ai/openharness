@@ -20,6 +20,7 @@ import { decisionsWaiting } from '../src/superTabs/decisions.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -343,6 +344,18 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
     expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
+  })
+
+  it('sends no empty id list to the database, for a person with no Swarm or with Swarms all in parts', async () => {
+    await scene()
+    const queries: Query[] = []
+    const reads = new SwarmReads(new SuperTabStore(watched(db, queries)), { now: () => clock })
+
+    expect((await reads.list(outsider)).tabs.length).toBeGreaterThan(0)
+    expect((await reads.list({ ...outsider, sub: 'u-without-swarms' })).tabs).toEqual([])
+
+    expect(queries.some(q => q.model === 'superTab')).toBe(true)
+    expect(queries.filter(sendsEmptyIn)).toEqual([])
   })
 
   it('reads each Swarm\'s newest change over all its parts, without a groupBy (it once panicked the engine on Mongo)', async () => {
