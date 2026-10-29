@@ -40,15 +40,16 @@ String superTabOperationId() {
 /// and what the chats here are handed so their tests need no backend.
 /// [onProgress] is told the part sent, from 0 to 1. A refusal throws a
 /// [SuperTabFailure] carrying the backend's code.
-typedef SwarmUpload = Future<Map<String, dynamic>> Function({
-  required String tabId,
-  required String conversationId,
-  required String name,
-  required String mime,
-  required Uint8List bytes,
-  required CancelToken cancel,
-  required void Function(double sent) onProgress,
-});
+typedef SwarmUpload =
+    Future<Map<String, dynamic>> Function({
+      required String tabId,
+      required String conversationId,
+      required String name,
+      required String mime,
+      required Uint8List bytes,
+      required CancelToken cancel,
+      required void Function(double sent) onProgress,
+    });
 
 /// The upload of a phone that cannot reach the backend with a file.
 Future<Map<String, dynamic>> refuseSwarmUpload({
