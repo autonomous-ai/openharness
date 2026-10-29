@@ -3293,6 +3293,61 @@ void main() {
   });
 
   testWidgets(
+    'the Agents choice is one Tab stop, and Up selects As memory allows',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+      expect(_agentsChoice(tester), 'atMost');
+
+      /// The choice keyboard focus is on, or null.
+      String? focusedChoice() => FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<RadioListTile<String>>()
+          ?.value;
+
+      // A full trip round the dialog stops on the choice once.
+      final stops = <String?>[];
+      FocusNode? first;
+      for (var i = 0; i < 30; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        final node = FocusManager.instance.primaryFocus;
+        if (first == null) {
+          first = node;
+        } else if (identical(node, first)) {
+          break;
+        }
+        stops.add(focusedChoice());
+      }
+      expect(stops.whereType<String>().toList(), ['atMost']);
+
+      // On it, Up moves the choice.
+      while (focusedChoice() == null) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(_agentsChoice(tester), 'memory');
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'a screen reader can change the At most number apart from the choice',
     (tester) async {
       final semantics = tester.ensureSemantics();
@@ -3430,9 +3485,8 @@ void main() {
         isNull,
       );
       expect(
-        find.text(
-          'Offline. Open Harness on this computer to change its settings.',
-        ),
+        // The machine by name: "this computer" is the one you're on.
+        find.text('Offline. Open Harness on Test host to change its settings.'),
         findsOneWidget,
       );
       expect(find.textContaining('to add it'), findsNothing);

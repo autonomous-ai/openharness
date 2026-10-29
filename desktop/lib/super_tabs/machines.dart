@@ -215,7 +215,7 @@ class _AgentSlots extends StatelessWidget {
 /// The number is a stepper rather than a field, so no keystroke can leave the
 /// dialog holding a count the backend would refuse; both buttons go dead at
 /// the bounds rather than staying lit and doing nothing. Changing it chooses
-/// At most, the only choice it belongs to. It sits beside the At most choice
+/// At most, the only choice it belongs to. It sits beside the At most tile
 /// rather than inside it, so a screen reader reaches the number and its two
 /// buttons instead of one merged choice (review of #2084).
 class _AgentsLimit extends StatelessWidget {
@@ -234,28 +234,6 @@ class _AgentsLimit extends StatelessWidget {
   final bool busy;
   final VoidCallback onMemory;
   final ValueChanged<int> onAtMost;
-
-  /// One choice: its radio and its words are one target and one label.
-  Widget _choice(String value, String label, VoidCallback onSelect) =>
-      MergeSemantics(
-        key: ValueKey(
-          value == 'memory'
-              ? 'machine-agents-memory'
-              : 'machine-agents-at-most',
-        ),
-        child: InkWell(
-          onTap: busy ? null : onSelect,
-          borderRadius: BorderRadius.circular(grid.AppControl.radius),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Radio<String>(value: value, enabled: !busy),
-              Text(label, style: DesktopChrome.text()),
-              const SizedBox(width: grid.AppDesktop.controlGap),
-            ],
-          ),
-        ),
-      );
 
   @override
   Widget build(BuildContext context) {
@@ -284,11 +262,28 @@ class _AgentsLimit extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _choice('memory', 'As memory allows', onMemory),
+                // Standard tiles: one Tab stop for the choice, and the arrow
+                // keys move it (re-review of #2084).
+                RadioListTile<String>(
+                  key: const ValueKey('machine-agents-memory'),
+                  value: 'memory',
+                  enabled: !busy,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('As memory allows'),
+                ),
                 Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    _choice('atMost', 'At most', () => onAtMost(value)),
+                    Expanded(
+                      child: RadioListTile<String>(
+                        key: const ValueKey('machine-agents-at-most'),
+                        value: 'atMost',
+                        enabled: !busy,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('At most'),
+                      ),
+                    ),
                     // The number on its own: adjustable by a screen reader's
                     // increase and decrease, with its two buttons beside it.
                     Semantics(
@@ -787,12 +782,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         return 'This computer can’t reach that machine. Sign in to Harness '
             'there with this account to change its settings.';
       }
+      // The machine by name: "this computer" is the one you're on.
+      final name = superTabMachineName(m.machine.displayName);
       if (m.belongsToOtherAccount) {
-        return 'This computer is signed in to another account.';
+        return '$name is signed in to another account.';
       }
-      if (m.needsLink) return 'Not linked. Link this computer from Machines.';
+      if (m.needsLink) return 'Not linked. Link $name from Machines.';
       if (m.isOffline) {
-        return 'Offline. Open Harness on this computer to change its settings.';
+        return 'Offline. Open Harness on $name to change its settings.';
       }
       return null;
     }
