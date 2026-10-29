@@ -2050,18 +2050,17 @@ static void swarm_buddy_checks(const char *dir) {
 
     // The side follows the daemon, newest wins: a face that turns to its Buddy chat (the desktop opened it) is the Buddy
     // side; one that turns away (the desktop moved on) is the PM side again. The dial does not answer either.
-    buddy_setup(); fake_ms += 3000; buddy_card("buddy");
+    buddy_setup(); buddy_card("buddy");
     scene_take(); assert(lilac_ring() && avatar() && swarm_sent == 0);
     buddy_card("lead"); scene_take(); assert(!lilac_ring() && pm_dots() && swarm_sent == 0);
     // A desktop focus moves the face without saying a side; only the person's own move does.
     swipe_up(); assert(swarm_sent == 1);
     ui_supertab_focus("s1", "B1"); scene_take(); assert(!strcmp(sw.lead, "B1") && !wire_has(1, "side s1 buddy") && !wire_has(1, "side s1 pm"));
-    // The dial's own move echoes back: the desktop follows its select, the daemon drops the side and the faces turn away.
-    // Within 2 s that is the dial's move, not a newer one: the side stays and is said again. Later, the desktop wins.
+    // The dial follows the daemon even right after its own move: the daemon keeps the side through the desktop move its
+    // select causes, so a turn away is always a newer desktop focus.
     buddy_setup(); swipe_up(); buddy_card("buddy"); swipe_next();
+    assert(!strcmp(sw.lead, "B1") && lilac_ring() && wire_has(0, "side s1 buddy"));
     sent = swarm_sent; buddy_card("lead"); scene_take();
-    assert(!strcmp(sw.lead, "B1") && lilac_ring() && avatar() && wire_has(sent, "side s1 buddy"));
-    buddy_card("buddy"); fake_ms += 3000; sent = swarm_sent; buddy_card("lead"); scene_take();
     assert(!lilac_ring() && pm_dots() && swarm_sent == sent);
 
     // Buddies off: no dots, swipe up is inert, and the face is exactly a face from a daemon without Buddies.

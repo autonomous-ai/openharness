@@ -606,7 +606,6 @@ static EXT_RAM_BSS_ATTR struct {
     // The side each Swarm is on (spec 2026-10-29-round-dial-pm-buddy): its PM's or the reader's Buddy's, kept across its
     // projects. A swipe sets it, and so does the daemon when a face turns to or from its Buddy chat (newest wins).
     struct { char tab[ID_MAX]; bool buddy; } side[HT_SUPERTABS_MAX];
-    uint32_t picked_ms;               // when the dial last moved the desktop (supertab.select); 0 never
     // A Buddy's word not yet seen on the dial, per Lead, and the chat it came in: the PM side's quiet badge.
     struct { char lead[ID_MAX], chat[ID_MAX]; } heard[SWARM_SAID];
 } sw;
@@ -728,7 +727,6 @@ static void swarm_show(const ht_supertab_t *t, int i, bool select)
     if (select) {
         swarm_send(SUPERTAB_SELECT, t->id, sw.lead);
         // The person moved here on the dial, which is newer than the desktop: the Swarm keeps the side the dial is on.
-        sw.picked_ms = ms() | 1;
         if (t->leads[i].buddies) swarm_side_send(t->id);
     }
     swarm_buddy_seen();
@@ -5164,13 +5162,8 @@ bool ui_supertab(const ht_supertab_t *in)
         else if (before && !now && !turn) turn = -1;
     }
     int n = ht_supertabs_put(&swarm, in, ms(), ev, (int)(sizeof ev / sizeof ev[0]));
-    if (!buddies || turn < 0) {
-        // The dial's own move echoes back as a turn away: its select moved the desktop, and the daemon drops the side on a
-        // desktop move. Within 2 s it is that move, which is newer, so the side stays and is said again.
-        bool echo = buddies && swarm_mode() && !strcmp(sw.tab, in->id) && sw.picked_ms && (int32_t)(ms() - sw.picked_ms) < 2000;
-        if (echo && swarm_side_buddy(in->id)) swarm_side_send(in->id);
-        else if (swarm_side_buddy(in->id)) swarm_side_put(in->id, false);
-    } else if (turn > 0) swarm_side_put(in->id, true);
+    if ((!buddies || turn < 0) && swarm_side_buddy(in->id)) swarm_side_put(in->id, false);
+    else if (buddies && turn > 0) swarm_side_put(in->id, true);
     bool beep = swarm_events(ev, n);
     // A wait that came before any Lead named its harness shows now, once.
     for (int w = 0; w < SWARM_WAITS; w++) {
