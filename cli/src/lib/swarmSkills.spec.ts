@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,12 @@ import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwar
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
+import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
+import { managedNodePath } from './nodeRuntime.js'
+import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
+import { hookArgv } from '../engines/kit/notifyHooks.js'
+import { notifyHookEntry } from '../engines/kit/hookSettings.js'
+import { messagesCommand } from '../engines/kit/messagesHook.js'
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
 const SWARM = { prepare: prepareSwarmSkill, github: () => null }
@@ -574,6 +580,9 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('Only when your owner asks')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
     expect(text).toContain('Never assign work, start agents, change code or open pull requests')
+    // What it may run, as its guard allows it (lib/buddyGuard.ts), in place of 'only harness super-tab' (Ken, 10-29).
+    expect(text).toContain('git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff')
+    expect(text).not.toContain('run only harness super-tab commands')
     // Buddies replaced Chat with PM (Ken, 10-29): the PM's private lines to the owner land in the Buddy's chat, and are not its orders.
     expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
@@ -581,22 +590,73 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
 })
 
 describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', () => {
-  it('pre-approves only its Super Tab commands for Claude Code, denies file editing, and leaves its files read-only', () => {
+  it('runs every Claude Code tool call past its guard, refuses the rest without asking, denies file editing, and leaves its files read-only', () => {
     const workspace = fixture()
     mkdirSync(join(workspace, 'src'))
     writeFileSync(join(workspace, 'src', 'app.ts'), 'code\n', { mode: 0o644 })
     writeFileSync(join(workspace, 'README.md'), 'readme\n', { mode: 0o644 })
     const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
     const settings = JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8'))
-    expect(settings.permissions).toEqual({ defaultMode: 'default', allow: ['Bash(harness super-tab:*)'], deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] })
-    for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json')]) {
+    const guard = join(realpathSync(workspace), '.claude', 'buddy-guard.mjs')
+    expect(settings).toEqual({
+      permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+      // No memory file at all: a committed CLAUDE.local.md importing files from outside the folder (security re-check of #2092).
+      claudeMdExcludes: ['**/*'],
+      // The person's own settings may turn hooks off; these, the folder's local settings, outrank theirs.
+      disableAllHooks: false,
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
+    })
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json'), guard]) {
       expect(statSync(file).mode & 0o222, file).toBe(0)
     }
     // Its folders stay writable, so the worktree is removed as any other; its skill keeps its own records.
     expect(statSync(join(workspace, 'src')).mode & 0o200).toBe(0o200)
     expect(statSync(prepared.file).mode & 0o200).toBe(0o200)
-    // A relaunch prepares it again the same way.
+    // A relaunch prepares it again the same way, a guard someone changed put back.
+    chmodSync(guard, 0o600); writeFileSync(guard, 'process.exit(0)\n')
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    expect(statSync(guard).mode & 0o222).toBe(0)
+  })
+
+  it('carries Harness\'s own hooks from the person\'s Claude settings into the folder\'s, and nobody else\'s (Lead, 10-29)', () => {
+    // A Buddy reads only its folder's settings (--setting-sources local): a hook a teammate commits to the project, or
+    // one in the person's own settings, never runs there. Harness's session, turn and Agent Messages hooks do.
+    const home = fixture(), workspace = fixture(), before = process.env.CLAUDE_CONFIG_DIR
+    const notify = notifyHookEntry(claudeHooks.settings!, hookArgv(18473, 'claude'))!.command
+    const inbox = messagesCommand(join(home, 'agent-messages'))
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({
+      permissions: { allow: ['Bash(git push:*)'] },
+      hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }, { type: 'command', command: 'touch /tmp/theirs' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+        PostToolUse: [{ hooks: [{ type: 'command', command: inbox, timeout: 5 }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'curl -X POST x' }] }],
+        Notification: [{ hooks: [{ type: 'command', command: 'say hi' }] }],
+      },
+    }))
+    process.env.CLAUDE_CONFIG_DIR = home
+    try { prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' }) } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before
+    }
+    const settings = JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8'))
+    expect(settings.permissions).toEqual({ defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] })
+    expect(settings.hooks).toEqual({
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command',
+        command: buddyGuardCommand(managedNodePath(), join(realpathSync(workspace), '.claude', 'buddy-guard.mjs')), timeout: 30 }] }],
+      SessionStart: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+      Stop: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
+      PostToolUse: [{ hooks: [{ type: 'command', command: inbox, timeout: 5 }] }],
+    })
+  })
+
+  it('deletes nothing in the folder, links out of it included: the guard refuses those by their real paths (Lead, 10-29)', () => {
+    const workspace = fixture(), outside = fixture()
+    writeFileSync(join(outside, 'secret.txt'), 'secret\n')
+    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'secret.md'))
+    symlinkSync(join(workspace, 'gone'), join(workspace, 'broken'))
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
+    expect([lstatSync(join(workspace, 'secret.md')).isSymbolicLink(), lstatSync(join(workspace, 'broken')).isSymbolicLink()]).toEqual([true, true])
   })
 
   it('locks the folder even when the skill cannot be prepared (re-check of #1992)', () => {
@@ -606,7 +666,7 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     symlinkSync(join(outside, 'elsewhere'), join(workspace, '.harness', '.gitignore'))
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).toThrow()
     expect(statSync(join(workspace, 'README.md')).mode & 0o222).toBe(0)
-    expect(JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).permissions.allow).toEqual(['Bash(harness super-tab:*)'])
+    expect(JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).permissions.defaultMode).toBe('dontAsk')
   })
 
   it('leaves every other role\'s folder as it is', () => {
