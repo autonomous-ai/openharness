@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { updateDismissKeys } from '../engines/codex/screen.js'
+import { feedbackDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
 import { identifier, object } from './wire.js'
@@ -267,11 +268,12 @@ export class TerminalHost {
    *  After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone. The held
    *  task goes on by itself: the mailbox types it again once the prompt is gone. */
   private async skipUpdate(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
-    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : null
+    // Codex's update screen, or one of Claude Code's own feedback popups (engines/claude/screen.ts feedbackDismissKeys).
+    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text)
     if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
     const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
-    if (!dismissed.ok) this.log(`could not dismiss Codex's update screen for ${agent.agentId}: ${dismissed.error}`)
+    if (!dismissed.ok) this.log(`could not dismiss a screen for ${agent.agentId}: ${dismissed.error}`)
     return tries + 1
   }
 
