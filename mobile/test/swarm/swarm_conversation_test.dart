@@ -1097,6 +1097,33 @@ void main() {
       expect(m.marks.unread(r.reader.snapshot!.conversation('g1')!), isFalse);
     });
 
+    test('a chat read before, opened again covered or at an earlier '
+        'message, marks nothing past what is seen of what it kept', () async {
+      final r = rig();
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': null,
+      };
+      await r.reader.refresh();
+      // Read while covered: kept, and not read.
+      var c = SwarmConversation(r.reader, 'g1', shown: false);
+      await c.load();
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty);
+
+      c = SwarmConversation(r.reader, 'g1', shown: false);
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty, reason: 'covered from the start');
+
+      c = SwarmConversation(r.reader, 'g1', heldAt: 'm1');
+      addTearDown(c.dispose);
+      await settle();
+      expect(m.sent, [1], reason: 'only through the message it opened at');
+    });
+
     test('a Swarm without read marks marks nothing', () async {
       final r = rig();
       r.swarm.routes[messages] = (_) => {

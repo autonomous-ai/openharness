@@ -230,11 +230,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       return;
     }
     session.inbox.removeListener(_attach);
-    final c = _conversation = SwarmConversation(reader, widget.conversationId)
-      ..shown = _seen
-      // Opened at a message, the chat is read through it until the person
-      // goes down to the foot.
-      ..heldAt = widget.messageId ?? _held.value;
+    // Set before what the chat kept is shown, so it is read only as far as
+    // it is seen: opened at a message, through it until the person goes
+    // down to the foot.
+    final c = _conversation = SwarmConversation(
+      reader,
+      widget.conversationId,
+      shown: _seen,
+      heldAt: widget.messageId ?? _held.value,
+    );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);

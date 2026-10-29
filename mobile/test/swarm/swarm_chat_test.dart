@@ -1528,6 +1528,36 @@ void main() {
       expect(unread(host), isFalse);
     });
 
+    testWidgets('a message left waiting below stays unread when the chat '
+        'opens again from what it kept, at an earlier message', (tester) async {
+      final fake = backend([
+        for (var i = 1; i < 40; i++)
+          message('m$i', i, text: 'Line $i\nof the log', minute: i),
+      ]);
+      final host = await pump(tester, fake);
+      await tester.drag(key('swarm-messages'), const Offset(0, 300));
+      await tester.pumpAndSettle();
+      movedOn(fake, 40);
+      fake.routes['$messages?after=39'] = (_) => {
+        'messages': [message('m40', 40, text: 'Fresh news', minute: 45)],
+        'next': null,
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(marksSent(fake), everyElement(lessThan(40)));
+
+      // Closed with 40 unseen; the chat keeps what it read.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(SwarmChatCache.length, greaterThan(0));
+      // A notice opens it again at its first message.
+      await show(tester, host, messageId: 'm1');
+
+      expect(inView(tester, find.text('Line 1\nof the log')), isTrue);
+      expect(marksSent(fake), everyElement(lessThan(40)));
+      expect(unread(host), isTrue);
+    });
+
     testWidgets('a message that arrives while Harness is behind is read only '
         'once Harness is in front again', (tester) async {
       final fake = backend([message('m1', 1, text: 'The plan', minute: 1)]);

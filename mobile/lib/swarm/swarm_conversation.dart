@@ -25,10 +25,14 @@ import 'swarm_request.dart';
 /// had is asked for while its messages are read. One the person cannot read
 /// keeps nothing here: messages, draft and a post not confirmed.
 class SwarmConversation extends ChangeNotifier {
+  /// [shown] and [heldAt] as they are from the start, so what it kept is
+  /// read only as far as it is seen.
   SwarmConversation(
     this.reader,
     this.id, {
     this.uploadTimeout = const Duration(minutes: 2),
+    this._shown = true,
+    this._heldAt,
   }) {
     _listed = conversation != null;
     if (SwarmChatCache.take(reader, id) case final kept?) {
@@ -63,7 +67,7 @@ class SwarmConversation extends ChangeNotifier {
   /// On screen, no other screen covers it and Harness is in front: what it
   /// shows is read ([SwarmReader.readMarks]), now and as new messages come.
   bool get shown => _shown;
-  bool _shown = true;
+  bool _shown;
   set shown(bool value) {
     if (_shown == value) return;
     _shown = value;
