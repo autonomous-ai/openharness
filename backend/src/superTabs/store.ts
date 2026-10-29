@@ -24,7 +24,6 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
-import { messagesPollKey, type MessagesPollMemory } from './quietMessages.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
@@ -200,10 +199,6 @@ function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelive
   return { swarm: { workspaceId: state.workspaceId, environment: state.environment }, grants }
 }
 
-/** Messages strictly after (or before) a cursor, by (sequence, id): rows one command wrote before the store by parts share a sequence. */
-const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
-  : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
-
 const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
 
 /** Whose full poll `deliveries` remembers: the caller, and a team session apart, as it may act only for its own machine's
@@ -214,10 +209,6 @@ const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
 /** Logged, never thrown: without the memory the delivery poll just runs in full. */
 const pollMemoryFailed = (error: unknown): void => {
   logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
-}
-/** The same for the quiet messages poll (quietMessages.ts): the messages poll then reads in full. */
-const messagesMemoryFailed = (error: unknown): void => {
-  logger.warn('[super-tab] messages poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
 }
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
@@ -266,9 +257,6 @@ export interface SuperTabStoreHooks {
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
    *  out, this server remembers alone. */
   polls?: PollMemory
-  /** Each caller's last full forward read of a conversation's messages (quietMessages.ts): given only while the server's
-   *  switch is on, and then the next polls with nothing new are answered without loading the Swarm. */
-  messagePolls?: MessagesPollMemory
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
@@ -354,7 +342,6 @@ export class SuperTabStore {
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.polls = hooks.polls ?? localPollMemory(now)
-    this.messagePolls = hooks.messagePolls ?? null
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
@@ -1764,17 +1751,12 @@ export class SuperTabStore {
   async messages(user: AuthUser, tabId: string, conversationId: string,
     cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string }, asAgentId?: string) {
     const tx = this.db
-    const forward = cursor.after !== undefined
-    const quiet = forward && this.messagePolls ? messagesPollKey(user, tabId, conversationId, asAgentId) : null
-    if (quiet) {
-      const answer = await this.quietMessages(user, tabId, conversationId, cursor.after!, cursor.afterId, quiet)
-      if (answer) return answer
-    }
-    // The stamp before the load, as the quiet delivery poll takes it: a write that lands during the read moves it.
-    const view = quiet ? await this.view([tabId]) : undefined, stamp = view?.mainStamp(tabId)
-    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] }, view)
+    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
+    const forward = cursor.after !== undefined
+    const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
+      : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
     const where = { tabId, conversationId,
       ...(cursor.messageId ? { id: cursor.messageId } : {}),
       ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
@@ -1795,50 +1777,10 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
-    const answer = { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
-    if (quiet && stamp !== undefined) {
-      const target = actor.kind === 'agent' ? agent(state, actor.agentId) : undefined
-      await this.messagePolls!.set(quiet, { at: this.now(), stamp, reactionSeq: answer.reactionSeq,
-        swarm: { workspaceId: state.workspaceId, environment: state.environment },
-        ...target ? { grant: { contributorId: target.contributorId, machineId: target.machineId, machineOwnerId: target.machineOwnerId,
-          hostGrant: target.hostGrant ?? null } } : {} }).catch(messagesMemoryFailed)
-    }
-    return answer
-  }
-
-  /** Each caller's last full forward read of a conversation (quietMessages.ts); null while the server's switch is off. */
-  private readonly messagePolls: MessagesPollMemory | null
-
-  /**
-   * A forward poll with nothing after its cursor, by a caller whose full read passed within SWEEP_EVERY_MS while the Swarm
-   * still has the stamp that read saw: an empty page, without loading the Swarm (quietMessages.ts). What the full read checks
-   * outside the Swarm is checked again; anything else, or any refusal, and the poll reads in full, which refuses as it always did.
-   */
-  private async quietMessages(user: AuthUser, tabId: string, conversationId: string, after: number, afterId: string | undefined, key: string) {
-    const last = await this.messagePolls!.get(key).catch(error => { messagesMemoryFailed(error); return undefined })
-    const now = this.now()
-    if (!last || now < last.at || now - last.at >= SWEEP_EVERY_MS) return undefined
-    if ((await this.view([tabId])).mainStamp(tabId) !== last.stamp) return undefined
-    if (await this.db.superTabMessage.findFirst({ where: { tabId, conversationId, ...past(after, afterId, 'gt') }, select: { id: true } })) return undefined
-    try {
-      await this.row(this.db, user, tabId)
-      const team = await this.teamHost(this.db, user)
-      if (last.grant) {
-        if (team !== null && last.grant.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-        // The contributor's place in the Swarm is the unchanged stamp's to vouch for, as in heldDeliveries.
-        await this.grantHolds(this.db, last.swarm, last.grant, () => {})
-      } else {
-        if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-        await requireWorkspaceAccess(this.db, last.swarm, user.sub)
-      }
-    } catch (error) {
-      if (error instanceof SuperTabError) return undefined
-      throw error
-    }
-    return { messages: [], next: null, reactionSeq: last.reactionSeq }
   }
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
