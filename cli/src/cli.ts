@@ -2751,13 +2751,19 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
+/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
+ *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
+function unlessBuddy(run: () => Promise<number>): Promise<number> {
+  return import('./superTabs/command.js').then(({ buddyRefusal }) => buddyRefusal())
+    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
+}
 
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2791,7 +2797,7 @@ switch (cmd) {
     replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'tell':
-    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2800,7 +2806,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2917,7 +2923,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    newCommand({
+    unlessBuddy(() => newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -2929,7 +2935,7 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    }).then((code) => { process.exitCode = code }).catch(onError)
+    })).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
