@@ -567,6 +567,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           score: scores[person.id],
           columns: columns,
           own: person.id == c.accountId,
+          weekName: weekName(_board.week, current),
           onTap: () => _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)

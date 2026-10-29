@@ -17,10 +17,16 @@ import 'swarm_state_test.dart' show createApp;
 Finder inRow(String key, Finder finder) =>
     find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
 
+/// A drawn unread dot; unread is now a bold name, heard as "Unread messages".
 Finder unreadDot(String groupId) => inRow(
   'super-group-$groupId',
   find.byWidgetPredicate(
-    (w) => w is Semantics && w.properties.label == 'Unread messages',
+    (w) =>
+        w is Container &&
+        w.decoration is BoxDecoration &&
+        (w.decoration! as BoxDecoration).shape == BoxShape.circle &&
+        // A dot holds nothing; an avatar holds its initial.
+        w.child == null,
   ),
 );
 

@@ -308,19 +308,24 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                       SizedBox(
                         width: _iconColumn,
-                        child: Center(
-                          child: waiting
-                              ? Tooltip(
-                                  message: 'Needs a human',
-                                  child: Text(
-                                    '?',
-                                    style: DesktopChrome.control(
-                                      color: grid.AppPalette.warn,
-                                      medium: true,
+                        // Unread is drawn as a bold name; a screen reader
+                        // hears it said, as it heard the dot it replaces.
+                        child: Semantics(
+                          label: unread ? 'Unread messages' : null,
+                          child: Center(
+                            child: waiting
+                                ? Tooltip(
+                                    message: 'Needs a human',
+                                    child: Text(
+                                      '?',
+                                      style: DesktopChrome.control(
+                                        color: grid.AppPalette.warn,
+                                        medium: true,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : null,
+                                  )
+                                : null,
+                          ),
                         ),
                       ),
                     ],

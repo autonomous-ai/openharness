@@ -168,10 +168,16 @@ class SuperTabPmChatRow extends StatelessWidget {
                   ),
                   SizedBox(
                     width: _column,
-                    child: Center(
-                      child: unreadCount > 0
-                          ? SuperTabPmUnread(unreadCount)
+                    // Unread is drawn as a bold name and heard in words.
+                    child: Semantics(
+                      label: unread && unreadCount == 0
+                          ? 'Unread messages'
                           : null,
+                      child: Center(
+                        child: unreadCount > 0
+                            ? SuperTabPmUnread(unreadCount)
+                            : null,
+                      ),
                     ),
                   ),
                   const SizedBox(width: _column),

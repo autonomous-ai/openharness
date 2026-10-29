@@ -106,6 +106,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     required this.onTap,
     this.columns,
     this.own = false,
+    this.weekName = 'this week',
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
@@ -116,6 +117,9 @@ class LeaderboardPersonRow extends StatelessWidget {
 
   /// Whether this is the viewer's own row.
   final bool own;
+
+  /// The week the board shows, "this week", "last week", …, as the crown says it.
+  final String weekName;
 
   @override
   Widget build(BuildContext context) {
@@ -233,7 +237,7 @@ class LeaderboardPersonRow extends StatelessWidget {
                   padding: const EdgeInsets.only(left: _halfGap),
                   child: Semantics(
                     key: ValueKey('leaderboard-crown-${person.id}'),
-                    label: 'Number one this week',
+                    label: 'Number one $weekName',
                     excludeSemantics: true,
                     child: Text('\u{1F451}', style: DesktopChrome.metadata()),
                   ),

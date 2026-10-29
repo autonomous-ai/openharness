@@ -303,6 +303,25 @@ void main() {
     },
   );
 
+  testWidgets("on a past week the crown names that week, not this one", (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    final controller = await show(tester, humansSwarm());
+    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Last week').last);
+    await tester.pumpAndSettle();
+    expect(crown('peer'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel(RegExp('Number one last week')),
+      findsOneWidget,
+    );
+    expect(find.bySemanticsLabel(RegExp('this week')), findsNothing);
+    semantics.dispose();
+    await close(tester, controller);
+  });
+
   testWidgets('crowns no one in a week where no one has points yet', (
     tester,
   ) async {
@@ -318,17 +337,38 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('draws no cups, trophies, sparkles or medal colours', (
-    tester,
-  ) async {
-    final controller = await show(tester, humansSwarm(), settle: false);
-    expect(find.byIcon(AppIcons.trophy), findsNothing);
-    expect(find.byIcon(AppIcons.sparkles), findsNothing);
-    expect(find.byKey(const ValueKey('leaderboard-sparkle')), findsNothing);
-    expect(find.byKey(const ValueKey('leaderboard-cup-peer')), findsNothing);
-    await tester.pumpAndSettle();
-    await close(tester, controller);
-  });
+  testWidgets(
+    'draws no emoji but the crown, and no cups, sparkles or medal colours',
+    (tester) async {
+      final controller = await show(tester, humansSwarm(), settle: false);
+      final emoji = RegExp(
+        '[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{231A}-\u{23FF}]',
+        unicode: true,
+      );
+      final roster = find.byType(SuperTabRoster);
+      // Every emoji drawn in the people and agents, the crown's placeholder
+      // aside: the crown is its own Text, the one emoji allowed.
+      final drawn = [
+        for (final widget in tester.widgetList<RichText>(
+          find.descendant(of: roster, matching: find.byType(RichText)),
+        ))
+          ...emoji
+              .allMatches(widget.text.toPlainText())
+              .map((match) => match[0]!),
+      ];
+      expect(drawn, ['\u{1F451}']);
+      expect(
+        find.descendant(of: crown('peer'), matching: find.text('\u{1F451}')),
+        findsOneWidget,
+      );
+      expect(find.byIcon(AppIcons.trophy), findsNothing);
+      expect(find.byIcon(AppIcons.sparkles), findsNothing);
+      expect(find.byKey(const ValueKey('leaderboard-sparkle')), findsNothing);
+      expect(find.byKey(const ValueKey('leaderboard-cup-peer')), findsNothing);
+      await tester.pumpAndSettle();
+      await close(tester, controller);
+    },
+  );
 
   testWidgets("fills the viewer's own row as the selected row, and no other", (
     tester,
