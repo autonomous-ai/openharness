@@ -5172,7 +5172,10 @@ bool ui_supertab(const ht_supertab_t *in)
         else if (before && !now && !turn) turn = -1;
     }
     int n = ht_supertabs_put(&swarm, in, ms(), ev, (int)(sizeof ev / sizeof ev[0]));
-    if ((!buddies || turn < 0) && swarm_side_buddy(in->id)) swarm_side_put(in->id, false);
+    // A daemon that says the side is the truth: a face alone cannot tell it where no project has a Buddy chat (review of
+    // #2218). An older one says none, and the faces' turns tell it.
+    if (in->side != HT_SIDE_NONE) swarm_side_put(in->id, buddies && in->side == HT_SIDE_BUDDY);
+    else if ((!buddies || turn < 0) && swarm_side_buddy(in->id)) swarm_side_put(in->id, false);
     else if (buddies && turn > 0) swarm_side_put(in->id, true);
     bool beep = swarm_events(ev, n);
     // A wait that came before any Lead named its harness shows now, once.

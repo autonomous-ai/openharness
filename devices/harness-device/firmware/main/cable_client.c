@@ -959,6 +959,9 @@ static void handle_supertab(const cJSON *p)
     const char *tab = str_of(p, "tab");
     if (tab && strlen(tab) >= ID_MAX) tab = "";   // a desk tab id that cannot be held links to nothing
     if (!ht_supertab_init(&card, str_of(p, "id"), tab, str_of(p, "name"), 0)) return;
+    // The Swarm's side, from a swarmBuddy daemon (review of #2218): the dial follows it. Anything else is none.
+    const char *side = str_of(p, "side");
+    card.side = !side ? HT_SIDE_NONE : !strcmp(side, "buddy") ? HT_SIDE_BUDDY : !strcmp(side, "pm") ? HT_SIDE_PM : HT_SIDE_NONE;
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
         if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;

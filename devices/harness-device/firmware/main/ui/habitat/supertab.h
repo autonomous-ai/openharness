@@ -28,9 +28,12 @@ typedef struct {
     bool buddies;
     struct { bool has, live; char chat_id[ID_MAX], name[HT_SUPERTAB_NAME], engine[16]; uint16_t cells; uint32_t color; } buddy;
 } ht_lead_t;
+// The side a swarmBuddy daemon says the Swarm is on (its cards' side, which the dial follows); NONE from an older daemon.
+typedef enum { HT_SIDE_NONE, HT_SIDE_PM, HT_SIDE_BUDDY } ht_side_t;
 typedef struct {
     char id[ID_MAX], tab[ID_MAX], name[HT_SUPERTAB_NAME];
     uint16_t count;             // the Swarm's real project count; at most 12 Leads come
+    ht_side_t side;
     uint8_t lead_n;
     ht_lead_t leads[HT_SUPERTAB_LEADS_MAX];
 } ht_supertab_t;

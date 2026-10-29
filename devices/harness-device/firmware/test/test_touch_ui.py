@@ -2087,6 +2087,25 @@ static void swarm_buddy_checks(const char *dir) {
     sent = swarm_sent; buddy_card("lead"); scene_take();
     assert(!lilac_ring() && pm_dots() && swarm_sent == sent);
 
+    // The daemon's side is the truth where it says one (review of #2218): Buddies on and no Buddy anywhere, the person
+    // swipes up to the empty Buddy side, then opens a group on the desktop. No face turns to or from a Buddy chat, and the
+    // frame says the PM side: the dial follows the desktop's group.
+    {
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000; desk_open();
+        const char ids[1][ID_MAX] = {"s1"}; ui_supertabs_ids(ids, 1);
+        card_begin("s1", "t1", "openharness"); buddy_lead("B2", "docs", "h2", "lead", "lead-docs", NULL, NULL); card.side = HT_SIDE_PM; card_send();
+        enter_at("s1", "B2"); swarm_sent = 0;
+        swipe_up(); assert(scene_says("No Buddy here yet") && swarm_sent == 1);
+        // The daemon took the swipe: its frame says the Buddy side, and the empty screen stays.
+        card_begin("s1", "t1", "openharness"); buddy_lead("B2", "docs", "h2", "lead", "lead-docs", NULL, NULL); card.side = HT_SIDE_BUDDY; card_send();
+        scene_take(); assert(scene_says("No Buddy here yet"));
+        // The desktop opens a group: the daemon drops the side.
+        card_begin("s1", "t1", "openharness"); buddy_lead("B2", "docs", "h2", "group", "g-docs", NULL, NULL); card.side = HT_SIDE_PM; card_send();
+        scene_take(); assert(!scene_says("No Buddy here yet") && !lilac_ring() && pm_dots() && swarm_sent == 1);
+        // And the daemon's Buddy side shows it, with no swipe here (another dial, or the side said again).
+        card_begin("s1", "t1", "openharness"); buddy_lead("B2", "docs", "h2", "lead", "lead-docs", NULL, NULL); card.side = HT_SIDE_BUDDY; card_send();
+        scene_take(); assert(scene_says("No Buddy here yet") && lilac_ring());
+    }
     // Buddies off: no dots, swipe up is inert, and the face is exactly a face from a daemon without Buddies.
     buddy_setup();
     card_begin("s1", "t1", "openharness");

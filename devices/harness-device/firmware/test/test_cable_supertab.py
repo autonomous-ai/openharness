@@ -188,6 +188,16 @@ int main(void) {
     assert(!got_card.leads[1].buddy.live);
     feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"openharness\",\"leads\":[{\"id\":\"L1\",\"state\":\"done\",\"chat\":\"lead\",\"chatId\":\"c\"}]}");
     assert(!got_card.leads[0].buddies && !got_card.leads[0].buddy.has);
+    // The Swarm's side, which a swarmBuddy daemon says on every frame: none from an older one or an unknown value.
+    assert(got_card.side == HT_SIDE_NONE);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"buddy\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_BUDDY);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"pm\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_PM);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"left\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_NONE);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":1,\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_NONE);
 
     // supertab.notice and supertab.notice.read reach the ui calls with their fields; the UI decides the beep.
     const unsigned beeps_before=beeps;
