@@ -659,7 +659,7 @@ describe('what the windows say, reaching the dial', () => {
       // Without the flag, today's recap: no chat asked for, none passed on.
       expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'lead', at: 3, none: false })
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1' })
-      expect(await seen.host.swarmSay!('h1', 'ship it', true)).toBe(true)
+      expect(await seen.host.swarmSay!('h1', 'ship it', true)).toEqual({ said: true })
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1', true)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: true })
@@ -678,7 +678,7 @@ describe('what the windows say, reaching the dial', () => {
       expect(await seen.host.swarmCardRecap!('st1', 'lead1', 'buddy')).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true })
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
       expect(await seen.host.swarmCardRecap!('st1', 'lead1', 'buddy')).toBeNull()
-      expect(await seen.host.swarmSay!('h1', 'ship it', 'buddy')).toBe(true)
+      expect(await seen.host.swarmSay!('h1', 'ship it', 'buddy')).toEqual({ said: true })
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1', 'buddy')
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
@@ -707,9 +707,24 @@ describe('what the windows say, reaching the dial', () => {
       const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, said: true }, { ok: true, said: false }, { error: 'NOT_FOUND' }, 'throw']
       const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
       withRequest(superTabRequest)
-      expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(true)
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: true })
       expect(superTabRequest).toHaveBeenCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
-      for (let i = 0; i < 3; i++) expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(false)
+      for (let i = 0; i < 3; i++) expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: false })
+    })
+
+    it('passes a refused post on, its message cut to what a dial shows; a malformed refusal is none', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, said: false, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } },
+        { ok: true, said: false, refused: { code: 'BUDDY_FORBIDDEN', message: 'é'.repeat(400) } },
+        { ok: true, said: false, refused: { code: 7, message: 'x' } }, { ok: true, said: false, refused: 'no' },
+        { ok: true, said: true, refused: { code: 'X', message: 'x' } },
+      ]
+      withRequest(vi.fn(async () => answers.shift()!))
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: false, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } })
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: false, refused: { code: 'BUDDY_FORBIDDEN', message: 'é'.repeat(150) } })
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: false })
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: false })
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toEqual({ said: true })
     })
 
     it('answers no recap when the core has no service to ask', async () => {

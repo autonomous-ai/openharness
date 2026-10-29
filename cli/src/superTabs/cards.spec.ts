@@ -208,7 +208,7 @@ describe('lastAgentMessage', () => {
 })
 
 /** A fake backend: tabs by id with the time each last changed, a message store per conversation, and call counting. */
-function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown } = {}) {
+function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> } } = {}) {
   const calls: string[] = []
   const failing = new Map<string, number>()
   let listFails = false
@@ -216,6 +216,7 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
   let pageSize = 0
   const call = vi.fn(async (method: string, path: string, _body?: unknown) => {
     calls.push(`${method} ${path}`)
+    if (method === 'POST' && extra.post) return extra.post()
     const [route, query] = path.split('?')
     if (route === '/api/super-tabs/list') {
       if (listFails) throw new Error('offline')
@@ -446,15 +447,30 @@ describe('SwarmCards.say', () => {
   it('posts the words as the person in the Lead\'s conversation of a harness here, and is false for any other harness', async () => {
     const t = setup({ t1: { lastChangedAt: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2' }), agent('a2')] }) } })
     await t.cards.tick()
-    expect(await t.cards.say('h-a2', 'ship it')).toBe(true)
+    expect(await t.cards.say('h-a2', 'ship it')).toEqual({ said: true })
     const post = t.call.mock.calls.find(c => c[0] === 'POST')!
     expect(post[1]).toBe('/api/super-tabs/t1/commands')
     expect(post[2]).toMatchObject({ operationId: expect.stringMatching(/^pro-voice-/),
       command: { type: 'message.send', conversationId: 'lead-mobile', text: 'ship it', replyTo: null, recipientIds: [] } })
     expect(post[2]).not.toHaveProperty('asAgentId')
-    expect(await t.cards.say('h-a1', 'x')).toBe(false)   // that Lead runs on another machine
-    expect(await t.cards.say('h-zz', 'x')).toBe(false)
+    expect(await t.cards.say('h-a1', 'x')).toEqual({ said: false })   // that Lead runs on another machine
+    expect(await t.cards.say('h-zz', 'x')).toEqual({ said: false })
     expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
+  })
+
+  // A refused post was typed into the Lead's terminal instead (spec 2026-10-29 Voice): the dial is told the refusal now.
+  it('say reports a 403 as refused with the backend\'s message', async () => {
+    let answer = { status: 403, body: { success: false, error: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } } }
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() } }, { post: () => answer })
+    await t.cards.tick()
+    expect(await t.cards.say('h-a1', 'ship it')).toEqual({ said: false, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } })
+    answer = { status: 409, body: { success: false, error: { code: 'BUDDIES_OFF', message: 'Buddies are off in this Swarm.' } } }
+    expect(await t.cards.say('h-a1', 'ship it', 'buddy')).toEqual({ said: false, refused: { code: 'BUDDIES_OFF', message: 'Buddies are off in this Swarm.' } })
+    // An unreachable backend is not a refusal: it fails as before, and the caller may fall back.
+    answer = { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } }
+    await expect(t.cards.say('h-a1', 'ship it')).rejects.toThrow('down')
+    t.call.mockImplementationOnce(async () => { throw new Error('offline') })
+    await expect(t.cards.say('h-a1', 'ship it')).rejects.toThrow('offline')
   })
 })
 
@@ -784,8 +800,8 @@ describe('SwarmCards chats', () => {
     const t = chatSwarm({})
     t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
     await vi.waitFor(() => expect(t.seen).toHaveLength(1))
-    expect(await t.cards.say('h-a1', 'to the PM', true)).toBe(true)
-    expect(await t.cards.say('h-a1', 'to the Lead')).toBe(true)
+    expect(await t.cards.say('h-a1', 'to the PM', true)).toEqual({ said: true })
+    expect(await t.cards.say('h-a1', 'to the Lead')).toEqual({ said: true })
     const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; text: string } }).command)
     expect(posts.map(p => [p.conversationId, p.text])).toEqual([['pm-web', 'to the PM'], ['lead-web', 'to the Lead']])
     t.cards.want(false)
@@ -1018,8 +1034,8 @@ describe('SwarmCards Buddy side', () => {
     t.cards.want(true, [], null)
     await vi.waitFor(() => expect(t.seen).toHaveLength(1))
     t.cards.side('t1', 'buddy')
-    expect(await t.cards.say('h-a1', 'to my Buddy', 'buddy')).toBe(true)
-    expect(await t.cards.say('h-a1', 'to the Lead', true)).toBe(true)
+    expect(await t.cards.say('h-a1', 'to my Buddy', 'buddy')).toEqual({ said: true })
+    expect(await t.cards.say('h-a1', 'to the Lead', true)).toEqual({ said: true })
     const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; text: string } }).command)
     expect(posts.map(p => [p.conversationId, p.text])).toEqual([['pm-web', 'to my Buddy'], ['lead-web', 'to the Lead']])
     t.cards.want(false)

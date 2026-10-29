@@ -405,7 +405,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim(), chat) }
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat)
+            // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {

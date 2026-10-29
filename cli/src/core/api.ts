@@ -1256,6 +1256,9 @@ export type CardSide = 'pm' | 'buddy'
 /** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
  *  the face on a swarmBuddy dial's side ('buddy'). */
 export type CardChat = boolean | 'buddy'
+/** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
+ *  refused by the backend with its code and message, which must never become a terminal turn instead. */
+export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
 export interface CardFocus { tabId: string; conversationId: string }
 

@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
-import type { SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import type { SaidOnCard, SwarmCard, SwarmLead } from '../superTabs/cards.js'
 import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
@@ -798,7 +798,7 @@ describe('cable session', () => {
   })
 
   it('posts words spoken to a Swarm Lead in its Swarm chat, and types them for any other harness', async () => {
-    const swarmSay = vi.fn(async (id: string) => id === 'a1')
+    const swarmSay = vi.fn(async (id: string) => ({ said: id === 'a1' }))
     const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
     const { session, port } = await connect(host)
     try {
@@ -4249,7 +4249,7 @@ describe('swarm cards', () => {
     it('a device without swarmChat gets today\'s frames', async () => {
       for (const hello of [PRO, { ...ROUND, swarmChat: undefined }]) {
         const cards = [card('st1', [lead(1, { state: 'ask', chat: pmChat, notice: notice() }), lead(2, { chat: group })])]
-        const swarmSay = vi.fn(async () => true)
+        const swarmSay = vi.fn(async () => ({ said: true as const }))
         const host = cardHost({ cards }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
         const { session, port } = await connect(host)
         try {
@@ -4404,7 +4404,7 @@ describe('swarm cards', () => {
     })
 
     it('asks recaps and talks with chat, and passes chatId on the recap', async () => {
-      const swarmSay = vi.fn(async () => true)
+      const swarmSay = vi.fn(async () => ({ said: true as const }))
       const host = cardHost({ cards: [card('st1', [lead(1, { chat: group })])] }, {
         transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay,
         swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'From the group', at: 7, none: false, chatId: 'g1' })),
@@ -4551,7 +4551,7 @@ describe('swarm cards', () => {
     })
 
     it('asks recaps, opens and talks for the face on its side, and takes only the recaps of that face', async () => {
-      const swarmSay = vi.fn(async () => true)
+      const swarmSay = vi.fn(async () => ({ said: true as const }))
       const host = cardHost({ cards: [card('st1', [withBuddy()])] }, {
         transcribe: vi.fn(async () => 'an idea'), route: vi.fn(), swarmSay,
         swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'From the Buddy', at: 7, none: false, chatId: 'pm1', buddy: true as const })),
@@ -4574,6 +4574,45 @@ describe('swarm cards', () => {
         await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
         expect(swarmSay.mock.calls[0]).toEqual(['a1', 'an idea', 'buddy'])
       } finally { await session.stop() }
+    })
+
+    // Review Focus 5: a post the backend refuses (a read-only Chat with PM, Buddies off, a Buddy chat not the reader's) was
+    // typed into the Lead's terminal instead.
+    const spoken = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay']) => {
+      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(hello); await settle()
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' || m.t === 'voice.transcript') || vi.mocked(host.sendTurn).mock.calls.length > 0).toBe(true))
+        await settle()
+        return { errors: ofType(port, 'voice.error').map((m) => m.message), turns: vi.mocked(host.sendTurn).mock.calls }
+      } finally { await session.stop() }
+    }
+    const refused = { said: false as const, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } }
+
+    it('a refused voice post shows voice.error and types nothing', async () => {
+      for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb' }, PRO, ROUND, BUDDY]) {
+        const swarmSay = vi.fn(async () => refused)
+        expect(await spoken(hello, [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })], swarmSay))
+          .toEqual({ errors: ['Chat with PM is read-only.'], turns: [] })
+        expect(swarmSay).toHaveBeenCalledOnce()
+      }
+    })
+
+    it('on the Buddy face an unreachable post shows voice.error and types nothing', async () => {
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+      // Nor when the Swarm no longer lists that Lead as one: the Buddy face never falls back to a terminal.
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1' })], vi.fn(async () => ({ said: false as const })))).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+    })
+
+    it('on the PM face an unreachable post still falls back to the turn', async () => {
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const pmFace = withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })
+      expect(await spoken(BUDDY, [pmFace], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+      // An older dial's face is today's, whatever a newer dial's side says.
+      expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
     })
 
     /** 13 Leads (12 are sent), every name at its 48-byte cut, each working in a group with a Buddy; `id(kind, l)` names the ids. */

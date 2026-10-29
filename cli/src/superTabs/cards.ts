@@ -25,8 +25,8 @@ import { buddyAvatar } from './buddyAvatar.js'
 
 type Json = Record<string, unknown>
 /** The cards' shapes are the core's contract with the Swarm (core/api.ts), which the core declares and the Swarm imports. */
-import type { CardChat, CardFocus, CardSide, ChatKind, LeadNotice, LeadRecap, LeadState, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
-export type { CardChat, CardFocus, CardSide, LeadNotice, LeadRecap, LeadState, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
+import type { CardChat, CardFocus, CardSide, ChatKind, LeadNotice, LeadRecap, LeadState, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
+export type { CardChat, CardFocus, CardSide, LeadNotice, LeadRecap, LeadState, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
 /** The Pro keeps an id in 48 bytes with its NUL: 47 characters at most reach it. */
@@ -539,18 +539,25 @@ export class SwarmCards {
   }
 
   /** Words spoken on a Pro to a Lead that runs here (its harness): posted as the person in that Lead's conversation, as typed in
-   *  the Swarm chat; with `chat`, in the chat on its face. False when that harness leads no project in the Swarms as last read,
-   *  so the caller sends the turn as before. */
-  async say(harnessId: string, text: string, chat: CardChat = false): Promise<boolean> {
+   *  the Swarm chat; with `chat`, in the chat on its face. Not `said` when that harness leads no project in the Swarms as last
+   *  read, so the caller sends the turn as before; `refused` when the backend refused the post (a 4xx: a read-only Chat with
+   *  PM, Buddies off, a Buddy chat not the reader's), whose words must never become a terminal turn instead (spec 2026-10-29
+   *  Voice). Any other failure (the network, a 5xx) throws as before. */
+  async say(harnessId: string, text: string, chat: CardChat = false): Promise<SaidOnCard> {
     for (const [tabId, { state }] of this.tabs) {
       const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
       const found = agent && cardId(agent.id) ? this.target(tabId, agent.id, chat) : null
       if (!found) continue
-      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
-        command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
-      return true
+      try {
+        await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
+          command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
+      } catch (error) {
+        if (error instanceof SuperTabHostError && error.status >= 400 && error.status < 500) return { said: false, refused: { code: error.code, message: error.message } }
+        throw error
+      }
+      return { said: true }
     }
-    return false
+    return { said: false }
   }
 
   /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it is on the face. */

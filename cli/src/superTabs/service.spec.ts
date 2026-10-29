@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
+import type { SaidOnCard } from './cards.js'
 import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -731,7 +732,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), say: vi.fn(async () => true), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -812,6 +813,14 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', 'buddy')
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
+  })
+  it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
+    const t = withCards()
+    t.cards.say.mockResolvedValueOnce({ said: false, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } })
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }, owner))
+      .toEqual({ ok: true, said: false, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } })
+    t.cards.say.mockResolvedValueOnce({ said: false })
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)).toEqual({ ok: true, said: false })
   })
   it('cardWorker says whether a machine\'s harness is one of a Swarm\'s workers, for the devices to keep its failure quiet', async () => {
     const t = withCards()

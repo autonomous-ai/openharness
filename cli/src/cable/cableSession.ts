@@ -337,7 +337,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import type { CardChat, CardSide, LeadNotice, LeadRecap, SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmCard, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
@@ -378,8 +378,9 @@ export interface CableHost {
   swarmCardOpen?(session: string, tabId: string, leadId: string | null, chat?: CardChat): void
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm: the cards show that side's face. */
   swarmCardSide?(tabId: string, side: CardSide): void
-  /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
-  swarmSay?(harnessId: string, text: string, chat?: CardChat): Promise<boolean>
+  /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
+   *  `refused`: the backend refused the post, whose words are never typed anywhere instead. */
+  swarmSay?(harnessId: string, text: string, chat?: CardChat): Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
@@ -2317,12 +2318,23 @@ export class CableSession {
       await reply({ t: 'voice.draft', ...state }); return
     }
     // Spoken to a Swarm Lead (its card or its tile): the words go to the Swarm chat as the person's, where everyone in the
-    // tab sees them, not typed into the Lead's terminal. Any other harness, or a failed post, gets the turn as before.
-    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction, ...this.chatFlag()).catch(() => false)) {
+    // tab sees them, not typed into the Lead's terminal. Any other harness, or a backend that could not be reached, gets the
+    // turn as before; a post the backend refused, and any word for the reader's Buddy, never does (spec 2026-10-29 Voice): a
+    // refused post for a read-only Chat with PM was typed into the PM's terminal.
+    if (turn.agentId && !carried && !selection?.ok && this.host.swarmSay) {
+      const said = await this.host.swarmSay(agentId, instruction, ...this.chatFlag()).catch((): SaidOnCard => ({ said: false }))
       if (!current()) return
-      this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
-      await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
-      return
+      if (said.said) {
+        this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
+        await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+        return
+      }
+      if (said.refused) {
+        this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)} refused (${said.refused.code})`)
+        await reply({ t: 'voice.error', message: said.refused.message })
+        return
+      }
+      if (this.onBuddyFace(agentId)) { await reply({ t: 'voice.error', message: 'Could not reach your Buddy. Try again.' }); return }
     }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
@@ -2666,6 +2678,12 @@ export class CableSession {
    *  process has the cards (the devices' process started again), and the core's replay of the last list then comes as an
    *  ordinary push, whose notices are old. */
   private noticesReplay = true
+
+  /** Whether this dial shows the reader's Buddy chat on the face of the Lead that runs as `harnessId` here. */
+  private onBuddyFace(harnessId: string): boolean {
+    if (!this.swarmBuddy) return false
+    return (this.host.swarmCards?.() ?? []).some((card) => card.leads.some((l) => l.local === harnessId && (l.sideChat ?? l.chat)?.kind === 'buddy'))
+  }
 
   /** The extra argument a swarmChat dial's requests carry ('buddy' for a swarmBuddy dial's); none for any other device, whose
    *  calls stay as they were. */
