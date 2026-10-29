@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { closeAssignment, writeRouteEffects } from './routeDecisions.js'
+import { closeAssignment, recordAttempts, writeRouteEffects } from './routeDecisions.js'
 
 type Row = Record<string, unknown> & { id: string; tabId: string; conversationId: string; outcome?: string | null }
 
@@ -69,5 +69,41 @@ describe('route decision persistence', () => {
     expect(outcome('queued')).toBe('done')
     expect(outcome('assigned')).toBe('done')
     expect(outcome('next')).toBeNull()
+  })
+})
+
+describe('attempt records on route decisions', () => {
+  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+  const task = (id: string, status = 'working') => ({ id, agentId: 'w', status, configuration: config,
+    execution: { machineId: 'm1', harnessId: 'h1', machineOwnerId: 'owner' }, result: null })
+  const swarm = (conversations: Array<{ id: string; assignment: ReturnType<typeof task> | null }>, input: number) => ({
+    agents: [{ id: 'w', machineId: 'm1', harnessId: 'h1', configuration: config }], conversations,
+    machines: [{ machineId: 'm1', observation: { receivedAt: 1, quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 1, resetsAt: null }] }],
+      runningHarnessIds: ['h1'], stoppedHarnessIds: [], harnessTokens: { h1: { 'claude-opus-5-5': { input, output: 0, cacheRead: 0, cacheWrite: 0 } } } } }],
+  }) as never
+  const tokens = (input: number) => ({ 'claude-opus-5-5': { input, output: 0, cacheRead: 0, cacheWrite: 0 } })
+
+  it('starts the run of a new attempt, ends it as lost, reopens it on resume, and ends it again with the real outcome left to its command', async () => {
+    const rows: Row[] = [{ id: 'd1', tabId: 'tab', conversationId: 'g1', assignmentId: 'a1', outcome: null, createdAt: new Date(5) }]
+    const tx = memoryTx(rows)
+    await recordAttempts(tx, 'tab', [{ id: 'g1', assignment: null }] as never, swarm([{ id: 'g1', assignment: task('a1') }], 100), 1000)
+    expect(rows[0]!.run).toEqual({ machineId: 'm1', harnessId: 'h1', engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription',
+      startedAt: 1000, start: tokens(100) })
+    await recordAttempts(tx, 'tab', [{ id: 'g1', assignment: task('a1') }] as never, swarm([{ id: 'g1', assignment: task('a1', 'lost') }], 400), 2000)
+    expect(rows[0]).toMatchObject({ outcome: 'lost', outcomeAt: new Date(2000), run: { endedAt: 2000, end: tokens(400), start: tokens(100) } })
+    await recordAttempts(tx, 'tab', [{ id: 'g1', assignment: task('a1', 'lost') }] as never, swarm([{ id: 'g1', assignment: task('a1') }], 400), 3000)
+    expect(rows[0]).toMatchObject({ outcome: null, outcomeAt: null })
+    await recordAttempts(tx, 'tab', [{ id: 'g1', assignment: task('a1') }] as never, swarm([{ id: 'g1', assignment: task('a1', 'done') }], 900), 4000)
+    expect(rows[0]).toMatchObject({ outcome: null, run: { endedAt: 4000, end: tokens(900) } })
+  })
+
+  it('supersedes an open attempt whose group went while it was active, and never reopens or overwrites a closed outcome', async () => {
+    const rows: Row[] = [{ id: 'd1', tabId: 'tab', conversationId: 'g1', assignmentId: 'a1', outcome: null, createdAt: new Date(5) },
+      { id: 'd2', tabId: 'tab', conversationId: 'g2', assignmentId: 'a2', outcome: 'cancelled', createdAt: new Date(5) }]
+    const tx = memoryTx(rows)
+    await recordAttempts(tx, 'tab', [{ id: 'g1', assignment: task('a1') }, { id: 'g2', assignment: task('a2') }] as never, swarm([], 50), 2000)
+    expect(rows.map(r => r.outcome)).toEqual(['superseded', 'cancelled'])
+    // Recorded before runs existed: it ends with what it ran on, its start unknown and taken as when it was routed.
+    expect(rows[0]!.run).toMatchObject({ engine: 'claude', startedAt: 5, start: null, endedAt: 2000, end: tokens(50) })
   })
 })

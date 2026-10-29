@@ -1,5 +1,6 @@
 /** What `harness super-tab route` records (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
 import { z } from 'zod'
+import type { RouteRun } from './costs/attempts.js'
 
 const level = z.enum(['low', 'medium', 'high'])
 const candidateId = z.string().regex(/^c\d{1,2}$/)
@@ -37,7 +38,9 @@ export const routeCandidateSchema = z.object({
 }).strict().refine(c => (c.kind === 'member') === !!c.agentId, 'Members name their agent; new agents do not.')
 export const routeRecordSchema = z.object({
   assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300),
-    size: z.enum(['small', 'medium', 'large']).optional() }).strict(),
+    size: z.enum(['small', 'medium', 'large']).optional(),
+    /** The job's kind the Lead gave (`ui`, `docs`; `review` for a review), what attempts are compared by (costs/read.ts). */
+    kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional() }).strict(),
   candidates: z.array(routeCandidateSchema).min(1).max(12),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),
@@ -80,6 +83,8 @@ export interface RouteOverride { by: 'lead' | 'person'; actorKey: string; candid
 export interface RouteDecision {
   id: string; conversationId: string; record: RouteRecord
   final: RouteFinal | null; override: RouteOverride | null; assignmentId: string | null; outcome: string | null
+  /** Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (costs/attempts.ts). */
+  run: RouteRun | null
 }
 export type RouteDecisionEffect =
   | { op: 'create'; id: string; conversationId: string; record: RouteRecord }
