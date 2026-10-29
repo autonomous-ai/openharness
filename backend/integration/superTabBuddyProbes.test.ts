@@ -270,9 +270,10 @@ describe('a Buddy and threads', () => {
     expect(seen.threads.map(t => t.id)).not.toContain(route.id)
     // The reply reads as a message of its own: no pointer to the row the Buddy may not read.
     expect(seen.messages.find(m => m.id === reply)!.thread ?? null).toBeNull()
-    // Its thread is refused like any message it may not read, as is a thread that does not exist (review 2 of #2168).
-    await expect(f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)).rejects.toThrow('unavailable')
-    await expect(f.store.messages(peer, f.tab, group, { thread: 'invented-root' }, agentId)).rejects.toThrow('unavailable')
+    // Its thread reads like a message it may not read and like a thread that is not there: an empty page (review 2 of #2168).
+    const empty = { messages: [], next: null, threads: [] }
+    expect(await f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)).toMatchObject(empty)
+    expect(await f.store.messages(peer, f.tab, group, { thread: 'invented-root' }, agentId)).toMatchObject(empty)
     expect((await f.store.messages(owner, f.tab, group, { thread: route.id }, f.lead)).messages.map(m => m.id)).toEqual([route.id, reply])
     expect(seen.messages.find(m => m.id === legacy)!.replyTo).toBeNull()
     // Nothing names the route row: not a reply's thread or reply-to, not a reply line (review 1 of #2168).
@@ -298,6 +299,6 @@ it('gives no reader a pointer to, or reply line for, an agent-only note it may n
     const read = await f.store.messages(user, f.tab, 'lead', {}, as)
     expect(read.messages.find(m => m.id === reply)).toMatchObject({ thread: null, replyTo: null })
     expect(JSON.stringify(read)).not.toContain(note)
-    await expect(f.store.messages(user, f.tab, 'lead', { thread: note }, as)).rejects.toThrow('unavailable')
+    expect(await f.store.messages(user, f.tab, 'lead', { thread: note }, as)).toMatchObject({ messages: [], next: null, threads: [] })
   }
 })
