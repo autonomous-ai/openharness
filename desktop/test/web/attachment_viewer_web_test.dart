@@ -41,7 +41,7 @@ void main() {
       'url': 'https://cdn.harness.autonomous.ai/a1/spec.md',
     });
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SuperTabAttachmentChips([file]))),
+      MaterialApp(home: Scaffold(body: SuperTabAttachments([file]))),
     );
 
     await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));

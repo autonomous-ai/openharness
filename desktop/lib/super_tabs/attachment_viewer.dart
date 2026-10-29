@@ -20,6 +20,16 @@ const kAttachmentTextMaxBytes = 2 * 1024 * 1024;
 Future<Uint8List> Function(Uri url, {int? maxBytes}) attachmentFetcher =
     fetchAttachment;
 
+/// A picture off the attachments host, drawn where the chat shows it; tests
+/// hand it bytes instead.
+@visibleForTesting
+ImageProvider Function(Uri url) attachmentImage = _networkImage;
+
+ImageProvider _networkImage(Uri url) => NetworkImage(url.toString());
+
+/// The picture at [url] through [attachmentImage].
+ImageProvider attachmentPicture(Uri url) => attachmentImage(url);
+
 /// The file at [url] through [attachmentFetcher], for the text viewer
 /// (`attachment_text_viewer.dart`), which a browser downloads apart.
 Future<Uint8List> readAttachment(Uri url, {int? maxBytes}) =>
