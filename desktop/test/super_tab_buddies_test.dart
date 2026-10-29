@@ -551,6 +551,9 @@ void main() {
               'name': 'Kens-Mini.local',
               'contributorId': 'peer',
               'scope': 'swarm',
+              'observation': {
+                'receivedAt': DateTime.now().millisecondsSinceEpoch,
+              },
             },
             {
               'machineId': 'ken-team',

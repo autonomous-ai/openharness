@@ -62,6 +62,9 @@ void main() {
     'engines': <dynamic>['claude'],
     'maxAgents': 4,
     'availableSlots': 4,
+    // Reporting now: it is in no account list here, so only this says it is
+    // there (buddyMachines).
+    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
   };
 
   Future<({SuperTabLaunchFixture f, SuperTabController c, String mac})> open(
@@ -220,6 +223,30 @@ void main() {
         await close(tester, f, c);
       },
     );
+
+    // Review of #2240: a Swarm row no account record confirms read as online.
+    testWidgets('a Swarm machine in no account list and not reporting is '
+        'offline, never picked by default', (tester) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [
+          {...rig(), 'observation': null},
+        ],
+        prepare: (f) => f.app.machineStates['m']!.nodeOnline = false,
+      );
+
+      expect(tester.widget<FilledButton>(start).onPressed, isNull);
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: option('rig'),
+          matching: find.text(kBuddyMachineOffline),
+        ),
+        findsOneWidget,
+      );
+      await close(tester, f, c);
+    });
 
     testWidgets('an offline machine cannot be picked', (tester) async {
       final (:f, :c, :mac) = await open(tester, prepare: accountMachines);
