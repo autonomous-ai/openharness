@@ -93,6 +93,9 @@ const SECRET = 'TOP-SECRET-outside-the-buddy-folder'
 const HOME_SECRET = 'TOP-SECRET-in-the-persons-home'
 const MEMORY = 'Project memory a teammate committed'
 const INSIDE_IMPORT = 'Imported from inside the folder'
+const LOCAL_MEMORY = 'Local memory a teammate committed'
+const RULES_MEMORY = 'A rule a teammate committed'
+const SUBFOLDER_MEMORY = 'Subfolder memory a teammate committed'
 
 describe.skipIf(!hasClaude).each([
   { mode: 'print', skip: false },
@@ -113,6 +116,8 @@ describe.skipIf(!hasClaude).each([
     ghIssueView: bash('gh issue view 7 --comments'),
     post: bash("harness super-tab --tab t post chat 'hello; nothing > here' op-1"),
     read: { name: 'Read', input: { file_path: '' } } as Call,
+    // A Read under docs/, which would load that folder's CLAUDE.md as memory.
+    readDocs: { name: 'Read', input: { file_path: '' } } as Call,
     // Claude Code's own Grep and Glob over the whole folder, links out of it there. 2.1.312 offers neither ("No such tool
     // available: … use grep/find via the Bash tool"), whose words the guard judges; a build that has them must not follow
     // a link out either, which the check on what reaches the model below holds it to.
@@ -189,10 +194,16 @@ describe.skipIf(!hasClaude).each([
     writeFileSync(join(root, 'home', 'private.txt'), `${HOME_SECRET}\n`)
     mkdirSync(join(folder, 'docs'))
     writeFileSync(join(folder, 'docs', 'inside.md'), `${INSIDE_IMPORT}\n`)
+    writeFileSync(join(folder, 'docs', 'guide.md'), 'A guide\n')
     const imports = ['@docs/inside.md', '@../elsewhere/secret.txt', `@${join(root, 'elsewhere', 'secret.txt')}`, '@~/private.txt']
     writeFileSync(join(folder, 'CLAUDE.md'), `# Notes\n\n${MEMORY}\n\n${imports.join('\n')}\n`)
-    writeFileSync(join(folder, 'CLAUDE.local.md'), `${imports.slice(1).join('\n')}\n`)
-    git('add', '.claude/settings.json', '.mcp.json', 'committed-link', 'CLAUDE.md', 'CLAUDE.local.md', 'docs/inside.md')
+    writeFileSync(join(folder, 'CLAUDE.local.md'), `${LOCAL_MEMORY}\n\n${imports.slice(1).join('\n')}\n`)
+    // And every other memory file: a rule, and a subfolder's CLAUDE.md, which a Read under docs/ would load.
+    mkdirSync(join(folder, '.claude', 'rules'))
+    writeFileSync(join(folder, '.claude', 'rules', 'rule.md'), `${RULES_MEMORY}\n\n${imports.slice(1).join('\n')}\n`)
+    writeFileSync(join(folder, 'docs', 'CLAUDE.md'), `${SUBFOLDER_MEMORY}\n\n${imports.slice(1).join('\n')}\n`)
+    git('add', '.claude/settings.json', '.mcp.json', 'committed-link', 'CLAUDE.md', 'CLAUDE.local.md', 'docs/inside.md',
+      '.claude/rules/rule.md', 'docs/CLAUDE.md', 'docs/guide.md')
     git('commit', '-qm', 'a teammate\'s settings')
     const before = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = join(root, 'config')
@@ -202,6 +213,7 @@ describe.skipIf(!hasClaude).each([
     refused.lateRead.input.file_path = join(folder, 'late-link')
     refused.committedRead.input.file_path = join(folder, 'committed-link')
     allowed.read.input.file_path = join(folder, 'notes.txt')
+    allowed.readDocs.input.file_path = join(folder, 'docs', 'guide.md')
     refused.write.input.file_path = join(folder, 'created.txt')
     refused.edit.input.file_path = join(folder, 'notes.txt')
 
@@ -311,9 +323,13 @@ describe.skipIf(!hasClaude).each([
   // It reads only its folder's settings (--setting-sources local), and with them no project memory: none of a committed
   // CLAUDE.md or CLAUDE.local.md, and so none of their imports, from inside the folder or out (Claude Code 2.1.312).
   // Without that flag the same run loads the CLAUDE.md text and its inside import, which is how this test sees memory.
-  it.skipIf(skip)('loads no project memory a teammate committed, and so nothing it imports from outside the folder', () => {
-    expect([MEMORY, INSIDE_IMPORT, SECRET, HOME_SECRET].map((text) => api.bodies.some((body) => body.includes(text))))
-      .toEqual([false, false, false, false])
+  it.skipIf(skip)('loads no memory file a teammate committed, and so nothing it imports from outside the folder', () => {
+    const memory = { MEMORY, LOCAL_MEMORY, RULES_MEMORY, SUBFOLDER_MEMORY, INSIDE_IMPORT, SECRET, HOME_SECRET }
+    expect(Object.fromEntries(Object.entries(memory).map(([name, text]) => [name, api.bodies.some((body) => body.includes(text))])))
+      .toEqual({ MEMORY: false, LOCAL_MEMORY: false, RULES_MEMORY: false, SUBFOLDER_MEMORY: false, INSIDE_IMPORT: false, SECRET: false,
+        HOME_SECRET: false })
+    // The Read under docs/ ran, so a subfolder's memory had its chance to load.
+    expect(api.results.get(api.id(allowed.readDocs))?.content).toContain('A guide')
   })
 
   it.skipIf(skip)('never lets a file elsewhere on the machine reach the model, through a link committed or added later', () => {

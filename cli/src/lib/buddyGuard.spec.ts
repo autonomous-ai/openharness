@@ -88,6 +88,8 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'cat README.md',
     "cat 'a file with spaces.md'",
     'rg -n "start agent" cli/src',
+    "rg --line-number --ignore-case --glob '*.ts' --type ts --context 2 --hidden needle src",
+    'rg --files-with-matches --fixed-strings --max-count=3 needle',
     'head -n 40 CHANGELOG.md',
     "harness super-tab --tab t post chat \"it's a plan: step 1; step 2 | done & more > less\" op-1",
     "harness super-tab --tab t propose op-2 '{\"conversationId\":\"c\",\"goal\":\"g\"}'",
@@ -228,6 +230,11 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'grep --line-num needle a.txt',
     'rg -L needle',
     'rg --follow needle',
+    // rg's long options by allowlist, as grep's, so a newer bundled rg cannot add one unnoticed (re-check of #2092).
+    'rg --some-new-option needle',
+    'rg --hidd needle',
+    'rg --no-config --follow needle',
+    'rg --files --follow',
     'ls -L out',
     'ls -lL .',
     // Nothing that runs on.

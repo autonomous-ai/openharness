@@ -25,7 +25,8 @@
  * refused when it is absolute, has a ".." part, or by its real path as the command runs leaves the folder: a link a pull
  * brings after launch included, and nothing in the folder is removed for it (review 3 of #2092, Lead). So are the read
  * commands' ways to follow links as they walk (grep -R/-S/-O, rg -L, ls -L), gh's -R/--repo (any repository its person
- * can read) and git's --no-index.
+ * can read) and git's --no-index. grep's and rg's long options are allowlists, by whole name: both are bundled with Claude
+ * Code, and a newer build must not add one that follows links or runs a program unnoticed.
  * Its Super Tab commands are a Buddy's own (status, messages, message, decisions, post, propose, help) as the pane it runs
  * in identifies it: never --agent, --port or --machine. Nothing runs on: no background shell, no tail -f.
  *
@@ -45,7 +46,14 @@ const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
 const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
 const GH = { issue: new Set(['view', 'list']), pr: new Set(['view', 'list', 'diff']) }
 const GIT_LONG = ['output', 'open-files-in-pager', 'ext-diff']
-const RG_LONG = ['pre', 'pre-glob', 'search-zip', 'hostname-bin']
+// rg's long options likewise, so a newer bundled rg cannot add one that follows links or runs a program unnoticed
+// (security re-check of #2092): only these, each by its whole name. --pre, --pre-glob, --search-zip, --hostname-bin and
+// --follow are not among them.
+const RG_LONG = new Set(['line-number', 'no-line-number', 'ignore-case', 'smart-case', 'case-sensitive', 'fixed-strings',
+  'word-regexp', 'line-regexp', 'regexp', 'count', 'count-matches', 'files-with-matches', 'files-without-match', 'glob',
+  'iglob', 'type', 'type-not', 'context', 'after-context', 'before-context', 'max-count', 'max-depth', 'invert-match',
+  'only-matching', 'no-filename', 'with-filename', 'heading', 'no-heading', 'hidden', 'no-ignore', 'column', 'vimgrep',
+  'json', 'color', 'trim', 'multiline', 'sort'])
 // A Buddy's grep is Claude Code's shell function around its built-in ugrep (2.1.312), whose long options go much further
 // than grep's: --dereference-files follows links while it walks, and others filter through commands, read configs, page
 // or index (security re-check of #2092). Only these, each by its whole name, with or without =VALUE.
@@ -170,7 +178,8 @@ function bashAllowed(command) {
         || (short(word) && /[wR]/.test(word)))
   }
   if (name === 'rg') {
-    return !rest.some((word) => longNames(word, [...RG_LONG, 'follow']) || (short(word) && /[zL]/.test(word)))
+    return !rest.some((word) => (word.startsWith('--') && word !== '--' && !RG_LONG.has(word.slice(2).split('=')[0]))
+      || (short(word) && /[zL]/.test(word)))
   }
   return false
 }

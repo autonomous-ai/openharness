@@ -232,7 +232,7 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   run with the person's credentials. It loads no memory file either (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`):
   a committed one importing files from outside the folder stopped a Buddy at a question nobody answers, and a yes would
   read them past the guard. It can still read the project's instructions with Read. Its `grep` is Claude Code's
-  built-in ugrep, so only grep's plain long options are allowed, by their whole names. Harness's own session, turn and
+  built-in ugrep, so only grep's plain long options are allowed, by their whole names, and rg's likewise. Harness's own session, turn and
   Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
   in its own copy of the project are read-only.
   A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
