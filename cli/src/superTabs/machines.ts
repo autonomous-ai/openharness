@@ -372,7 +372,7 @@ export class ContributedMachines {
       ? await (this.deps.modelsStamp ?? (() => localModelsStamp(this.core.dataDir, this.deps.env ?? process.env)))().catch(() => '') : ''
     // The local daemon is reached only for a reading to send, never for a pass that has nothing to say.
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
-    let usage: Record<string, unknown> | null = null
+    let usage: { value: Record<string, unknown>; at: number } | null = null
     try {
       for (const row of pools) {
         try {
