@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_space.dart';
@@ -12,10 +13,12 @@ import 'identity.dart';
 import 'model.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_leaderboard_reader.dart';
+import 'swarm_project_tasks.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_task_status.dart';
 import 'team_glance.dart';
 
 /// The people of [project] in [snapshot]: everyone in the Swarm, or, for a
@@ -139,7 +142,15 @@ String swarmTeamAgentsLine(List<SwarmTeamAgent> team) => [
       '$n ${state.counted}',
 ].join(' · ');
 
-/// One person on a project's Team: what they are on [now] (the status they
+/// The open [tasks] of a project counted as its Team's Tasks caption says
+/// them, in the order they are listed: "1 waiting on you · 2 working"; empty
+/// when none is open.
+String swarmTeamTasksLine(SwarmProjectTaskLists tasks) => [
+  if (tasks.waiting.isNotEmpty) '${tasks.waiting.length} waiting on you',
+  if (tasks.working.isNotEmpty) '${tasks.working.length} working',
+].join(' · ');
+
+/// One person on a project's Team: what they are on now (the status they
 /// set, while it lasts), their week's [score] from its board, if the board
 /// has answered, and whether they are the viewer.
 typedef SwarmTeamHuman = ({
@@ -162,7 +173,7 @@ List<SwarmTeamHuman> swarmProjectHumans(
   required String viewer,
   DateTime? now,
 }) {
-  final at = now ?? DateTime.now();
+  final at = now ?? clock.now();
   final scores = {
     for (final score in board?.people ?? const <SwarmScore>[])
       score.personId: score,
@@ -203,7 +214,10 @@ Color swarmMemberColor(SwarmMemberState state) => switch (state) {
 
 /// A project's Team, as Swarm Home C draws it (Tony, 2026-10-30) to Dee's
 /// rules (2026-10-29), one row shape for all ([SwarmMemberRow]) and no
-/// ranks: its humans by this week's points, most first, then by name, each
+/// ranks. On top its open tasks (Tony, 2026-10-30: Home C has no Tasks tab),
+/// in the Tasks tab's rows: what waits on the person there, then the work
+/// going on ([swarmProjectTasks]), counted beside their caption, each
+/// opening its chat ([onOpen]). Then its humans by this week's points, most first, then by name, each
 /// opening their week; then its agents, each in its state with the task it
 /// holds, the most urgent first ([swarmProjectAgents]), with what needs a look
 /// counted beside their caption, each opening the task it holds ([onOpen]).
@@ -265,15 +279,21 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    final session = widget.session;
     final reader = widget.reader;
     return ListenableBuilder(
-      listenable: Listenable.merge([reader, _board]),
+      // Needs and held answers move with the session and its inbox; the
+      // work and the team with the read; the points with the board.
+      listenable: Listenable.merge([session, session.inbox, reader, _board]),
       builder: (context, _) {
         final snapshot = reader.snapshot;
         final project = snapshot?.projects
             .where((p) => p.id == widget.projectId)
             .firstOrNull;
         if (snapshot == null || project == null) return const SizedBox.shrink();
+        final now = clock.now();
+        final tasks = swarmProjectTasks(session.inbox, reader, project.id, now);
+        final personName = swarmTaskPersonName(snapshot);
         final agents = swarmProjectAgents(snapshot, project.id);
         final board = _board.board;
         final humans = swarmProjectHumans(
@@ -295,9 +315,45 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
             ),
             children: [
               SwarmCaption(
+                'Tasks',
+                key: const ValueKey('swarm-team-tasks-caption'),
+                note: swarmTeamTasksLine(tasks),
+                first: true,
+              ),
+              if (tasks.waiting.isEmpty && tasks.working.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
+                  child: SwarmRow.line(
+                    'No open tasks.',
+                    key: const ValueKey('swarm-team-no-tasks'),
+                  ),
+                )
+              else
+                SwarmGroup(
+                  children: [
+                    for (final need in tasks.waiting)
+                      SwarmWaitingRow(
+                        key: ValueKey('swarm-waiting-${need.key}'),
+                        session: session,
+                        snapshot: snapshot,
+                        need: need,
+                        personName: personName,
+                        now: now,
+                        onOpen: () => widget.onOpen(need.conversationId),
+                      ),
+                    for (final g in tasks.working)
+                      SwarmWorkRow(
+                        key: ValueKey('swarm-task-${g.id}'),
+                        snapshot: snapshot,
+                        group: g,
+                        personName: personName,
+                        onTap: () => widget.onOpen(g.id),
+                      ),
+                  ],
+                ),
+              SwarmCaption(
                 'Humans',
                 key: const ValueKey('swarm-team-humans-caption'),
-                first: true,
               ),
               if (_board.error case final error? when board == null)
                 _BoardError(error: error, onRetry: _board.refresh),
@@ -505,19 +561,18 @@ class SwarmMemberRow extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: AppType.label(color: AppPalette.textPrimary),
                       ),
-                      if (detail != null && detail.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            detail,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppType.caption(
-                              color: AppPalette.textSecondary,
-                              height: 1.35,
-                            ),
+                      if (detail != null && detail.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          detail,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppType.caption(
+                            color: AppPalette.textSecondary,
+                            height: 1.35,
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ),

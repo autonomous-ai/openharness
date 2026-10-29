@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
+import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_project_tasks.dart';
 import 'package:harness_mobile/swarm/swarm_project_team.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -209,6 +211,81 @@ void main() {
     of: key(k),
     matching: find.textContaining(RegExp(r'\d'), findRichText: true),
   );
+
+  group('Team, its tasks', () {
+    /// The key of Juno's work in g2, waiting on the person.
+    String workKey(WidgetTester tester) =>
+        host(tester).session!.inbox.needs.whereType<SwarmWorkNeed>().single.key;
+
+    testWidgets('on top: what waits on the person, then what is worked on, '
+        "in the Tasks tab's rows, counted beside their caption", (
+      tester,
+    ) async {
+      await team(tester, backend());
+
+      expect(
+        said(tester, 'swarm-team-tasks-caption'),
+        'Tasks | 1 waiting on you · 1 working',
+      );
+      final waiting = 'swarm-waiting-${workKey(tester)}';
+      expect(key(waiting), findsOneWidget);
+      expect(tester.widget(key(waiting)), isA<SwarmWaitingRow>());
+      expect(tester.widget(key('swarm-task-g1')), isA<SwarmWorkRow>());
+      expect(key('swarm-task-g2'), findsNothing, reason: 'it waits on you');
+      expect(key('swarm-reply-${workKey(tester)}'), findsOneWidget);
+      double y(String k) => tester.getTopLeft(key(k)).dy;
+      final order = [
+        y('swarm-team-tasks-caption'),
+        y(waiting),
+        y('swarm-task-g1'),
+        y('swarm-team-humans-caption'),
+        y('swarm-team-agents-caption'),
+      ];
+      expect(order, [...order]..sort(), reason: 'Tasks first, waiting first');
+      expect(find.text('Done today'), findsNothing, reason: 'open tasks only');
+    });
+
+    testWidgets('a task opens its chat', (tester) async {
+      await team(tester, backend());
+
+      await tester.tap(key('swarm-task-g1'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Header is in.'), findsOneWidget);
+    });
+
+    testWidgets('none open says so in a line, and finished work is not '
+        'listed', (tester) async {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        return {
+          ...read,
+          'groups': [
+            part(
+              'g1',
+              1,
+              groupData(
+                'g1',
+                title: 'Buddy chat header',
+                number: 2156,
+                agentIds: ['agent-lead', 'agent-builder'],
+                status: 'done',
+                workerId: 'agent-builder',
+              ),
+            ),
+          ],
+        };
+      };
+      await team(tester, fake);
+
+      expect(said(tester, 'swarm-team-tasks-caption'), 'Tasks');
+      expect(key('swarm-team-no-tasks'), findsOneWidget);
+      expect(find.text('No open tasks.'), findsOneWidget);
+      expect(key('swarm-task-g1'), findsNothing);
+    });
+  });
 
   group('Team, its humans', () {
     testWidgets("ordered by this week's points, most first, though no row "
@@ -436,6 +513,9 @@ void main() {
     testWidgets('a row opens the task its agent holds', (tester) async {
       await team(tester, backend());
 
+      // Under the Tasks and the humans.
+      await tester.ensureVisible(key('swarm-member-agent-builder'));
+      await tester.pumpAndSettle();
       await tester.tap(key('swarm-member-agent-builder'));
       await tester.pumpAndSettle();
 
