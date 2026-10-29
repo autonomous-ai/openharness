@@ -246,11 +246,11 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
             own: score.personId == viewer,
             columns: columns!,
             onTap: () => unawaited(
-              _showPerson(
+              showSwarmPersonWeek(
                 context,
-                score,
-                personOf(score.personId),
-                nameOf(score),
+                score: score,
+                person: personOf(score.personId),
+                name: nameOf(score),
               ),
             ),
           ),
@@ -287,36 +287,36 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     if (week == null || !mounted) return;
     await reader.showWeek(week == current ? null : week);
   }
-
-  /// [score]'s week in a sheet, as the desktop shows it when a name is
-  /// clicked.
-  Future<void> _showPerson(
-    BuildContext context,
-    SwarmScore score,
-    SuperTabPerson? person,
-    String name,
-  ) => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: AppGlass.rowFill,
-    showDragHandle: true,
-    shape: AppControl.sheetShape,
-    builder: (context) => _Sheet(
-      key: const ValueKey('swarm-leaderboard-sheet'),
-      title: name,
-      leading: SwarmAvatar(
-        id: score.personId,
-        name: name,
-        picture: person?.avatar,
-      ),
-      closeKey: 'swarm-leaderboard-sheet-close',
-      children: [
-        for (final (label, value) in swarmPersonWeek(score))
-          _WeekLine(label: label, value: value),
-      ],
-    ),
-  );
 }
+
+/// [score]'s week in a sheet, as the desktop shows it when a name is clicked:
+/// from the leaderboard and from a project's Team.
+Future<void> showSwarmPersonWeek(
+  BuildContext context, {
+  required SwarmScore score,
+  required SuperTabPerson? person,
+  required String name,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: AppGlass.rowFill,
+  showDragHandle: true,
+  shape: AppControl.sheetShape,
+  builder: (context) => _Sheet(
+    key: const ValueKey('swarm-leaderboard-sheet'),
+    title: name,
+    leading: SwarmAvatar(
+      id: score.personId,
+      name: name,
+      picture: person?.avatar,
+    ),
+    closeKey: 'swarm-leaderboard-sheet-close',
+    children: [
+      for (final (label, value) in swarmPersonWeek(score))
+        _WeekLine(label: label, value: value),
+    ],
+  ),
+);
 
 /// Figures of one width, so a column of numbers holds row under row.
 const _figures = [FontFeature.tabularFigures()];
