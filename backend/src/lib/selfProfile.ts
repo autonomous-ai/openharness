@@ -3,6 +3,7 @@ import { Session } from 'node:inspector/promises'
 import { performance } from 'node:perf_hooks'
 import type { FastifyInstance } from 'fastify'
 import { logger } from '../utils/logger.js'
+import { enterWork } from './queryStats.js'
 
 /**
  * Where this process spends its CPU, logged from production without a debugger (#314: five pods with few people).
@@ -23,8 +24,10 @@ let busy = new Map<string, number>()
 /** Names one window keeps; work under any further name counts as `other`, so memory stays bounded. */
 const MAX_KINDS = 50
 
-/** Names the work running now, and everything it goes on to schedule. A no-op unless the profile is on. */
+/** Names the work running now, and everything it goes on to schedule: always for the query stats (lib/queryStats.ts),
+ *  and for the CPU accounting when the profile is on. */
 export function markCpuKind(kind: string): void {
+  enterWork(kind)
   if (!enabled) return
   const resource = executionAsyncResource() as Tagged
   if (resource) resource[KIND] = kind

@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient, SwarmWorkspaceMember, SwarmWorkspaceRemoval 
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { fail, stableId, type SuperTabState } from './model.js'
 import { mayAssignRole, mayManageMember, WORKSPACE_LABEL, workspaceCan, type WorkspaceAction, type WorkspaceRole } from './workspaces.js'
+import { memberSwarms } from './swarmRows.js'
 import { logger } from '../utils/logger.js'
 
 type Transaction = Prisma.TransactionClient
@@ -292,8 +293,8 @@ export class SwarmWorkspaces {
   /** The removed person leaves each Swarm of the Workspace they are still in; the removal closes once none is left. Returns how
    *  many Swarms could not be left now. */
   private async finish(removal: SwarmWorkspaceRemoval): Promise<number> {
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: removal.autonomousEnv, workspaceId: removal.workspaceId, memberIds: { has: removal.userId } },
-      select: { id: true } })
+    // Every Swarm of theirs in the Workspace: no page limit, as before; a person is in few Swarms.
+    const rows = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
     let pending = 0
     for (const row of rows) {
       try { await this.deps.leave(personOf(removal, removal.autonomousEnv), row.id, stableId('workspace-removal', removal.id)) } catch (error) {
