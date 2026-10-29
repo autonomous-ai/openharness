@@ -415,3 +415,37 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
   })
 })
+
+describe('the week\'s summary: Faster and Better against the weeks before (Dee, 2026-10-29)', () => {
+  const attempt = (assignmentId: string, at: number, firstReview?: boolean): Run =>
+    ({ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at, ...firstReview === undefined ? {} : { firstReview } })
+  /** A request whose first attempt started at [first], shipped at [shippedAt]. */
+  const landedAfter = (first: number, shippedAt: number) =>
+    shipped('dee', first, shippedAt, { ledger: { askedAt: first, shippedAt, runs: [attempt(`a${first}`, first), attempt(`b${first}`, first + 1)] } })
+  const weekOf = (view: ReturnType<typeof board>, start: number) => view.weeks.find(w => w.week === start)!
+
+  it('gives the four weeks ending with the board\'s, newest first', () => {
+    expect(board(swarm(), []).weeks.map(w => w.week)).toEqual([WEEK, LAST, LAST - WEEK_MS, LAST - 2 * WEEK_MS])
+  })
+
+  it('times each week\'s shipped requests from their first assignment to shipping, as a median', () => {
+    const view = board(swarm(), [landedAfter(WEEK, WEEK + HOUR), landedAfter(WEEK, WEEK + 3 * HOUR), landedAfter(WEEK - DAY_MS, WEEK + 2 * DAY_MS),
+      landedAfter(LAST, LAST + 4 * HOUR)])
+    expect(weekOf(view, WEEK)).toMatchObject({ shipped: 3, medianRequestMs: 3 * HOUR })
+    expect(weekOf(view, LAST)).toMatchObject({ shipped: 1, medianRequestMs: 4 * HOUR })
+    expect(weekOf(view, LAST - WEEK_MS)).toMatchObject({ shipped: 0, medianRequestMs: null })
+  })
+
+  it('counts each week\'s attempts with a first review on record, and how many passed it', () => {
+    const view = board(swarm(), [group({ status: 'working', ledger: { runs: [attempt('a1', WEEK, true), attempt('a2', WEEK + HOUR, false),
+      attempt('a3', WEEK + 2 * HOUR), attempt('a4', LAST, true)] } })])
+    expect(weekOf(view, WEEK).firstReview).toEqual({ reviewed: 2, passed: 1 })
+    expect(weekOf(view, LAST).firstReview).toEqual({ reviewed: 1, passed: 1 })
+  })
+
+  it('leaves out a private conversation and a review group\'s own attempts', () => {
+    const view = board(swarm(), [{ ...landedAfter(WEEK, WEEK + HOUR), audience: { people: [{ id: 'dee', generation: 'g' }] } },
+      group({ status: 'working', reviewOf: 'g0', ledger: { runs: [attempt('r1', WEEK, true)] } })])
+    expect(weekOf(view, WEEK)).toMatchObject({ shipped: 0, firstReview: { reviewed: 0, passed: 0 } })
+  })
+})

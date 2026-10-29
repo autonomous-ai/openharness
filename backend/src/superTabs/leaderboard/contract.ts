@@ -77,6 +77,17 @@ export interface ModelScore {
   reviews: number
 }
 
+/** The team's week for the sidebar's This week (Dee, 2026-10-29): Faster is the median time from a shipped request's first
+ *  assignment to shipping; Better the share of the week's attempts with a first review on record that passed it. */
+export interface TeamWeek {
+  /** Its Monday 00:00 UTC. */
+  week: number
+  /** Requests shipped with a PR. */
+  shipped: number
+  medianRequestMs: number | null
+  firstReview: { reviewed: number; passed: number }
+}
+
 export interface Leaderboard {
   projectId: string
   week: number
@@ -92,4 +103,6 @@ export interface Leaderboard {
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]
+  /** The board's week and the three before it, newest first. Absent from a backend before it. */
+  weeks: TeamWeek[]
 }
