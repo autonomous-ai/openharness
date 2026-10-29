@@ -8,7 +8,8 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'swarm_needs_page.dart';
+import 'swarm_activity_page.dart';
+import 'swarm_buddies_page.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
@@ -59,12 +60,11 @@ class SwarmTabEntry {
 }
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
-/// here, one entry each: Home, Needs you with what waits on the person
-/// counted, and You. [onSettings] opens the phone's Settings over the tabs,
-/// from Home's drawer and from You.
-///
-/// Buddies is not on the bar until its screen comes (part b of direction
-/// C): main has no list of Buddies, each is in its project.
+/// here, one entry each: Home; Buddies ([SwarmBuddiesView]) with the Buddy
+/// chats that have something unread counted; Activity ([SwarmActivityView])
+/// with what waits on the person counted; and You ([SwarmYouPage]).
+/// [onSettings] opens the phone's Settings over the tabs, from Home's drawer
+/// and from You.
 List<SwarmTabEntry> swarmTabs({
   void Function(BuildContext context)? onSettings,
 }) => [
@@ -75,11 +75,18 @@ List<SwarmTabEntry> swarmTabs({
     screen: (_) => SwarmPage(onSettings: onSettings),
   ),
   SwarmTabEntry(
+    tab: SwarmTab.buddies,
+    label: 'Buddies',
+    icon: LucideIcons.messageCircle300,
+    screen: (_) => const SwarmBuddiesView(),
+    badge: (session) => (count: session.buddyList.badge, warn: false),
+  ),
+  SwarmTabEntry(
     tab: SwarmTab.activity,
     label: 'Activity',
     icon: LucideIcons.bell300,
-    screen: (_) => const SwarmNeedsPage(),
-    badge: (session) => (count: session.inbox.needs.length, warn: true),
+    screen: (_) => const SwarmActivityView(),
+    badge: (session) => (count: session.activity.badge, warn: true),
   ),
   SwarmTabEntry(
     tab: SwarmTab.you,

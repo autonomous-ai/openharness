@@ -46,6 +46,8 @@ class SuperTabMessageRow extends StatefulWidget {
     this.reactorName,
     this.onReact,
     this.proposalOwner,
+    this.headerStatus,
+    this.dimmed = false,
     this.thread,
     this.threadUnread = false,
     this.onOpenThread,
@@ -95,6 +97,10 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+  final Widget? headerStatus;
+
+  /// Its text and files are faint while it sends; its status line is not.
+  final bool dimmed;
 
   /// The reader, whose own reactions are marked; [reactorName] names the
   /// others. Without [onReact] the counts only show.
@@ -353,7 +359,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             size: 14,
                                           ),
                                         ),
-                                      if (message.createdAt case final time?)
+                                      if (widget.headerStatus
+                                          case final status?)
+                                        status
+                                      else if (message.createdAt
+                                          case final time?)
                                         Tooltip(
                                           message: MaterialLocalizations.of(
                                             context,
@@ -442,24 +452,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               if (message.text.isNotEmpty)
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 960,
-                                  ),
-                                  child: SuperTabMessageText(
-                                    message.text,
-                                    references: widget.references,
-                                    onOpenGroup: widget.onOpenGroup,
-                                    mentions: widget.mentions,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 960,
+                                    ),
+                                    child: SuperTabMessageText(
+                                      message.text,
+                                      references: widget.references,
+                                      onOpenGroup: widget.onOpenGroup,
+                                      mentions: widget.mentions,
+                                    ),
                                   ),
                                 ),
                               if (message.attachments.isNotEmpty)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    top: message.text.isEmpty ? 0 : 8,
-                                  ),
-                                  child: SuperTabAttachments(
-                                    message.attachments,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      top: message.text.isEmpty ? 0 : 8,
+                                    ),
+                                    child: SuperTabAttachments(
+                                      message.attachments,
+                                    ),
                                   ),
                                 ),
                               widget.card ??
