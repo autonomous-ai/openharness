@@ -135,7 +135,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// above the first message the person had not read as it opened
   /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
   /// above the screen; and Jump to latest while they read more than a
-  /// screen back.
+  /// screen back. The person's own Buddy chat has both too, in the project's
+  /// Buddy tab and on its own page.
   final bool homeC;
 
   @override
@@ -203,8 +204,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// says how many. Null at the foot.
   final _held = ValueNotifier<String?>(null);
 
-  /// Swarm Home C: the person reads more than a screen back, where Jump to
-  /// latest is offered.
+  /// Whether this chat has the New messages line and Jump to latest: Swarm
+  /// Home C's project chat and the person's own Buddy chat, known as the chat
+  /// opens. Not a work chat.
+  bool _unreadLine = false;
+
+  /// The person reads more than a screen back, where Jump to latest is
+  /// offered.
   final _farBack = ValueNotifier<bool>(false);
 
   /// Each entry's row as last built, with what it was built from ([_row]).
@@ -283,6 +289,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       return;
     }
     session.inbox.removeListener(_attach);
+    _unreadLine =
+        widget.homeC ||
+        widget.buddy != null ||
+        swarmIsOwnBuddyChat(reader, widget.conversationId);
     // Set before what the chat kept is shown, so it is read only as far as
     // it is seen: opened at a message, through it until the person goes
     // down to the foot; with a New messages line to place, nothing until it
@@ -294,7 +304,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       heldAt:
           widget.messageId ??
           _held.value ??
-          (widget.homeC && !_lineDecided ? _undecided : null),
+          (_unreadLine && !_lineDecided ? _undecided : null),
     );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
@@ -323,7 +333,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// line above the screen opens the chat at it ([_openAtLine]), unless a
   /// notice opened it at a message.
   void _placeLine(SwarmConversation c) {
-    if (!mounted || _conversation != c || _lineDecided || !widget.homeC) {
+    if (!mounted || _conversation != c || _lineDecided || !_unreadLine) {
       return;
     }
     _lineDecided = true;
@@ -454,6 +464,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _madeFrom = null;
     _lineAt = null;
     _lineDecided = false;
+    _farBack.value = false;
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;
     _conversation = null;
@@ -526,7 +537,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _nearTop();
     if (!_scroll.hasClients) return;
     final back = _scroll.offset > _readingBack;
-    if (widget.homeC) {
+    if (_unreadLine) {
       _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
     }
     // At the foot all is seen; reading back, only what was seen at the foot
@@ -998,7 +1009,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               child: ListenableBuilder(
                 listenable: Listenable.merge([c, _held, _farBack]),
                 builder: (context, _) => switch (_waiting(c)) {
-                  0 when !_farBack.value => const SizedBox.shrink(),
+                  0 when !_farBack.value || c.state == SwarmChatState.lost =>
+                    const SizedBox.shrink(),
                   final count => Center(
                     child: _NewPill(count: count, onTap: _toFoot),
                   ),
