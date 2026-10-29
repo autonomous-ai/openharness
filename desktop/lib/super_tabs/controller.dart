@@ -599,6 +599,35 @@ class SuperTabController extends ChangeNotifier {
   /// ones read lately.
   static const _keepLeft = Duration(minutes: 15);
 
+  /// Conversations opened again over messages held from an earlier visit,
+  /// until a read of their newest messages lands: the held copy may end
+  /// before what arrived meanwhile ([awaitsNewest]).
+  final _staleHeld = <String>{};
+
+  /// Whether [id]'s view waits for its newest messages before it places the
+  /// New messages line, follows the end or marks anything read: reopened
+  /// over a held copy whose read has not landed yet. A read that failed
+  /// keeps it waiting while the held copy ends before the conversation's
+  /// newest main-stream message; the next poll reads it again.
+  bool awaitsNewest(String id) => _staleHeld.contains(id);
+
+  /// A read of [id]'s newest messages landed, or failed: it waits no more,
+  /// unless it failed with the held copy short of the newest message.
+  /// Whether this ended a wait.
+  bool _settleHeld(String id, {required bool read}) {
+    if (!read && _heldBehind(id)) return false;
+    return _staleHeld.remove(id);
+  }
+
+  /// Whether [id]'s held messages end before its newest main-stream message
+  /// as the Swarm's state last said it.
+  bool _heldBehind(String id) {
+    final group = snapshot?.conversation(id);
+    final tail = _messages[id]?.lastOrNull?.sequence;
+    if (group == null || tail == null) return false;
+    return tail < (group.lastMainSequence ?? group.lastMessageSequence);
+  }
+
   /// Each conversation's reads under way, newest and older apart: an older
   /// page asked for during a poll's read is a read of its own.
   final _reading = <(String, bool), Future<void>>{};
@@ -1332,6 +1361,7 @@ class SuperTabController extends ChangeNotifier {
     _rows.remove(id);
     _keepRows(id, rows);
     _messages[id] = page;
+    _staleHeld.remove(id);
     _before[id] = SuperTabPage.of(page.first);
     if (answer['next'] != null) {
       _readingBack.add(id);
@@ -1449,6 +1479,7 @@ class SuperTabController extends ChangeNotifier {
         return false;
       }
       _messages.remove(id);
+      _staleHeld.remove(id);
       _rows.remove(id);
       _before.remove(id);
       _quoted.remove(id);
@@ -1572,6 +1603,7 @@ class SuperTabController extends ChangeNotifier {
     _parts = null;
     _partsReadAt = null;
     _messages.clear();
+    _staleHeld.clear();
     _quoted.clear();
     _quoting.clear();
     _forgetThreads();
@@ -1605,6 +1637,7 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _staleHeld.clear();
     _forgetNewer();
     _quoted.clear();
     _quoting.clear();
@@ -2149,6 +2182,12 @@ class SuperTabController extends ChangeNotifier {
       if (group.closed) closedOpenProjects.add(group.projectId);
     }
     _moveView(to: id);
+    // Held from an earlier visit: what arrived meanwhile is not among them.
+    if (_messages[id]?.isNotEmpty ?? false) {
+      _staleHeld.add(id);
+    } else {
+      _staleHeld.remove(id);
+    }
     openedThread = null;
     _viewVersion++;
     operationNotice = null;
@@ -2273,6 +2312,7 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
+        _staleHeld.removeWhere((id) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
         _quoting.removeWhere((id, _) => !allowed.contains(id));
         _forgetThreads(allowed.contains);
@@ -2683,6 +2723,7 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _staleHeld.clear();
       _forgetNewer();
       _quoted.clear();
       _quoting.clear();
@@ -2906,6 +2947,7 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
+      final settled = !older && _settleHeld(id, read: true);
       if (keepPlace) {
         _newer.add(id);
         _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
@@ -2926,16 +2968,18 @@ class SuperTabController extends ChangeNotifier {
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();
-      if (!same) {
+      if (!same || settled) {
         if (id == selectedId) _viewVersion++;
         _changed();
       }
     } catch (failure) {
+      if (!older) _settleHeld(id, read: false);
       // The state read waits for a machine within the grace: so do these.
       if (!_inConnectGrace(failure)) _readFailure(failure, revokeTab: false);
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _staleHeld.remove(id);
         _forgetNewer(id);
         _quoted.remove(id);
         _quoting.remove(id);
