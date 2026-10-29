@@ -124,6 +124,23 @@ it('the worker\'s sweep runs a pass a minute and stops by itself once nothing is
   expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
 })
 
+it('a failed pass is logged and the next minute\'s pass carries on', async () => {
+  const lines: string[] = []
+  const log = { info: (message: string) => lines.push(message), warn: (message: string) => lines.push(message) }
+  await db.productUsageReceipt.deleteMany({ where: { id: { startsWith: 'old-2026-10-30' } } })
+  let calls = 0
+  // The database refuses the first command only, as a lost connection or a primary stepping down would.
+  const flaky = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
+    ? (command: never) => calls++ ? target.$runCommandRaw(command) : Promise.reject(new Error('connection closed'))
+    : Reflect.get(target, key) })
+  const stop = sweep.startReceiptSweep(flaky, { everyMs: 20, chunk: 100, chunks: 1, pauseMs: 0, now: () => now, log })
+  try {
+    await vi.waitFor(() => expect(lines.at(-1)).toMatch(/done/), { timeout: 5000 })
+  } finally { stop() }
+  expect(lines[0]).toMatch(/pass failed; retrying next minute/)
+  expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
+})
+
 it('counting stays exact: a report inside the window counts once across the sweep, an older one adds nothing', async () => {
   const context = { surface: 'cli', release: '0.4.92', platform: 'macos', channel: 'production' } as const
   const report = { schemaVersion: 1 as const, revision: 0, id: randomUUID(), day: '2026-11-01', context, counters: { turns_ended: 2 } }
