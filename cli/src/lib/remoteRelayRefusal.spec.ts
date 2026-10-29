@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { env } from '../config/env.js'
 import { WebSocketServer } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { RemoteRelayPool } from './remoteRelay.js'
@@ -177,5 +180,32 @@ describe('a bad token refused before the upgrade', () => {
     // Held by the backoff: the next select is answered from the refusal, without a dial or a refresh.
     await expect(pool.acquire(machineId, 'prod', select, sink, () => {})).rejects.toMatchObject({ closeCode: 4401 })
     expect(asked).toBe(2)
+  })
+})
+
+// Review of #2101: the deletion mark could not be written (a full or read-only disk), and the error escaped the refusal's
+// backoff as an unhandled rejection, which can take the relay down, with the pin gone and no mark kept. The machine is held
+// as gone in memory instead, said in the log, and nothing dials it again in this process.
+describe('a deleted machine whose mark cannot be written', () => {
+  it('is held as gone in memory, without an unhandled rejection', async () => {
+    const markFile = join(env.ADAPTER_DATA_DIR, 'e2e', 'machinePeers-gone.json')
+    rmSync(markFile, { recursive: true, force: true })
+    mkdirSync(markFile, { recursive: true }) // a folder where the file goes: every write of it fails
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(async () => { process.off('unhandledRejection', onUnhandled); warn.mockRestore(); rmSync(markFile, { recursive: true, force: true }) })
+
+    const b = await refusingBackend({ error: 'NOT_YOUR_MACHINE', reason: 'deleted' })
+    await expect(b.window()).rejects.toMatchObject({ message: 'NOT_YOUR_MACHINE' })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(unhandled).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not keep'))
+    expect(b.peers.gone().has(machineId)).toBe(true)
+    b.advance(10 * 60_000)
+    await expect(b.window()).rejects.toMatchObject({ message: 'NO_PEER_LINK' })
+    await expect(b.background()).rejects.toMatchObject({ message: 'NO_PEER_LINK' })
+    expect(b.dials()).toBe(1)
   })
 })

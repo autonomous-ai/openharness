@@ -495,9 +495,14 @@ export class RemoteRelayPool {
     // seconds). Its pin goes, and stays gone until the machine list shows it again; every select is then NO_PEER_LINK,
     // answered here without a dial. Only this reason: a share check that failed for a moment says NOT_YOUR_MACHINE too.
     if (error instanceof RelayConnectError && error.message === 'NOT_YOUR_MACHINE' && error.reason === 'deleted') {
-      this.peers.markGone(machineId)
-      this.refusals.delete(machineId)
-      return
+      try {
+        this.peers.markGone(machineId)
+        this.refusals.delete(machineId)
+        return
+      } catch (err) {
+        // Held in memory (machinePeers.ts) and by the backoff below; never thrown out of here, where nothing would catch it.
+        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
     const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
@@ -508,7 +513,8 @@ export class RemoteRelayPool {
 
   private async dial(machineId: string, autonomousEnv: string, selectFrame: Frame, forceRefresh: boolean): Promise<Entry> {
     const peer = this.peers.get(machineId)
-    if (!peer) throw new RelayConnectError('NO_PEER_LINK')
+    // A machine marked gone is not dialled even when its pin could not be removed (machinePeers.ts markGone).
+    if (!peer || this.peers.gone().has(machineId)) throw new RelayConnectError('NO_PEER_LINK')
     const token = await this.auth.accessToken({ force: forceRefresh })
     // `auth=http`: this relay reads a bad token refused with HTTP 401 before the upgrade (below), as a 4401.
     const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}&auth=http`

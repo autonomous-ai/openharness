@@ -23,6 +23,9 @@ const FILE = join(DIR, 'machinePeers.json')
 // Not per account (accountTrust.ts leaves it in place): a deleted machine id is gone for every account.
 const GONE_FILE = join(DIR, 'machinePeers-gone.json')
 const GONE_MAX = 256
+// Marks the file could not take (a full or read-only disk, review of #2101), for every store in this process: they still
+// keep the trust group from pinning the machine again and the relay from dialling it, until the daemon restarts.
+const goneInMemory = new Set<string>()
 
 export interface MachinePeer {
   machineId: string
@@ -74,28 +77,34 @@ export class MachinePeerStore {
   }
 
   /** The backend said [machineId] was deleted: drop its pin, and remember it so the trust group does not pin it again. */
+  /** Throws when the mark or the unpin cannot be written; the mark holds in memory for this process all the same. */
   markGone(machineId: string): void {
-    this.unlink(machineId)
     const gone = this.gone()
     gone.delete(machineId)
     gone.add(machineId)
-    writeGone(gone)
+    try { writeGone(gone) } catch (err) { goneInMemory.add(machineId); throw err }
+    this.unlink(machineId)
   }
 
   /** Machines marked gone. */
   gone(): Set<string> {
+    let kept: string[] = []
     try {
       const raw = JSON.parse(readFileSync(GONE_FILE, 'utf-8')) as unknown
-      return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [])
-    } catch { return new Set() }
+      if (Array.isArray(raw)) kept = raw.filter((id): id is string => typeof id === 'string')
+    } catch { /* none yet, or unreadable: the marks in memory still hold */ }
+    return new Set([...kept, ...goneInMemory])
   }
 
   /** The account's machine list names [listed]: any of them marked gone is back (re-added, or shared again). True when one was. */
   restore(listed: Iterable<string>): boolean {
     const gone = this.gone()
     let back = false
-    for (const id of listed) back = gone.delete(id) || back
-    if (back) writeGone(gone)
+    for (const id of listed) {
+      goneInMemory.delete(id)
+      back = gone.delete(id) || back
+    }
+    if (back) writeGone(new Set([...gone].filter((id) => !goneInMemory.has(id))))
     return back
   }
 
