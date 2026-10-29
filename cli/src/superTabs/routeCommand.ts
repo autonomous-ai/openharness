@@ -67,6 +67,10 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
     // Worded as a subscription's, so a Builder on a local model, which runs through the grid without one, is not kept out.
     else if (e.signedIn === false) engines[String(e.engine)] = `${name} is not signed in to a subscription on this machine. Its owner can sign in there; the next reading clears this.`
   }
+  // The server's own count of failed starts (backend superTabs/engineHealth.ts), with its words; a server before it sends none.
+  for (const [engine, reason] of Object.entries(object(pool.suspendedEngines))) {
+    if (ENGINE_NAME[engine] && typeof reason === 'string' && !engines[engine]) engines[engine] = reason
+  }
   // Only a Swarm folder's own checkout of the project is read; the repository's machine runs it from the Lead's checkout.
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
   const wanted = typeof repository.repositoryUrl === 'string' ? repositoryKey(repository.repositoryUrl) : null
@@ -474,7 +478,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const observed = object(pool.observation), resources = object(observed.resources)
     const fresh = finite(observed.receivedAt) && Date.now() - observed.receivedAt < 45_000
     const quotas = list(observed.quotas)
-    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
+    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })),
+      why: text(object(observed.quotaReasons)[engine]) }) : UNKNOWN_QUOTA }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
