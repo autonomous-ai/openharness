@@ -63,8 +63,10 @@ const REFUSED_BACKOFF_MAX_MS = 30_000
 const RETRY_AFTER_MAX_MS = 5 * 60_000
 // Warm background sessions kept per machine. Each concurrent background client needs its own (they
 // must not see each other's frames), so the cap is "how many pollers may overlap on one machine and
-// still find a warm session"; beyond it the extra session is torn down on detach as it always was.
-const ISOLATED_IDLE_MAX = 4
+// still find a warm session"; beyond it the extra session is closed on detach, as `shelf full`, so the backend's
+// disconnect lines count it. 4 until the WebSocket roadmap's Phase 1 (item 6): each idle session costs the backend one
+// quiet socket, and with no count of the overflows the cap was doubled rather than tuned; those lines tune it next.
+const ISOLATED_IDLE_MAX = 8
 // Same convention/value as localWsServer.ts's app<->daemon heartbeat. Without this, a machine-node
 // cycling (e.g. `harness start` on the OTHER end after a crash/restart) can leave this daemon holding
 // an upstream socket the backend silently dropped with no close frame — every RPC sent through it then
@@ -369,7 +371,7 @@ export class RemoteRelayPool {
         detached = true
         session.detach() // the pool's own linger starts here
         const idle = this.idleIsolated.get(machineId) ?? []
-        if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId); return }
+        if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId, { code: 1000, reason: 'shelf full' }); return }
         idle.push(pool)
         this.idleIsolated.set(machineId, idle)
       },
@@ -392,7 +394,7 @@ export class RemoteRelayPool {
    *  without ever touching this socket (nothing else — not even the heartbeat, since backend itself
    *  keeps answering pings fine — would ever notice on its own). Signalled by the local client sending
    *  `forceReconnect: true` on a fresh `machine_select` after observing a live RPC time out. */
-  invalidate(machineId: string): void {
+  invalidate(machineId: string, close?: { code: number; reason: string }): void {
     const entry = this.entries.get(machineId)
     if (!entry) return
     this.entries.delete(machineId)
@@ -410,7 +412,8 @@ export class RemoteRelayPool {
     entry.onClosed = null
     void entry.p2p?.stop('invalidated', false)
     entry.p2p = null
-    try { entry.ws.terminate() } catch { /* already gone */ }
+    // A healthy session put away is closed saying why; one known dead is cut.
+    try { if (close) entry.ws.close(close.code, close.reason); else entry.ws.terminate() } catch { /* already gone */ }
   }
 
   /** Every session this pool holds, ended, for a gateway that is going (its core went away, or it is
@@ -491,6 +494,19 @@ export class RemoteRelayPool {
    *  An unlinked machine is not held: nothing was dialled, and a link made a moment later must work at once. */
   private backOff(machineId: string, error: unknown): void {
     if (error instanceof RelayConnectError && error.message === 'NO_PEER_LINK') return
+    // The person's own machine was deleted (roadmap Phase 1.1: one daemon dialled a machine deleted weeks before every few
+    // seconds). Its pin goes, and stays gone until the machine list shows it again; every select is then NO_PEER_LINK,
+    // answered here without a dial. Only this reason: a share check that failed for a moment says NOT_YOUR_MACHINE too.
+    if (error instanceof RelayConnectError && error.message === 'NOT_YOUR_MACHINE' && error.reason === 'deleted') {
+      try {
+        this.peers.markGone(machineId)
+        this.refusals.delete(machineId)
+        return
+      } catch (err) {
+        // Held in memory (machinePeers.ts) and by the backoff below; never thrown out of here, where nothing would catch it.
+        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
     const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
     const asked = error instanceof RelayConnectError && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
@@ -500,9 +516,11 @@ export class RemoteRelayPool {
 
   private async dial(machineId: string, autonomousEnv: string, selectFrame: Frame, forceRefresh: boolean): Promise<Entry> {
     const peer = this.peers.get(machineId)
-    if (!peer) throw new RelayConnectError('NO_PEER_LINK')
+    // A machine marked gone is not dialled even when its pin could not be removed (machinePeers.ts markGone).
+    if (!peer || this.peers.gone().has(machineId)) throw new RelayConnectError('NO_PEER_LINK')
     const token = await this.auth.accessToken({ force: forceRefresh })
-    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}`
+    // `auth=http`: this relay reads a bad token refused with HTTP 401 before the upgrade (below), as a 4401.
+    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}&auth=http`
     const ws = new WebSocket(url, [token])
     // An 'error' with no listener throws out of the emitter and takes the daemon down. The handshake's
     // once('error') below is consumed by its first emit, and nothing listens after the handshake at all;
@@ -599,10 +617,10 @@ export class RemoteRelayPool {
               if (!settled) {
                 settled = true; clearTimeout(timeout)
                 const code = typeof payload.error === 'string' ? payload.error : 'machine_select_error'
-                const retryAfterMs = (payload as { retryAfterMs?: unknown }).retryAfterMs
+                const { retryAfterMs, reason } = payload as { retryAfterMs?: unknown; reason?: unknown }
                 // Offline closes the window's socket as the node_status answer below does (1013, try again later).
                 reject(new RelayConnectError(code, code === 'MACHINE_OFFLINE' ? 1013 : undefined,
-                  typeof retryAfterMs === 'number' ? retryAfterMs : undefined))
+                  typeof retryAfterMs === 'number' ? retryAfterMs : undefined, typeof reason === 'string' ? reason : undefined))
               }
               return
             }
@@ -742,6 +760,15 @@ export class RemoteRelayPool {
       })
       ws.once('error', (err) => {
         if (!settled) { settled = true; clearTimeout(timeout); reject(err instanceof Error ? err : new Error(String(err))) }
+      })
+      // The backend refused before the upgrade (WEB_WS_AUTH_HTTP_401): a 401 is the 4401 it used to close with, which
+      // connect() answers with one refresh. With this listener `ws` leaves the request open, so it is ended here.
+      ws.once('unexpected-response', (_req, res) => {
+        if (!settled) {
+          settled = true; clearTimeout(timeout)
+          reject(new RelayConnectError(`relay refused: HTTP ${res.statusCode ?? 0}`, res.statusCode === 401 ? 4401 : undefined))
+        }
+        ws.terminate()
       })
     })
     try {
