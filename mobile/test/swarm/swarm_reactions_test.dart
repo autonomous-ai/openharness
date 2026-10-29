@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
+import 'package:harness_mobile/shared/widgets/app_dialog.dart'
+    show kSheetVeilOpacity;
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_reactions.dart';
@@ -149,6 +151,47 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 3));
     });
 
+    testWidgets('the bar sits 4 points under its message, and a count is '
+        'padded 8 points across, on the spacing scale', (tester) async {
+      await show(
+        tester,
+        SwarmReactionBar(
+          messageId: 'm1',
+          reactions: counts({
+            'rocket': [('person', 'person-ann')],
+          }),
+          readerId: me,
+          nameOf: nameOf,
+          onReact: (_) {},
+        ),
+      );
+
+      expect(
+        tester
+            .widget<Padding>(
+              find
+                  .descendant(
+                    of: find.byType(SwarmReactionBar),
+                    matching: find.byType(Padding),
+                  )
+                  .first,
+            )
+            .padding,
+        const EdgeInsets.only(top: 4),
+      );
+      expect(
+        tester
+            .widget<Container>(
+              find.descendant(
+                of: chip(SuperTabReactionEmoji.rocket),
+                matching: find.byType(Container),
+              ),
+            )
+            .padding,
+        const EdgeInsets.symmetric(horizontal: 8),
+      );
+    });
+
     testWidgets('a message with no reactions draws nothing', (tester) async {
       await show(
         tester,
@@ -223,6 +266,59 @@ void main() {
 
       expect(await picked, SuperTabReactionEmoji.rocket);
       expect(find.byKey(const ValueKey('swarm-react-rocket')), findsNothing);
+    });
+
+    testWidgets('dims the page as every sheet does, and draws each emoji at '
+        "an icon's size, 24 points", (tester) async {
+      final picked = await open(tester, const []);
+
+      final route = ModalRoute.of(
+        tester.element(find.byKey(const ValueKey('swarm-react-rocket'))),
+      )!;
+      expect(
+        route.barrierColor,
+        Colors.black.withValues(alpha: kSheetVeilOpacity),
+      );
+      expect(
+        tester.widget<Text>(find.text('🚀')).style!.fontSize,
+        24,
+        reason: 'a glyph alone in a control, like AppIconSize.standalone',
+      );
+
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(await picked, isNull);
+    });
+
+    testWidgets('the sheet is inset 16 across and 16 below, 8 above, with a '
+        'grabber 36 by 4', (tester) async {
+      final picked = await open(tester, const []);
+
+      expect(
+        tester
+            .widget<Padding>(
+              find.byWidgetPredicate((w) => w is Padding && w.child is Column),
+            )
+            .padding,
+        const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      );
+      final grabber = find.byWidgetPredicate(
+        (w) => w is Container && w.constraints?.maxWidth == 36,
+      );
+      expect(
+        tester.getSize(
+          find.descendant(of: grabber, matching: find.byType(DecoratedBox)),
+        ),
+        const Size(36, 4),
+      );
+      expect(
+        tester.widget<Container>(grabber).margin,
+        const EdgeInsets.only(bottom: 12),
+      );
+
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(await picked, isNull);
     });
 
     testWidgets("marks the reader's own, and closes with none picked", (

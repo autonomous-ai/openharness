@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_a.dart';
 
 import 'model.dart';
 import 'swarm_message_row.dart'
@@ -35,7 +38,7 @@ class SwarmReactionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     if (reactions.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.only(top: AppSpace.xs),
       child: Wrap(
         spacing: 6,
         children: [
@@ -100,13 +103,14 @@ class _Count extends StatelessWidget {
               widthFactor: 1,
               child: Container(
                 height: 30,
-                padding: const EdgeInsets.symmetric(horizontal: 9),
-                decoration: BoxDecoration(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+                decoration: ShapeDecoration(
                   color: mine
                       ? accent.withValues(alpha: 0.14)
                       : swarmChatCard(tty),
-                  border: Border.all(color: mine ? accent : swarmChatHair(tty)),
-                  borderRadius: BorderRadius.circular(15),
+                  shape: StadiumBorder(
+                    side: BorderSide(color: mine ? accent : swarmChatHair(tty)),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -148,7 +152,7 @@ Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
   return showModalBottomSheet<SuperTabReactionEmoji>(
     context: context,
     backgroundColor: AppGlass.rowFill,
-    barrierColor: Colors.black.withValues(alpha: .55),
+    barrierColor: SwarmTokensSetA.sheetBarrier,
     shape: AppControl.sheetShape,
     builder: (context) => _Picker(mine: mine),
   );
@@ -166,17 +170,23 @@ class _Picker extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.l,
+          AppSpace.s,
+          AppSpace.l,
+          AppSpace.l,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // The grabber: a capsule as wide as the two largest steps.
             Container(
-              width: 36,
-              height: 5,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
+              width: AppSpace.xl + AppSpace.m,
+              height: AppSpace.xs,
+              margin: const EdgeInsets.only(bottom: AppSpace.m),
+              decoration: ShapeDecoration(
                 color: AppGlass.hair,
-                borderRadius: BorderRadius.circular(3),
+                shape: const StadiumBorder(),
               ),
             ),
             Row(
@@ -210,7 +220,9 @@ class _Picker extends StatelessWidget {
                         ),
                         child: Text(
                           emoji.glyph,
-                          style: const TextStyle(fontSize: 26),
+                          style: const TextStyle(
+                            fontSize: AppIconSize.standalone,
+                          ),
                         ),
                       ),
                     ),
