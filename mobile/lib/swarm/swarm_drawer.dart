@@ -7,8 +7,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
 import 'model.dart';
@@ -100,7 +102,12 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 4, 8, 8),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.l,
+                AppSpace.xs,
+                AppSpace.s,
+                AppSpace.s,
+              ),
               child: Row(
                 children: [
                   Expanded(
@@ -120,7 +127,12 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.s,
+                  0,
+                  AppSpace.s,
+                  AppSpace.m,
+                ),
                 children: [
                   // Who you are in each Swarm, first: the way to your
                   // picture and status.
@@ -150,7 +162,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                       inbox.swarms.isEmpty &&
                       inbox.error == null) ...[
                     const _Caption('Projects'),
-                    SwarmSkeletonRows(id: 'swarm-drawer-loading', drawer: true),
+                    _ProjectsLoading('swarm-drawer-loading'),
                   ],
                   for (final swarm in swarms)
                     ...switch (inbox!.reader(swarm.id)) {
@@ -169,10 +181,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                         ],
                       SwarmReader(snapshot: null, error: null) || null => [
                         _Caption(several ? swarm.name : 'Projects'),
-                        SwarmSkeletonRows(
-                          id: 'swarm-drawer-loading-${swarm.id}',
-                          drawer: true,
-                        ),
+                        _ProjectsLoading('swarm-drawer-loading-${swarm.id}'),
                       ],
                       _ => const <Widget>[],
                     },
@@ -228,7 +237,10 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                   border: Border(top: BorderSide(color: AppGlass.hair)),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpace.s,
+                    vertical: AppSpace.xs,
+                  ),
                   child: SwarmDrawerRow(
                     key: const ValueKey('swarm-drawer-settings'),
                     leading: const _Glyph(LucideIcons.settings2300),
@@ -301,7 +313,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
               title: project.name,
               detail: SwarmTeamLine(
                 swarmTeamGlance(snapshot, projectId: project.id),
-                size: 13,
+                size: AppType.captionSize,
                 kept: swarmHomeKept(session.inbox.reader(swarmId)),
               ),
               onTap: () => then(() => widget.onProject(swarmId, project.id)),
@@ -347,8 +359,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     );
     return [
       if (reader != null &&
-          (swarmBuddyChat(reader, project.id) != null ||
-              swarmCanWrite(reader)))
+          (swarmBuddyChat(reader, project.id) != null || swarmCanWrite(reader)))
         SwarmDrawerRow(
           key: ValueKey('swarm-drawer-buddy-chat-$swarmId-${project.id}'),
           title: 'Buddy chat',
@@ -411,11 +422,10 @@ class _You extends StatelessWidget {
               status?.label ?? 'Set a status',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: AppType.caption(
                 color: status == null
                     ? AppPalette.textFaint
                     : AppPalette.textSecondary,
-                fontSize: 13.5,
               ),
             ),
             onTap: onTap,
@@ -430,11 +440,13 @@ class _You extends StatelessWidget {
 class _Glyph extends StatelessWidget {
   const _Glyph(this.icon);
 
+  static const double width = 32;
+
   final IconData icon;
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: 32,
+    width: width,
     child: Icon(icon, size: 22, color: AppPalette.textSecondary),
   );
 }
@@ -447,12 +459,16 @@ class _Caption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(10, 18, 10, 6),
+    padding: const EdgeInsets.fromLTRB(
+      AppSpace.s,
+      AppSpace.l,
+      AppSpace.s,
+      AppSpace.xs,
+    ),
     child: Text(
       text,
-      style: TextStyle(
+      style: AppType.caption(
         color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
-        fontSize: 13,
         height: 1.2,
       ),
     ),
@@ -534,12 +550,18 @@ class SwarmDrawerRow extends StatelessWidget {
   /// Every row but a chat under its project clears this, for a thumb.
   static const double height = 52;
 
+  /// Around a row's words; a chat's start under its project's name.
+  static const padding = EdgeInsets.symmetric(
+    horizontal: AppSpace.s,
+    vertical: AppSpace.xs,
+  );
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return Material(
       color: selected ? AppSurface.selectedFill : Colors.transparent,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(AppControl.rowRadius),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap == null
@@ -551,12 +573,17 @@ class SwarmDrawerRow extends StatelessWidget {
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: sub ? 44 : height),
           child: Padding(
-            padding: EdgeInsets.fromLTRB(sub ? 54 : 10, 6, 10, 6),
+            padding: sub
+                ? padding.copyWith(
+                    left: padding.left + _Glyph.width + AppSpace.m,
+                  )
+                : padding,
+
             child: Row(
               children: [
                 if (leading case final leading?) ...[
                   leading,
-                  const SizedBox(width: 12),
+                  const SizedBox(width: AppSpace.m),
                 ],
                 Expanded(
                   child: Column(
@@ -571,14 +598,11 @@ class SwarmDrawerRow extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: sub
-                                  ? TextStyle(
+                                  ? AppType.body(
                                       color: AppPalette.textSecondary,
-                                      fontSize: 15,
                                     )
-                                  : TextStyle(
+                                  : AppType.label(
                                       color: AppPalette.textPrimary,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
                                     ),
                             ),
                           ),
@@ -623,4 +647,76 @@ class SwarmDrawerRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A Swarm's projects on their way: two rows in the shape of a project's
+/// [SwarmDrawerRow], as tall as the rows that replace them, fading towards
+/// the last; one "Loading" to a screen reader. Keyed [id]; its row `i`,
+/// `$id-$i`.
+class _ProjectsLoading extends StatelessWidget {
+  _ProjectsLoading(this.id) : super(key: ValueKey(id));
+
+  final String id;
+
+  static const _rows = 2;
+
+  @override
+  Widget build(BuildContext context) => SkeletonBlock(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < _rows; i++)
+          Opacity(
+            opacity: skeletonFade(i, _rows, depth: .4),
+            child: _ProjectLoading(
+              key: ValueKey('$id-$i'),
+              width: i.isEven ? .45 : .6,
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+/// One project's row on its way: its tile, a bar for its name and a longer
+/// one for its team's line, each as tall as the line it stands for.
+class _ProjectLoading extends StatelessWidget {
+  const _ProjectLoading({super.key, required this.width});
+
+  /// The name's share of the row's words.
+  final double width;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: SwarmDrawerRow.height),
+    child: Padding(
+      padding: SwarmDrawerRow.padding,
+      child: Row(
+        children: [
+          const Skeleton(
+            width: _Glyph.width,
+            height: _Glyph.width,
+            radius: AppCard.insetRadius,
+          ),
+          const SizedBox(width: AppSpace.m),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // The real row's metrics: its title, then its team's line
+                // ([SwarmTeamLine] at the caption's size).
+                SkeletonText(style: AppType.label(), widthFactor: width),
+                const SizedBox(height: 2),
+                SkeletonText(
+                  style: AppType.caption(height: 1.35),
+                  widthFactor: (width + .25).clamp(0, 1),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

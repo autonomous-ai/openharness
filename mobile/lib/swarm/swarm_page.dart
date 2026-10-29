@@ -7,7 +7,9 @@ import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -186,10 +188,11 @@ class _SwarmPageState extends State<SwarmPage> {
                             child: ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
                               padding: EdgeInsets.fromLTRB(
-                                12,
+                                AppSpace.m,
                                 0,
-                                12,
-                                MediaQuery.paddingOf(context).bottom + 28,
+                                AppSpace.m,
+                                MediaQuery.paddingOf(context).bottom +
+                                    AppSpace.xl,
                               ),
                               children: _body(context, session, tty),
                             ),
@@ -256,7 +259,7 @@ class _SwarmPageState extends State<SwarmPage> {
             top: 0,
           ),
           _EmptyNeeds.none => Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
             child: SwarmRow.line(
               'Nothing needs you.',
               key: const ValueKey('swarm-needs-none'),
@@ -336,7 +339,7 @@ class _SwarmPageState extends State<SwarmPage> {
       if (inbox.swarms.isEmpty) ...[
         SwarmCaption('Your Swarms', first: first && buddies.isEmpty),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
           child: SwarmRow.line(
             'No Swarm yet. Start one on your computer.',
             lines: 2,
@@ -375,7 +378,7 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// What went wrong, in the danger colour, up to three lines.
   Widget _error(String text, {required String key, double top = 6}) => Padding(
-    padding: EdgeInsets.fromLTRB(4, top, 4, 0),
+    padding: EdgeInsets.fromLTRB(AppSpace.xs, top, AppSpace.xs, 0),
     child: SwarmRow.line(
       text,
       key: ValueKey(key),
@@ -492,17 +495,18 @@ class _Unavailable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+    padding: const EdgeInsets.fromLTRB(
+      AppSpace.screenInset,
+      AppSpace.s,
+      AppSpace.screenInset,
+      AppSpace.xl,
+    ),
     children: [
       Text(
         'Swarm is off on this phone, or you are signed out. '
         'Turn it on in Settings ▸ Experimental.',
         key: const ValueKey('swarm-unavailable'),
-        style: TextStyle(
-          color: AppPalette.textSecondary,
-          fontSize: 16,
-          height: 1.45,
-        ),
+        style: AppType.body(color: AppPalette.textSecondary, height: 1.45),
       ),
     ],
   );

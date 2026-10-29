@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -189,16 +190,10 @@ class SwarmGroup extends StatelessWidget {
 /// A row on its way, in the shape of the row it stands for: a mark at its
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
-/// row arrives. [SwarmSkeletonRow.new] stands for a card's row (`SwarmRow`)
-/// with a line under its title; [SwarmSkeletonRow.drawer] for a project in
-/// the drawer (`SwarmDrawerRow`).
+/// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
+/// title; the drawer draws its own.
 class SwarmSkeletonRow extends StatelessWidget {
-  const SwarmSkeletonRow({super.key, this.round = false, this.width = .45})
-    : _drawer = false;
-
-  const SwarmSkeletonRow.drawer({super.key, this.width = .45})
-    : round = false,
-      _drawer = true;
+  const SwarmSkeletonRow({super.key, this.round = false, this.width = .45});
 
   /// An avatar's round mark rather than a project's tile.
   final bool round;
@@ -206,27 +201,18 @@ class SwarmSkeletonRow extends StatelessWidget {
   /// The title bar's share of the row's words.
   final double width;
 
-  final bool _drawer;
-
   @override
   Widget build(BuildContext context) {
-    // The real rows' metrics: the drawer's title takes its line height from
-    // the drawer, as its row's does.
-    final title = _drawer
-        ? TextStyle(fontSize: 16, fontWeight: FontWeight.w500)
-        : AppType.label(height: 1.3);
-    final line = _drawer
-        ? TextStyle(fontSize: AppType.captionSize, height: 1.35)
-        : AppType.caption(height: 1.35);
+    // The real rows' metrics.
+    final title = AppType.label(height: 1.3);
+    final line = AppType.caption(height: 1.35);
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: _drawer ? 52 : 56),
+      constraints: const BoxConstraints(minHeight: 56),
       child: Padding(
-        padding: _drawer
-            ? const EdgeInsets.fromLTRB(10, 6, 10, 6)
-            : const EdgeInsets.symmetric(
-                horizontal: AppSpace.l,
-                vertical: AppSpace.m,
-              ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.l,
+          vertical: AppSpace.m,
+        ),
         child: Row(
           children: [
             Skeleton(
@@ -242,7 +228,7 @@ class SwarmSkeletonRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SkeletonText(style: title, widthFactor: width),
-                  SizedBox(height: _drawer ? 2 : 3),
+                  const SizedBox(height: 3),
                   SkeletonText(
                     style: line,
                     widthFactor: (width + .25).clamp(0, 1),
@@ -258,15 +244,11 @@ class SwarmSkeletonRow extends StatelessWidget {
 }
 
 /// [rows] rows on their way ([SwarmSkeletonRow]), in a card ([SwarmGroup]),
-/// or bare as the drawer's rows are ([drawer]); fading towards the last, one
-/// "Loading" to a screen reader. Keyed [id]; its row `i`, `$id-$i`.
+/// fading towards the last; one "Loading" to a screen reader. Keyed [id]; its
+/// row `i`, `$id-$i`.
 class SwarmSkeletonRows extends StatelessWidget {
-  SwarmSkeletonRows({
-    required this.id,
-    this.rows = 2,
-    this.round = false,
-    this.drawer = false,
-  }) : super(key: ValueKey(id));
+  SwarmSkeletonRows({required this.id, this.rows = 2, this.round = false})
+    : super(key: ValueKey(id));
 
   final String id;
   final int rows;
@@ -274,35 +256,20 @@ class SwarmSkeletonRows extends StatelessWidget {
   /// Avatars' round marks rather than projects' tiles.
   final bool round;
 
-  /// The drawer's projects.
-  final bool drawer;
-
   @override
   Widget build(BuildContext context) {
     final children = [
       for (var i = 0; i < rows; i++)
         Opacity(
           opacity: skeletonFade(i, rows, depth: .4),
-          child: drawer
-              ? SwarmSkeletonRow.drawer(
-                  key: ValueKey('$id-$i'),
-                  width: i.isEven ? .45 : .6,
-                )
-              : SwarmSkeletonRow(
-                  key: ValueKey('$id-$i'),
-                  round: round,
-                  width: i.isEven ? .45 : .6,
-                ),
+          child: SwarmSkeletonRow(
+            key: ValueKey('$id-$i'),
+            round: round,
+            width: i.isEven ? .45 : .6,
+          ),
         ),
     ];
-    return SkeletonBlock(
-      child: drawer
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: children,
-            )
-          : SwarmGroup(children: children),
-    );
+    return SkeletonBlock(child: SwarmGroup(children: children));
   }
 }
 
@@ -346,7 +313,7 @@ class SwarmAvatar extends StatelessWidget {
         child: Text(
           _initial(name),
           style: TextStyle(
-            color: Colors.white, // TODO(AppInk.onFill): swap when it lands.
+            color: AppInk.onFill,
             fontSize: size >= 32 ? 13.5 : 11,
             fontWeight: FontWeight.w600,
             height: 1,
@@ -426,8 +393,7 @@ class SwarmBadge extends StatelessWidget {
     child: Text(
       '$count',
       style: AppType.caption(
-        // TODO(AppInk.onFill): swap the white when it lands.
-        color: warn ? SwarmInk.onWarning : Colors.white,
+        color: warn ? SwarmInk.onWarning : AppInk.onFill,
         fontWeight: AppFont.semibold,
         height: 1,
       ),
@@ -481,8 +447,7 @@ class SwarmButton extends StatelessWidget {
         AppPalette.textPrimary,
         AppGlass.hair,
       ),
-      // TODO(AppInk.onFill): swap the white when it lands.
-      SwarmButtonStyle.fill => (AppPalette.accent, Colors.white, null),
+      SwarmButtonStyle.fill => (AppPalette.accent, AppInk.onFill, null),
       SwarmButtonStyle.link => (null, AppPalette.swarmAccent, null),
     };
     final enabled = onPressed != null && !busy;

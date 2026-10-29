@@ -7,6 +7,7 @@ import '../phone/phone_sheet.dart';
 import '../phone/tty.dart';
 import '../phone/tty_controls.dart';
 import '../settings/experimental_features.dart';
+import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import 'swarm_inbox.dart';
 import 'swarm_session.dart';
@@ -151,7 +152,7 @@ class _SwarmStartViewState extends State<SwarmStartView> {
           // The invitations list is the account's email's: an invite to it
           // comes here by itself, and there is no link to open.
           quiet: Padding(
-            padding: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.only(top: AppSpace.m),
             child: Text(
               'Invites to your email show up here.',
               textAlign: TextAlign.center,
@@ -238,7 +239,12 @@ class _HowSheet extends StatelessWidget {
     final tty = Tty.of(context);
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.screenInset,
+          AppSpace.m,
+          AppSpace.screenInset,
+          AppSpace.m,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -251,7 +257,7 @@ class _HowSheet extends StatelessWidget {
             const SizedBox(height: 18),
             for (final (index, step) in _steps.indexed)
               Padding(
-                padding: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.only(bottom: AppSpace.l),
                 child: Row(
                   children: [
                     Container(
@@ -327,7 +333,7 @@ class SwarmIntroPage extends StatelessWidget {
                 more: [
                   for (final tick in _ticks)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.only(bottom: AppSpace.m),
                       child: Row(
                         children: [
                           Icon(
@@ -394,7 +400,12 @@ class _StartScreen extends StatelessWidget {
       children: [
         Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 28, 24, 16),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xl,
+              AppSpace.xl,
+              AppSpace.xl,
+              AppSpace.l,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -431,10 +442,10 @@ class _StartScreen extends StatelessWidget {
         ),
         Padding(
           padding: EdgeInsets.fromLTRB(
-            16,
-            12,
-            16,
-            12 + MediaQuery.paddingOf(context).bottom,
+            AppSpace.screenInset,
+            AppSpace.m,
+            AppSpace.screenInset,
+            AppSpace.m + MediaQuery.paddingOf(context).bottom,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -464,7 +475,7 @@ class _Mark extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: ttyRaised(tty),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(AppCard.radius),
       ),
       child: icon != null
           ? Icon(icon, size: 30, color: tty.text)
