@@ -19,6 +19,11 @@ describe('the team account\'s engines', () => {
     const result = await checkTeamEngines({ home: '/Users/harnessteam', executable: (path) => path === '/Users/harnessteam/.local/bin/claude', account, now: () => 42 })
     expect(result).toEqual({ checkedAt: 42, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } })
     expect(teamEngineBin('/h', 'codex')).toBe('/h/.local/bin/codex')
+    // Windows: npm's .cmd in the prefix itself.
+    expect(teamEngineBin('C:\\Users\\harnessteam', 'claude', 'win32')).toBe('C:\\Users\\harnessteam\\.local\\claude.cmd')
+    const windows = await checkTeamEngines({ home: 'C:\\Users\\harnessteam', platform: 'win32', now: () => 1, account,
+      executable: (path) => path === 'C:\\Users\\harnessteam\\.local\\codex.cmd' })
+    expect(windows).toMatchObject({ claude: { installed: false }, codex: { installed: true } })
     const failing = await checkTeamEngines({ home: '/h', executable: () => true, account: async () => { throw new Error('unreadable') }, now: () => 1 })
     expect(failing.claude).toEqual({ installed: true, signedIn: null })
   })
@@ -45,6 +50,10 @@ describe('the team account\'s engines', () => {
     expect(lines).toContain('Claude Code ✓ installed · ✗ not signed in')
     expect(lines).toContain('Codex       ✗ not installed · harness team setup installs it')
     expect(lines).toContain('open a terminal on this Mac\'s Harness Team machine')
+    // Off a Mac the computer is not a Mac (seen in `harness team setup` on Linux, 2026-10-28).
+    const linux = engineLines(engines({ claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } }), ago, 'linux').join('\n')
+    expect(linux).toContain('open a terminal on this computer\'s Harness Team machine')
+    expect(linux).not.toContain('Mac')
     expect(lines).toContain('    claude                      Claude Code')
     expect(lines).not.toContain('codex login')
     expect(lines).toContain('Your own sign-ins are not copied into the team account')

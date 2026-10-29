@@ -20,10 +20,13 @@ import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
+import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
+import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
+import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -53,6 +56,7 @@ async function start(): Promise<void> {
   let stopSweeps = (): void => {}
   let stopArchive = (): void => {}
   let stopDeliveries = (): void => {}
+  let stopReceiptSweep = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -62,6 +66,7 @@ async function start(): Promise<void> {
     stopSweeps()
     stopArchive()
     stopDeliveries()
+    stopReceiptSweep()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -69,10 +74,14 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
+  // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
+  stopReceiptSweep = startReceiptSweep(prisma)
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
-  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once.
-  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries })
+  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
+  // groups they changed.
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
+    swarmChanged: announceSwarmChanges })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).

@@ -5,6 +5,7 @@
 import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS, weekStart } from './week.js'
+import { agentTarget } from '../rules.js'
 import type { UnblockKind } from './contract.js'
 
 /** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
@@ -16,7 +17,12 @@ export interface Unblock { personId: string; at: number; waitedMs: number; kind?
  *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
  *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
 export interface Run extends RanOn { assignmentId: string; at: number
-  firstVerdicts?: Record<string, boolean>; firstReview?: boolean }
+  firstVerdicts?: Record<string, boolean>; firstReview?: boolean
+  /** The step up from a cheaper model this attempt is (stepUp.ts): its attempt number and why. */
+  stepUp?: { attempt: number; reason: string }
+  /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: it is rated by
+   *  the engine's `default` row (rules.ts policyQuality; review of ee4ee6c9a). */
+  engineDefault?: true }
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
  *  absent from attempts recorded before efforts were (Lead, 2026-10-29: never guessed afterwards). */
 export interface RanOn { engine: string; model: string | null; effort?: string; grid?: true }
@@ -194,18 +200,33 @@ export function waitsNow(group: Conversation): boolean {
 
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
-  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now }
+  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
+    ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
+    ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}
-  // A request recorded before this time was kept still has its first attempt in [runs] until 20 more roll it off; only a
-  // request with no attempt yet starts now (review of #2097).
-  ledger.firstAssignedAt ??= ledger.runs?.[0]?.at ?? now
+  ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** When a request's first attempt was assigned: kept since that was recorded. A request recorded before has its first
+ *  attempt in [runs] while fewer than MAX_RUNS are kept; once that many are, the first may have rolled off, so it takes
+ *  the time the request was asked (full review of #2097). Undefined for a request never assigned. */
+export function firstAssignedAt(ledger: GroupLedger): number | undefined {
+  if (ledger.firstAssignedAt != null) return ledger.firstAssignedAt
+  const runs = ledger.runs ?? []
+  if (!runs.length) return undefined
+  return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
 }
 
 /** An agent's verdict on an independent check is one finished review by the model it runs on. */
 export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, reviewer: Agent, now: number): void {
   if (!check.independent) return
   const ledger = group.ledger ??= {}
+  // A check given again on the same attempt is the same review (full review of #2097): only its first verdict counts.
+  // An attempt recorded before attempts were has no run to tell a repeat by, so it earns no model credit (review of
+  // #2128).
+  const run = ledger.runs?.find(r => r.assignmentId === group.assignment?.id)
+  if (!run || run.firstVerdicts?.[check.id] !== undefined) return
   const on = ranOn(state, reviewer, reviewer.configuration), week = weekStart(now)
   // Only the weeks the board reads: one row per week and model, however many verdicts.
   const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)

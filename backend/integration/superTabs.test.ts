@@ -61,7 +61,8 @@ async function routedStart(tab: string, lead: string, role?: 'reviewer') {
 const message = (text: string): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
 /** Makes [machineId], a machine of `host`'s, one used only for agents (`harness team on`) for this test: its account row
  *  is a team machine and it reports from its team session with that privacy, so it may take the owner's projects
- *  (docs/plans/2026-10-24-swarm-team-account.md, Task 3). A teammate's work runs only on such a machine. */
+ *  (docs/plans/2026-10-24-swarm-team-account.md, Task 3). A teammate's work runs only on such a machine. Its host routes then
+ *  take its team session alone, never its owner's own sign-in (security review 2 of #2089). */
 async function teamMachine(machineId: string) {
   const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
   await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
@@ -696,7 +697,7 @@ describe('private swarm projects on the real control API', () => {
     await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'PROJECT_CONTRIBUTION' })
     await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
       scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
-    const pool = (await poolRows(store, host, machineId))[0]!
+    const pool = (await poolRows(store, team.session, machineId))[0]!
     await store.observeMachine(team.session, tab, machineId, { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
@@ -706,20 +707,20 @@ describe('private swarm projects on the real control API', () => {
       .rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const secondStart = (await run(tab, { type: 'agent.start', request })).result.startId as string
     await run(tab, { type: 'agent.start', request: { ...request, conversationId: 'lead', cwd: '/swarm-root/lead' } })
-    const queued = (await poolRows(store, host, machineId))[0]!
+    const queued = (await poolRows(store, team.session, machineId))[0]!
     expect(queued.starts).toHaveLength(2)
     expect(queued.projects!.find(p => p.id === projectId)).toMatchObject({
       repository: { machineId: 'test-host', cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' },
       conversationIds: [conversationId],
     })
     expect((await store.read(host, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
-    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, machineId)
+    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, machineId)
     await hostRun({ type: 'agent.startDispatch', startId: secondStart })
     const started = await hostRun({ type: 'agent.started', startId: secondStart, harnessId: 'second-builder', configuration: config })
     await hostRun({ type: 'agent.startSettled', startId: secondStart, warning: null })
     const agentId = String(started.result.agentId)
-    expect((await store.read(host, tab, agentId)).state.conversations.map(c => c.id)).toEqual([conversationId])
-    await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.read(team.session, tab, agentId)).state.conversations.map(c => c.id)).toEqual([conversationId])
+    await expect(store.messages(team.session, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await db.machineShare.findUnique({ where: { machineId } })).toBeNull()
   })
 
@@ -891,7 +892,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const team = await teamMachine('grid-host')
     await run(tab, { type: 'machine.contribute', machineId: 'grid-host', name: 'Grid laptop', cwd: '/project', engines: ['claude'], maxAgents: 2 }, host)
     const grid = (await store.read(owner, tab)).state.localModels!.grid
-    const generation = (await poolRows(store, host, 'grid-host'))[0]!.machine.generation
+    const generation = (await poolRows(store, team.session, 'grid-host'))[0]!.machine.generation
     await store.observeMachine(team.session, tab, 'grid-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
       quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy,
@@ -901,7 +902,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: group, machineId: 'grid-host', engine: 'claude', name: 'Builder',
       cwd: '/project', worktree: true, gridModel: 'moonshotai/kimi-k3', gridName: grid,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'grid-host')
+    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'grid-host')
     await hostRun({ type: 'agent.startDispatch', startId })
     const agentId = String((await hostRun({ type: 'agent.started', startId, harnessId: 'grid-builder',
       configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null } })).result.agentId)
@@ -924,14 +925,14 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const team = await teamMachine('skills-host')
     await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
-    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
+    const generation = (await poolRows(store, team.session, 'skills-host'))[0]!.machine.generation
     await store.observeMachine(team.session, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
       quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
     const start = async () => String((await run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId: 'skills-host', engine: 'claude',
       name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
+    const skillMode = async (startId: string) => (await store.start(team.session, tab, startId, undefined, 'skills-host')).skillMode
 
     expect(await skillMode(await start())).toBe('default')
     await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'orchestration' })
@@ -953,7 +954,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, contribute)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await run(tab, contribute, host)
     expect(await db.machineShare.findUnique({ where: { machineId: 'pool-host' } })).toBeNull()
-    const pools = await poolRows(store, host, 'pool-host')
+    const pools = await poolRows(store, team.session, 'pool-host')
     expect(pools).toHaveLength(1)
     const generation = pools[0]!.machine.generation
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
@@ -973,7 +974,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(queued.request.permissionMode).toBe('full')
     await expect(run(tab, { type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await expect(store.start(peer, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
+    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
     await expect(hostRun(message('Not a generic proxy'))).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await run(tab, { type: 'machine.pause', machineId: 'pool-host', paused: true }, host)
     await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'MACHINE_PAUSED' })
@@ -989,10 +990,10 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.start(owner, tab, startId)).poolSettled).toBe(true)
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
-    expect(await poolRows(store, host, 'pool-host')).toEqual([])
+    expect(await poolRows(store, team.session, 'pool-host')).toEqual([])
     // The machine stays listed while its host cleans up, but its owner left: a reading is refused as theirs no longer.
-    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(store.observeMachine(team.session, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(store.start(team.session, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {
@@ -1162,6 +1163,68 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toEqual(['Please start.'])
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
+  })
+
+  it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const reply = (text: string, replyTo: string, extra: Record<string, unknown> = {}) =>
+      ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [], ...extra }) as Command
+    const root = String((await run(tab, message('Should we do thread replies?'))).result.messageId)
+    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [owner.sub] }), host, lead)).result.messageId)
+    // A reply only in its thread leaves the chat's newest main-stream message where it was; an also-sent one moves it.
+    const lead1 = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const afterFirst = await lead1()
+    expect(afterFirst.lastMainSequence).toBe(afterFirst.lastMessageSequence - 1)
+    const second = String((await run(tab, reply('Agreed.', first, { alsoSend: true }), peer)).result.messageId)
+    const after = String((await run(tab, message('Next topic.'))).result.messageId)
+    const afterAll = await lead1()
+    expect(afterAll.lastMainSequence).toBe(afterAll.lastMessageSequence)
+
+    // Agents read one feed: every reply, each with its thread root.
+    const feed = (await store.messages(host, tab, 'lead', {}, lead)).messages
+    expect(feed.map(m => [m.id, m.thread, m.alsoInChat ?? null])).toEqual(
+      [[root, root, null], [first, root, null], [second, root, true], [after, after, null]])
+    expect(feed.find(m => m.id === second)!.replyTo).toBe(first)
+    const page = await store.messages(owner, tab, 'lead', {})
+    const last = feed.find(m => m.id === second)!
+    expect(page.threads).toEqual([{ id: root, replies: 2, lastSequence: last.sequence, lastAt: last.createdAt,
+      authors: [expect.objectContaining({ kind: 'person', id: peer.sub }), expect.objectContaining({ kind: 'agent', id: lead })],
+      people: [owner.sub, peer.sub] }])
+    // A poll that reads only a new reply still learns its root's summary.
+    const poll = await store.messages(owner, tab, 'lead', { after: feed.find(m => m.id === first)!.sequence })
+    expect(poll.threads.map(t => [t.id, t.replies])).toEqual([[root, 2]])
+
+    const thread = await store.messages(owner, tab, 'lead', { thread: root })
+    expect(thread.messages.map(m => m.id)).toEqual([root, first, second])
+    expect(thread.threads.map(t => t.id)).toEqual([root])
+
+    // A person who leaves is no longer named, though their reply stays.
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    const left = (await store.messages(owner, tab, 'lead', { thread: root })).threads[0]!
+    expect(left.people).toEqual([owner.sub])
+    expect(left.authors.map(a => a.id)).toEqual([lead])
+    expect(left.replies).toBe(2)
+  })
+
+  it('keeps a reply to a message written before threads inline, and refuses a thread of a conversation the reader cannot see', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const old = randomUUID().replaceAll('-', '').slice(0, 24)
+    await db.superTabMessage.create({ data: { id: old, tabId: tab, conversationId: 'lead', sequence: 0,
+      author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' }, text: 'Before threads.', recipientIds: [], mentions: [] } })
+    const answer = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Answered inline.', replyTo: old, recipientIds: [],
+      alsoSend: true }, peer)).result.messageId)
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.find(m => m.id === answer)).toMatchObject({ replyTo: old, thread: answer, alsoInChat: null })
+    expect(rows.find(m => m.id === old)!.thread).toBeNull()
+
+    const project = (await run(tab, { type: 'project.create', name: 'Private project', visibility: 'private', brief: '' })).result
+    const hidden = String(project.conversationId)
+    const secret = String((await run(tab, { ...message('Private root'), conversationId: hidden } as Command)).result.messageId)
+    await expect(store.messages(peer, tab, hidden, { thread: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // A root named under another conversation reads nothing of it.
+    expect((await store.messages(peer, tab, 'lead', { thread: secret })).messages).toEqual([])
   })
 
   it('delivers a Lead\'s agent-only notice to the Lead once and shows it to no person in the project chat', async () => {
@@ -1495,7 +1558,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await run(tab, { type: 'agent.start', request })
-    expect((await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
+    expect((await poolRows(store, team.session, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
   })
   it('lets a project\'s Lead change its skills only by quoting a message the project owner wrote there, and tells the host', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Skills')).id
@@ -1934,6 +1997,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     } finally {
       await db.user.update({ where: { id: owner.sub }, data: { email: owner.email } })
     }
+  })
+
+  it('judges a review verdict\'s step up by the tab\'s own ratings', async () => {
+    const { tab } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [{ description: 'Reviewed', independent: true }] })).result.conversationId as string
+    const sonnet = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Sonnet',
+      configuration: { ...config, engine: 'claude', model: 'claude-sonnet-4-5' }, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: sonnet })).result.assignmentId as string
+    // The task stepped up to Sonnet before; this tab's owner rates Sonnet at the top tier, so its failed review steps nothing up.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { version: part.version + 1,
+      data: { ...part.data as object, stepUp: { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' } } } })
+    await run(tab, { type: 'tab.routingPolicy', policy: { models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, quality: 3 } : m) } })
+    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
+    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Ready: no.' })
+    const after = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
+    expect(after.assignment).toMatchObject({ id: assignmentId, status: 'working' })
   })
 
   it('stores the account routing policy with revisions and merges the owner policy into each tab', async () => {

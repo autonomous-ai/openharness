@@ -9,14 +9,15 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
-import { fail, type AgentStart, type SuperTabState } from '../model.js'
-import { GrantReads, type SuperTabStore } from '../store.js'
+import { fail, type SuperTabState } from '../model.js'
+import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readLastChangedAts, readMachines } from '../cachedReads.js'
 import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
+import { plainHost } from '../parts/commit.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
@@ -28,14 +29,10 @@ const ROW_HASH = 22
 /** A full read covers this many of the machine's Swarms, most recently changed first (was 100 full Swarms each second). */
 const FULL_TABS = 500
 
-/** A change any host of the Swarm cares about from the part alone: names, pause, observers, its agents and starts. */
+/** A change this machine's host cares about from the part alone (parts/commit.ts plainHost, the rule the push shares). */
 function plainlyRelevant(part: Part, machineId: string): boolean {
-  switch (part.kind) {
-    case 'head': case 'member': return true
-    case 'agent': return (part.data as { machineId?: string } | null)?.machineId === machineId
-    case 'start': return (part.data as AgentStart | null)?.request.machineId === machineId
-    default: return false
-  }
+  const host = plainHost(part.kind, part.data)
+  return host === 'all' || host === machineId
 }
 const PLAIN_KINDS = ['head', 'member', 'agent', 'start'] as const
 
@@ -53,8 +50,8 @@ export class HostReads {
     const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
     // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
     const tx = this.db
-    await this.store.hostFor(tx, user, machineId)
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.store.hostFor(tx, user, machineId, owned)
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
     const grants = new GrantReads(owned)
@@ -80,6 +77,8 @@ export class HostReads {
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
+      // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
+      if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
       const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.

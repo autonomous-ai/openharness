@@ -309,7 +309,7 @@ export async function authenticateAccessToken(
     autonomousEnv,
     ...metadata,
     ...(signUpAttribution ? { signUpAttribution } : {}),
-  })
+  }, { existing })
   // Learn the account's Google subject while an Autonomous token is in hand, so a computer of the same
   // account signed in by QR can be answered later (lib/googleSubject.ts). Not awaited, never throws.
   // Here and not in the REST hook, because a daemon that only holds a socket authenticates here too.

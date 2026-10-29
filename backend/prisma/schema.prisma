@@ -560,6 +560,10 @@ model ProductUsageTotal {
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
+  /// Days the receipt lives past its report day (types/productUsageReceipt.ts). Required by the collection's rule once the
+  /// receipt sweep installs it (lib/productUsageReceiptSweep.ts): a server that writes receipts without it cannot count.
+  /// Absent on receipts written before 2026-10-29.
+  life      Int?
 
   @@map("product_usage_receipts")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
@@ -1084,10 +1088,17 @@ model SuperTabMessage {
   recipientIds    String[]
   /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
   mentions        String[]
+  /// The thread's root (superTabs/threads.ts): a top-level message's own id, a reply's root. Absent on rows written before
+  /// threads, whose replies stay inline quotes.
+  thread          String?
+  /// A thread reply also shown in the conversation's main stream.
+  alsoInChat      Boolean?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
   @@index([tabId, conversationId, sequence, id])
+  /// One thread's page, and a page's thread summaries (superTabs/pageReads.ts pageThreads).
+  @@index([tabId, conversationId, thread, sequence])
 }
 
 /// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
@@ -1125,6 +1136,22 @@ model SuperTabReaction {
   createdAt      DateTime @default(now())
 
   @@index([tabId, messageId])
+}
+
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
+model SuperTabReadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  sequence       Int
+  updatedAt      DateTime
+
+  @@index([tabId, personId, updatedAt])
+  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  @@index([updatedAt], map: "read_mark_expiry")
 }
 
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
@@ -1651,6 +1678,9 @@ model ExperimentalSettings {
   agentMessagesHideSummary Boolean @default(false)
   /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
   agentsTellAgents     Boolean @default(false)
+  /// A program acting for the person (a lamp's lamp-tasks, not an agent) may give more work to an idle harness of
+  /// theirs in a pane (`harness reply`, cli/src/messages/replyLocal.ts, #1628). Off by default.
+  programsReply        Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

@@ -1,9 +1,12 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
-import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
+import { leadStartFailed } from './leadStart.js'
 import { ledProject, projectsOf } from './projects.js'
 import { waitedOn } from './leaderboard/record.js'
 
@@ -103,8 +106,8 @@ function limitReason(worker: Agent, now: number): string | null {
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return `its session on ${pool.name} stopped`
-  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return `its machine ${pool.name} has been offline for 2 minutes`
+  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
+  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
@@ -176,10 +179,42 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
     text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
 }
 
+/** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
+ *  conversation, written under the person who asked for it as a machine's removal is (machines.ts removalEnded). Nothing while
+ *  it still waits for a machine. */
+function leadNotice(state: SuperTabState, start: AgentStart, text: string | null): MessageDraft[] {
+  const asker = start.request.leadFor!
+  const person = state.people.find(p => p.id === asker.personId && p.generation === asker.generation)
+  if (!text || !person || !state.conversations.some(c => c.id === start.request.conversationId)) return []
+  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation },
+    text, source: { kind: 'system' } }]
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now)]
+  return [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+}
+
+/** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */
+export const PURGE_NOTICE_MS = 15 * 60_000
+
+/** A removed confidential session whose host has not confirmed its data deleted (commands.ts removeAgent `heldFor`): its
+ *  Team account keeps serving only its project, and its project's conversation hears once, or the Swarm's first one when
+ *  its project went with it. Its host keeps trying (cli superTabs/host.ts endSession). */
+function unpurged(state: SuperTabState, now: number): MessageDraft[] {
+  const owner = state.people.find(p => p.id === state.ownerId)
+  return (state.closingSessions ?? []).flatMap(closing => {
+    if (!closing.heldFor || closing.noticed || closing.since === undefined || now - closing.since <= PURGE_NOTICE_MS || !owner) return []
+    closing.noticed = true
+    const project = projectsOf(state).find(p => p.id === closing.heldFor) ?? projectsOf(state)[0]
+    if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
+    return [{ id: stableId('unpurged', closing.agentId, closing.harnessId), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+      author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
+      text: `The saved session of a removed agent that held people's private chats, on ${machineName(state, closing.machineId)}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`,
+      source: { kind: 'system' } }]
+  })
 }
 
 /** The Lead's own time checks: those above, then each task's state, waking the Lead for those that just stalled. Only the
@@ -309,10 +344,14 @@ export const BUDDY_PICKUP_MS = 5 * 60_000
 
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
-    if (start.request.buddyOf && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+    if ((start.request.buddyOf || start.request.leadFor) && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
       && now - start.requestedAt > BUDDY_PICKUP_MS) {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
+      if (start.request.leadFor) {
+        start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
+        return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
+      }
       start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
       return buddyNotice(state, start)
     }
@@ -324,15 +363,18 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
+    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)
+    // A grid host that never started the agent steps the work up a tier (stepUp.ts).
+    const stepped = group && start.request.gridModel && !activeWork(group) ? stepUp(state, group, GRID_START_FAILED, now, start.id) : null
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
+      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}`, source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

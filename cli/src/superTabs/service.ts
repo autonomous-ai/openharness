@@ -13,7 +13,7 @@ import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution, setMachineAgents } from './contribution.js'
 import { messageIdOf } from './attach.js'
-import { cardId, SwarmCards } from './cards.js'
+import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
@@ -32,6 +32,8 @@ import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
+import { buddyArchived, buddyStatus, isBuddyIn, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
@@ -49,10 +51,10 @@ const HELP = {
   leads: 'The Leads conversation (leadsConversationId in a Lead\'s status) is one conversation for the whole Swarm, outside every project. Only Leads and people post there, and only Leads among agents receive it. Before assigning, look at otherProjectsWork; if your task touches the same code, say so there and agree an order first, then tell your own project. The Swarm posts there by itself when two projects\' active tasks own the same code.',
   // Help without --tab cannot tell who asks, so it does not list a Lead's own options; this tells a Lead where they are.
   leadOptions: 'Leads: run help with --tab ID for options only a Lead has.',
-  messages: 'messages GROUP: read recent messages in a conversation.',
+  messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   decisions: 'decisions [--answered]: the decisions you asked of people, still open, or with --answered those answered (each with its choice and note). A Lead also sees those asked in its project. When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: to tell one person something directly, a Lead sends person.tell; it lands in their Buddy chat, which the Lead cannot read. Project members watching the Lead\'s terminal see what it sends: put nothing there you would not say in the project chat.',
-  costs: 'costs [--days N]: what the attempts routed in the last N days (7 unless set, at most 90) cost and how they went, per engine, model, effort and kind of job: attempts, first-review pass rate, shipped, median minutes to ship, tokens, API-equivalent cost and actual per-token spend in US dollars, and cost per shipped change, with the prices and their sources. Only attempts routed since cost records began, in the groups you may read.',
+  costs: 'costs [--days N]: what the attempts routed in the last N days (7 unless set, at most 90) cost and how they went, per engine, model, effort and kind of job: attempts, first-review pass rate, shipped, median minutes to ship, tokens, API-equivalent cost and actual per-token spend in US dollars, and cost per shipped change, with the prices and their sources; models has the same per engine and model alone (a grid model by its own name), and stepUps counts the attempts that stepped up from a cheaper model. Only attempts routed since cost records began, in the groups you may read.',
   post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: ${POST_HELP}`,
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
@@ -68,7 +70,7 @@ const HELP = {
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
-  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. Low-difficulty, low-risk work that is not a review ranks models on the Swarm\'s grid first unless the owner set noGridFirst.',
+  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. Low-risk work that is not a review ranks models on the Swarm\'s grid first unless the owner set noGridFirst: low-difficulty work, and medium work of kind docs, copy, tests, fixtures, fix or refactor (a grid model rated 2, such as Kimi K3 or DeepSeek v4.1). A review never runs on a grid model, below quality 2 or on the reviewed Builder\'s engine. When a grid attempt\'s first review says Ready no, or its grid host never starts the agent, the Swarm closes it and steps the task up (no grid and quality 2, then quality 3, at most twice) and tells you: route it again, and the route and the server keep to the new floor.',
   commands: [
     { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
@@ -179,9 +181,12 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   const body = object(page)
   if (!Array.isArray(body.messages)) return page
   const mine = new Set([...body.messages, ...later].map(object).filter(m => object(m.author).id === agentId && typeof m.replyTo === 'string').map(m => m.replyTo))
-  return { ...body, messages: body.messages.map(object).map(m => {
+  return { ...body, messages: body.messages.map(object).map(row => {
+    // `thread` is named on a thread reply only: a top-level message is its own thread's root, and an older row has none.
+    const { thread, ...m } = row
+    const reply = typeof thread === 'string' && thread !== m.id ? { ...m, thread } : m
     const asked = Array.isArray(m.recipientIds) && m.recipientIds.includes(agentId) && object(m.author).id !== agentId
-    return asked ? { ...m, answered: mine.has(m.id) } : m
+    return asked ? { ...reply, answered: mine.has(m.id) } : reply
   }) }
 }
 
@@ -214,7 +219,7 @@ export interface SuperTabServiceOptions {
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
-  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
+  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
@@ -229,6 +234,8 @@ export interface SuperTabServiceOptions {
   teamNodeTools?: () => unknown
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
+  /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
+  pullRequests?: BuddyStatusDeps['pullRequests']
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 
@@ -238,11 +245,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   let held: SwarmSources | null = null
   const sources = (): SwarmSources => {
     const machine = core.daemon.machineId()
-    if (held?.feed.machineId !== machine) held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+    if (held?.feed.machineId !== machine) {
+      held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+      // A task's GitHub token is fetched as the host first sees the task, not at the refresher's next minute (github.ts).
+      held.feed.watch(read => tokens.assigned?.(read))
+    }
     return held
   }
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
+  // A Buddy runs only on its person's own machine (backend buddy.create), so this machine's GitHub is its person's. Read once
+  // per daemon, cached 30 seconds a pull request. Each Buddy's last summary, by tab and agent, marks what changed since.
+  let pullRequests: BuddyStatusDeps['pullRequests'] | null = null
+  const buddySince = new Map<string, number | null>()
   const reservations = () => {
     const machine = core.daemon.machineId()
     if (bookMachine !== machine) { book?.stop(); book = null; bookMachine = machine }
@@ -391,10 +406,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat).
-          const chat = payload.chat === true
+          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
+          // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
+          const chat: CardChat = payload.chat === 'buddy' ? 'buddy' : payload.chat === true
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
@@ -404,11 +420,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim(), chat) }
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...(cardId(payload.chatId) ? [payload.chatId] : []))
+            // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
+          }
+          if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
+            cards().side(payload.tabId, payload.side)
+            return { ok: true }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId, chat)
@@ -468,7 +490,27 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeDecision' && identifier(payload.decisionId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/route-decisions/${payload.decisionId}?${identity}`) }
         }
-        if (payload.action === 'status') return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
+        if (payload.action === 'status') {
+          const read = await swarm()
+          if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }
+          pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
+          const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
+            decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          if (payload.archived === true) {
+            const projectId = String(list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
+            const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
+            const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
+            return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
+          }
+          const key = `${payload.tabId}:${agentId}`
+          const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
+            since: buddySince.get(key) ?? null }, deps)
+          buddySince.delete(key)
+          buddySince.set(key, read.lastChangedAt)
+          // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
+          for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
+          return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
@@ -492,13 +534,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeHistory') {
           // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
           // a group this agent cannot read answers 404, refused like one it does not lead (review round 1).
-          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${payload.conversationId}?${identity}`)
+          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${encodeURIComponent(String(payload.conversationId))}?${identity}`)
             .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })).group).data : null
           if (!group || object(group).leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
             // An older backend has no such route: its 404 is unreadable like any other failure.
-            within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/attempts?${identity}`)),
+            within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/attempts?${identity}`)),
           ])
           // The log's records carry every candidate's line; the route needs only who was picked and how it went, and the account and expected spend of what actually runs, which an open pick still holds: after an override
           // that is the person's chosen candidate, and a Lead's own choice outside the list has no known account.
@@ -522,18 +564,22 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
-          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)
+          // An older page's cursor is its sequence and message id together, or it is refused: never read as the newest page.
+          const paged = payload.before !== undefined || payload.beforeId !== undefined
+          if (paged && !(Number.isSafeInteger(payload.before) && Number(payload.before) >= 0 && identifier(payload.beforeId))) return { error: 'INVALID_REQUEST' }
+          const before = paged ? `&before=${payload.before}&beforeId=${payload.beforeId}` : ''
+          const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}${before}`)
           return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
-          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${payload.messageId}`)
+          const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&messageId=${payload.messageId}`)
           // One exact message cannot show its own answer, so what came after it is read, but only for a question put to
           // this agent. If that read fails the message is still returned, just without a verdict.
           const sent = object(list(object(page).messages)[0])
           const asked = Array.isArray(sent.recipientIds) && sent.recipientIds.includes(agentId) && object(sent.author).id !== agentId
-          if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: page }
+          if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: markAnswered(page, [], agentId) }
           try {
-            const later = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&after=${sent.sequence}`)).messages
+            const later = object(await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&after=${sent.sequence}`)).messages
             return { ok: true, value: markAnswered(page, list(later), agentId) }
           } catch { return { ok: true, value: page } }
         }
@@ -573,7 +619,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         // `post --attach` asks first whether this post already went out with its files.
         if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {
-          const sent = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${messageIdOf(payload.tabId, agentId, payload.operationId)}`))
+          const sent = object(await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&messageId=${messageIdOf(payload.tabId, agentId, payload.operationId)}`))
           const earlier = object(list(sent.messages)[0])
           // The agent's id goes back too: the files are uploaded as this agent, through the daemon's local upload route.
           return { ok: true, value: { agentId, attachmentIds: Array.isArray(earlier.attachments) ? list(earlier.attachments).map(a => String(a.id)) : null } }

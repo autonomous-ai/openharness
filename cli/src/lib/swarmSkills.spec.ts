@@ -16,7 +16,7 @@ import { notifyHookEntry } from '../engines/kit/hookSettings.js'
 import { messagesCommand } from '../engines/kit/messagesHook.js'
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
-const SWARM = { prepare: prepareSwarmSkill, github: () => null }
+const SWARM = { prepare: prepareSwarmSkill, github: () => null, args: () => [] }
 
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')); roots.push(root); return root }
@@ -65,6 +65,9 @@ describe('built-in Swarm skills', () => {
   const lost = '- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt\'s pushed branch and last result, not to start over.\n'
   // The night-shift lines (v2 B, 2026-10-27): a task lost to a usage limit resumes by itself unless an account or engine
   // with allowance can take it now, and the morning digest. The Lead's alone, in both modes, right after the lost-work line.
+  // The thread line (Dee's threads, 2026-10-29): the Lead answers inside the thread of the message it answers. The Lead's
+  // alone, in both modes, right after its write-like-a-colleague line.
+  const thread = '- Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.\n'
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'
   const digest = '- Morning digest: when a person asks for one, set the project\'s digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
@@ -75,6 +78,7 @@ describe('built-in Swarm skills', () => {
   const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   // The requests section (Lead's ruling for v2 G, the human leaderboard, 2026-10-27): the Lead's alone, in both modes, in a
   // section of its own so other groups' edits to the Lead text merge cleanly.
+  const update = '- Codex\'s "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.\n'
   const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
@@ -167,6 +171,7 @@ describe('built-in Swarm skills', () => {
       expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
       expect(text.split(twoHours)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(update)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(local)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(plan)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -185,9 +190,10 @@ describe('built-in Swarm skills', () => {
       expect(text.split(missingStop)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(reviewCheck)).toHaveLength(role === 'review' ? 2 : 1)
       expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(approved(text, 'orchestration', role).replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(approved(text, 'orchestration', role).replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '')
-        .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, ''))).toBe(sha256)
+        .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the stall rule', () => {
@@ -205,9 +211,9 @@ describe('built-in Swarm skills', () => {
   })
   it('adds the terminal line where each Lead skill keeps work moving, right after the silent-worker rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(orchestration).toContain(`naming the machine owner who can answer.\n${twoHours}${lost}${limit}${digest}${terminal}- Keep each worker supplied`)
+    expect(orchestration).toContain(`naming the machine owner who can answer.\n${twoHours}${lost}${limit}${digest}${terminal}${update}- Keep each worker supplied`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}- A Builder or Reviewer`)
+    expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}${update}- A Builder or Reviewer`)
   })
   it('adds the overlap line last in each Lead skill\'s "Route, start, assign"', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -237,7 +243,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}${requestsLast}`)).toBe(true)
   })
   it('gives each Builder and Reviewer skill its shared-machine rules in a section of their own: before the red flags, or last', () => {
     const lastBefore = { dev: '- Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.\n',
@@ -260,6 +266,12 @@ describe('built-in Swarm skills', () => {
     expect(orchestration).toContain(`${twoHours}${lost}`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- When the Swarm tells you a task stalled`)
+  })
+  it('adds the thread line right after each Lead skill\'s write-like-a-colleague line', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const lines = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split('\n')
+      expect(lines[lines.indexOf(thread.trimEnd()) - 1]).toMatch(/^- Write like a colleague: /)
+    }
   })
   it('adds the usage-limit and digest lines right after each Lead skill\'s lost-work line', () => {
     for (const mode of ['orchestration', 'default'] as const) {
@@ -310,6 +322,7 @@ describe('built-in Swarm skills', () => {
     const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(update)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(localDefault)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(plan)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -328,9 +341,10 @@ describe('built-in Swarm skills', () => {
     expect(text.split(missingStop)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(reviewCheck)).toHaveLength(role === 'review' ? 2 : 1)
     expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(approved(text, 'default', role).replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(approved(text, 'default', role).replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '')
-      .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, ''))).toBe(sha256)
+      .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

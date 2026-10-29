@@ -4,6 +4,7 @@ import { ensureProductUsageExpiry } from '../productUsage.js'
 import { ensureHarnessSessionExpiry } from '../ssoSession.js'
 import { ensureTerminalExpiry } from '../../superTabs/terminal.js'
 import { ensureMentionExpiry } from '../../superTabs/mentions.js'
+import { ensureReadMarkExpiry } from '../../superTabs/readMarks.js'
 import { ensurePartExpiry } from '../../superTabs/sweeps.js'
 import { ensureSchema, type SchemaTarget } from './migrate.js'
 
@@ -15,5 +16,6 @@ export async function releaseSchema(db: PrismaClient = prisma, target: SchemaTar
   await ensureHarnessSessionExpiry(db)
   await ensureTerminalExpiry(db)
   await ensureMentionExpiry(db)
+  await ensureReadMarkExpiry(db)
   await ensurePartExpiry(db)
 }

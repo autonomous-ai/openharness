@@ -35,4 +35,11 @@ describe('the installed copy', () => {
     expect(isInstalledCopy('C:\\work\\oh\\cli\\dist\\cli.js', cli, 'win32')).toBe(false)
     expect(isInstalledCopy('D:\\cli\\0.5.0\\cli.js', cli, 'win32')).toBe(false)
   })
+
+  it('is the Harness Team account\'s too: its task runs the version folder `cli\\current` names (team/windowsScript.ts)', () => {
+    const cli = 'C:\\Users\\harnessteam\\.harness\\cli'
+    expect(isInstalledCopy('C:\\Users\\harnessteam\\.harness\\cli\\0.4.97\\cli.js', cli, 'win32')).toBe(true)
+    // The flat copy an earlier setup laid down was never the installed one, so its updater never ran.
+    expect(isInstalledCopy('C:\\Users\\harnessteam\\.harness\\cli\\cli.js', cli, 'win32')).toBe(false)
+  })
 })

@@ -160,6 +160,7 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -200,6 +201,11 @@ class SuperTabConversation {
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
+
+  /// Its newest message in the main stream: a reply only in its thread
+  /// leaves it. Null from a backend before threads, or before this
+  /// conversation's first message since.
+  final int? lastMainSequence;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -294,6 +300,11 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      readMarks = Map.unmodifiable({
+        if (row['readMarks'] case final Map marks)
+          for (final MapEntry(:key, :value) in marks.entries)
+            if (key is String && value is num) key: value.toInt(),
+      }),
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -367,6 +378,10 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
+  /// conversation, on any of their devices. Never another person's.
+  final Map<String, int> readMarks;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -763,12 +778,40 @@ class SuperTabDelivery {
   };
 }
 
+/// What a page says about one thread (backend threads.ts): the line under its
+/// root, and who it marks unread for.
+class SuperTabThread {
+  SuperTabThread.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      replies = (row['replies'] as num).toInt(),
+      lastSequence = (row['lastSequence'] as num).toInt(),
+      lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
+      authors = List.unmodifiable(
+        (row['authors'] as List? ?? const []).map(superTabMap),
+      ),
+      people = List.unmodifiable(
+        (row['people'] as List? ?? const []).whereType<String>(),
+      );
+  final String id;
+  final int replies, lastSequence;
+  final DateTime? lastAt;
+
+  /// The newest distinct reply authors, newest first: the first wrote the
+  /// last reply.
+  final List<Map<String, dynamic>> authors;
+
+  /// People who wrote in the thread or were tagged in it.
+  final List<String> people;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
       text = _text(row, 'text'),
       replyTo = row['replyTo'] as String?,
+      thread = row['thread'] as String?,
+      alsoInChat = row['alsoInChat'] == true,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -786,6 +829,17 @@ class SuperTabMessage {
       );
   final String id, conversationId, text;
   final String? replyTo;
+
+  /// The root of this message's thread: its own id for a top-level message,
+  /// null for one written before threads (its replies stay inline quotes).
+  final String? thread;
+
+  /// A thread reply also shown in the conversation's main stream.
+  final bool alsoInChat;
+  bool get threadReply => thread != null && thread != id;
+
+  /// Whether the main stream lists it: a thread reply only when also sent.
+  bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;

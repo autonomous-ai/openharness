@@ -226,6 +226,80 @@ class SuperTabClient {
   int _generation = 0;
   Timer? _discoveryTimer;
   Future<void>? _discovering, _loadingHidden;
+
+  /// WS roadmap Phase 2a: until when the server is known to push this
+  /// account's Swarm changes ([kSwarmPushLease]), the next discovery a change
+  /// asked for, and when discovery last read.
+  DateTime? _pushUntil;
+  Timer? _discoverSoon;
+  DateTime? _lastDiscovery;
+
+  bool get _pushing {
+    final until = _pushUntil;
+    return until != null && clock.now().isBefore(until);
+  }
+
+  /// Whether the server is known to push this account's Swarm changes now.
+  bool get pushing => _pushing;
+
+  /// Every [discoveryInterval], unless the server pushes: then every
+  /// [kSwarmDiscoverySafetyNet], a change asking for one sooner.
+  bool get _discoveryDue {
+    final last = _lastDiscovery;
+    return !_pushing ||
+        last == null ||
+        clock.now().difference(last) >= kSwarmDiscoverySafetyNet;
+  }
+
+  /// The server's word over this account's socket (backend
+  /// lib/swarmClientPushes.ts, a `swarm_changed` frame). Naming no Swarm, it
+  /// pushes. Naming one, the Swarm open here reads it ([SuperTabController.told]),
+  /// and a change to its main parts reads discovery ([_discoverWhenAllowed]),
+  /// once for a burst of them across Swarms (new tags, a Swarm joined or left).
+  void swarmChanged(Map<String, dynamic> payload) {
+    if (_account == null) return;
+    final tabId = payload['tabId'], parts = payload['parts'];
+    if (tabId == null && parts == null) {
+      _pushUntil = clock.now().add(kSwarmPushLease);
+      // Said on every connect (review of #2121): a daemon that reconnected
+      // was not told what changed meanwhile, so each open Swarm and the list
+      // read once, on their next allowed read.
+      for (final controller in _loaded.values) {
+        controller
+          ..pushUntil = _pushUntil
+          ..told(main: true);
+      }
+      _discoverWhenAllowed();
+      return;
+    }
+    if (tabId is! String || parts is! List) return;
+    final main = parts.contains('main');
+    if (!main && !parts.contains('machine')) return;
+    final at = payload['lastChangedAt'];
+    _loaded[tabId]?.told(main: main, at: at is int ? at : null);
+    if (main) _discoverWhenAllowed();
+  }
+
+  /// One discovery for the changes told since the last: a second from now,
+  /// or once [discoveryInterval] has passed since the last, so the list is
+  /// read no more often than its old poll (review of #2121).
+  bool _discoveryWanted = false;
+  void _discoverWhenAllowed() {
+    if (onTabs == null || discoveryInterval <= Duration.zero) return;
+    _discoveryWanted = true;
+    if (_discoverSoon != null) return;
+    final last = _lastDiscovery;
+    var wait = const Duration(seconds: 1);
+    if (last != null) {
+      final left = discoveryInterval - clock.now().difference(last);
+      if (left > wait) wait = left;
+    }
+    _discoverSoon = Timer(wait, () {
+      _discoverSoon = null;
+      if (_discoveryWanted) unawaited(refreshTabs());
+    });
+  }
+
   Future<void> _savingHidden = Future.value();
   Set<String> _hidden = {};
   final _creating = <String>{};
@@ -276,6 +350,10 @@ class SuperTabClient {
     _claimViews(leaving: _forgetsWebOnly ? leaving : null);
     _generation++;
     _discoveryTimer?.cancel();
+    _discoverSoon?.cancel();
+    _discoverSoon = null;
+    // The server's word was for the account that left; the next is told anew.
+    _pushUntil = null;
     _discovering = null;
     _loadingHidden = null;
     _hidden = {};
@@ -304,10 +382,9 @@ class SuperTabClient {
         onTabs != null &&
         discoveryInterval > Duration.zero) {
       unawaited(refreshTabs());
-      _discoveryTimer = Timer.periodic(
-        discoveryInterval,
-        (_) => unawaited(refreshTabs()),
-      );
+      _discoveryTimer = Timer.periodic(discoveryInterval, (_) {
+        if (_discoveryDue) unawaited(refreshTabs());
+      });
     }
   }
 
@@ -359,6 +436,8 @@ class SuperTabClient {
   Future<void> refreshTabs() {
     if (_account == null || onTabs == null) return Future.value();
     if (_discovering case final active?) return active;
+    _lastDiscovery = clock.now();
+    _discoveryWanted = false;
     final generation = _generation;
     final account = _account!;
     final read = () async {
@@ -501,21 +580,27 @@ class SuperTabClient {
     final saved = raw == null
         ? <String, dynamic>{}
         : superTabMap(jsonDecode(raw));
-    final controller = SuperTabController(
-      tabId: id,
-      accountId: account,
-      initial: saved,
-      request: (method, path, {body}) {
-        if (generation != _generation) {
-          throw const SuperTabFailure('FORBIDDEN', 'The account changed.');
-        }
-        return map(method, path, body: body);
-      },
-      save: (state) => storage.write(key, jsonEncode(state)),
-      upload: upload,
-      avatarUpload: avatarUpload,
-      reading: _reading,
-    )..away = _isAway(id);
+    final controller =
+        SuperTabController(
+            tabId: id,
+            accountId: account,
+            initial: saved,
+            request: (method, path, {body}) {
+              if (generation != _generation) {
+                throw const SuperTabFailure(
+                  'FORBIDDEN',
+                  'The account changed.',
+                );
+              }
+              return map(method, path, body: body);
+            },
+            save: (state) => storage.write(key, jsonEncode(state)),
+            upload: upload,
+            avatarUpload: avatarUpload,
+            reading: _reading,
+          )
+          ..away = _isAway(id)
+          ..pushUntil = _pushUntil;
     var seenChange = (
       lastChangedAt: -1,
       mentionsWaiting: -1,

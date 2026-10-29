@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/auth/sign_in_provider.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 
 import '../exit_app.dart';
 import '../tty.dart';
@@ -68,6 +69,7 @@ class PhoneWelcome extends StatefulWidget {
     this.sendCode,
     this.signIn,
     this.scanCamera,
+    this.swarmHome,
   });
 
   final AppNotifier notifier;
@@ -79,6 +81,9 @@ class PhoneWelcome extends StatefulWidget {
   /// Stands in for the camera on Scan QR from computer's page, in tests and renders. Null opens the
   /// real one.
   final Widget? scanCamera;
+
+  /// The Swarm Home kept on this phone ([SwarmHomeCache.device] when null).
+  final SwarmHomeCache? swarmHome;
 
   @override
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
@@ -112,6 +117,14 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
 
   static const _codeLength = 4;
   static const _resendAfter = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    // Signed out, so the last Swarm Home goes: a session that ended while the app was not running
+    // never had a signed-in shell to clear it ([SwarmHost]).
+    unawaited((widget.swarmHome ?? SwarmHomeCache.device()).clear());
+  }
 
   @override
   void dispose() {
