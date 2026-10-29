@@ -11,6 +11,8 @@ LeadMachine _machine(
   bool maySleep = false,
   String? unavailable,
   bool inSwarm = true,
+  bool own = true,
+  Map<String, String> engineRefusals = const {},
 }) => LeadMachine(
   id: id,
   name: id,
@@ -20,7 +22,11 @@ LeadMachine _machine(
   maySleep: maySleep,
   unavailable: unavailable,
   inSwarm: inSwarm,
+  own: own,
+  engineRefusals: engineRefusals,
 );
+
+const _claudeOff = {'claude': 'Claude Code isn’t offered here'};
 
 void main() {
   group('leadRepositoryKey', () {
@@ -168,5 +174,52 @@ void main() {
         expect(_machine('mac', free: 0).startable, isFalse);
       },
     );
+  });
+
+  group('bestLeadPlacement', () {
+    test('never proposes Claude Code on a machine offering only Codex', () {
+      // The rig ranks first (always on, more room), but cannot run Claude.
+      final rig = _machine('rig', free: 14, engineRefusals: _claudeOff);
+      final laptop = _machine('laptop', free: 2, maySleep: true);
+      final placed = bestLeadPlacement([rig, laptop], _repo, engine: 'claude');
+      expect((placed?.machine.id, placed?.engine), ('laptop', 'claude'));
+    });
+
+    test('switches to an engine the best machine runs when none runs the '
+        'chosen one', () {
+      final rig = _machine('rig', engineRefusals: _claudeOff);
+      final placed = bestLeadPlacement([rig], _repo, engine: 'claude');
+      expect((placed?.machine.id, placed?.engine), ('rig', 'codex'));
+    });
+
+    test('an engine the person chose stays: no machine runs it, no place', () {
+      final rig = _machine('rig', engineRefusals: _claudeOff);
+      expect(
+        bestLeadPlacement([rig], _repo, engine: 'claude', engineChosen: true),
+        isNull,
+      );
+    });
+
+    test('your own machine with another engine before a teammate’s with the '
+        'chosen one', () {
+      final rig = _machine('rig', engineRefusals: _claudeOff);
+      final theirs = _machine('team', own: false, free: 30);
+      final placed = bestLeadPlacement([theirs, rig], _repo, engine: 'claude');
+      expect((placed?.machine.id, placed?.engine), ('rig', 'codex'));
+    });
+
+    test('a machine that runs no Product Manager engine is not startable', () {
+      final rig = _machine(
+        'rig',
+        engineRefusals: const {
+          'claude': 'Claude Code isn’t offered here',
+          'codex': 'Codex isn’t signed in',
+        },
+      );
+      expect(rig.startable, isFalse);
+      expect(rig.runs('codex'), isFalse);
+      expect(bestLeadPlacement([rig], _repo, engine: 'claude'), isNull);
+      expect(bestLeadMachine([rig], _repo), isNull);
+    });
   });
 }

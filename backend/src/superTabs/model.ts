@@ -57,6 +57,9 @@ export interface Agent {
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
    *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
   gridModel?: string
+  /** Its start named no model, so it runs its engine's own: rated by the policy's `default` row for life (rules.ts
+   *  agentTarget). Kept here for the same reason as [gridModel]: a command never sees the finished start (live bug 10-29). */
+  launchedDefault?: true
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -163,6 +166,9 @@ export interface Assignment {
   progressAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
+  /** When a review last found problems in its hand-off: the hand-off no longer pauses its quiet time (liveness.ts
+   *  waitingForReview). Its next status clears it. */
+  reviewFoundAt?: number
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
@@ -220,6 +226,8 @@ export interface Conversation {
   lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
+  cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
   messageSeq?: number
   /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
@@ -259,14 +267,13 @@ export interface TaskLiveness {
   personId?: string
 }
 
+/** The GitHub pull request links in [text], each once, in order. */
+export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
   const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) {
-    if (!text) continue
-    for (const match of text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)) {
-      if (Number(match[1]) <= Number.MAX_SAFE_INTEGER) urls.add(match[0])
-    }
-  }
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -376,7 +383,21 @@ export interface MessageDraft {
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
-export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
+/** Notices written for the Lead or an agent, read only by their recipients like an agent-only notice, under their own kind
+ *  so their recipients receive them as before: the Lead's wake for a stalled, lost or resumed task, the old agent's moved
+ *  notice, and the Lead's scheduled report and digest requests. People read the task's state on its status line (Ken,
+ *  2026-10-29: shown under the Lead's name in the project chat, they read as requests to act). By kind, so the ones already
+ *  stored are hidden as well; but only one that reaches an agent: with no Lead to hear it, a person is the only one who can
+ *  act, so people read it (review of #2177). */
+const RECIPIENT_NOTICES = new Set<unknown>(['work-stalled', 'work-lost', 'work-resumed', 'update-request', 'digest-request'])
+/** Marks a notice of a kind people also read (a cancel to its worker), or a copy for no one of a notice its recipient hears
+ *  elsewhere, as its recipients' alone. */
+export const forRecipients = (source: Record<string, unknown>) => ({ ...source, recipientsOnly: true as const })
+/** Whether only the message's recipients read it: never people, nor other agents. */
+export const agentOnly = (source: unknown, recipients: readonly string[]): boolean => {
+  const notice = source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
+  return notice?.kind === AGENT_ONLY.kind || notice?.recipientsOnly === true || (RECIPIENT_NOTICES.has(notice?.kind) && recipients.length > 0)
+}
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */
 export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {

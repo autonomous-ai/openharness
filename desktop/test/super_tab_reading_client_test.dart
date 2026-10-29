@@ -347,6 +347,8 @@ void main() {
         reading: SuperTabReading.desktop,
         storage: storage,
       )..bind('owner');
+      // The Swarm in front polls every 3 s; one behind it only every 15 s.
+      client.show('tab');
       client.open('tab').ignore();
       async.flushMicrotasks();
       client.release('tab');

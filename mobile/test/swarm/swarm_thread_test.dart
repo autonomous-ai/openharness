@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_thread.dart';
@@ -47,12 +49,14 @@ void main() {
 
   /// A Swarm with conversation g1 at [sequence] while [listed] says so, its
   /// chat read with [chatRows]: root m1 and its first reply unless told.
+  /// Files go up to [uploads].
   Future<({FakeSwarm swarm, SwarmReader reader, SwarmConversation chat})> rig({
     int sequence = 2,
     String role = 'owner',
     int? number,
     List<Map<String, dynamic>>? chatRows,
     bool Function()? listed,
+    FakeUploads? uploads,
   }) async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
@@ -76,11 +80,14 @@ void main() {
       'next': null,
       'threads': [line('m1', 1, 2)],
     };
-    final reader = SwarmReader(
-      tabId: tab,
-      accountId: me,
-      request: swarm.request,
-    );
+    final reader = uploads == null
+        ? SwarmReader(tabId: tab, accountId: me, request: swarm.request)
+        : SwarmReader(
+            tabId: tab,
+            accountId: me,
+            request: swarm.request,
+            upload: uploads.upload,
+          );
     addTearDown(reader.dispose);
     await reader.refresh();
     final chat = SwarmConversation(reader, 'g1');
@@ -457,6 +464,334 @@ void main() {
     expect(open(work.chat).alsoSendLabel, 'Also send to the workgroup');
     final chat = await rig();
     expect(open(chat.chat).alsoSendLabel, 'Also send to the chat');
+  });
+
+  group('files', () {
+    SwarmOutgoingFile file(String name, [int size = 3]) =>
+        SwarmOutgoingFile(name, Uint8List.fromList(List.filled(size, 7)));
+    List<String> names(Iterable<SwarmOutgoingFile> files) => [
+      for (final f in files) f.name,
+    ];
+
+    test('attached files go up for the chat, then the reply names them, to '
+        'the chat too with Also send', () async {
+      final uploads = FakeUploads();
+      final r = await rig(uploads: uploads);
+      readsBack(r.swarm);
+      final t = open(r.chat);
+      t.draft = 'Here are the shots';
+      t.alsoSend = true;
+      t.files.add([file('a.jpg'), file('b.pdf', 5)]);
+      expect(t.canSend, isTrue);
+
+      expect(await t.send(), isTrue);
+
+      expect(uploads.names, ['a.jpg', 'b.pdf']);
+      for (final u in uploads.asked) {
+        expect((u.tabId, u.conversationId), (tab, 'g1'));
+      }
+      expect(uploads.asked.last.mime, 'application/pdf');
+      expect(r.swarm.commands, [
+        {
+          'type': 'message.send',
+          'conversationId': 'g1',
+          'text': 'Here are the shots',
+          'replyTo': 'm1',
+          'recipientIds': <String>[],
+          'alsoSend': true,
+          'attachmentIds': ['id-a.jpg', 'id-b.pdf'],
+        },
+      ]);
+      expect(t.files.files, isEmpty);
+      expect(t.pending, isNull, reason: 'read back');
+      expect(t.pendingFiles, isEmpty);
+      expect(r.chat.files.files, isEmpty, reason: 'the chat\'s own box');
+    });
+
+    test('a reply of files alone goes with no text', () async {
+      final uploads = FakeUploads();
+      final r = await rig(uploads: uploads);
+      readsBack(r.swarm);
+      final t = open(r.chat);
+      expect(t.canSend, isFalse);
+      t.files.add([file('crash.log')]);
+      expect(t.canSend, isTrue);
+
+      expect(await t.send(), isTrue);
+
+      expect(r.swarm.commands.single['text'], '');
+      expect(r.swarm.commands.single['attachmentIds'], ['id-crash.log']);
+    });
+
+    test('while the files go up the box holds them and cannot send; on their '
+        'way the reply shows them', () async {
+      final uploads = FakeUploads()..answersAtOnce = false;
+      final r = await rig(uploads: uploads);
+      final answer = Completer<Object?>();
+      r.swarm.routes[commands] = (_) => answer.future;
+      final t = open(r.chat);
+      final a = file('a.jpg');
+      t.draft = 'look';
+      t.files.add([a]);
+
+      final sending = t.send();
+      await settle();
+      expect(t.uploading, isTrue);
+      expect(t.isUploading(a), isTrue);
+      expect(t.canSend, isFalse);
+      expect(await t.send(), isFalse, reason: 'one send at a time');
+      expect(t.draft, 'look');
+      expect(names(t.files.files), ['a.jpg']);
+      uploads.asked.single.onProgress(0.5);
+      expect(t.uploadProgress(a), 0.5);
+
+      uploads.asked.single.answer.complete(FakeUploads.attachment('f1'));
+      await settle();
+      expect(t.uploading, isFalse);
+      expect(t.pending, 'look');
+      expect(names(t.pendingFiles), ['a.jpg']);
+      expect(t.files.files, isEmpty);
+
+      answer.complete({'ok': true});
+      await sending;
+    });
+
+    test('files are the thread\'s own: apart from the chat\'s and other '
+        'threads\', and kept with the thread while the chat is open', () async {
+      final r = await rig();
+      final first = SwarmThread(r.chat, 'm1');
+      first.files.add([file('a.jpg')]);
+      first.dispose();
+
+      expect(r.chat.files.files, isEmpty);
+      expect(open(r.chat, 'm9').files.files, isEmpty);
+      expect(names(open(r.chat).files.files), ['a.jpg']);
+    });
+
+    test('an upload refused shows what the chat shows, keeps the draft and '
+        'the files, and sends nothing', () async {
+      const refused = SuperTabFailure(
+        'ATTACHMENT_TOO_LARGE',
+        'That file is over 10 MB.',
+        statusCode: 413,
+      );
+      final uploads = FakeUploads()..refuse['b.jpg'] = refused;
+      final r = await rig(uploads: uploads);
+      r.chat.files.add([file('a.jpg'), file('b.jpg')]);
+      expect(await r.chat.send(), isFalse);
+      final t = open(r.chat);
+      t.draft = 'look';
+      t.files.add([file('a.jpg'), file('b.jpg')]);
+
+      expect(await t.send(), isFalse);
+
+      expect(t.error, r.chat.error);
+      expect(t.error, 'That file is over 10 MB.');
+      expect(t.draft, 'look');
+      expect(names(t.files.files), ['a.jpg', 'b.jpg']);
+      expect(r.swarm.commands, isEmpty);
+      expect(t.uploading, isFalse);
+      expect(t.pending, isNull);
+      expect(t.canSend, isTrue, reason: 'not stuck: Send tries again');
+    });
+
+    test(
+      'an upload that fails for any other reason says what the chat says',
+      () async {
+        final uploads = FakeUploads()..answersAtOnce = false;
+        final r = await rig(uploads: uploads);
+        r.chat.files.add([file('a.jpg')]);
+        final chatSending = r.chat.send();
+        await settle();
+        uploads.asked.last.answer.completeError(StateError('socket closed'));
+        expect(await chatSending, isFalse);
+        final t = open(r.chat);
+        t.files.add([file('a.jpg')]);
+
+        final sending = t.send();
+        await settle();
+        uploads.asked.last.answer.completeError(StateError('socket closed'));
+
+        expect(await sending, isFalse);
+        expect(t.error, r.chat.error);
+        expect(t.error, 'Could not upload the file. Try again.');
+      },
+    );
+
+    test(
+      'Send again after a failed upload sends only what did not go up',
+      () async {
+        final uploads = FakeUploads()
+          ..refuse['b.jpg'] = const SuperTabFailure('UPLOAD_FAILED', 'No.');
+        final r = await rig(uploads: uploads);
+        readsBack(r.swarm);
+        final t = open(r.chat);
+        t.files.add([file('a.jpg'), file('b.jpg')]);
+        expect(await t.send(), isFalse);
+        uploads.refuse.clear();
+
+        expect(await t.send(), isTrue);
+
+        expect(uploads.names, ['a.jpg', 'b.jpg', 'b.jpg']);
+        expect(r.swarm.commands.single['attachmentIds'], [
+          'id-a.jpg',
+          'id-b.jpg',
+        ]);
+      },
+    );
+
+    test('a reply refused for its files puts them back and sends them up '
+        'again; one refused for anything else keeps them uploaded', () async {
+      final uploads = FakeUploads();
+      final r = await rig(uploads: uploads);
+      var refusal = const SuperTabFailure(
+        'ATTACHMENT_UNAVAILABLE',
+        'That file is no longer there. Attach it again.',
+        statusCode: 400,
+      );
+      r.swarm.routes[commands] = (_) => throw refusal;
+      final t = open(r.chat);
+      t.draft = 'look';
+      t.files.add([file('a.jpg')]);
+
+      expect(await t.send(), isFalse);
+      expect(t.draft, 'look');
+      expect(names(t.files.files), ['a.jpg']);
+      expect(t.pending, isNull);
+      expect(t.error, 'That file is no longer there. Attach it again.');
+
+      refusal = const SuperTabFailure(
+        'INVALID_COMMAND',
+        'That reply could not be sent.',
+        statusCode: 400,
+      );
+      expect(await t.send(), isFalse);
+      expect(uploads.names, ['a.jpg', 'a.jpg'], reason: 'up again');
+      expect(names(t.files.files), ['a.jpg']);
+
+      readsBack(r.swarm);
+      expect(await t.send(), isTrue);
+      expect(uploads.names, ['a.jpg', 'a.jpg'], reason: 'kept uploaded');
+    });
+
+    test('taking a file off while it goes up gives the upload up and sends '
+        'nothing', () async {
+      final uploads = FakeUploads()..answersAtOnce = false;
+      final r = await rig(uploads: uploads);
+      final t = open(r.chat);
+      final a = file('a.jpg');
+      t.draft = 'look';
+      t.files.add([a, file('b.jpg')]);
+      final sending = t.send();
+      await settle();
+
+      t.files.remove(a);
+
+      expect(t.uploading, isFalse);
+      expect(uploads.asked.single.cancel.isCancelled, isTrue);
+      expect(await sending, isFalse);
+      expect(r.swarm.commands, isEmpty);
+      expect(t.draft, 'look');
+      expect(names(t.files.files), ['b.jpg']);
+      expect(t.canSend, isTrue);
+    });
+
+    test('leaving the thread while its files go up changes nothing: the '
+        'upload stops, nothing is sent, and the draft and the files wait for '
+        'it', () async {
+      final uploads = FakeUploads()..answersAtOnce = false;
+      final r = await rig(uploads: uploads);
+      readsBack(r.swarm);
+      final t = SwarmThread(r.chat, 'm1');
+      t.draft = 'look';
+      t.files.add([file('a.jpg')]);
+      final sending = t.send();
+      await settle();
+
+      t.dispose();
+      expect(uploads.asked.single.cancel.isCancelled, isTrue);
+      uploads.asked.single.answer.complete(FakeUploads.attachment('late'));
+
+      expect(await sending, isFalse);
+      await settle();
+      expect(r.swarm.commands, isEmpty);
+      expect(r.chat.error, isNull);
+      final again = open(r.chat);
+      expect(again.draft, 'look');
+      expect(names(again.files.files), ['a.jpg']);
+      expect(again.uploading, isFalse);
+      expect(again.error, isNull);
+      expect(again.canSend, isTrue);
+    });
+
+    test('access taken away while the files go up: the upload stops, the '
+        'files and the draft go, and the late answer sends nothing', () async {
+      final uploads = FakeUploads()..answersAtOnce = false;
+      final r = await rig(uploads: uploads);
+      final t = open(r.chat);
+      t.draft = 'Secret plan';
+      t.files.add([file('plan.pdf')]);
+      final sending = t.send();
+      await settle();
+
+      r.reader.revoke();
+
+      expect(t.state, SwarmChatState.lost);
+      expect(t.uploading, isFalse);
+      expect(t.files.files, isEmpty);
+      expect(t.draft, isEmpty);
+      expect(uploads.asked.single.cancel.isCancelled, isTrue);
+      uploads.asked.single.answer.complete(FakeUploads.attachment('late'));
+      expect(await sending, isFalse);
+      expect(r.swarm.commands, isEmpty);
+      expect(t.error, isNull);
+      expect(r.chat.threadFiles('m1').files, isEmpty);
+    });
+
+    for (final code in ['FORBIDDEN', 'NOT_FOUND']) {
+      test('an upload refused with $code drops the thread, as a refused reply '
+          'does', () async {
+        final uploads = FakeUploads()
+          ..refuse['plan.pdf'] = SuperTabFailure(
+            code,
+            'You cannot read this chat.',
+            statusCode: code == 'FORBIDDEN' ? 403 : 404,
+          );
+        final r = await rig(uploads: uploads);
+        final t = open(r.chat);
+        t.draft = 'Secret plan';
+        t.files.add([file('plan.pdf')]);
+        final before = r.swarm.paths.length;
+
+        expect(await t.send(), isFalse);
+
+        expect(t.state, SwarmChatState.lost);
+        expect(t.files.files, isEmpty);
+        expect(t.draft, isEmpty);
+        expect(t.error, isNull, reason: 'no message from a chat not open');
+        expect(r.swarm.commands, isEmpty);
+        await settle();
+        expect(
+          r.swarm.paths.skip(before).where((p) => p.startsWith(messages)),
+          isNotEmpty,
+          reason: 'the chat reads again to learn it',
+        );
+      });
+    }
+
+    test('the chat losing access empties every thread\'s files, those a '
+        'thread screen holds too', () async {
+      final r = await rig();
+      final held = r.chat.threadFiles('m1')..add([file('a.jpg')]);
+      final other = r.chat.threadFiles('m9')..add([file('b.jpg')]);
+
+      r.reader.revoke();
+      await settle();
+
+      expect(held.files, isEmpty);
+      expect(other.files, isEmpty);
+      expect(r.chat.threadFiles('m1').files, isEmpty);
+    });
   });
 
   group('privacy', () {

@@ -8,8 +8,11 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
+import 'swarm_attach.dart';
+import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_message_row.dart';
@@ -31,7 +34,8 @@ typedef SwarmThreadPending = Widget Function(SwarmThread thread, String text);
 
 /// One thread of a chat, full screen as Slack Mobile opens one: its root at
 /// the top, "N replies", its replies, and a reply box at the foot with Also
-/// send (the desktop's thread panel, Tony's mockup of 10-29).
+/// send and the chat's + for files (the desktop's thread panel, Tony's
+/// mockup of 10-29).
 ///
 /// Its rows are drawn by the chat that opened it ([row], [pending]), so a
 /// message looks the same in both. While it is up its Swarm is watched, so
@@ -71,6 +75,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// The message whose actions are open (Copy), by a tap on it.
   String? _acting;
 
+  /// What the last pick left out, or why it could not pick, under the box.
+  final _attachNote = ValueNotifier<String?>(null);
+  bool _picking = false;
+
   SwarmSession? _session;
   bool _watching = false;
 
@@ -101,6 +109,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     if (_watching) _session?.unwatch(widget.swarmId);
     _thread.composer.removeListener(_drafted);
     _thread.dispose();
+    _attachNote.dispose();
     _text.dispose();
     _focus.dispose();
     _scroll.dispose();
@@ -123,9 +132,28 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
+  /// The box's + ([attachSwarmFiles]), its files into the thread's.
+  Future<void> _pickFiles() async {
+    if (_picking) return;
+    _picking = true;
+    try {
+      await attachSwarmFiles(
+        context,
+        _thread.files,
+        // Nothing goes into a thread the person can no longer reply in.
+        stillWanted: () =>
+            mounted && _thread.state != SwarmChatState.lost && _thread.canPost,
+        note: (note) => _attachNote.value = note,
+      );
+    } finally {
+      _picking = false;
+    }
+  }
+
   /// Sends the reply, at the foot of the thread where it shows. Once the
   /// backend took it the keyboard goes down, unless the next is being typed.
   Future<void> _send() async {
+    _attachNote.value = null;
     if (_scroll.hasClients) {
       unawaited(
         _scroll.animateTo(
@@ -363,12 +391,14 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
-  /// The reply box: a field that grows with what is typed, then Also send
-  /// and a round Send (the desktop's thread composer).
+  /// The reply box: the files going with the reply, a field that grows with
+  /// what is typed, then Also send, the + and a round Send (the desktop's
+  /// thread composer).
   Widget _box(SwarmThread t, Tty tty) {
     final canSend = t.canSend;
     // A reply not confirmed is sent again from where it shows.
     final writable = !t.sending && t.pending == null;
+    final canAttach = !t.uploading && t.files.room > 0;
     return Container(
       key: const ValueKey('swarm-thread-box'),
       decoration: BoxDecoration(
@@ -384,6 +414,25 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          ValueListenableBuilder(
+            valueListenable: _attachNote,
+            builder: (context, note, _) => note == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.xs,
+                      0,
+                      AppSpace.xs,
+                      AppSpace.s,
+                    ),
+                    child: Text(
+                      note,
+                      key: const ValueKey('swarm-thread-attach-note'),
+                      style: AppType.caption(color: tty.yellow),
+                    ),
+                  ),
+          ),
+          SwarmOutgoingChips(box: t),
           SwarmMessageField(
             controller: _text,
             focus: _focus,
@@ -399,6 +448,11 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                   onChanged: writable ? (on) => t.alsoSend = on : null,
                 ),
               ),
+              if (swarmSendsFiles)
+                SwarmAttachButton(
+                  key: const ValueKey('swarm-thread-attach'),
+                  onTap: canAttach ? () => unawaited(_pickFiles()) : null,
+                ),
               SwarmRoundButton(
                 key: const ValueKey('swarm-thread-send'),
                 label: 'Send reply',

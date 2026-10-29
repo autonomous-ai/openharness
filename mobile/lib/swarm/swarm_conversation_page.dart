@@ -65,6 +65,33 @@ void openSwarmConversation(
 @visibleForTesting
 Future<bool> Function() openSwarmSettings = openAppSettings;
 
+/// A composer's + — the chat's, or a thread's reply box: the sheet, then the
+/// picker it names, its files into [files], and what to say under the box to
+/// [note]. A refusal of the camera or photos offers the phone's Settings.
+/// Nothing is added, or said, once [stillWanted] fails.
+Future<void> attachSwarmFiles(
+  BuildContext context,
+  SwarmOutgoingFiles files, {
+  required bool Function() stillWanted,
+  required ValueChanged<String?> note,
+}) async {
+  final source = await showSwarmAttachSheet(context);
+  if (source == null || !stillWanted()) return;
+  final outcome = await addSwarmPicked(files, source, stillWanted: stillWanted);
+  if (!stillWanted() || !context.mounted) return;
+  switch (outcome) {
+    case SwarmPicked(note: final said):
+      note(said);
+    case SwarmPickFailed(:final message):
+      note(message);
+    case SwarmPickDenied(:final source):
+      note(null);
+      if (await showSwarmAccessOff(context, source)) {
+        unawaited(openSwarmSettings());
+      }
+  }
+}
+
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
 /// quote leading to its original; the decisions asked of the person in it;
@@ -369,31 +396,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _send(c);
   }
 
-  /// The composer's +: the sheet, then the picker it names, its files into
-  /// [c]'s. A refusal of the camera or photos offers the phone's Settings.
+  /// The composer's + ([attachSwarmFiles]), its files into [c]'s.
   Future<void> _pickFiles(SwarmConversation c) async {
     if (_picking) return;
     _picking = true;
     try {
-      final source = await showSwarmAttachSheet(context);
-      if (source == null || !mounted || _conversation != c) return;
-      final outcome = await addSwarmPicked(
+      await attachSwarmFiles(
+        context,
         c.files,
-        source,
         stillWanted: () => mounted && _conversation == c,
+        note: (note) => _attachNote.value = note,
       );
-      if (!mounted || _conversation != c) return;
-      switch (outcome) {
-        case SwarmPicked(:final note):
-          _attachNote.value = note;
-        case SwarmPickFailed(:final message):
-          _attachNote.value = message;
-        case SwarmPickDenied(:final source):
-          _attachNote.value = null;
-          if (await showSwarmAccessOff(context, source)) {
-            unawaited(openSwarmSettings());
-          }
-      }
     } finally {
       _picking = false;
     }
@@ -581,7 +594,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             c.reader.snapshot?.personLook(c.reader.accountId) ??
             (picture: null, status: null),
         text: text,
-        files: const [],
+        files: t.pendingFiles,
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
         // Taken by the backend and not read back yet: still on its way.
         sending: t.sending || t.confirmed,
@@ -1521,24 +1534,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          SwarmOutgoingChips(conversation: c),
+          SwarmOutgoingChips(box: c),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               if (swarmSendsFiles)
-                SwarmRoundButton(
+                SwarmAttachButton(
                   key: const ValueKey('swarm-attach'),
-                  label: 'Attach files',
                   onTap: c.uploading || c.files.room <= 0
                       ? null
                       : () => unawaited(_pickFiles(c)),
-                  child: Icon(
-                    LucideIcons.plus,
-                    size: AppIconSize.standalone,
-                    color: c.uploading || c.files.room <= 0
-                        ? AppPalette.textFaint
-                        : AppPalette.textSecondary,
-                  ),
                 ),
               const SizedBox(width: 6),
               Expanded(
@@ -2559,6 +2564,25 @@ class SwarmRoundButton extends StatelessWidget {
         decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
         child: child,
       ),
+    ),
+  );
+}
+
+/// A composer's + ([attachSwarmFiles]): off, and faint, while files go up or
+/// no more fit.
+class SwarmAttachButton extends StatelessWidget {
+  const SwarmAttachButton({super.key, required this.onTap});
+
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => SwarmRoundButton(
+    label: 'Attach files',
+    onTap: onTap,
+    child: Icon(
+      LucideIcons.plus,
+      size: AppIconSize.standalone,
+      color: onTap == null ? AppPalette.textFaint : AppPalette.textSecondary,
     ),
   );
 }
