@@ -28,6 +28,10 @@ class MemPeers {
   }
   unlink(id: string): boolean { return this.pins.delete(id) }
   list(): Array<Pin & { fingerprint: string }> { return [...this.pins.values()].map((p) => ({ ...p, fingerprint: 'fp' })) }
+  goneIds = new Set<string>()
+  gone(): Set<string> { return new Set(this.goneIds) }
+  markGone(id: string): void { this.pins.delete(id); this.goneIds.add(id) }
+  restore(listed: Iterable<string>): boolean { let any = false; for (const id of listed) any = this.goneIds.delete(id) || any; return any }
 }
 
 interface Node {
@@ -48,6 +52,8 @@ interface Node {
   teamFree: boolean
   /** How often the list was read again. */
   reads: number
+  /** The machines this one sent a request to. */
+  asked: string[]
 }
 
 /** A small fleet whose "relay" is a direct call: a request reaches the target only if the caller pinned
@@ -78,6 +84,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       kindOf: 'computer',
       teamFree: false,
       reads: 0,
+      asked: [],
     } as unknown as Node
     node.syncer = new S.GroupSyncer({
       store: memStore,
@@ -93,6 +100,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
         teamFree: () => node.teamFree,
       },
       request: async (machineId, frame: Frame) => {
+        node.asked.push(machineId)
         const target = nodes.find((n) => n.machineId === machineId)
         if (!target?.online) return null
         const pin = node.peers.get(machineId)
@@ -123,6 +131,33 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
 }
 
 describe('GroupSyncer', () => {
+  // Roadmap Phase 1.1: a machine deleted from the account stayed in the roster, so every round pinned it again and the relay
+  // dialled it again, for good. Once the relay marks it gone (the backend said it was deleted), nothing here pins or dials it,
+  // until the account's machine list shows it again.
+  it('never pins or dials a machine marked gone, until it is listed again', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, x, b] = [f.add('a'), f.add('c'), f.add('b')]
+    f.link(x, a); f.link(b, a)
+    await a.syncer.syncAll()
+    expect(a.peers.get(x.machineId!)).not.toBeNull()
+
+    a.peers.markGone(x.machineId!)
+    a.asked.length = 0
+    await a.syncer.syncAll()
+    // B still tells A about X; that must not put X back either.
+    await b.syncer.syncAll()
+    a.syncer.resume()
+    expect(a.peers.get(x.machineId!)).toBeNull()
+    expect(a.asked).not.toContain(x.machineId)
+    expect(a.asked).toContain(b.machineId)
+
+    a.peers.restore([x.machineId!])
+    await a.syncer.syncAll()
+    expect(a.peers.get(x.machineId!)?.pub).toBe(x.pub)
+    expect(a.asked).toContain(x.machineId)
+  })
+
   it('never makes a machine shared across accounts part of the group, either way', async () => {
     vi.useFakeTimers()
     const f = fleet()
@@ -462,7 +497,9 @@ describe('GroupSyncer', () => {
     for (const n of f.nodes) n.syncer.stop()
   })
 
-  it('a round that missed a member tries again soon, then backs off', async () => {
+  // The first retry waits 30 s, as the relay holds a refused machine (remoteRelay.ts): at 15 s it went through the background
+  // pools and asked an offline machine again before the backend's retry-after was up (socket churn e2e, 2026-10-29).
+  it('a round that missed a member tries again after 30 s, then backs off', async () => {
     vi.useFakeTimers()
     const f = fleet()
     const [a, b] = [f.add('a'), f.add('b')]
@@ -472,13 +509,31 @@ describe('GroupSyncer', () => {
     const handle = vi.spyOn(b.syncer, 'handle')
     await a.syncer.syncAll()
     b.online = true
-    await vi.advanceTimersByTimeAsync(14_000)
+    await vi.advanceTimersByTimeAsync(29_000)
     expect(handle).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(handle).toHaveBeenCalledTimes(1)
     // It answered: no more retries.
     await vi.advanceTimersByTimeAsync(5 * 60_000)
     expect(handle).toHaveBeenCalledTimes(1)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
+  // Review of #2104: with the first retry at 30 s, a new link waited behind the pending retry instead of going out at
+  // once. Fresh news is sent now, whatever retry for a missed member is pending.
+  it('a new link goes out at once, even while a retry for a missed member is pending', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b, phone] = [f.add('a'), f.add('b'), f.add('p', false)]
+    b.online = false
+    f.link(a, b)
+    b.syncer.stop()
+    await vi.advanceTimersByTimeAsync(0) // the link's fan-out misses B: a retry is pending
+    await vi.advanceTimersByTimeAsync(5_000)
+    b.online = true
+    a.syncer.linked({ pub: phone.pub, kind: 'viewer', label: 'new phone' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(b.trusted.has(phone.pub)).toBe(true)
     for (const n of f.nodes) n.syncer.stop()
   })
 

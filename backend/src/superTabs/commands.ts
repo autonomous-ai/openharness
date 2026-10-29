@@ -1,6 +1,7 @@
 import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
+import { tokensByModelSchema } from './costs/tokens.js'
 import {
   activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY,
@@ -27,6 +28,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -175,7 +177,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable(),
     // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
-    ask: decisionChoices.extend({ personId: id }).strict().optional() }).strict(),
+    ask: decisionChoices.extend({ personId: id }).strict().optional(),
+    // Its session's token totals by model, read by its host as it finishes (Done, Stopped): the attempt's end (costs/attempts.ts).
+    tokens: tokensByModelSchema.optional() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
   z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
@@ -1001,17 +1005,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           text: `${[...names].join(', ')} never started and will not start now. Start ${names.size > 1 ? 'them' : 'it'} again if still needed.` })
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
+      // Saving settings sends the whole contribution again; only machine.pause changes its pause (review of #2084).
+      const paused = mac?.paused ?? state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
-        contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: mac?.paused ?? false,
+        contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}) })
-      // A Mac given other slots or a new name gives its team account the same; its own folder, engines and grant stay.
+      // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
-      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: false })
+      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
       break
     }
     case 'machine.pause': {
@@ -1365,6 +1371,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      // Codex runs a command its rules files allow outside its sandbox without asking, and those are the person's own and
+      // Harness's, shared by all their Codex sessions: a Buddy could run harness new or send, or anything they once told
+      // Codex to always allow. Refused here, so every machine refuses whatever its CLI, until a Buddy has a Codex home of
+      // its own (security review 1 of #2087). Desktop names this reason beside a disabled Codex.
+      if (command.engine === 'codex') fail('BUDDY_ENGINE', CODEX_BUDDY_REFUSAL, 403)
       const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
       const chatId = buddyChatId(project.id, me)
       // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a

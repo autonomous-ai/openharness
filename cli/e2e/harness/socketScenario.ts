@@ -95,10 +95,13 @@ export class DesktopWindow {
 }
 
 /**
- * A browser tab on machine `machineId`: web-ws with `client=web` (ws_conn.dart's query), select, then the
+ * A browser tab on machine `machineId`: web-ws with `client=web` and its version (ws_conn.dart's query), select, then the
  * end-to-end hello a paired browser sends. Redials like a window; 4403 stops it, as a sign-in for
  * another environment does.
  */
+/** The web build the tab stands for, as it reads its version from the host's release file. */
+const WEB_BUILD_VERSION = '1.3.64'
+
 export class WebTab {
   dials = 0
   sessions = 0
@@ -114,7 +117,8 @@ export class WebTab {
     if (this.closing) return
     this.dials++
     const { wsUrl, token, machineId, identity, machinePub } = this.options
-    const ws = new WebSocket(`${wsUrl}/api/web-ws?autonomousEnv=prod&client=web`, [token])
+    // The web build's version rides every socket since Phase 0 (#2029: ws_conn.dart `'v': declaredAppVersion`).
+    const ws = new WebSocket(`${wsUrl}/api/web-ws?autonomousEnv=prod&client=web&v=${WEB_BUILD_VERSION}`, [token])
     this.ws = ws
     const crypto = new RelaySessionCrypto({ machineId, selfIdentity: identity, peerPub: machinePub, groupSeen: new Map() })
     ws.on('error', () => { /* 'close' follows */ })
@@ -162,6 +166,33 @@ export interface ScenarioResult {
 }
 
 /**
+ * Why the offline machine's retries break the backend's 30 s retry-after, per daemon; empty when they do not. Every
+ * select of it must come through a named daemon's meter entry, and each daemon must have been refused it at least twice
+ * (review of #2104: a daemon that asked once has no gap to measure, and an empty list of gaps passes any minimum).
+ */
+export function offlineRetryProblems(result: ScenarioResult, daemons: readonly string[] = ['a', 'b']): string[] {
+  const problems: string[] = []
+  const selects = result.sockets.filter((s) => s.endpoint === '/api/web-ws').flatMap((s) => s.selects
+    .filter((select) => select.machineId === result.machines.offline).map((select) => ({ ...select, via: s.via })))
+  const unnamed = selects.filter((select) => select.via === null || !daemons.includes(select.via)).length
+  if (unnamed) problems.push(`${unnamed} select(s) of the offline machine came through no named daemon`)
+  for (const daemon of daemons) {
+    const times = selects.filter((select) => select.via === daemon && select.outcome === 'MACHINE_OFFLINE')
+      .map((select) => select.at).sort((x, y) => x - y)
+    if (times.length < 2) {
+      problems.push(`daemon ${daemon} was refused the offline machine ${times.length} time(s): no retry to measure`)
+      continue
+    }
+    // A second of slack for the timers on both sides.
+    for (let i = 1; i < times.length; i++) {
+      const gap = times[i] - times[i - 1]
+      if (gap < 29_000) problems.push(`daemon ${daemon} asked the offline machine again after ${(gap / 1000).toFixed(1)} s`)
+    }
+  }
+  return problems
+}
+
+/**
  * What a run is missing to prove anything; empty when it did everything it should. Each check on the run also
  * passes when nothing happened (no deleted-machine select, no quick redial), so a run that never reached a machine
  * through A's relay, never opened the tab's session, was never refused X or selected Y once must fail, loudly.
@@ -187,11 +218,13 @@ async function resolveMachine(backend: RealBackend, who: Account, label: string)
   return { machineId: r.body.data.machine.machineId as string, computerId }
 }
 
-/** A daemon signed in as `who` on machine `machine`, dialling the backend through the meter. */
-async function machineDaemon(meter: SocketMeter, who: Account, machine: { machineId: string; computerId: string },
+/** A daemon signed in as `who` on machine `machine`, dialling the backend through its own meter entry, named `name`:
+ *  two daemons of one account declare the same client, version and token, and only the entry tells them apart. */
+async function machineDaemon(meter: SocketMeter, name: string, who: Account, machine: { machineId: string; computerId: string },
   e2ee: Record<string, unknown>, stops: Array<() => unknown>): Promise<IsolatedDaemon> {
+  const entry = await meter.entry(name)
   const daemon = await IsolatedDaemon.create({ env: {
-    ADAPTER_COMPUTER_ID: machine.computerId, BACKEND_WS_URL: meter.wsUrl, WEB_URL: meter.url,
+    ADAPTER_COMPUTER_ID: machine.computerId, BACKEND_WS_URL: entry.wsUrl, WEB_URL: entry.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' } })
   // Before anything else can throw: the daemon's tmux server and folders exist from here on.
   stops.push(() => daemon.close())
@@ -222,7 +255,7 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
 
     const idA = newIdentity(), idB = newIdentity(), tab = newIdentity()
     const linkedAt = Date.now()
-    const daemonA = await machineDaemon(meter, alice, a, {
+    const daemonA = await machineDaemon(meter, 'a', alice, a, {
       'identity.json': { priv: b64e(idA.priv), pub: b64e(idA.pub) },
       // Pins as `harness link connect` left them; X's and Y's keys are never used, their selects fail first.
       'machinePeers.json': [
@@ -231,7 +264,7 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
         { machineId: offline.machineId, pub: b64e(newIdentity().pub), label: 'machine-y', linkedAt },
       ],
     }, stops)
-    const daemonB = await machineDaemon(meter, alice, b, {
+    const daemonB = await machineDaemon(meter, 'b', alice, b, {
       'identity.json': { priv: b64e(idB.priv), pub: b64e(idB.pub) },
       'paired.json': [
         { identityPub: b64e(idA.pub), label: 'machine-a', pairedAt: linkedAt, role: 'web', machineId: a.machineId, kind: 'machine' },

@@ -888,6 +888,18 @@ it('lets a big machine offer more than 16 agents and refuses only counts that ar
   f.run(contribute(96).data!, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
   expect(f.state.machines![0]!.maxAgents).toBe(96)
 })
+// Review of #2084: saving a paused machine's settings sends the whole contribution again, and it came back unpaused.
+it('keeps a paused machine paused when its owner saves other settings, until they unpause it', () => {
+  const f = fixture(), owners = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+  const save = (maxAgents: number): Command => ({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents })
+  f.run(save(2), owner, owners)
+  f.run({ type: 'machine.pause', machineId: 'host', paused: true })
+  f.run(save(4), owner, owners)
+  expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 4, paused: true })])
+  f.run({ type: 'machine.pause', machineId: 'host', paused: false })
+  f.run(save(3), owner, owners)
+  expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, paused: false })])
+})
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
   const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }
@@ -2054,6 +2066,16 @@ describe('machine.remove', () => {
     expect(() => f.run(cleaned(removalId))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(f.state.machines!.map(m => m.removal)).toEqual([undefined])
+  })
+
+  // A settings save keeps a machine's pause (review of #2084), but nothing of a removed machine is kept.
+  it('starts a machine removed and added again unpaused, though its removal paused it', () => {
+    const { f, removalId } = cleaning()
+    expect(f.state.machines!.map(m => m.paused)).toEqual([true])
+    f.run(cleaned(removalId))
+    f.run({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: false })])
   })
 
   it('lets the machine owner\'s host acknowledge after the owner left the Swarm', () => {

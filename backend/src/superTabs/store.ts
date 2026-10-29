@@ -47,7 +47,8 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
-import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { costRows, summarizeCosts } from './costs/read.js'
+import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
@@ -1219,6 +1220,12 @@ export class SuperTabStore {
       ended = endedHolds(original, effects.state)
       started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
+      // An attempt finished by its own agent ends with the totals its host read as it finished; finished by anyone else, or
+      // without them, its end is unknown (costs/attempts.ts endRun).
+      const finished = command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped') ? {
+        assignmentId: command.assignmentId, tokens: actor.kind === 'agent'
+          && original.conversations.find(c => c.id === command.conversationId)?.assignment?.agentId === actor.agentId ? command.tokens ?? null : null } : undefined
+      await recordAttempts(tx, tabId, original, effects.state, context.now, finished)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
@@ -1833,6 +1840,20 @@ export class SuperTabStore {
     })
   }
 
+  /** What the attempts routed in the last `days` cost and how they went (costs/read.ts), over the groups the reader may read.
+   *  The decisions are read first, by index, so only the groups they name are loaded. */
+  async costSummary(user: AuthUser, tabId: string, days: number, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const until = this.now(), since = until - days * 24 * 60 * 60_000
+      const { rows, truncated } = await costRows(tx, tabId, since)
+      const { state } = await this.load(tx, user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
+      return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
+    })
+  }
+
   async routeDecision(user: AuthUser, tabId: string, decisionId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const row = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId }, select: { conversationId: true } })
@@ -1958,6 +1979,7 @@ export class SuperTabStore {
         const sequences = numberMessages(state, rows, now)
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
+        await recordAttempts(tx, tabId, loaded.state, state, now)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
@@ -1967,8 +1989,10 @@ export class SuperTabStore {
       const team = isTeamSession(user)
       // Its privacy check counts only from the Harness Team account's own session; an ordinary sign-in's claim is dropped.
       // Progress is kept for running sessions only: their leases are read from it (liveness.ts).
-      const { privacy: reported, harnessProgress, preparingStartIds, ...reading } = observation
+      const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
       const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => observation.runningHarnessIds.includes(id)))
+      // Token counts too: an attempt's run reads its session's totals from them (costs/attempts.ts).
+      const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => observation.runningHarnessIds.includes(id)))
       // A machine says preparing only of the starts it launched that are neither running nor failed (liveness.ts).
       const preparing = preparingStartIds?.filter(id => state.starts?.some(s => s.id === id && s.request.machineId === machineId
         && s.dispatched && !s.harnessId && !s.error))
@@ -1977,6 +2001,7 @@ export class SuperTabStore {
       pool.observation = { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
         // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
         sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+        ...(tokens ? { harnessTokens: tokens } : {}),
         ...(preparing ? { preparingStartIds: preparing } : {}) }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
@@ -2226,6 +2251,7 @@ export class SuperTabStore {
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
       // second finds none).
       await this.endRuns(tx, tabId, loaded.state, state)
+      await recordAttempts(tx, tabId, loaded.state, state, this.now())
       if (ledProject(state, agentId)) {
         await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
       }
@@ -2416,6 +2442,7 @@ export class SuperTabStore {
       // A confirmed stop finishes its worker, as work.status stopped does (design ruling R5).
       const project = group ? groupProject(state, group).id : undefined
       await this.save(tx, loaded, state, clock.next(), project && state.projects ? [{ kind: 'progress', key: project }] : [])
+      await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await this.writeMessages(tx, tabId, state, notices, sequences)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       ended = endedHolds(before, state)

@@ -14,6 +14,23 @@ import 'model.dart';
 /// The engines a Buddy runs on (spec: Buddies, 10-28).
 const kBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
 
+/// Engines a Buddy cannot run on yet, and why, in the backend's own words
+/// (`CODEX_BUDDY_REFUSAL`, backend superTabs/commands.ts): the dialog offers
+/// them turned off, with this beside them (security review 1 of #2087).
+const kBuddyEngineRefusals = {
+  'codex': 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.',
+};
+
+/// The engine Start again asks for: the Buddy's own, or Claude Code in place
+/// of one the server refuses, which it would refuse again (review 2 of #2087).
+String buddyRestartEngine(String engine) =>
+    kBuddyEngineRefusals.containsKey(engine) ? 'claude' : engine;
+
+/// Start again's label: "Start with Claude Code" where it changes the engine.
+String buddyRestartLabel(String engine) => buddyRestartEngine(engine) == engine
+    ? 'Start again'
+    : 'Start with Claude Code';
+
 /// An engine as people read it: "Claude", "Codex".
 String buddyEngineName(String engine) =>
     kBuddyEngines[engine] ??
@@ -247,7 +264,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             Flexible(
                               child: RadioListTile<String>(
                                 value: key,
-                                enabled: !_busy,
+                                enabled:
+                                    !_busy &&
+                                    !kBuddyEngineRefusals.containsKey(key),
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(value),
@@ -259,6 +278,16 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
+              for (final refusal in kBuddyEngineRefusals.values) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: _labelWidth),
+                  child: Text(
+                    refusal,
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                ),
+              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(error, style: DesktopChrome.control()),
@@ -375,10 +404,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                       c.addBuddy(
                         projectId: chat.projectId,
                         machineId: machineId,
-                        engine: engine,
+                        engine: buddyRestartEngine(engine),
                       ),
                     ),
-              child: const Text('Start again'),
+              child: Text(buddyRestartLabel(engine)),
             ),
         ],
       ),
@@ -428,10 +457,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                           c.addBuddy(
                             projectId: chat.projectId,
                             machineId: agent.machineId,
-                            engine: agent.engine,
+                            engine: buddyRestartEngine(agent.engine),
                           ),
                         ),
-                  child: const Text('Start again'),
+                  child: Text(buddyRestartLabel(agent.engine)),
                 ),
               ],
             ),
@@ -515,10 +544,13 @@ class _BuddyStartState extends State<_BuddyStart> {
                     value: _engine,
                     semanticLabel: 'Agent',
                     textStyle: DesktopChrome.control(),
+                    // Only engines the server takes; the refused ones say why
+                    // below, as Add a Buddy does (#2087).
                     options: [
                       for (final MapEntry(:key, :value)
                           in kBuddyEngines.entries)
-                        SelectOption(value: key, label: value),
+                        if (!kBuddyEngineRefusals.containsKey(key))
+                          SelectOption(value: key, label: value),
                     ],
                     onChanged: (value) {
                       if (!busy) setState(() => _engine = value);
@@ -540,6 +572,14 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
               ],
             ),
+          if (machine != null)
+            for (final refusal in kBuddyEngineRefusals.values) ...[
+              const SizedBox(height: 4),
+              Text(
+                refusal,
+                style: DesktopChrome.control(color: DesktopChrome.muted),
+              ),
+            ],
         ],
       ),
     );
