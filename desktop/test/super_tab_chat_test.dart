@@ -315,22 +315,30 @@ void main() {
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
     final c = await show(tester, server);
-    Finder projectDot() => find.descendant(
-      of: find.byKey(const ValueKey('super-group-lead')),
-      matching: find.byWidgetPredicate(
-        (widget) =>
-            widget is Semantics && widget.properties.label == 'Unread messages',
-      ),
-    );
+    // Unread is the project's name in bold, with no dot (Dee, 2026-10-29).
+    final name = c.snapshot!.projects.single.name;
+    FontWeight? projectWeight() => tester
+        .widget<RichText>(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-group-lead')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is RichText && widget.text.toPlainText() == name,
+            ),
+          ),
+        )
+        .text
+        .style
+        ?.fontWeight;
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsOneWidget);
+    expect(projectWeight(), grid.AppFont.semibold);
     await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
     expect(find.text('An unread workgroup update'), findsOneWidget);
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsNothing);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     await closeReadView(tester, c);
   });
 

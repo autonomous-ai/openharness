@@ -83,9 +83,9 @@ function reportedClean(state: SuperTabState, worker: Agent, now: number): boolea
  * Marks for stopping every worker of the project idle for IDLE_STOP_MS: started by the Swarm (a person's own session is
  * theirs to close), not a Lead, with no active task, no message waiting for it (`busy`), its host reporting nothing
  * uncommitted, not waiting to resume after a usage limit, and, for a Reviewer, no re-check pending. Each gets one quiet
- * line, to nobody, in its most recent group. Run on its Lead's poll, which knows what is waiting. `asleep` are the groups
- * of its Reviewers that ordinary loads leave out: an archived review group still says whose re-check may come (review of
- * #1807).
+ * line, to nobody, in its most recent loaded group, else the Lead conversation. Run on its Lead's poll, which knows what
+ * is waiting. `asleep` are the groups of its Reviewers that ordinary loads leave out: an archived review group still says
+ * whose re-check may come (review of #1807).
  */
 export function stopIdleWorkers(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>,
   asleep: readonly GroupActivity[] = []): MessageDraft[] {
@@ -107,7 +107,8 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
     worker.idleStop = { previous: worker.workDecision ?? null }
     worker.workDecision = 'stop'
     worker.releaseId = stableId('idle-stop', worker.id, String(since))
-    const last = groups.filter(g => !g.archived).sort((a, b) => (time(b.lastActivityAt) ?? 0) - (time(a.lastActivityAt) ?? 0))[0]
+    // Only a group the poll loaded takes the line: an asleep one refuses posts, and its refusal would fail the whole poll.
+    const last = groups.filter(g => !g.archived && state.conversations.some(c => c.id === g.id)).sort((a, b) => (time(b.lastActivityAt) ?? 0) - (time(a.lastActivityAt) ?? 0))[0]
     rows.push({ id: stableId('idle-stop', worker.id, String(since), 'line'), conversationId: last?.id ?? project.leadConversationId, replyTo: null, recipients: [],
       author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
       text: `${worker.displayName ?? worker.name} stopped: no work for 15 minutes.`, source: { kind: 'idle-stop', agentId: worker.id } })
