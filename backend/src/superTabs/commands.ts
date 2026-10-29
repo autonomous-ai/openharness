@@ -25,6 +25,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
@@ -275,8 +276,9 @@ export interface CommandContext {
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
     hostMachineId?: string }
   /** Loaded from this tab and conversation by the store. */
-  /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies). */
-  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null }
+  /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
+   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
+  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
@@ -1978,6 +1980,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
       message(group.id, `${group.brief}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
+      const news = assignedNotice(state, group, sender, operationId)
+      if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' } })
       break
@@ -2137,6 +2141,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (clean.removed.length) { draft.text = clean.text; removed.push(...clean.removed) }
   }
   if (removed.length) Object.assign(result, credentialResult(removed))
+  // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
+  for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
   return effects
 }
 
