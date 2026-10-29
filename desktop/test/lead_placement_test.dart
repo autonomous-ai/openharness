@@ -10,6 +10,7 @@ LeadMachine _machine(
   Set<String> repositories = const {},
   bool maySleep = false,
   String? unavailable,
+  bool inSwarm = true,
 }) => LeadMachine(
   id: id,
   name: id,
@@ -18,6 +19,7 @@ LeadMachine _machine(
   repositories: repositories,
   maySleep: maySleep,
   unavailable: unavailable,
+  inSwarm: inSwarm,
 );
 
 void main() {
@@ -80,6 +82,25 @@ void main() {
         _machine('b', free: 8),
       ], null);
       expect(ranked.map((m) => m.id), ['b', 'a']);
+    });
+
+    test('one of the person’s machines the Swarm does not list comes after '
+        'the Swarm’s own and is still startable', () {
+      final outside = LeadMachine(
+        id: 'mine',
+        name: 'Mine',
+        online: true,
+        freeAgents: null,
+        inSwarm: false,
+      );
+      final ranked = rankLeadMachines([
+        outside,
+        _machine('laptop', maySleep: true, free: 1),
+      ], _repo);
+      expect(ranked.map((m) => m.id), ['laptop', 'mine']);
+      expect(outside.startable, isTrue);
+      expect(bestLeadMachine([outside], _repo)?.id, 'mine');
+      expect(leadMachineDetail(outside, _repo), 'Online · Not in this Swarm');
     });
 
     test('no machine is best when none is online, free and allowed', () {

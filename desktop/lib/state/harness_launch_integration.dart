@@ -1,4 +1,5 @@
 import 'harness_attachments.dart';
+import 'lead_placement.dart';
 
 class HarnessLaunchRole {
   const HarnessLaunchRole({
@@ -55,6 +56,12 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
+
+  /// A new project in a Swarm: the Swarm's machines its Product Manager may
+  /// start on, best first. The form then shows only the task, repo and
+  /// visibility, with the machine on a "Product Manager:" line. Null keeps
+  /// the ordinary machine, agent and folder controls.
+  List<LeadMachine>? leadMachines;
   final Future<String> Function(String machineId, String task) prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;

@@ -1,12 +1,16 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import '../core/first_task.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/harness_launch_integration.dart';
+import '../state/lead_placement.dart';
 import '../state/swarm.dart';
 import 'controller.dart';
+import 'machine_icon.dart';
+import 'machine_status.dart';
 import 'model.dart';
 import 'launch_prompt.dart';
 
@@ -67,129 +71,142 @@ class SuperTabLaunch {
         ];
       }
     }
+    // A project's Product Manager starts on one of the Swarm's machines.
+    final leadMachines = saved['newProject'] == true && tab.superTabId != null
+        ? launch.leadMachinesOf(
+            await app.superTabs.readSnapshot(tab.superTabId!),
+          )
+        : null;
     final selectedRole =
         roles?.where((role) => role.id == saved['roleId']).firstOrNull ??
         roles?.where((role) => role.kind == 'builder').firstOrNull ??
         roles?.firstOrNull;
     late final HarnessLaunchIntegration integration;
-    integration = HarnessLaunchIntegration(
-      forcedPermissionMode: 'full',
-      creationId: saved['creationId'] as String? ?? superTabOperationId(),
-      initialTask: saved['initialMessage'] as String?,
-      swarmRole: saved['lead'] == true
-          ? 'lead'
-          : selectedRole?.swarmRole ??
-                (saved['roleKind'] == 'reviewer' ? 'review' : 'dev'),
-      swarmSkillMode: saved['skillMode'] as String? ?? 'orchestration',
-      roles: roles,
-      roleId: recovering ? saved['roleId'] as String? : selectedRole?.id,
-      actionLabel: saved['newProject'] == true
-          ? 'New Project'
-          : saved['lead'] == true
-          ? 'New Swarm'
-          : 'New Harness',
-      // Routing reads quota for Claude Code and Codex only, so a Lead is one
-      // of them; the agents it starts may be anything.
-      engines: saved['lead'] == true ? const ['claude', 'codex'] : null,
-      projectVisibility: saved['lead'] == true
-          ? saved['visibility'] as String? ?? 'public'
-          : null,
-      projectVisibilityLocked:
-          saved['projectPrepared'] == true || saved['creationRequest'] != null,
-      prepare: (machine, task) async {
-        if (integration.roles != null) {
-          final chosen = integration.roles!
-              .where((role) => role.id == integration.roleId)
-              .firstOrNull;
-          if (chosen == null) {
-            throw const SuperTabFailure(
-              'ROLE_UNAVAILABLE',
-              'Choose a role before starting this agent.',
-            );
-          }
-          saved['roleId'] = chosen.id;
-          saved['roleKind'] = chosen.kind;
-        }
-        if (saved['projectPrepared'] != true &&
-            saved['creationRequest'] == null) {
-          saved['visibility'] = integration.projectVisibility ?? 'public';
-        }
-        try {
-          final prompt = await launch.prepare(machine, task);
-          integration.swarmSkillMode =
-              saved['skillMode'] as String? ?? 'orchestration';
-          integration.swarmRole = saved['lead'] == true
-              ? 'lead'
-              : saved['roleKind'] == 'reviewer'
-              ? 'review'
-              : 'dev';
-          return prompt;
-        } on SuperTabFailure catch (failure) {
-          if (failure.code == 'PROJECT_UNAVAILABLE' && launch.started) {
-            integration.discard = launch.discard;
-          }
-          // Validation rejects the request before applying it. A lost response
-          // stays locked so retrying cannot create a second project or change
-          // the visibility of a project that may already exist.
-          if (saved['projectPrepared'] != true &&
-              const {
-                'VALIDATION_ERROR',
-                'UPDATE_REQUIRED',
-              }.contains(failure.code)) {
-            saved.remove('creationRequest');
-            saved['operationId'] = superTabOperationId();
-            await launch.persist();
-          }
-          rethrow;
-        } finally {
-          integration.projectVisibilityLocked =
-              saved['projectPrepared'] == true ||
-              saved['creationRequest'] != null;
-        }
-      },
-      beforeSubmit: (machine, receipt) async {
-        saved['machineId'] = machine;
-        saved['creationId'] = receipt;
-        saved['phase'] = 'starting';
-        saved['engine'] = integration.engine;
-        saved['folder'] = integration.folder;
-        await launch.persist();
-      },
-      complete: (machine, harnessId) async {
-        try {
-          await launch.join(machine, harnessId);
-        } catch (_) {
-          // The harness exists and its join did not finish: the journal now
-          // holds it, and the person may rather drop it than retry.
-          integration.discard = launch.discard;
-          rethrow;
-        }
-      },
-      stageAttachments: launch.stageAttachments,
-      needsAttachmentReview: () => saved['filesState'] == 'sending',
-      resolveAttachments: (resend) async {
-        launch.checkAccount();
-        saved['filesState'] = resend ? 'pending' : 'delivered';
-        await launch.persist();
-        await launch.resume();
-      },
-      resume: recovering
-          ? () async {
+    integration =
+        HarnessLaunchIntegration(
+            forcedPermissionMode: 'full',
+            creationId: saved['creationId'] as String? ?? superTabOperationId(),
+            initialTask: saved['initialMessage'] as String?,
+            swarmRole: saved['lead'] == true
+                ? 'lead'
+                : selectedRole?.swarmRole ??
+                      (saved['roleKind'] == 'reviewer' ? 'review' : 'dev'),
+            swarmSkillMode: saved['skillMode'] as String? ?? 'orchestration',
+            roles: roles,
+            roleId: recovering ? saved['roleId'] as String? : selectedRole?.id,
+            actionLabel: saved['newProject'] == true
+                ? 'New Project'
+                : saved['lead'] == true
+                ? 'New Swarm'
+                : 'New Harness',
+            // Routing reads quota for Claude Code and Codex only, so a Lead is one
+            // of them; the agents it starts may be anything.
+            engines: saved['lead'] == true ? const ['claude', 'codex'] : null,
+            projectVisibility: saved['lead'] == true
+                ? saved['visibility'] as String? ?? 'public'
+                : null,
+            projectVisibilityLocked:
+                saved['projectPrepared'] == true ||
+                saved['creationRequest'] != null,
+            prepare: (machine, task) async {
+              if (integration.leadMachines case final machines?) {
+                launch.checkLeadMachine(machines, machine);
+              }
+              if (integration.roles != null) {
+                final chosen = integration.roles!
+                    .where((role) => role.id == integration.roleId)
+                    .firstOrNull;
+                if (chosen == null) {
+                  throw const SuperTabFailure(
+                    'ROLE_UNAVAILABLE',
+                    'Choose a role before starting this agent.',
+                  );
+                }
+                saved['roleId'] = chosen.id;
+                saved['roleKind'] = chosen.kind;
+              }
+              if (saved['projectPrepared'] != true &&
+                  saved['creationRequest'] == null) {
+                saved['visibility'] = integration.projectVisibility ?? 'public';
+              }
               try {
-                await launch.resume();
+                final prompt = await launch.prepare(machine, task);
+                integration.swarmSkillMode =
+                    saved['skillMode'] as String? ?? 'orchestration';
+                integration.swarmRole = saved['lead'] == true
+                    ? 'lead'
+                    : saved['roleKind'] == 'reviewer'
+                    ? 'review'
+                    : 'dev';
+                return prompt;
               } on SuperTabFailure catch (failure) {
-                if (failure.code == 'CREATION_FAILED') {
-                  saved.remove('phase');
-                  saved.remove('creationId');
+                if (failure.code == 'PROJECT_UNAVAILABLE' && launch.started) {
+                  integration.discard = launch.discard;
+                }
+                // Validation rejects the request before applying it. A lost response
+                // stays locked so retrying cannot create a second project or change
+                // the visibility of a project that may already exist.
+                if (saved['projectPrepared'] != true &&
+                    const {
+                      'VALIDATION_ERROR',
+                      'UPDATE_REQUIRED',
+                    }.contains(failure.code)) {
+                  saved.remove('creationRequest');
+                  saved['operationId'] = superTabOperationId();
                   await launch.persist();
-                  integration.pending = false;
-                  integration.resume = null;
                 }
                 rethrow;
+              } finally {
+                integration.projectVisibilityLocked =
+                    saved['projectPrepared'] == true ||
+                    saved['creationRequest'] != null;
               }
-            }
-          : null,
-    )..pending = recovering;
+            },
+            beforeSubmit: (machine, receipt) async {
+              saved['machineId'] = machine;
+              saved['creationId'] = receipt;
+              saved['phase'] = 'starting';
+              saved['engine'] = integration.engine;
+              saved['folder'] = integration.folder;
+              await launch.persist();
+            },
+            complete: (machine, harnessId) async {
+              try {
+                await launch.join(machine, harnessId);
+              } catch (_) {
+                // The harness exists and its join did not finish: the journal now
+                // holds it, and the person may rather drop it than retry.
+                integration.discard = launch.discard;
+                rethrow;
+              }
+            },
+            stageAttachments: launch.stageAttachments,
+            needsAttachmentReview: () => saved['filesState'] == 'sending',
+            resolveAttachments: (resend) async {
+              launch.checkAccount();
+              saved['filesState'] = resend ? 'pending' : 'delivered';
+              await launch.persist();
+              await launch.resume();
+            },
+            resume: recovering
+                ? () async {
+                    try {
+                      await launch.resume();
+                    } on SuperTabFailure catch (failure) {
+                      if (failure.code == 'CREATION_FAILED') {
+                        saved.remove('phase');
+                        saved.remove('creationId');
+                        await launch.persist();
+                        integration.pending = false;
+                        integration.resume = null;
+                      }
+                      rethrow;
+                    }
+                  }
+                : null,
+          )
+          ..pending = recovering
+          ..leadMachines = leadMachines;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -222,6 +239,100 @@ class SuperTabLaunch {
     return saved['lead'] == true
         ? 'Waiting for $machineName to start the Lead for “$title”.'
         : 'Waiting for $machineName to start the harness.';
+  }
+
+  /// The Swarm's machines, one row per computer, then the person's others,
+  /// best first. A new project's Product Manager starts only on one of the
+  /// person's own, connected to this Desktop: it runs on its owner's machine,
+  /// in their account (Ken, 10-28; docs/swarms.md), so teammates' rows only
+  /// say why not.
+  List<LeadMachine> leadMachinesOf(SuperTabSnapshot snapshot, {DateTime? now}) {
+    final at = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    // A machine reports readiness and resources only once it has them.
+    Map<String, dynamic> part(Object? value) =>
+        value is Map ? superTabMap(value) : const {};
+    LeadMachine row(String id, Map<String, dynamic> pool) {
+      final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
+      final observation = part(reading['observation']);
+      final received = observation['receivedAt'];
+      final online =
+          received is num &&
+          at - received < kSuperTabMachineOfflineAfter.inMilliseconds;
+      final running = observation['runningHarnessIds'];
+      final max = reading['maxAgents'];
+      final checkouts = part(observation['readiness'])['checkouts'];
+      final device = part(observation['resources'])['deviceType'];
+      return LeadMachine(
+        id: id,
+        name: pool['name'] as String? ?? id,
+        online: online,
+        freeAgents: math.max(
+          0,
+          (max is num ? max.toInt() : 0) -
+              (running is List ? running.length : 0),
+        ),
+        repositories: {
+          if (checkouts is List)
+            for (final checkout in checkouts)
+              ?leadRepositoryKey(switch (part(checkout)['repository']) {
+                final String repository => repository,
+                _ => null,
+              }),
+        },
+        maySleep:
+            superTabMachineSymbol(device is String ? device : null) ==
+            'laptopcomputer',
+        unavailable: pool['contributorId'] != accountId
+            ? 'Another person’s machine'
+            : app.stateOf(id) == null
+            ? 'Not connected to this computer'
+            : pool['paused'] == true
+            ? 'Paused in this Swarm'
+            : null,
+      );
+    }
+
+    final listed = [
+      for (final pool in snapshot.machines)
+        if (pool['machineId'] case final String id
+            when snapshot.placeOf(id) == id && pool['removal'] == null)
+          row(id, pool),
+    ];
+    return rankLeadMachines([
+      ...listed,
+      // A person's start may still name a machine of theirs the Swarm does
+      // not list (backend agent.start), as New Project always could.
+      for (final state in app.machineStates.values)
+        if (!state.belongsToOtherAccount &&
+            !listed.any((m) => m.id == state.machine.machineId))
+          LeadMachine(
+            id: state.machine.machineId,
+            name: state.machine.displayName,
+            online: !state.needsLink && !state.isOffline,
+            freeAgents: null,
+            inSwarm: false,
+          ),
+    ], null);
+  }
+
+  /// Refuses a machine the list cannot start the Product Manager on now.
+  void checkLeadMachine(List<LeadMachine> machines, String machine) {
+    final chosen = machines.where((m) => m.id == machine).firstOrNull;
+    if (chosen == null) {
+      throw const SuperTabFailure(
+        'MACHINE_NOT_LISTED',
+        'Choose one of this Swarm’s machines.',
+      );
+    }
+    if (chosen.startable) return;
+    throw SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      chosen.unavailable != null
+          ? '${chosen.name}: ${chosen.unavailable}. Choose another machine.'
+          : !chosen.online
+          ? '${chosen.name} is offline. Choose another machine.'
+          : '${chosen.name} has no free agents. Choose another machine.',
+    );
   }
 
   void checkAccount() {

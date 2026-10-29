@@ -9,12 +9,18 @@ class LeadMachine {
     this.repositories = const {},
     this.maySleep = false,
     this.unavailable,
+    this.inSwarm = true,
   });
   final String id, name;
   final bool online;
 
-  /// The agent slots it offers the Swarm that nothing runs in.
-  final int freeAgents;
+  /// The agent slots it offers the Swarm that nothing runs in; null for a
+  /// machine of the person's the Swarm does not list, which it does not limit.
+  final int? freeAgents;
+
+  /// Listed by the Swarm. A person may still start their project's Product
+  /// Manager on another machine of theirs, as before.
+  final bool inSwarm;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
@@ -31,7 +37,7 @@ class LeadMachine {
     return key != null && repositories.contains(key);
   }
 
-  bool get startable => unavailable == null && online && freeAgents > 0;
+  bool get startable => unavailable == null && online && (freeAgents ?? 1) > 0;
 }
 
 /// One repository however its remote is spelled: `host/owner/name`, lower
@@ -51,9 +57,10 @@ String? leadRepositoryKey(String? remote) {
   return value.isEmpty ? null : value;
 }
 
-/// Best first: one the Product Manager can start on now, always on (laptops
-/// that may sleep last), with [repository] already there, with the most room; then the ones it cannot
-/// use yet (full), then other people's, then offline ones.
+/// Best first: one the Product Manager can start on now (the Swarm's machines
+/// before the person's others, always on with laptops that may sleep last,
+/// with [repository] already there, with the most room); then the ones it
+/// cannot use yet (full), then other people's, then offline ones.
 List<LeadMachine> rankLeadMachines(
   Iterable<LeadMachine> machines,
   String? repository,
@@ -69,9 +76,10 @@ List<LeadMachine> rankLeadMachines(
   return [...machines]..sort(
     (a, b) => [
       tier(a).compareTo(tier(b)),
+      flag(a.inSwarm).compareTo(flag(b.inSwarm)),
       flag(!a.maySleep).compareTo(flag(!b.maySleep)),
       flag(a.has(repository)).compareTo(flag(b.has(repository))),
-      b.freeAgents.compareTo(a.freeAgents),
+      (b.freeAgents ?? 0).compareTo(a.freeAgents ?? 0),
       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
     ].firstWhere((order) => order != 0, orElse: () => 0),
   );
@@ -92,6 +100,7 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
   if (!machine.online) return 'Offline';
   final free = machine.freeAgents;
+  if (free == null) return 'Online · Not in this Swarm';
   return [
     'Online',
     free <= 0

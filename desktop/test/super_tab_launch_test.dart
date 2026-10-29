@@ -10,6 +10,7 @@ import 'package:harness/core/launch_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/state/lead_placement.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
@@ -602,6 +603,108 @@ void main() {
       );
     },
   );
+
+  test(
+    'New Project lists the Swarm machines for its Product Manager, best first',
+    () async {
+      final f = SuperTabLaunchFixture();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      Map<String, dynamic> pool(
+        String id,
+        String name, {
+        String contributor = 'owner',
+        String device = 'Mac Studio',
+        int max = 8,
+        int running = 0,
+        int age = 0,
+        String? host,
+        List<String> repositories = const [],
+      }) => {
+        'machineId': id,
+        'name': name,
+        'contributorId': contributor,
+        'maxAgents': max,
+        'paused': false,
+        'hostMachineId': ?host,
+        'observation': {
+          'receivedAt': now - age,
+          'resources': {'deviceType': device},
+          'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
+          'readiness': {
+            'checkouts': [
+              for (final repository in repositories)
+                {'folder': 'p', 'repository': repository, 'git': true},
+            ],
+          },
+        },
+      };
+      (f.connection.server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@example.com',
+        'role': 'collaborator',
+      });
+      f.connection.server.state['machines'] = [
+        pool(
+          'm',
+          'Mac Studio',
+          max: 32,
+          running: 2,
+          repositories: ['github.com/autonomous-ai/autonomous-os'],
+        ),
+        pool('laptop', 'Ken MacBook', device: 'MacBook Pro'),
+        pool('rig', '2x 4090 Rig', contributor: 'diego', max: 16),
+        pool('rig-team', 'Rig team', contributor: 'diego', host: 'rig'),
+        pool('old', 'Old Mac', age: 10 * 60 * 1000),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final machines = box.integration!.leadMachines!;
+      expect(machines.map((m) => m.id), ['m', 'rig', 'laptop', 'old']);
+      final studio = machines.first;
+      expect(studio.name, 'Mac Studio');
+      expect(studio.startable, isTrue);
+      expect(studio.freeAgents, 30);
+      expect(
+        studio.has('git@github.com:autonomous-ai/autonomous-os.git'),
+        isTrue,
+      );
+      expect(studio.maySleep, isFalse);
+      expect(machines[1].unavailable, 'Another person’s machine');
+      expect(machines[2].maySleep, isTrue);
+      expect(machines[2].unavailable, 'Not connected to this computer');
+      expect(machines[3].online, isFalse);
+      expect(bestLeadMachine(machines, null)?.id, 'm');
+    },
+  );
+
+  test('New Project refuses a machine its list cannot start', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [
+      {
+        'machineId': 'm',
+        'name': 'Mac Studio',
+        'contributorId': 'owner',
+        'maxAgents': 2,
+        'paused': false,
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'runningHarnessIds': ['a', 'b'],
+        },
+      },
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.integration!.leadMachines!.single.startable, isFalse);
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.error, 'Mac Studio has no free agents. Choose another machine.');
+    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
+
+  test('a new Swarm keeps choosing among the person’s own machines', () async {
+    final f = SuperTabLaunchFixture();
+    final box = await f.box();
+    expect(box.integration!.leadMachines, isNull);
+  });
 
   test(
     'an unsupported project request keeps its draft and unlocks visibility',
