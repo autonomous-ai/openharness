@@ -491,6 +491,12 @@ class SuperTabSnapshot {
     return team != null && contributor != accountId ? team : own;
   }
 
+  /// The pool whose allowances the machine row [machineId] shows, to every viewer: the machine's own. A Mac's Harness
+  /// Team account holds no sign-in of its own; its agents spend the Mac owner's subscriptions, which the Mac reads.
+  /// The Team account's pool only for a row without one of its own.
+  Map<String, dynamic>? subscriptionPoolOf(String machineId) =>
+      pool(machineId) ?? teamPoolOf(machineId);
+
   /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
   /// while that Mac is in the Swarm too; [machineId] itself otherwise.
   String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;

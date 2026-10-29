@@ -29,6 +29,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
+import 'machine_allowance.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
 import 'machine_icon.dart';
@@ -1361,6 +1362,141 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : '${minutes ~/ 1440}d';
   }
 
+  /// The Subscriptions a machine's row shows to every viewer, from its own pool ([SuperTabSnapshot.subscriptionPoolOf]):
+  /// a Mac's Harness Team account spends the Mac owner's subscriptions. One card per engine it offers, Claude first,
+  /// with its figure or why there is none; offline, the last figures, with when they were read.
+  ({
+    List<Map<String, Object?>> accounts,
+    List<String>? engines,
+    List<_Allowance> allowances,
+    String aside,
+  })
+  _subscriptions(
+    String id, {
+    required Map<String, dynamic>? reading,
+    required bool readingDim,
+    required DateTime? readingAt,
+    required DateTime now,
+  }) {
+    final pool = c.snapshot!.subscriptionPoolOf(id) ?? reading;
+    final poolId = pool?['machineId'] as String? ?? id;
+    final state = widget.app?.stateOf(poolId);
+    final observation = superTabMap(
+      pool?['observation'] ?? const <String, dynamic>{},
+    );
+    final received = observation['receivedAt'];
+    final readAt = identical(pool, reading)
+        ? readingAt
+        : received is num
+        ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
+        : null;
+    final stale = identical(pool, reading)
+        ? readingDim
+        : readAt == null ||
+              now.difference(readAt) >= kSuperTabMachineOfflineAfter;
+    final quotas = {
+      for (final raw in observation['quotas'] as List? ?? [])
+        if (_chipEngines.contains(superTabMap(raw)['engine']))
+          superTabMap(raw)['engine'] as String: superTabMap(raw),
+    };
+    final configured = (pool?['engines'] as List?)?.whereType<String>();
+    final allowed =
+        configured?.any((engine) => !_chipEngines.contains(engine)) == true
+        ? quotas.keys.toList()
+        : configured?.where(_chipEngines.contains).toList();
+    var accounts =
+        _usage?.rows
+            .where(
+              (row) =>
+                  (allowed == null || allowed.contains(row['engine'])) &&
+                  (state?.isLocalMachine == true
+                      ? row['local'] == true
+                      : (row['machines'] as List? ?? []).contains(
+                          state?.machine.displayName,
+                        )),
+            )
+            .toList() ??
+        const <Map<String, Object?>>[];
+    if (accounts.isEmpty && readAt != null) {
+      accounts = [for (final quota in quotas.values) _quotaRow(quota, poolId)];
+    }
+    final reasons = observation['quotaReasons'];
+    final allowances = [
+      for (final engine in _chipEngines)
+        if (allowed?.contains(engine) ??
+            (quotas.containsKey(engine) ||
+                accounts.any((row) => row['engine'] == engine)))
+          switch (accounts
+              .where(
+                (row) =>
+                    row['engine'] == engine && row['remainingPercent'] is num,
+              )
+              .firstOrNull) {
+            final row? => _figured(engine, row, stale: stale),
+            null => _unfigured(
+              engine,
+              poolId,
+              superMachineAllowanceReason(
+                quotas[engine],
+                reasons is Map ? reasons[engine] : null,
+              ),
+            ),
+          },
+    ];
+    return (
+      accounts: accounts,
+      engines: allowed,
+      allowances: allowances,
+      aside: !stale
+          ? 'left now'
+          : readAt == null
+          ? 'offline'
+          : 'offline, read ${superTabAgo(now.difference(readAt))}',
+    );
+  }
+
+  /// [engine]'s card from its account [row], which has a figure; [stale] when it is the last one an offline machine read.
+  _Allowance _figured(
+    String engine,
+    Map<String, Object?> row, {
+    required bool stale,
+  }) {
+    final account = WorkspaceSubscriptionUsage.fromRows([row]).accounts.first;
+    return _Allowance(
+      engine: engine,
+      name: account.name,
+      figure: account.figure,
+      left: (row['remainingPercent'] as num).toDouble().clamp(0, 100),
+      stale: stale,
+      note: superMachineAllowanceNote(switch (row['details']) {
+        final List lines => lines.whereType<String>(),
+        _ => const <String>[],
+      }),
+      detail: [
+        account.name,
+        ...switch (row['details']) {
+          final List lines when lines.isNotEmpty => lines.whereType<String>(),
+          _ => ['${account.figure} remaining'],
+        },
+      ].join('\n'),
+    );
+  }
+
+  /// [engine]'s card without a figure, saying [reason] instead; named and figured as one with a reading is.
+  _Allowance _unfigured(String engine, String machineId, String reason) {
+    final account = WorkspaceSubscriptionUsage.fromRows([
+      {'engine': engine, 'accountKey': 'machine:$machineId:$engine'},
+    ]).accounts.first;
+    return _Allowance(
+      engine: engine,
+      name: account.name,
+      figure: account.figure,
+      left: null,
+      note: reason,
+      detail: '${account.name}\n$reason',
+    );
+  }
+
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
     final app = widget.app, snapshot = c.snapshot!;
@@ -1455,38 +1591,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (agentsOnly && person != null
             ? "${superTabPersonName(person.email)}'s computer"
             : 'Unavailable machine');
-    final configured = (reading?['engines'] as List?)
-        ?.whereType<String>()
-        .toList();
-    final allowed =
-        configured?.any((engine) => !_chipEngines.contains(engine)) == true
-        ? [
-            for (final raw in observation['quotas'] as List? ?? [])
-              if (_chipEngines.contains(superTabMap(raw)['engine']))
-                superTabMap(raw)['engine'] as String,
-          ]
-        : configured?.where(_chipEngines.contains).toList();
-    var accounts =
-        _usage?.rows
-            .where(
-              (row) =>
-                  (allowed == null || allowed.contains(row['engine'])) &&
-                  (state?.isLocalMachine == true
-                      ? row['local'] == true
-                      : (row['machines'] as List? ?? []).contains(
-                          state?.machine.displayName,
-                        )),
-            )
-            .toList() ??
-        const <Map<String, Object?>>[];
-    if (accounts.isEmpty && observedAt != null) {
-      accounts = [
-        for (final raw in observation['quotas'] as List? ?? [])
-          // Routing reads quota for these two only; other engines drew "—".
-          if (const {'claude', 'codex'}.contains(superTabMap(raw)['engine']))
-            _quotaRow(superTabMap(raw), readId),
-      ];
-    }
+    final subscriptions = _subscriptions(
+      id,
+      reading: reading,
+      readingDim: dim,
+      readingAt: readingAt,
+      now: now,
+    );
+    final accounts = subscriptions.accounts, allowed = subscriptions.engines;
     final paused = reading?['paused'] == true;
     final removal = shared?['removal'];
     final cleaning =
@@ -1513,45 +1625,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           );
     String available(double used) =>
         resourcePercent((100 - used).clamp(0, 100));
-    // Each engine with a known, unexpired allowance, Claude first. Offline or out of reach, an allowance is an
-    // old reading and no chip shows it as now.
-    final allowances = dim
-        ? const <_Allowance>[]
-        : [
-            for (final engine in _chipEngines)
-              if (accounts
-                      .where(
-                        (row) =>
-                            row['engine'] == engine &&
-                            row['remainingPercent'] is num,
-                      )
-                      .firstOrNull
-                  case final row?)
-                for (final account in WorkspaceSubscriptionUsage.fromRows([
-                  row,
-                ]).accounts.take(1))
-                  _Allowance(
-                    engine: engine,
-                    name: account.name,
-                    figure: account.figure,
-                    left: (row['remainingPercent'] as num).toDouble().clamp(
-                      0,
-                      100,
-                    ),
-                    note: superMachineAllowanceNote(switch (row['details']) {
-                      final List lines => lines.whereType<String>(),
-                      _ => const <String>[],
-                    }),
-                    detail: [
-                      account.name,
-                      ...switch (row['details']) {
-                        final List lines when lines.isNotEmpty =>
-                          lines.whereType<String>(),
-                        _ => ['${account.figure} remaining'],
-                      },
-                    ].join('\n'),
-                  ),
-          ];
     // The models this machine offers the Swarm, from the same reading: an API's by its model, without the
     // provider's folder ("deepseek/…"), the API's name on hover.
     final apiModels = <_ServedModel>[], localModels = <_ServedModel>[];
@@ -1627,7 +1700,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       resources: value,
       accounts: accounts,
       engines: allowed,
-      allowances: allowances,
+      allowances: subscriptions.allowances,
+      subscriptionsAside: subscriptions.aside,
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
@@ -2511,6 +2585,7 @@ class _MachineView {
     required this.accounts,
     required this.engines,
     required this.allowances,
+    required this.subscriptionsAside,
     required this.tip,
     this.problem,
     this.setUpTeam = false,
@@ -2543,6 +2618,9 @@ class _MachineView {
 
   /// What the row's chips show, Claude first; empty while offline or out of reach.
   final List<_Allowance> allowances;
+
+  /// Beside the Subscriptions heading: `left now`, or `offline, read 2 h ago` over the last figures.
+  final String subscriptionsAside;
 
   /// What this machine offers the Swarm on its grid, as its reading says: the APIs its person shares, and its own
   /// models running for the Swarm (docs/plans/2026-10-23-swarm-local-models.md). Empty while the add-on is off.
@@ -2603,23 +2681,36 @@ class _Allowance {
     required this.left,
     required this.detail,
     this.note,
+    this.stale = false,
   });
 
   final String engine, name, figure, detail;
 
-  /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure.
+  /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure; or
+  /// why there is no figure ([superMachineAllowanceReason]).
   final String? note;
 
-  /// The share left, 0–100.
-  final double left;
+  /// The share left, 0–100; null when there is no figure.
+  final double? left;
 
-  /// Amber below 20%, red below 10%, otherwise the reading's own ink.
+  /// The last figure an offline machine read: shown muted, never as now.
+  final bool stale;
+
+  /// The tone of what is left: amber below 20%, red below 10%; none for an old or missing figure.
+  Color? get tone => left == null || stale
+      ? null
+      : left! < 10
+      ? grid.AppPalette.usageCritical
+      : left! < 20
+      ? grid.AppPalette.usageLow
+      : null;
+
+  /// The figure's ink: its tone, muted when old or missing, otherwise the reading's own ink.
   Color get ink => statusLineInkOnSurface(
-    left < 10
-        ? grid.AppPalette.usageCritical
-        : left < 20
-        ? grid.AppPalette.usageLow
-        : DesktopChrome.foreground,
+    tone ??
+        (left == null || stale
+            ? DesktopChrome.muted
+            : DesktopChrome.foreground),
     DesktopChrome.surface,
   );
 }
@@ -2773,8 +2864,8 @@ class _MachineReadings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (view.dim) return const SizedBox.shrink();
-    final resources = view.resources;
+    // Offline or out of reach, only Subscriptions shows: the last figures, said to be old.
+    final resources = view.dim ? null : view.resources;
     final memoryTotal = resources?.memoryTotalBytes;
     final memoryFree = memoryTotal == null || resources?.memoryUsedBytes == null
         ? null
@@ -2833,15 +2924,24 @@ class _MachineReadings extends StatelessWidget {
             for (final reading in hardware) _hardware(reading),
           ]),
         ),
-      if (view.allowances.isNotEmpty)
-        (
-          'Subscriptions',
-          'left now',
-          (width) => _grid(width, width >= 260 ? 2 : 1, [
-            for (final allowance in view.allowances) _allowance(allowance),
-          ]),
-        ),
-      if (view.apiModels.isNotEmpty || view.localModels.isNotEmpty)
+      (
+        'Subscriptions',
+        view.allowances.isEmpty ? null : view.subscriptionsAside,
+        (width) => view.allowances.isEmpty
+            ? Text(
+                'No Claude or Codex allowance reported for this machine',
+                style: DesktopChrome.text(
+                  size: 11,
+                  height: 1.3,
+                  color: DesktopChrome.muted,
+                ),
+              )
+            : _grid(width, width >= 260 ? 2 : 1, [
+                for (final allowance in view.allowances) _allowance(allowance),
+              ]),
+      ),
+      if (!view.dim &&
+          (view.apiModels.isNotEmpty || view.localModels.isNotEmpty))
         (
           'Models for the Swarm',
           null,
@@ -2858,7 +2958,6 @@ class _MachineReadings extends StatelessWidget {
           ),
         ),
     ];
-    if (sections.isEmpty) return const SizedBox.shrink();
     return Padding(
       key: ValueKey('super-machine-readings-${view.id}'),
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
@@ -3003,15 +3102,13 @@ class _MachineReadings extends StatelessWidget {
   }
 
   Widget _allowance(_Allowance allowance) {
-    final tone = allowance.left < 10
-        ? grid.AppPalette.usageCritical
-        : allowance.left < 20
-        ? grid.AppPalette.usageLow
-        : null;
+    final left = allowance.left;
     return Tooltip(
       message: allowance.detail,
       child: Semantics(
-        label: '${allowance.name} ${allowance.figure} remaining',
+        label: left == null
+            ? '${allowance.name}: ${allowance.note}'
+            : '${allowance.name} ${allowance.figure} remaining',
         excludeSemantics: true,
         child: Container(
           key: ValueKey(
@@ -3057,13 +3154,13 @@ class _MachineReadings extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              // The bar is what is left, as the figure is.
-              _Meter(share: allowance.left / 100, tone: tone),
+              // The bar is what is left, as the figure is; none without a figure.
+              if (left != null) _Meter(share: left / 100, tone: allowance.tone),
               if (allowance.note case final note?) ...[
                 const SizedBox(height: 5),
                 Text(
                   note,
-                  maxLines: 1,
+                  maxLines: left == null ? 2 : 1,
                   overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.text(
                     size: 10,
