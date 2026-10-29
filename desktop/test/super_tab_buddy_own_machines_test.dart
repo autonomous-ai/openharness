@@ -265,6 +265,9 @@ void main() {
           'engines': ['claude', 'codex'],
         });
         expect(c.buddy('lead'), isNotNull);
+        // Named by the account, though no Swarm list has it.
+        expect(find.textContaining('another machine'), findsNothing);
+        expect(find.textContaining('on $mac'), findsWidgets);
         await close(tester, f, c);
       },
     );
