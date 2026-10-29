@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ScreenReading } from '../../engines/facets/screen.js'
+import { AutonomousDeviceInput } from '../../core/deviceInput.js'
+import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import { createSuperTabTerminal } from './terminal.js'
 
 const session = { agentId: 'h1', engine: 'claude' } as RegisteredSession
@@ -110,5 +112,74 @@ describe('typing keys only while the screen is still the one that was read', () 
     const refused = setup({ captured: 'x', keyed: () => false })
     expect(await refused.terminal.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'The terminal did not take the key Escape.' })
     expect(await setup().terminal.inputIfScreen('h1', [], 'Allow? 1. Yes')).toEqual({ ok: false, error: 'Nothing to type.' })
+  })
+})
+
+// In production the pane's lock is the device input's `legacyWrite`, which runs two ordinary writers at once: only the
+// Swarm terminal's own mutex keeps the Lead's typed input and the host's conditional key from overlapping (review of 6c82a2cbd,
+// reproduced with these real classes: the Lead's Esc cleared the prompt and the dismissal sent its Esc into the composer).
+describe('the Lead\'s typed input and the host\'s conditional keys on one pane, under the real write guard', () => {
+  const UPDATE = 'Update available\n› 1. Update now\n  2. Skip\n  enter continue · esc skip', COMPOSER = '› '
+  const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+
+  /** A pane that shows the update prompt until its first Esc, whose writes wait on `gate`, as a slow terminal does. */
+  function realPane() {
+    let screen = UPDATE, open = () => {}
+    const gate = new Promise<void>(resolve => { open = resolve })
+    const landed: Array<{ key: string; on: string }> = []
+    const device = new AutonomousDeviceInput({
+      getSession: () => session, validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
+      capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
+      onDelivery: vi.fn(), onInputStatus: vi.fn(),
+    })
+    const terminal = createSuperTabTerminal({
+      resolve: id => id === 'h1' ? session : undefined,
+      capture: async () => ({ state: 'succeeded' as const, value: screen }),
+      read: async () => null,
+      type: async () => true,
+      key: async (_id, key) => { await gate; landed.push({ key, on: screen }); if (key === 'Escape') screen = COMPOSER; return true },
+      locked: (id, write) => device.legacyWrite(id, write),
+    })
+    return { terminal, landed, open: () => open() }
+  }
+
+  it('sends the conditional Esc into the update prompt only: the Lead\'s Esc, started first, clears it and the dismissal sends nothing', async () => {
+    const t = realPane()
+    const lead = t.terminal.input('h1', '', ['Escape'])
+    const dismissal = t.terminal.inputIfScreen('h1', ['Escape'], UPDATE)
+    await flush()
+    t.open()
+    expect(await lead).toEqual({ ok: true })
+    expect(await dismissal).toMatchObject({ ok: false })
+    expect(t.landed).toEqual([{ key: 'Escape', on: UPDATE }])
+  })
+
+  it('runs the two strictly in turn when the dismissal comes first', async () => {
+    const t = realPane()
+    const dismissal = t.terminal.inputIfScreen('h1', ['Escape'], UPDATE)
+    const lead = t.terminal.input('h1', '', ['Escape'])
+    await flush()
+    t.open()
+    expect(await dismissal).toEqual({ ok: true })
+    expect(await lead).toEqual({ ok: true })
+    // Strictly in turn: the dismissal's Esc found the prompt; the Lead's own Esc came after, as the Lead asked.
+    expect(t.landed).toEqual([{ key: 'Escape', on: UPDATE }, { key: 'Escape', on: COMPOSER }])
+  })
+
+  it('goes on with the next writer after one whose write threw, and after the agent has gone while it waited', async () => {
+    let thrown = false, there = true
+    const terminal = createSuperTabTerminal({
+      resolve: id => id === 'h1' && there ? session : undefined,
+      capture: async () => ({ state: 'succeeded' as const, value: UPDATE }),
+      read: async () => null, type: async () => true,
+      key: async () => { if (!thrown) { thrown = true; there = false; throw new Error('pane gone') } return true },
+      locked: (_id, write) => write(),
+    })
+    const first = terminal.input('h1', '', ['Escape'])
+    const second = terminal.inputIfScreen('h1', ['Escape'], UPDATE)
+    await expect(first).rejects.toThrow('pane gone')
+    expect(await second).toEqual({ ok: false, error: 'The agent is not running on this machine.' })
+    there = true
+    expect(await terminal.inputIfScreen('h1', ['Escape'], UPDATE)).toEqual({ ok: true })
   })
 })
