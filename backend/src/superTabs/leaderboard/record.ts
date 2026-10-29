@@ -5,6 +5,7 @@
 import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS, weekStart } from './week.js'
+import { agentTarget } from '../rules.js'
 import type { UnblockKind } from './contract.js'
 
 /** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
@@ -16,7 +17,12 @@ export interface Unblock { personId: string; at: number; waitedMs: number; kind?
  *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
  *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
 export interface Run extends RanOn { assignmentId: string; at: number
-  firstVerdicts?: Record<string, boolean>; firstReview?: boolean }
+  firstVerdicts?: Record<string, boolean>; firstReview?: boolean
+  /** The step up from a cheaper model this attempt is (stepUp.ts): its attempt number and why. */
+  stepUp?: { attempt: number; reason: string }
+  /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: it is rated by
+   *  the engine's `default` row (rules.ts policyQuality; review of ee4ee6c9a). */
+  engineDefault?: true }
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
  *  absent from attempts recorded before efforts were (Lead, 2026-10-29: never guessed afterwards). */
 export interface RanOn { engine: string; model: string | null; effort?: string; grid?: true }
@@ -194,7 +200,9 @@ export function waitsNow(group: Conversation): boolean {
 
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
-  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now }
+  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
+    ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
+    ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}
   ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)

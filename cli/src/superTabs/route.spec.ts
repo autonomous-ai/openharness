@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -58,6 +58,12 @@ describe('quota and rates', () => {
     expect(rateFor(policy, 'claude', 'opus', 'high')).toEqual({ quality: 3, cost: 3 })
     expect(rateFor(policy, 'claude', 'opus', 'max')).toEqual({ quality: 3, cost: 3 })
     expect(rateFor(policy, 'claude', null, null)).toEqual({ quality: 1, cost: 1 })
+    // A model the policy does not name, a small Codex variant among them, is rated 1 (review of #2137); one launched on the
+    // engine's own model takes the `default` row, whatever slug it reports.
+    expect(rateFor(policy, 'codex', 'gpt-5.5-mini', 'high')).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-6.1-sol', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'claude', 'claude-opus-4-7', 'high', true)).toEqual({ quality: 3, cost: 3 })
   })
 })
 
@@ -276,7 +282,12 @@ describe('edges', () => {
   it('rates default models, unknown models and unknown engines', () => {
     expect(rateFor(policy, 'codex', null, null)).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'claude', 'sonnet', null)).toEqual({ quality: 2, cost: 2 })
-    expect(rateFor(policy, 'codex', 'gpt-x', 'high')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-x', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+    expect(rateFor(policy, 'codex', 'gpt-5.5-mini', 'high', true)).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-5-nano', 'high', true)).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'claude', null, null, true)).toEqual({ quality: 1, cost: 1 })
     expect(rateFor(policy, 'other', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
   })
   it('rates a working member by the model its engine reported, not only by the catalog alias', () => {
@@ -285,8 +296,9 @@ describe('edges', () => {
     expect(rateFor(policy, 'claude', 'claude-sonnet-4-5[1m]', 'medium')).toEqual({ quality: 2, cost: 2 })
     expect(rateFor(policy, 'claude', 'sonnet[1m]', null)).toEqual({ quality: 2, cost: 2 })
     expect(rateFor(policy, 'claude', 'claude-haiku-4-5', 'auto')).toEqual({ quality: 1, cost: 1 })
-    // Codex reports a real slug; its catalog row is `default`.
-    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high')).toEqual({ quality: 3, cost: 2 })
+    // Codex reports a real slug; its catalog row is `default`, for an agent launched on the engine's own model.
+    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(policy, 'codex', 'gpt-5.5', 'high')).toEqual({ quality: 1, cost: 1 })
     // A model that matches nothing and an engine without a default row stay at the floor.
     expect(rateFor(policy, 'claude', 'claude-mystery-1', 'high')).toEqual({ quality: 1, cost: 1 })
   })
@@ -603,6 +615,17 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
       expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
     })
+    it('ranks a strong grid model first for medium docs, copy, tests, fixtures, a specified fix or a mechanical refactor (Ken, 2026-10-29)', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      for (const kind of ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']) {
+        expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind }, NOW))).toBe('moonshotai/kimi-k3')
+      }
+      // A small model stays under the medium floor, and other kinds keep the policy order.
+      expect(firstOf(choose([expiring, grid], policy, { ...simple, difficulty: 'medium', kind: 'docs' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'ui' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'docs', risk: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'high', kind: 'docs' }, NOW))).toBe('opus')
+    })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, difficulty: 'medium' }, NOW))).toBe('opus')
@@ -615,6 +638,37 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([codex, local({ machineName: 'mac', engine: 'codex' })], policy, simple, NOW, [], prefer))).toBe('qwen3')
       expect(firstOf(choose([expiring, grid], policy, simple, NOW, [], [{ rule: { kind: 'noGridFirst' }, text: 'Subscriptions first.' }]))).toBe('opus')
     })
+  })
+
+  it('rates a grid model by the policy\'s first named row it matches, else its local quality, else 1', () => {
+    const rows = { ...policy, localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 3 }] } }
+    expect(gridQuality(rows, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(rows, 'ds-1017', 'DeepSeek V4.1 Flash')).toBe(3)
+    expect(gridQuality(rows, 'qwen3:4b')).toBe(1)
+    expect(gridQuality({ ...policy, localModels: { quality: 2, enabled: true } }, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(1)
+  })
+  it('never lets a grid model, a model below quality 2 or the reviewed Builder\'s own family review (Ken, 2026-10-29)', () => {
+    const codex = { engine: 'codex' }
+    expect(reviewRefusals(local({ quality: 2 }), codex, true)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
+    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex, true)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
+    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), codex, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Codex.'])
+    // A Builder on a grid model is its own family: Claude reviews it, even though Claude Code drove it.
+    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' }, true)).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude' }, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
+    expect(reviewRefusals(probe(), null, true)).toEqual([])
+    // Another engine counts only where the owner's rules let it run, at the effort a new agent starts at (review of ee4ee6c9a).
+    const codexElsewhere = probe({ machineId: 'm2', engine: 'codex', model: 'default', effort: 'default', quality: 3 })
+    const only = (machineIds: string[]) => [{ rule: { kind: 'machines', machineIds }, text: 'Only ours.' } as SwarmRule]
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [])).toBe(true)
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, only(['m1']))).toBe(false)
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [{ rule: { kind: 'minEffort', effort: 'high' }, text: 'High.' }])).toBe(true)
+    expect(otherFamilyReviews([probe(), probe({ engine: 'codex', model: 'gpt-5.5-mini', quality: 1 })], { engine: 'claude' }, [])).toBe(false)
+    expect(otherFamilyReviews([codexElsewhere], null, [])).toBe(false)
+    // With no Reviewer of another engine anywhere, the Builder's own engine reviews at its top tier only (Lead, 2026-10-29).
+    expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), { engine: 'claude' }, false)).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude' }, false))
+      .toEqual(['A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.'])
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {

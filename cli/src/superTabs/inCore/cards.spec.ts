@@ -119,6 +119,31 @@ describe('the Swarm cards on the devices', () => {
     cards.recap(recap({ chatId: 'bad id' }))
     expect(swarmCardRecap).toHaveBeenCalledOnce()
   })
+  // Round dial PM and Buddy screens (spec 2026-10-29): the swarmBuddy dial's fields, checked as the chat and notice are.
+  it('keeps a sound side chat, buddies flag, buddy block and buddy notice, drops a malformed one', () => {
+    const { cards, swarmCards, swarmCardRecap } = setup()
+    const buddy = (over: Record<string, unknown> = {}) => ({ chatId: 'b1', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true, ...over })
+    const quiet = (over: Record<string, unknown> = {}) => ({ chat: 'buddy', chatId: 'b1', id: 'm2', text: 'An idea', at: 1792560000, ...over })
+    const side = { kind: 'buddy', id: 'b1', name: "diego's Buddy", working: false }
+    cards.cards([card('t1', [lead('l1', { sideChat: side, buddies: true, buddy: buddy({ name: 'b'.repeat(60), engine: 'e'.repeat(20) }), buddyNotice: quiet({ text: '日'.repeat(600) }), notice: quiet() })])])
+    const [sent] = swarmCards.mock.calls[0][0][0].leads
+    expect(sent).toMatchObject({ sideChat: side, buddies: true, buddy: buddy({ name: 'b'.repeat(48), engine: 'e'.repeat(16) }), buddyNotice: quiet({ text: '日'.repeat(500) }) })
+    // The Buddy's word never rides in the Lead's notice, which an older dial reads.
+    expect(sent).not.toHaveProperty('notice')
+    swarmCards.mockClear()
+    const badBuddies = [buddy({ chatId: 'bad id' }), buddy({ name: 5 }), buddy({ engine: null }), buddy({ cells: 32768 }), buddy({ cells: -1 }), buddy({ cells: 1.5 }),
+      buddy({ color: '#D6A79A' }), buddy({ color: 'red' }), buddy({ live: 'yes' }), 'buddy']
+    for (const bad of badBuddies) cards.cards([card('t1', [lead('l1', { buddy: bad, buddies: 'yes', sideChat: { ...side, kind: 'other' }, buddyNotice: quiet({ chat: 'lead' }) })])])
+    expect(swarmCards).toHaveBeenCalledTimes(badBuddies.length)
+    for (const [list] of swarmCards.mock.calls) {
+      for (const field of ['buddy', 'buddies', 'sideChat', 'buddyNotice']) expect(list[0].leads[0]).not.toHaveProperty(field)
+    }
+    // A swarmBuddy dial's recap says so; anything but a literal true is not.
+    cards.recap(recap({ chatId: 'b1', buddy: true }))
+    expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'b1', buddy: true }))
+    cards.recap(recap({ chatId: 'b1', buddy: 'yes' }))
+    expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'b1' }))
+  })
 })
 
 describe('whether the Swarm cards are wanted, which the core owns', () => {
@@ -231,6 +256,21 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })
     expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }],
       [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }], [{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }]])
+  })
+  it('passes a swarmBuddy dial\'s buddy flag, and its side as cardSide with a sound side only', async () => {
+    const { cards, request } = wanting()
+    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
+    await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' })
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })
+    expect(await cards.ask({ action: 'cardSide', tabId: 't1', side: 'buddy', extra: 1 })).toEqual({ ok: true })
+    await cards.ask({ action: 'cardSide', tabId: 't1', side: 'pm' })
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'bad id' })
+    expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }],
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }], [{ action: 'cardSide', tabId: 't1', side: 'buddy' }], [{ action: 'cardSide', tabId: 't1', side: 'pm' }],
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }]])
+    request.mockClear()
+    for (const side of ['up', null, undefined, true]) expect(await cards.ask({ action: 'cardSide', tabId: 't1', side })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(request).not.toHaveBeenCalled()
   })
   it('on an account change with no device wanting cards only clears the list', () => {
     const { cards, request, swarmCards } = wanting()

@@ -60,6 +60,26 @@ void main() {
     },
   );
 
+  // The round dial draws Buddies from cli/src/superTabs/buddyAvatar.ts; these
+  // vectors pin both to the same half bits and dark-mode tone.
+  test('a Buddy\'s pattern matches the dial\'s vectors', () {
+    int halfBits(List<bool> cells) {
+      var bits = 0;
+      for (var i = 0; i < 15; i++) {
+        if (cells[(i ~/ 3) * 5 + i % 3]) bits |= 1 << i;
+      }
+      return bits;
+    }
+
+    Color darkTone(double hue) => HSLColor.fromAHSL(1, hue, .42, .72).toColor();
+    final diego = superTabAgentPattern("diego's Buddy");
+    expect((halfBits(diego.cells), diego.hue), (25513, 13.0));
+    expect(darkTone(diego.hue), const Color(0xffd6a79a));
+    final ken = superTabAgentPattern("ken's Buddy");
+    expect((halfBits(ken.cells), ken.hue), (30735, 327.0));
+    expect(darkTone(ken.hue), const Color(0xffd69abb));
+  });
+
   testWidgets('an agent without a picture shows its pattern and engine badge', (
     tester,
   ) async {

@@ -359,7 +359,7 @@ export interface CoreApi {
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`; core/devicesLink.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  `cardOpen`, `cardSay`, `cardSide`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
   superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
@@ -1209,6 +1209,8 @@ export interface SwarmLaunch {
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
+  args(engine: string): string[]
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
@@ -1218,19 +1220,47 @@ export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolea
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
  *  order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number; chat?: SwarmChat; notice?: LeadNotice }
+export interface SwarmLead {
+  id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number
+  /** The face of a round dial without swarmBuddy: today's rule, whatever a newer dial swiped to. */
+  chat?: SwarmChat
+  notice?: LeadNotice
+  /** While the Swarm has Buddies on: the face of a dial that speaks swarmBuddy, on the side it keeps for this Swarm. */
+  sideChat?: SwarmChat
+  /** Present only while the Swarm has Buddies on. */
+  buddies?: true
+  /** The reader's own Buddy in this project, when it has one. */
+  buddy?: SwarmBuddy
+  /** The newest message the reader's Buddy wrote in its chat since the baseline: the dial's quiet alert. */
+  buddyNotice?: LeadNotice
+}
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
-/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string }
-/** A project's three places to chat (design 2026-10-28-round-dial-swarm-chat): its Lead conversation, the reader's private
- *  chat (`pm`: their Buddy chat, where the PM's private lines land since Buddies replaced Chat with PM), and a group. */
-export type ChatKind = 'lead' | 'pm' | 'group'
-/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's PM chat or a group
- *  open. `working` only for a working group, `since` from one of its agents' turn here. */
+/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
+ *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
+/** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
+ *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
+ *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
+export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
+/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
+ *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
+ *  turn here. */
 export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
-/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline: the dial's alert. */
-export interface LeadNotice { chat: 'lead' | 'pm'; chatId: string; id: string; text: string; at: number }
+/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline (the
+ *  dial's alert), or the reader's Buddy wrote in its chat (`buddy`, the quiet one). */
+export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number }
+/** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
+ *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
+export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean }
+/** The screen a round dial shows of each project of a Swarm: the PM's (today's face) or the reader's Buddy's. */
+export type CardSide = 'pm' | 'buddy'
+/** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
+ *  the face on a swarmBuddy dial's side ('buddy'). */
+export type CardChat = boolean | 'buddy'
+/** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
+ *  refused by the backend with its code and message, which must never become a terminal turn instead. */
+export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
 export interface CardFocus { tabId: string; conversationId: string }
 
@@ -1252,6 +1282,9 @@ export interface SuperTabsCore {
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
   input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
+  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen` (superTabs/inCore/
+   *  terminal.ts): for a caller that read the screen earlier and must not type into a different one. */
+  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped>
 }
 export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
 export type SuperTabTyped = { ok: true } | { ok: false; error: string }
@@ -1543,6 +1576,12 @@ export type BackendNotice =
   /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
    *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
   | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
+  /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
+   *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
+  | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
+  /** A Swarm the account is in changed (backend lib/swarmClientPushes.ts): this computer's windows read it again. Naming none,
+   *  the server says it pushes them (desktop super_tabs/swarm_pushes.dart). */
+  | { type: 'swarm_changed'; tabId?: string; lastChangedAt?: number; parts?: Array<'main' | 'machine'> }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readTeamConfig, teamConfigJson, type TeamConfig } from './config.js'
 import {
-  PRIVACY_RECHECK_MS, TeamPrivacyObserver, privacyProbes, readTeamStatus, realPrivacyDeps, runPrivacyCheck, writeTeamStatus,
+  PRIVACY_RECHECK_MS, TeamPrivacyObserver, adminGroupIds, privacyProbes, readTeamStatus, realPrivacyDeps, runPrivacyCheck, writeTeamStatus,
   type PrivacyDeps, type PrivacyResult,
 } from './privacy.js'
 
@@ -54,6 +54,63 @@ describe('privacy check', () => {
     const result = runPrivacyCheck(config, refusedEverywhere({ open: (p) => { throw errno(p.endsWith('.gitconfig') ? 'ENOENT' : 'EACCES') } }))
     expect(result).toMatchObject({ passed: false, item: 'gitconfig' })
     expect((result as { detail: string }).detail).toContain('ENOENT')
+  })
+
+  describe('on Linux', () => {
+    const LINUX_HOME = '/home/owner-placeholder'
+    const linuxConfig = { ownerHome: LINUX_HOME, sentinel: `${LINUX_HOME}/.harness-team-privacy` }
+    const onLinux = (over: Partial<PrivacyDeps> = {}) => refusedEverywhere({ platform: 'linux', adminGids: () => [27, 10], ...over })
+
+    it('tries the Linux places: the keyring, Chrome\'s and Firefox\'s profiles, in place of the Keychain, Chrome and Safari', () => {
+      const tried: string[] = []
+      expect(runPrivacyCheck(linuxConfig, onLinux({
+        open: (p) => { tried.push(`open ${p}`); throw errno('EACCES') }, list: (p) => { tried.push(`list ${p}`); throw errno('EACCES') },
+      }))).toEqual({ passed: true, checkedAt: 5 })
+      expect(tried).toEqual([
+        `open ${LINUX_HOME}/.harness-team-privacy`, `list ${LINUX_HOME}`, `open ${LINUX_HOME}/.gitconfig`, `list ${LINUX_HOME}/.ssh`,
+        ...['code', 'Code', 'Developer', 'Projects', 'projects', 'src', 'Documents'].map((name) => `list ${LINUX_HOME}/${name}`),
+        // GNOME Keyring's folder, then KWallet's.
+        `list ${LINUX_HOME}/.local/share/keyrings`, `list ${LINUX_HOME}/.local/share/kwalletd`,
+        `list ${LINUX_HOME}/.config/google-chrome`, `list ${LINUX_HOME}/.mozilla`,
+      ])
+      expect(privacyProbes(linuxConfig, 'linux').map((p) => p.item))
+        .toEqual(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'firefox'])
+      expect(JSON.stringify(privacyProbes(linuxConfig, 'linux').map((p) => p.what))).not.toMatch(/Keychain|Safari|Library/)
+    })
+
+    it('fails on a KWallet folder it can list, or one it is not refused (ENOENT under a home it can search)', () => {
+      const kwallet = `${LINUX_HOME}/.local/share/kwalletd`
+      expect(runPrivacyCheck(linuxConfig, onLinux({ list: (p) => { if (p === kwallet) return; throw errno('EACCES') } })))
+        .toMatchObject({ passed: false, item: 'keychain', detail: 'The team account could read your login keyring folder.' })
+      expect(runPrivacyCheck(linuxConfig, onLinux({ list: (p) => { throw errno(p === kwallet ? 'ENOENT' : 'EACCES') } })))
+        .toMatchObject({ passed: false, item: 'keychain' })
+    })
+
+    it('fails a home folder others can list, and passes one that is 700', () => {
+      // 755, the sentinel kept away by its own mode: the listing is what gives the folder away.
+      const open = runPrivacyCheck(linuxConfig, onLinux({ list: (p) => { if (p === LINUX_HOME) return; throw errno('EACCES') } }))
+      expect(open).toMatchObject({ passed: false, item: 'home-listing', detail: 'The team account could read the list of files in your home folder.' })
+      // 755 as it is, the sentinel readable by everyone on purpose: that comes first.
+      expect(runPrivacyCheck(linuxConfig, onLinux({ open: () => {}, list: (p) => { if (p === LINUX_HOME) return; throw errno('EACCES') } })))
+        .toMatchObject({ passed: false, item: 'sentinel' })
+      expect(runPrivacyCheck(linuxConfig, onLinux())).toEqual({ passed: true, checkedAt: 5 })
+    })
+
+    it('fails a team account in sudo, wheel or admin, by those groups\' ids, and not for macOS\'s group 80', () => {
+      expect(runPrivacyCheck(linuxConfig, onLinux({ groups: () => [1001, 27] }))).toMatchObject({ passed: false, item: 'standard-user' })
+      expect(runPrivacyCheck(linuxConfig, onLinux({ groups: () => [1001, 80] }))).toEqual({ passed: true, checkedAt: 5 })
+    })
+
+    it('keeps a failed Firefox probe in the status file the owner reads', () => {
+      const failed = { passed: false, item: 'firefox', detail: 'The team account could read Firefox\'s profile folder.', checkedAt: 5 }
+      expect(readTeamStatus('/x', () => JSON.stringify({ version: 1, privacy: failed }))).toEqual({ version: 1, privacy: failed })
+    })
+
+    it('reads the administrator groups\' ids from getent\'s answer', () => {
+      expect(adminGroupIds('sudo:x:27:owner-placeholder\nadmin:x:118:\n')).toEqual([27, 118])
+      expect(adminGroupIds('')).toEqual([])
+      expect(adminGroupIds('broken\nwheel:x:abc:\n')).toEqual([])
+    })
   })
 
   it('fails an administrator team account', () => {
@@ -120,6 +177,38 @@ describe('team config', () => {
     expect(readTeamConfig('/x', () => JSON.stringify({ ...teamConfig, port: 18473 }))).toBeNull()
     expect(readTeamConfig('/x', () => JSON.stringify({ ...teamConfig, user: '' }))).toBeNull()
     expect(readTeamConfig('/x', () => JSON.stringify({ ...teamConfig, env: { BACKEND_WS_URL: 'javascript:x' } }))).toBeNull()
+  })
+
+  it('on Windows, reads Windows names and paths and the owner\'s SID, which it requires', () => {
+    const windows: TeamConfig = {
+      ...teamConfig, home: 'C:\\Users\\harnessteam', owner: 'DELL', ownerSid: 'S-1-5-21-1-2-3-1001', ownerHome: 'C:\\Users\\DELL',
+      sentinel: 'C:\\Users\\DELL\\.harness-team-privacy', label: '\\Harness\\Harness Team', plist: 'C:\\Windows\\System32\\Tasks\\Harness\\Harness Team',
+      statusFile: 'C:\\ProgramData\\Harness\\Team\\status.json', node: 'C:\\Users\\harnessteam\\.harness\\runtime\\node-v1\\node.exe',
+      cli: 'C:\\Users\\harnessteam\\.harness\\cli\\cli.js',
+    }
+    expect(readTeamConfig('x', () => teamConfigJson(windows), 'win32')).toEqual(windows)
+    expect(readTeamConfig('x', () => teamConfigJson({ ...windows, ownerSid: undefined }), 'win32')).toBeNull()
+    expect(readTeamConfig('x', () => teamConfigJson({ ...windows, ownerHome: 'C:\\Users\\..\\Windows' }), 'win32')).toBeNull()
+    // A Mac's config never reads as a Windows one, nor the other way round.
+    expect(readTeamConfig('x', () => teamConfigJson(teamConfig), 'win32')).toBeNull()
+    expect(readTeamConfig('x', () => teamConfigJson(windows), 'darwin')).toBeNull()
+  })
+})
+
+describe('privacy check on Windows', () => {
+  it('tries the Windows places, skips one that is not there, and tells an administrator by SID', () => {
+    const tried: string[] = []
+    const winConfig = { ownerHome: 'C:\\Users\\DELL', sentinel: 'C:\\Users\\DELL\\.harness-team-privacy' }
+    const deps: PrivacyDeps = {
+      platform: 'win32', groups: () => [], now: () => 7, groupSids: () => ['S-1-5-32-545'],
+      open: (path) => { tried.push(path); throw errno(path.endsWith('.gitconfig') ? 'ENOENT' : 'EPERM') },
+      list: (path) => { tried.push(path); throw errno('EPERM') },
+    }
+    expect(runPrivacyCheck(winConfig, deps)).toEqual({ passed: true, checkedAt: 7 })
+    expect(tried).toContain('C:\\Users\\DELL\\AppData\\Local\\Microsoft\\Edge\\User Data')
+    expect(runPrivacyCheck(winConfig, { ...deps, groupSids: () => ['S-1-5-32-544'] })).toMatchObject({ passed: false, item: 'standard-user' })
+    expect(readTeamStatus('x', () => JSON.stringify({ version: 1, privacy: { passed: false, item: 'edge', detail: 'd', checkedAt: 1 } }))?.privacy)
+      .toMatchObject({ item: 'edge' })
   })
 })
 
