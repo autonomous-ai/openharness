@@ -338,12 +338,20 @@ export class GrantReads {
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
 
-/** A lost task's row without the machine its session ran on: the reason in its text and in its source (liveness.ts loseTask). */
-function withoutLostMachine(m: SuperTabMessage): SuperTabMessage {
-  const source = m.source as { kind?: unknown; reason?: unknown } | null
-  if (source?.kind !== 'work-lost' || typeof source.reason !== 'string') return m
-  const reason = lostReasonWithoutMachine(source.reason)
-  return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
+/** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
+ *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
+function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
+  const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown } | null
+  if (source?.kind === 'work-lost' && typeof source.reason === 'string') {
+    const reason = lostReasonWithoutMachine(source.reason)
+    return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
+  }
+  if ((source?.kind === 'machine-left' || source?.kind === 'machine-removed') && typeof source.machine === 'string' && source.machine) {
+    const { machine, ...rest } = source
+    const text = m.text.startsWith(machine) ? `A machine${m.text.slice(machine.length)}` : m.text
+    return { ...m, text: text.split(machine).join('a machine'), source: rest as SuperTabMessage['source'] }
+  }
+  return m
 }
 
 export class SuperTabStore {
@@ -1842,8 +1850,8 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
-    // A lost task's rows name the machine it ran on; a Buddy reads them without it (security re-check 2 of #2115).
-    const shown = buddy ? page.map(withoutLostMachine) : page
+    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
+    const shown = buddy ? page.map(withoutMachineNames) : page
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).

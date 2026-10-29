@@ -332,4 +332,28 @@ describe('a Buddy through the store', () => {
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
       .rejects.toThrow('Attach this file again')
   })
+  it('never hears of a machine removed from the Swarm in its change feed, though the PM does (security review 2 of #2115)', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    await db.machine.create({ data: { machineId: 'owner-studio', userId: owner.sub, apiKey: 'fixture-owner-studio', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await f.execute({ type: 'machine.contribute', machineId: 'owner-studio', name: 'Owner Studio', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
+    const generation = (await poolRows(f.store, owner, 'owner-studio')).find(p => p.tabId === f.tab)!.machine.generation
+    await f.store.observeMachine(owner, f.tab, 'owner-studio', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const reads = new SwarmReads(f.store)
+    const [buddyFirst, pmFirst] = [await reads.firstLoad(peer, f.tab, agentId), await reads.firstLoad(owner, f.tab, f.lead)]
+    expect(pmFirst.machines.map(m => m.key)).toContain('owner-studio')
+    expect(buddyFirst.machines).toEqual([])
+
+    const removalId = String((await f.execute({ type: 'machine.remove', machineId: 'owner-studio' })).result.removalId)
+    await f.store.execute(owner, f.tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'owner-studio', removalId } })
+    const pm = await reads.changes(owner, f.tab, pmFirst.cursor, f.lead)
+    expect('reload' in pm && pm.reload).toBe(false)
+    expect((pm as { machines: Array<{ key: string; deleted?: boolean }> }).machines).toContainEqual(expect.objectContaining({ key: 'owner-studio', deleted: true }))
+    const seen = await reads.changes(peer, f.tab, buddyFirst.cursor, agentId)
+    expect('reload' in seen && seen.reload).toBe(false)
+    expect((seen as { machines: unknown[] }).machines).toEqual([])
+    expect(JSON.stringify(seen)).not.toMatch(/owner-studio|Owner Studio/)
+  })
 })

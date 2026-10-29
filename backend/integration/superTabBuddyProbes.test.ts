@@ -175,3 +175,25 @@ it('denies the old Buddy identity after its person leaves and rejoins',async()=>
   await expect(f.store.messages(peer,f.tab,'lead',{},agentId)).rejects.toThrow()
   await expect(new SwarmReads(f.store).firstLoad(peer,f.tab,agentId)).rejects.toThrow()
 })
+
+it('reads a machine leaving the Swarm without its name, in the project chat and in a task (security pass at 018bdd7b8)', async () => {
+  const f = await swarm(), { agentId } = await buddy(f)
+  await db.machine.create({ data: { machineId: 'probe-studio', userId: owner.sub, apiKey: 'fixture-probe-studio', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  await f.execute({ type: 'machine.contribute', machineId: 'probe-studio', name: 'OWNER-STUDIO-HOST', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
+  const gen = (await poolRows(f.store, owner, 'probe-studio')).find(p => p.tabId === f.tab)!.machine.generation
+  await f.store.observeMachine(owner, f.tab, 'probe-studio', { generation: gen, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+    diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+  quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+  const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Studio task', brief: '', checks: [] })).result.conversationId)
+  await f.execute({ type: 'agent.add', conversationId: group, machineId: 'probe-studio', harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false })
+  const removalId = String((await f.execute({ type: 'machine.remove', machineId: 'probe-studio' })).result.removalId)
+  await f.store.execute(owner, f.tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'probe-studio', removalId } })
+
+  const pm = [...(await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages, ...(await f.store.messages(owner, f.tab, group, {}, f.lead)).messages]
+  const left = pm.find(m => m.text.startsWith('OWNER-STUDIO-HOST left the Swarm'))!, removed = pm.find(m => m.text.includes('removed OWNER-STUDIO-HOST from the Swarm'))!
+  expect([left, removed].map(m => (m.source as { kind?: string }).kind)).toEqual(['machine-left', 'machine-removed'])
+  const seen = [...(await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages, ...(await f.store.messages(peer, f.tab, group, {}, agentId)).messages]
+  expect(seen.find(m => m.id === left.id)!.text).toBe('A machine left the Swarm: its host confirmed its cleanup.')
+  expect(seen.find(m => m.id === removed.id)!.text).toMatch(/^owner removed a machine from the Swarm, and \S+ with it\.$/)
+  expect(JSON.stringify(seen)).not.toContain('OWNER-STUDIO-HOST')
+})
