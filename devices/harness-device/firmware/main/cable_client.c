@@ -324,6 +324,11 @@ static void send_hello(void)
     // Each Lead's face is the chat the desktop has open, and the alerts are the Lead's new messages (handle_supertab_notice;
     // design 2026-10-28-round-dial-swarm-chat). A daemon that predates it ignores the field and sends today's frames.
     msg_string(&root, "swarmChat", "v1");
+    // A PM and a Buddy side per Swarm (spec 2026-10-29-round-dial-pm-buddy): each Lead's `buddies` and the reader's
+    // Buddy, a face that may be the Buddy chat, its quiet notice, and `supertab.side` back. Older daemons ignore it.
+    msg_string(&root, "swarmBuddy", "v1");
+    // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
+    // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -390,6 +395,15 @@ void cable_client_supertab_send(const char *t, const char *tab, const char *lead
     cJSON *root = msg(t);
     msg_string(&root, "tab", tab);
     msg_string(&root, "lead", lead);
+    send_json(root);
+}
+
+void cable_client_supertab_side(const char *tab, bool buddy)
+{
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
+    cJSON *root = msg("supertab.side");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "side", buddy ? "buddy" : "pm");
     send_json(root);
 }
 
@@ -943,15 +957,20 @@ static void handle_supertabs(const cJSON *p)
 }
 static void handle_supertab(const cJSON *p)
 {
-    static EXT_RAM_BSS_ATTR ht_supertab_t card;   // 3.4 KB: too large for the reader task's stack
+    static EXT_RAM_BSS_ATTR ht_supertab_t card;   // 6 KB: too large for the reader task's stack
     const char *tab = str_of(p, "tab");
     if (tab && strlen(tab) >= ID_MAX) tab = "";   // a desk tab id that cannot be held links to nothing
     if (!ht_supertab_init(&card, str_of(p, "id"), tab, str_of(p, "name"), 0)) return;
+    // The Swarm's side, from a swarmBuddy daemon (review of #2218): the dial follows it. Anything else is none.
+    const char *side = str_of(p, "side");
+    card.side = !side ? HT_SIDE_NONE : !strcmp(side, "buddy") ? HT_SIDE_BUDDY : !strcmp(side, "pm") ? HT_SIDE_PM : HT_SIDE_NONE;
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
         if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
         if (!cJSON_IsObject(l)) continue;
         const cJSON *order = cJSON_GetObjectItemCaseSensitive(l, "order"), *since = cJSON_GetObjectItemCaseSensitive(l, "since");
+        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy");
+        const cJSON *cells = cJSON_IsObject(buddy) ? cJSON_GetObjectItemCaseSensitive(buddy, "cells") : NULL;
         ht_lead_in_t in = {
             .id = str_of(l, "id"), .project_id = str_of(l, "projectId"), .project = str_of(l, "project"),
             .engine = str_of(l, "engine"), .owner = str_of(l, "owner"), .local = str_of(l, "local"), .state = str_of(l, "state"),
@@ -960,6 +979,12 @@ static void handle_supertab(const cJSON *p)
             .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
             // The chat on the face; absent from a daemon without swarmChat, which reads as the Lead chat.
             .chat = str_of(l, "chat"), .chat_id = str_of(l, "chatId"), .chat_name = str_of(l, "chatName"),
+            // The reader's Buddy, from a swarmBuddy daemon while Buddies are on; supertab.c drops a block it cannot draw.
+            .buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies")),
+            .buddy = {.present = cJSON_IsObject(buddy), .chat_id = str_of(buddy, "chatId"), .name = str_of(buddy, "name"),
+                      .engine = str_of(buddy, "engine"), .color = str_of(buddy, "color"),
+                      .cells = cJSON_IsNumber(cells) && cells->valuedouble >= 0 && cells->valuedouble < 65536 ? (long)cells->valuedouble : -1,
+                      .live = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(buddy, "live"))},
         };
         ht_supertab_lead_add(&card, &in);
     }
@@ -982,16 +1007,18 @@ static void handle_supertab_recap(const cJSON *p)
     ui_supertab_recap(tab, lead, chat_id ? chat_id : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
 }
 // `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the Lead's new message in its Lead conversation or Chat with
-// PM, the one thing that alerts with a swarmChat daemon. The daemon sends each once; the UI decides the beep.
+// PM, the one thing that alerts with a swarmChat daemon, or the Buddy's in its chat (chat "buddy", a quiet one). The daemon
+// sends each once; the UI decides the beep.
 static void handle_supertab_notice(const cJSON *p)
 {
     const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat = str_of(p, "chat"), *chat_id = str_of(p, "chatId");
     const char *id = str_of(p, "id"), *text = str_of(p, "text");
     if (!id_fits(tab) || !id_fits(lead) || !id_fits(chat_id) || !id_fits(id) || !text || !chat) return;
-    if (strcmp(chat, "lead") && strcmp(chat, "pm")) return;   // groups never alert
+    if (strcmp(chat, "lead") && strcmp(chat, "pm") && strcmp(chat, "buddy")) return;   // groups never alert
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    if (ui_supertab_notice(tab, lead, strcmp(chat, "pm") ? HT_CHAT_LEAD : HT_CHAT_PM, chat_id, text,
+    ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY : HT_CHAT_LEAD;
+    if (ui_supertab_notice(tab, lead, kind, chat_id, text,
                            secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
         audio_notify_done();
 }

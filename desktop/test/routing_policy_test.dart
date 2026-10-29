@@ -43,11 +43,36 @@ void main() {
       ...json,
       'localModels': {'quality': 2, 'enabled': false},
     };
-    expect(
-      RoutingPolicy.fromJson(local).copyWith(notes: 'x').toJson(),
-      {...local, 'notes': 'x'},
-    );
+    expect(RoutingPolicy.fromJson(local).copyWith(notes: 'x').toJson(), {
+      ...local,
+      'notes': 'x',
+    });
   });
+
+  test(
+    'keeps the owner\'s benchmark prior overrides through an edit and a save',
+    () {
+      // Not edited here, but a Desktop save must not erase them (backend routingPolicy.ts priorOverrides).
+      final overrides = [
+        {'model': 'kimi k3', 'kind': 'cli', 'quality': 3},
+      ];
+      final withOverrides = {...json, 'priorOverrides': overrides};
+      final parsed = RoutingPolicy.fromJson(withOverrides);
+      expect(parsed.toJson(), withOverrides);
+      expect(parsed.copyWith(notes: 'x').toJson(), {
+        ...withOverrides,
+        'notes': 'x',
+      });
+      // A policy saved without them stays without them.
+      expect(
+        RoutingPolicy.fromJson(json)
+            .copyWith(notes: 'x')
+            .toJson()
+            .containsKey('priorOverrides'),
+        isFalse,
+      );
+    },
+  );
 
   testWidgets('edits a model, the floor, the reserve and the notes', (
     tester,

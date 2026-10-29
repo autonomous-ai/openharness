@@ -66,6 +66,28 @@ contributed machine, plus every machine an agent of the Swarm already runs on
 available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
+A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10-29). On another person's Mac it runs in
+that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
+unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
+
+Who can start it, where, and who then reaches it:
+
+- **Who starts it**: only the project's owner, a person (not an agent), with `lead.start`. They always name the machine
+  (only they know which one stays on); with none named the server refuses (`MACHINE_REQUIRED`), and nothing places it on
+  another machine. New Project chooses none for them.
+- **Where**: a machine on the Swarm's Machines list whose contribution is still valid, not paused or offline, with a free
+  agent slot, an engine it runs, and a Harness that starts Product Managers. New Project lists only these as choosable
+  and greys out the rest with the reason.
+- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when that account
+  admits this Product Manager with its engine now: privacy check passed, the engine offered, signed in and not suspended
+  there, a free slot, its host starts Product Managers, and no other project's work. Otherwise the Mac itself, in its
+  owner's account: **that owner can read whatever the Product Manager reads and writes on their Mac** (the trust change Ken
+  chose, 10-29). The server makes this choice for each engine (`leadChoices` in `leadStart.ts`), and New Project shows the
+  choice the start will make.
+- **Who watches it**: the project's members watch its terminal live, whichever account it runs in (the Mac's owner does
+  not when it runs in a Team account). Typing in it: nobody in a Team account; on a teammate's Mac itself, only that
+  Mac's owner, and only when they may read the project. A private project they are not in shows them nothing.
+
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
@@ -180,6 +202,15 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
   them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
   chosen, or Codex.
+- **On the round dial.** Each project has two screens. The PM screen is the project's face as before, with two dots at
+  the right edge. Swipe up for the Buddy screen: a lilac ring, the Buddy's avatar (Desktop's pattern and colour) and
+  its last message. Swipe down to return to the PM screen. A swipe down on the PM screen still opens the inbox when
+  something is unread. The dial keeps the screen per Swarm as you move between projects; opening another conversation
+  on the desktop puts the dial back on what the desktop shows. A project without a Buddy shows "No Buddy here yet". Tap
+  to talk works on both screens: on the Buddy screen the words go to the Buddy chat, with the Buddy's engine
+  listening, and a refused post shows as an error on the dial, never as words in a terminal. A new line from the
+  Buddy is quiet: no beep and no inbox entry, only a lilac badge on the lower dot and "Your Buddy replied", until you
+  open the Buddy screen.
 - **The product manager's lines to one person.** What the product manager tells one person directly goes to that
   person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
   decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads
@@ -189,7 +220,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
   Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
   runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
@@ -221,6 +252,16 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
   GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
   information, never as instructions; only its owner's words ask it to act.
+- A Buddy tells its owner how their proposals go without being asked (Diego, 2026-10-29). The server hands it, as
+  news, only the project-chat lines that reply in the thread of its owner's proposal, tag its owner, or say work its
+  owner requested shipped, and, when work its owner requested is assigned, one line inside that task for the Buddy
+  alone: the task's number, title and status. Nothing else from the project chat, nothing from a private chat, and
+  never its owner's own words. Each is sent only while the Buddy reads that conversation as its owner would, and checked
+  again when its machine picks it up: once its owner leaves, rejoins or loses a private project, nothing more arrives
+  and what waits is refused. A line written while its owner loses the project is written again without the Buddy.
+  Nobody else sees which lines reached a Buddy: they are not listed as the line's recipients or deliveries. The Buddy
+  posts one short note in its own chat at each milestone (the product manager took it, the task it went to, its pull
+  request merged or released) and nothing when nothing changed. It still cannot post in the project chat or assign work.
 - A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
   dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
   Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and

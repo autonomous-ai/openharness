@@ -101,7 +101,25 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     expect(view.parts.machines.map(m => m.key)).toEqual(['mac'])
     expect(view.parts.machines[0]!.data.observation!.runningHarnessIds).toEqual(['lead-harness'])
-    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true } } })
+    // A teammate's machine says where New Project's Product Manager would run there, by engine (leadStart.ts leadChoices).
+    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true }, lead: {
+      claude: { refused: 'Claude Code isn’t offered on mac.' }, codex: { refused: 'Update Harness on mac to run a Product Manager there.' } } } })
+  })
+
+  it('tells only a person where New Project\'s Product Manager would run, and only on a teammate\'s machine', () => {
+    const { parts, s } = scene()
+    expect(readerView(parts, owner, NOW, { teamMachines: [] }).derived.machines.mac).not.toHaveProperty('lead')
+    expect(readerView(parts, agentActor(s.worker), NOW, { teamMachines: [] }).derived.machines.mac).not.toHaveProperty('lead')
+    expect(readerView(parts, peer, NOW, { teamMachines: [] }).derived.machines.mac).toHaveProperty('lead')
+  })
+
+  // The route leaves a suspended engine out and Desktop strikes it through (engineHealth.ts); 6 hours on it no longer shows.
+  it('derives the engines suspended on a machine now, with why, and none once the suspension has run out', () => {
+    const s = richSwarm()
+    s.contribute('mac', 'swarm')
+    s.edit(state => { state.machines![0]!.engineSuspensions = { codex: { at: NOW - MINUTE, fine: true }, claude: { at: NOW - 7 * 60 * MINUTE, fine: false } } })
+    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, { teamMachines: [] })
+    expect(view.derived.machines.mac!.suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
   })
 
   it('gives a Lead the other projects\' work and a person the mentions waiting', () => {

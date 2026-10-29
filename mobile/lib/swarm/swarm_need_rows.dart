@@ -153,7 +153,7 @@ class SwarmNeedLine extends StatelessWidget {
     final line = switch (need) {
       final SwarmDecisionNeed decision => switch (session.held(decision)) {
         final choice? =>
-          'Sending “${_option(decision.decision.options, choice)}”',
+          'Sending “${swarmOption(decision.decision.options, choice)}”',
         null => decision.decision.question,
       },
       SwarmMentionNeed(:final mention) =>
@@ -349,7 +349,7 @@ class SwarmDecisionAnswer extends StatelessWidget {
     if (held != null) {
       actions = _Held(
         key: ValueKey('swarm-held-box-${decision.id}-$held'),
-        label: 'Sending “${_option(decision.options, held)}”',
+        label: 'Sending “${swarmOption(decision.options, held)}”',
         labelKey: ValueKey('swarm-held-${decision.id}'),
         window: session.undoWindow,
         action: SwarmButton(
@@ -364,7 +364,7 @@ class SwarmDecisionAnswer extends StatelessWidget {
     } else if (asks?.unconfirmed(decision) case final choice?) {
       // Sent, and maybe taken: only the same answer may go again.
       actions = _Held(
-        label: '“${_option(decision.options, choice)}” is not confirmed.',
+        label: '“${swarmOption(decision.options, choice)}” is not confirmed.',
         action: SwarmButton(
           key: ValueKey('swarm-resend-${decision.id}'),
           label: 'Send again',
@@ -407,7 +407,8 @@ class SwarmDecisionAnswer extends StatelessWidget {
   }
 }
 
-String _option(List<String> options, int index) =>
+/// A decision's option [index], in its words.
+String swarmOption(List<String> options, int index) =>
     index >= 0 && index < options.length ? options[index] : 'Option $index';
 
 /// A decision's options, as many to a line as fit at 120 points or more,

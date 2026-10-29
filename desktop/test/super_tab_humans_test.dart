@@ -16,12 +16,11 @@ import 'support/super_tab_fixture.dart';
 
 /// The leaderboard lives in the right pane's Humans section (Dee, 2026-10-27),
 /// built to the desktop design system (2026-10-28): a small week picker, then
-/// everyone, most points first, by display
-/// name. Each row is a bold rank in its own column, avatar, name, a quiet line
-/// of the non-zero numbers in words, and the points as the one number,
-/// right-aligned (Dee, 2026-10-29: one number per person, no team total line).
-/// Number one wears a crown beside their name (People are celebrated, design
-/// system); no cups, trophies or medal colours. A tap shows what the numbers
+/// everyone, by the week's points, highest first (Dee, 2026-10-29: no ranks). Each row is the
+/// avatar, name, a quiet line of the non-zero numbers in words, and the points
+/// as the one number, right-aligned (one number per person, no team total
+/// line). Number one wears a crown beside their name (People are celebrated,
+/// design system); no cups, trophies or medal colours. A tap shows what the numbers
 /// are made of. There is no separate leaderboard view.
 void main() {
   Finder person(String id) => find.byKey(ValueKey('super-person-$id'));
@@ -76,7 +75,146 @@ void main() {
     controller.dispose();
   }
 
-  testWidgets('lists every person, most points first, with no cut-off', (
+  /// The rows' ids, top to bottom.
+  List<String> order(WidgetTester tester, List<String> ids) => [...ids]
+    ..sort(
+      (a, b) => tester
+          .getTopLeft(person(a))
+          .dy
+          .compareTo(tester.getTopLeft(person(b)).dy),
+    );
+
+  testWidgets(
+    "lists every person by the week's points, highest first, with no cut-off",
+    (tester) async {
+      final server = humansSwarm();
+      // A tie, and a person the board has no row for.
+      final scores = server.leaderboard!['people'] as List;
+      (scores.firstWhere((s) => s['personId'] == 'scholes') as Map)['points'] =
+          6;
+      (server.state['people'] as List).add({
+        'id': 'ann',
+        'email': 'ann@example.com',
+        'role': 'collaborator',
+      });
+      final controller = await show(tester, server);
+      // Dee 21, Ken 13, then scholes and Tony tied at 6 by name, diego 2;
+      // without points last, by name: ann (no row), huy, maximilian (0).
+      final ids = [
+        'peer',
+        'owner',
+        'scholes',
+        'tony',
+        'diego',
+        'ann',
+        'huy',
+        'maximilian.alexander.longname',
+      ];
+      for (final id in ids) {
+        expect(person(id), findsOneWidget);
+      }
+      expect(find.textContaining('Show '), findsNothing);
+      expect(order(tester, ids), ids);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('switching the week sorts by that week\'s points', (
+    tester,
+  ) async {
+    final server = humansSwarm();
+    final controller = await show(tester, server);
+    final ids = [
+      'peer',
+      'owner',
+      'tony',
+      'scholes',
+      'diego',
+      'huy',
+      'maximilian.alexander.longname',
+    ];
+    expect(order(tester, ids), ids);
+    // Last week: diego led, Dee had nothing.
+    final week = Map<String, int>.from({
+      'diego': 30,
+      'huy': 9,
+      'tony': 9,
+      'owner': 1,
+      'peer': 0,
+      'scholes': 0,
+      'maximilian.alexander.longname': 0,
+    });
+    for (final score in server.leaderboard!['people'] as List) {
+      score['points'] = week[score['personId']];
+    }
+    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Last week').last);
+    await tester.pumpAndSettle();
+    expect(order(tester, ids), [
+      'diego',
+      'huy',
+      'tony',
+      'owner',
+      'peer',
+      'maximilian.alexander.longname',
+      'scholes',
+    ]);
+    await close(tester, controller);
+  });
+
+  testWidgets(
+    'lends no order from a board for another project, a failed read or a lost project',
+    (tester) async {
+      // By name, letter case aside: dee, diego, huy, ken, maximilian…,
+      // scholes, tony.
+      const byName = [
+        'peer',
+        'diego',
+        'huy',
+        'owner',
+        'maximilian.alexander.longname',
+        'scholes',
+        'tony',
+      ];
+      final other = humansSwarm();
+      other.leaderboard!['projectId'] = 'other';
+      var controller = await show(tester, other);
+      expect(order(tester, byName), byName);
+      await close(tester, controller);
+
+      final failed = humansSwarm()..leaderboard = null;
+      controller = await show(tester, failed);
+      expect(order(tester, byName), byName);
+      expect(find.textContaining('Loading'), findsNothing);
+      await close(tester, controller);
+
+      final lost = humansSwarm();
+      controller = await show(tester, lost);
+      expect(order(tester, byName).take(2), ['peer', 'owner']);
+      lost.state['projects'] = <Object>[];
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(order(tester, byName), byName);
+      expect(
+        find.byKey(const ValueKey('leaderboard-points-peer')),
+        findsNothing,
+      );
+      await close(tester, controller);
+    },
+  );
+
+  Finder within(String id, String text) =>
+      find.descendant(of: person(id), matching: find.text(text));
+  // Number one's name carries the crown beside it in the same line.
+  Finder nameIn(String id, String name) =>
+      find.descendant(of: person(id), matching: find.textContaining(name));
+  Finder part(String kind, String id) =>
+      find.byKey(ValueKey('leaderboard-$kind-$id'));
+  TextStyle styleOf(WidgetTester tester, Finder text) =>
+      tester.widget<Text>(text).style!;
+
+  testWidgets('shows no rank: each row starts with the avatar, in one column', (
     tester,
   ) async {
     final controller = await show(tester, humansSwarm());
@@ -89,64 +227,27 @@ void main() {
       'huy',
       'maximilian.alexander.longname',
     ];
+    double avatarLeft(String id) => tester
+        .getTopLeft(
+          find.descendant(
+            of: person(id),
+            matching: find.byType(SuperTabAvatar),
+          ),
+        )
+        .dx;
     for (final id in ids) {
-      expect(person(id), findsOneWidget);
+      expect(part('rank', id), findsNothing, reason: id);
+      expect(avatarLeft(id), avatarLeft('peer'), reason: id);
     }
-    expect(find.textContaining('Show '), findsNothing);
-    final tops = [for (final id in ids) tester.getTopLeft(person(id)).dy];
-    expect(tops, [...tops]..sort());
+    // Nothing stands before the avatar.
+    expect(
+      avatarLeft('peer') - tester.getTopLeft(person('peer')).dx,
+      lessThanOrEqualTo(grid.AppDesktop.controlGap),
+    );
+    // Dee is first with 21, yet no numeral says so.
+    expect(within('peer', '1'), findsNothing);
     await close(tester, controller);
   });
-
-  Finder within(String id, String text) =>
-      find.descendant(of: person(id), matching: find.text(text));
-  // Number one's name carries the crown beside it in the same line.
-  Finder nameIn(String id, String name) =>
-      find.descendant(of: person(id), matching: find.textContaining(name));
-  Finder part(String kind, String id) =>
-      find.byKey(ValueKey('leaderboard-$kind-$id'));
-  TextStyle styleOf(WidgetTester tester, Finder text) =>
-      tester.widget<Text>(text).style!;
-
-  testWidgets(
-    'ranks each person with a bold numeral in its own right-aligned column',
-    (tester) async {
-      final controller = await show(tester, humansSwarm());
-      final ranks = {
-        'peer': '1',
-        'owner': '2',
-        'tony': '3',
-        'scholes': '4',
-        'diego': '5',
-        'huy': '6',
-        'maximilian.alexander.longname': '6',
-      };
-      for (final MapEntry(key: id, value: rank) in ranks.entries) {
-        expect(
-          find.descendant(of: part('rank', id), matching: find.text(rank)),
-          findsOneWidget,
-          reason: id,
-        );
-      }
-      final right = tester.getTopRight(part('rank', 'peer')).dx;
-      for (final id in ranks.keys) {
-        expect(tester.getTopRight(part('rank', id)).dx, right, reason: id);
-      }
-      // The rank stands before the avatar, in its own column.
-      final avatar = find.descendant(
-        of: person('peer'),
-        matching: find.byType(SuperTabAvatar),
-      );
-      expect(right, lessThanOrEqualTo(tester.getTopLeft(avatar).dx));
-      final rank = styleOf(
-        tester,
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-      );
-      expect(rank.fontWeight, FontWeight.w700);
-      expect(rank.fontFeatures, grid.AppFont.tabularFigures);
-      await close(tester, controller);
-    },
-  );
 
   testWidgets(
     'gives each person their points as the one emphasized number, right-aligned',
@@ -175,12 +276,6 @@ void main() {
       expect(points.fontWeight, grid.AppFont.semibold);
       expect(points.fontFeatures, grid.AppFont.tabularFigures);
       expect(points.color, grid.AppPalette.textPrimary);
-      // The rank is quieter than the points.
-      final rank = styleOf(
-        tester,
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-      );
-      expect(rank.color, grid.AppPalette.textSecondary);
       // A long name is cut short rather than pushing the points out.
       final name = tester.widget<Text>(
         within(
@@ -247,7 +342,7 @@ void main() {
       // The line starts where the name does.
       expect(
         tester.getTopLeft(part('meta', 'peer')).dx,
-        tester.getTopLeft(nameIn('peer', 'Dee')).dx,
+        tester.getTopLeft(nameIn('peer', 'dee')).dx,
       );
       await close(tester, controller);
     },
@@ -276,18 +371,14 @@ void main() {
         find.bySemanticsLabel(RegExp('Number one this week')),
         findsOneWidget,
       );
-      // After the name, before the points; the numeral stays.
+      // After the name, before the points.
       expect(
         tester.getTopLeft(crown('peer')).dx,
-        greaterThan(tester.getTopLeft(nameIn('peer', 'Dee')).dx),
+        greaterThan(tester.getTopLeft(nameIn('peer', 'dee')).dx),
       );
       expect(
         tester.getTopRight(crown('peer')).dx,
         lessThan(tester.getTopLeft(part('points', 'peer')).dx),
-      );
-      expect(
-        find.descendant(of: part('rank', 'peer'), matching: find.text('1')),
-        findsOneWidget,
       );
       // A crowned row is as tall as one without; the columns hold.
       expect(
@@ -414,8 +505,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    final right = tester.getTopRight(part('rank', 'peer')).dx;
-    expect(tester.getTopRight(part('rank', 'huy')).dx, right);
     final points = tester.getTopRight(part('points', 'peer')).dx;
     expect(tester.getTopRight(part('points', 'owner')).dx, points);
     await close(tester, controller);
@@ -472,13 +561,13 @@ void main() {
     final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
     Finder line(String text) =>
         find.descendant(of: waiting, matching: find.text(text));
-    expect(line('3 agents are waiting on Ken'), findsOneWidget);
+    expect(line('3 agents are waiting on ken'), findsOneWidget);
     expect(line('1 agent is waiting on you'), findsOneWidget);
     await close(tester, controller);
   });
 
   testWidgets(
-    'keeps a row with no points in rank order, its 0 in the points style',
+    'keeps a row with no points after those with points, its 0 in the points style',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       final zero = styleOf(
@@ -537,18 +626,17 @@ void main() {
   );
 
   testWidgets(
-    "names each person by display name, else their email's first part",
+    'names each person by their username, never the account display name',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       Finder within(String id, String text) =>
           find.descendant(of: person(id), matching: find.text(text));
-      expect(nameIn('peer', 'Dee'), findsOneWidget);
-      expect(within('owner', 'Ken'), findsOneWidget);
-      // A server from before names: the email's first part, as before.
+      expect(nameIn('peer', 'dee'), findsOneWidget);
+      expect(within('owner', 'ken'), findsOneWidget);
       expect(within('scholes', 'scholes'), findsOneWidget);
-      expect(find.text('dee'), findsNothing);
+      expect(find.text('Dee'), findsNothing);
       // On hover the whole name, which a long one needs when it is cut, then the email.
-      expect(find.byTooltip('Dee\ndee@example.com'), findsOneWidget);
+      expect(find.byTooltip('dee\ndee@example.com'), findsOneWidget);
 
       await close(tester, controller);
     },
@@ -631,7 +719,7 @@ void main() {
       final dialog = find.byType(SuperTabDetailDialog);
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
-      expect(inDialog('Dee'), findsOneWidget);
+      expect(inDialog('dee'), findsOneWidget);
       // Who they are on one line under the name (Ken, 2026-10-28).
       expect(inDialog('dee@example.com · Can collaborate'), findsOneWidget);
       // This week's points in words, and last week's beside them rather than a difference.

@@ -37,6 +37,16 @@ it('accepts the served models Builders are not offered, with why', () => {
   expect(machineObservationSchema.safeParse({ ...sent, refusedModels: Array(17).fill(refused) }).success).toBe(false)
 })
 
+it('accepts why an allowance is unknown, and a reading from before it', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: 'Anthropic is limiting how often the allowance can be read.' } }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: '' } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: 'x'.repeat(301) } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { 'Not An Engine': 'why' } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`e${i}`, 'why'])) }).success).toBe(false)
+})
+
 it('accepts what a machine is ready for, and a reading from before it', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const readiness = { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: null, signedIn: null }],

@@ -30,10 +30,11 @@ void _agentMessages(ConversationServer server) {
     attachments: [
       {
         'id': 'a1',
-        'name': 'fixture-375.png',
-        'mime': 'image/png',
+        // A file that stays a chip: a picture shows in place.
+        'name': 'fixture-375.pdf',
+        'mime': 'application/pdf',
         'size': 2048,
-        'url': 'https://cdn.harness.autonomous.ai/a1/fixture-375.png',
+        'url': 'https://cdn.harness.autonomous.ai/a1/fixture-375.pdf',
       },
     ],
   );

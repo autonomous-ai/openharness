@@ -14,6 +14,12 @@ import 'package:harness_mobile/swarm/swarm_buddy.dart';
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
+  // Live cards (Slack parity, #2212): which messages are cards, and the
+  // review verdict a card shows. The phone reads no GitHub yet (Lead, 10-29:
+  // that request is a security change of its own), so Desktop's PR facts
+  // reader has no copy here.
+  'lib/swarm/live_card_model.dart': 'lib/super_tabs/live_card_model.dart',
+  'lib/swarm/review_verdict.dart': 'lib/super_tabs/review_verdict.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
@@ -25,12 +31,12 @@ const _copies = {
 /// a computer and dropped on the phone. Back in [_copies] once the desktop's
 /// model carries them.
 ///
-/// Chat threads (#2132), PM ruling 10-29: the phone has no thread view yet,
-/// so a reply only in its thread stays in the chat, inline, and nothing is
-/// lost; but unread and bold follow the desktop's main-stream rule
-/// (`lastMainSequence`, [SuperTabConversation.mainSequence]), so a reply only
-/// in its thread makes a chat unread on neither. The phone reads a message's
-/// thread and the thread summaries as the desktop does, and shows none yet.
+/// Chat threads (#2132): the phone reads a message's thread and the thread
+/// summaries as the desktop does, and draws them as it does (Tony, option B,
+/// 10-29): the line under a root, a reply only in its thread out of the chat,
+/// and the thread on a screen of its own. Unread and bold follow the
+/// desktop's main-stream rule (`lastMainSequence`,
+/// [SuperTabConversation.mainSequence]) on both.
 const _model = ('lib/swarm/model.dart', 'lib/super_tabs/model.dart');
 
 void main() {

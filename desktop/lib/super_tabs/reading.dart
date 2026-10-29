@@ -9,6 +9,8 @@ class SuperTabReading {
     this.quietPoll,
     this.quietAfter = const Duration(seconds: 30),
     this.pausesAway = false,
+    this.awayPoll,
+    this.messagesWhenChanged = false,
     this.readsOnConnect = false,
     this.connectGrace = Duration.zero,
     this.messagesWithState = false,
@@ -20,6 +22,8 @@ class SuperTabReading {
   /// once, and a Swarm seen before asks only for what changed since, drawing
   /// nothing kept until that read has said what the reader may still see.
   static const desktop = SuperTabReading(
+    awayPoll: Duration(seconds: 15),
+    messagesWhenChanged: true,
     messagesWithState: true,
     drawsSaved: true,
     confirmsSaved: true,
@@ -36,6 +40,19 @@ class SuperTabReading {
   /// True stops the poll while the tab is not the one on screen or the page is
   /// hidden, and reads at once when it is shown again.
   final bool pausesAway;
+
+  /// Null polls an away Swarm as often as the one on screen. Otherwise a
+  /// Swarm that is not the one on screen, or the whole app in the background,
+  /// polls this often (as the web does), and reads at once when shown again.
+  /// Unlike [pausesAway] it keeps reading: Desktop's badges and notices come
+  /// from the Swarms it is not showing.
+  final Duration? awayPoll;
+
+  /// True reads the open conversation's messages only when something may
+  /// have happened: a first read, a push, a state that moved since they were
+  /// read, a message waiting for its receipt. A poll whose state read finds
+  /// nothing new then asks for the state alone.
+  final bool messagesWhenChanged;
 
   /// True reads at once when a machine able to serve Swarm reads connects,
   /// instead of at the next poll.

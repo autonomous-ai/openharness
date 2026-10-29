@@ -56,6 +56,8 @@ const HELP = {
   decisions: 'decisions [--answered]: the decisions you asked of people, still open, or with --answered those answered (each with its choice and note). A Lead also sees those asked in its project. When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: to tell one person something directly, a Lead sends person.tell; it lands in their Buddy chat, which the Lead cannot read. Project members watching the Lead\'s terminal see what it sends: put nothing there you would not say in the project chat.',
   costs: 'costs [--days N]: what the attempts routed in the last N days (7 unless set, at most 90) cost and how they went, per engine, model, effort and kind of job: attempts, first-review pass rate, shipped, median minutes to ship, tokens, API-equivalent cost and actual per-token spend in US dollars, and cost per shipped change, with the prices and their sources; models has the same per engine and model alone (a grid model by its own name), and stepUps counts the attempts that stepped up from a cheaper model. Only attempts routed since cost records began, in the groups you may read.',
   post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: ${POST_HELP}`,
+  // Acknowledgements as reactions, as Slack bots do (swarm skills); backend reactions.ts holds the emoji and the rules.
+  react: 'react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off]: react to a message you can read in a conversation you take part in, as people do, instead of posting an acknowledgement: eyes (👀) when you start on a message addressed to you, check (✅) when you have done what it asked, rocket (🚀) when its work merged; also thumbs_up, tada, heart and laugh. --off takes yours back. A reaction wakes nobody.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
@@ -70,7 +72,7 @@ const HELP = {
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
-  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. Low-risk work that is not a review ranks models on the Swarm\'s grid first unless the owner set noGridFirst: low-difficulty work, and medium work of kind docs, copy, tests, fixtures, fix or refactor (a grid model rated 2, such as Kimi K3 or DeepSeek v4.1). A review never runs on a grid model, below quality 2 or on the reviewed Builder\'s engine. When a grid attempt\'s first review says Ready no, or its grid host never starts the agent, the Swarm closes it and steps the task up (no grid and quality 2, then quality 3, at most twice) and tells you: route it again, and the route and the server keep to the new floor.',
+  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. Two failed starts in a row suspend an engine on a machine for up to 6 hours (the route says so); machine.engineResume offers it there again: only the machine\'s owner does, or the Lead passing on the owner\'s chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. Low-risk work that is not a review ranks models on the Swarm\'s grid first unless the owner set noGridFirst: low-difficulty work, and medium work of kind docs, copy, tests, fixtures, fix or refactor (a grid model rated 2, such as Kimi K3 or DeepSeek v4.1). A review never runs on a grid model, below quality 2 or on the reviewed Builder\'s engine. When a grid attempt\'s first review says Ready no, or its grid host never starts the agent, the Swarm closes it and steps the task up (no grid and quality 2, then quality 3, at most twice) and tells you: route it again, and the route and the server keep to the new floor.',
   commands: [
     { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
@@ -93,6 +95,7 @@ const HELP = {
     { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents first.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'rule.set', rule: { kind: 'noGridFirst' }, text: 'Subscriptions first, even for simple work.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'rule.remove', ruleId: 'RULE', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'machine.engineResume', machineId: 'MACHINE', engine: 'codex', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
@@ -219,11 +222,11 @@ export interface SuperTabServiceOptions {
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
-  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
+  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
-  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>>
+  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
   team?: () => boolean
   /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
@@ -245,7 +248,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   let held: SwarmSources | null = null
   const sources = (): SwarmSources => {
     const machine = core.daemon.machineId()
-    if (held?.feed.machineId !== machine) held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+    if (held?.feed.machineId !== machine) {
+      held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+      // A task's GitHub token is fetched as the host first sees the task, not at the refresher's next minute (github.ts).
+      held.feed.watch(read => tokens.assigned?.(read))
+    }
     return held
   }
   let host: SuperTabHost | null = null
@@ -291,7 +298,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
-  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>> | null = null
+  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
   // at as it connects, and a failed install again half an hour later.
   const settled = (outcome: string) => outcome === 'present' || outcome === 'installed' || outcome === 'not-team'
@@ -353,11 +360,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
         // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
         // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
-        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline') {
+        // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
+        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline'
+          || payload.action === 'teamSetupStatus') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           const setup = () => autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
             .catch(error => { autoSetup = null; throw error })
           if (payload.action === 'teamSetupDecline') { (await setup()).decline(); return { ok: true } }
+          if (payload.action === 'teamSetupStatus') {
+            const made = await setup()
+            return made.status ? { ok: true, ...await made.status() } : { error: 'INVALID_REQUEST' }
+          }
           if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
           // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
           // nothing read, run or asked of the backend.
@@ -410,13 +423,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
-            const focus = cardId(asked.tabId) && cardId(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+            const focus = cardId(asked.tabId) && cardId(asked.conversationId)
+              ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
             cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...(cardId(payload.chatId) ? [payload.chatId] : []))
+            const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
+              : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
             return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }

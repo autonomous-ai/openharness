@@ -94,7 +94,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     const sequence = (group.messageSeq ?? state.sequenceBase ?? 0) + 1
     group.messageSeq = sequence
     sequences.set(message.id, sequence)
-    if (agentOnly(message.source)) continue
+    if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
     if (!message.thread || message.alsoInChat) group.lastMainSequence = sequence
     group.lastActivityAt = new Date(now).toISOString()

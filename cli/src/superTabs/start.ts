@@ -10,7 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
-import { NO_PM_RELAY, teamRelayed } from '../team/relay.js'
+import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -327,6 +327,18 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
         return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
       }
+      // A Codex model the Mac owner's ChatGPT account does not offer launched and then failed every request (Mac Auto, whose
+      // owner is offered GPT-6-Luna and the GPT-5.6 models, was asked for gpt-6.1-sol, 2026-10-29). In a Team account on the
+      // relay the owner's list is read first, and such a start is refused before anything launches, naming what is offered.
+      // A list that cannot be read refuses nothing.
+      if (request.engine === 'codex' && model && model !== 'default' && request.gridModel === undefined && isTeamDaemon()) {
+        const offered = await offeredCodexModels().catch(() => null)
+        if (offered && !offered.slugs.includes(model)) {
+          const detail = codexModelNotOffered(model, offered)
+          requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
+          return { error: 'START_FAILED', startId, detail }
+        }
+      }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
         error: 'CONTRIBUTION_REQUIRED', startId,
@@ -457,7 +469,9 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
       ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined
     // New native frames have their creation time before the engine binds. Wait for its original session identity.
-    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId,
+    // The agent it launched goes with it: should the Swarm fail this start meanwhile, its host stops that agent
+    // (superTabs/machines.ts `abandoned`).
+    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
       detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
     const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
     let joined: Json = { result: {} }

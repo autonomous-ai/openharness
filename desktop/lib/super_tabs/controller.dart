@@ -13,6 +13,7 @@ import 'avatar_upload.dart';
 import 'message_link.dart';
 import 'model.dart';
 import 'buddy_chat.dart';
+import 'catch_up.dart';
 import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
@@ -210,7 +211,10 @@ class SuperTabController extends ChangeNotifier {
         final value = superTabMap(initial['pending']);
         if (value['operationId'] is String && value['command'] is Map) {
           _pending = value;
-          operationError = 'Check the pending action before sending it again.';
+          _failOperation(
+            'Check the pending action before sending it again.',
+            command: superTabMap(value['command']),
+          );
         }
       }
     }
@@ -268,12 +272,42 @@ class SuperTabController extends ChangeNotifier {
 
   /// Why the files of each conversation's last send did not go up. Kept apart
   /// from [operationError] so it shows only under its own conversation.
-  final _uploadErrors = <String, String>{};
+  final _uploadErrors = <Object, String>{};
+
+  /// The conversation the last action that set [operationError] was for, or
+  /// null when it was for none (a machine, a member, the Swarm).
+  String? _operationErrorFor;
 
   /// What the composer of [conversationId] says went wrong: the last action's
-  /// [operationError], else its own upload failure.
-  String? composerError(String conversationId) =>
-      operationError ?? _uploadErrors[conversationId];
+  /// [operationError] when it was for this conversation or for none, else its
+  /// own upload failure. An action still unconfirmed blocks every composer's
+  /// send, so its error shows in each, with Retry.
+  String? composerError(String conversationId) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            _operationErrorFor == conversationId ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[conversationId];
+  }
+
+  /// Sets [operationError] for [command], remembering its conversation.
+  void _failOperation(
+    String message, {
+    required Map<String, dynamic> command,
+    String? code,
+  }) {
+    operationError = message;
+    operationErrorCode = code;
+    final id = command['conversationId'];
+    _operationErrorFor = id is String ? id : null;
+  }
+
+  /// The same for the reply box of [root]'s thread in [conversationId].
+  String? threadComposerError(String conversationId, String root) =>
+      operationError ?? _uploadErrors[(conversationId, root)];
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -362,6 +396,17 @@ class SuperTabController extends ChangeNotifier {
     });
   }
 
+  /// How often the idle poll reads: every [pollInterval], or
+  /// [SuperTabReading.awayPoll] while the Swarm is away (never more often
+  /// than [pollInterval]). A push is not an idle poll: [_readGap] keeps
+  /// reading a told change at [pollInterval], so a tag reaches an away
+  /// Swarm's badge and notice as fast as before.
+  Duration get _every {
+    final away = _policy.awayPoll;
+    if (away == null || !_away) return pollInterval;
+    return away > pollInterval ? away : pollInterval;
+  }
+
   /// How often the poll read before pushes: every [pollInterval], or
   /// [SuperTabReading.quietPoll] once the person has been quiet a while.
   Duration get _readGap {
@@ -443,7 +488,19 @@ class SuperTabController extends ChangeNotifier {
   set away(bool value) {
     if (_away == value) return;
     _away = value;
-    if (!_policy.pausesAway || _startedAt == null || _disposed) return;
+    if (_startedAt == null || _disposed) return;
+    if (!_policy.pausesAway) {
+      // Going away slows the poll; coming back reads at once unless a poll
+      // just did ([SuperTabReading.awayPoll]).
+      if (_policy.awayPoll == null) return;
+      final last = _lastFullRead;
+      if (!value &&
+          (last == null || clock.now().difference(last) >= pollInterval)) {
+        unawaited(refresh());
+      }
+      _schedule();
+      return;
+    }
     if (value) {
       _poll?.cancel();
       return;
@@ -500,12 +557,22 @@ class SuperTabController extends ChangeNotifier {
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
+
+  /// The files waiting to go with the next reply of each thread, by its
+  /// conversation and root: a root id alone is not enough to keep two
+  /// conversations' files apart.
+  final _threadAttachments = <(String, String), HarnessAttachments>{};
   // Files already uploaded for the message being sent, so a retry sends their
   // ids rather than uploading them again.
   final _uploaded = <HarnessAttachment, String>{};
   final _progress = <HarnessAttachment, double>{};
   CancelToken? _cancel;
-  ({String conversationId, List<HarnessAttachment> files})? _sending;
+  ({
+    String conversationId,
+    HarnessAttachments owner,
+    List<HarnessAttachment> files,
+  })?
+  _sending;
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
 
@@ -546,6 +613,35 @@ class SuperTabController extends ChangeNotifier {
   /// between a few groups; short enough that a day of browsing holds only the
   /// ones read lately.
   static const _keepLeft = Duration(minutes: 15);
+
+  /// Conversations opened again over messages held from an earlier visit,
+  /// until a read of their newest messages lands: the held copy may end
+  /// before what arrived meanwhile ([awaitsNewest]).
+  final _staleHeld = <String>{};
+
+  /// Whether [id]'s view waits for its newest messages before it places the
+  /// New messages line, follows the end or marks anything read: reopened
+  /// over a held copy whose read has not landed yet. A read that failed
+  /// keeps it waiting while the held copy ends before the conversation's
+  /// newest main-stream message; the next poll reads it again.
+  bool awaitsNewest(String id) => _staleHeld.contains(id);
+
+  /// A read of [id]'s newest messages landed, or failed: it waits no more,
+  /// unless it failed with the held copy short of the newest message.
+  /// Whether this ended a wait.
+  bool _settleHeld(String id, {required bool read}) {
+    if (!read && _heldBehind(id)) return false;
+    return _staleHeld.remove(id);
+  }
+
+  /// Whether [id]'s held messages end before its newest main-stream message
+  /// as the Swarm's state last said it.
+  bool _heldBehind(String id) {
+    final group = snapshot?.conversation(id);
+    final tail = _messages[id]?.lastOrNull?.sequence;
+    if (group == null || tail == null) return false;
+    return tail < (group.lastMainSequence ?? group.lastMessageSequence);
+  }
 
   /// Each conversation's reads under way, newest and older apart: an older
   /// page asked for during a poll's read is a read of its own.
@@ -652,23 +748,37 @@ class SuperTabController extends ChangeNotifier {
 
   /// The files waiting to go with the next message in a conversation. They
   /// stay in memory: only the text of a draft is saved.
-  HarnessAttachments attachments(String id) => _attachments.putIfAbsent(id, () {
+  HarnessAttachments attachments(String id) =>
+      _attachments.putIfAbsent(id, () => _newFiles(id, id));
+
+  /// The files waiting to go with the next reply of [root]'s thread in
+  /// [conversationId]. Like [attachments], they stay in memory, and they are
+  /// forgotten with the thread when access to the conversation goes.
+  HarnessAttachments threadAttachments(String conversationId, String root) =>
+      _threadAttachments.putIfAbsent((
+        conversationId,
+        root,
+      ), () => _newFiles(conversationId, (conversationId, root)));
+
+  /// An empty set of files for a message to [conversationId] whose upload
+  /// failures are kept under [errorKey].
+  HarnessAttachments _newFiles(String conversationId, Object errorKey) {
     final files = HarnessAttachments(
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
     );
     files.addListener(() {
       // Changing the files answers a refused upload.
-      if (_uploadErrors.remove(id) != null) _changed();
+      if (_uploadErrors.remove(errorKey) != null) _changed();
       // Taking a chip off while its files go up gives the upload up.
       if (uploading &&
-          _sending?.conversationId == id &&
+          identical(_sending?.owner, files) &&
           !files.files.toSet().containsAll(_sending!.files)) {
         cancelUpload();
       }
     });
     return files;
-  });
+  }
 
   /// Whether [file] is still on its way to the backend in a send.
   bool isUploading(HarnessAttachment file) =>
@@ -965,6 +1075,20 @@ class SuperTabController extends ChangeNotifier {
     };
     _threadRows.removeWhere((root, _) => roots.contains(root));
     _threadBefore.removeWhere((root, _) => roots.contains(root));
+    final forgotten = <HarnessAttachments>[];
+    _threadAttachments.removeWhere((key, files) {
+      if (!gone(key.$1)) return false;
+      forgotten.add(files);
+      return true;
+    });
+    for (final files in forgotten) {
+      // Files on their way for a conversation that is gone are given up.
+      if (identical(_sending?.owner, files)) cancelUpload();
+      files.dispose();
+    }
+    _uploadErrors.removeWhere(
+      (key, _) => key is (String, String) && gone(key.$1),
+    );
     if (openedThread case final open? when gone(open.conversationId)) {
       openedThread = null;
     }
@@ -974,10 +1098,28 @@ class SuperTabController extends ChangeNotifier {
   bool hasEarlierReplies(String root) => _threadBefore.containsKey(root);
   bool readingEarlierReplies = false;
 
+  /// Lets go of the empty file sets of threads that are not open, which only
+  /// reading a thread's reply box made.
+  void _pruneThreadFiles() {
+    final open = openedThread;
+    _threadAttachments.removeWhere((key, files) {
+      // A picker, drop or paste still reading for a box will add to it.
+      if (!files.isEmpty ||
+          files.isReading ||
+          (key.$1 == open?.conversationId && key.$2 == open?.root) ||
+          identical(_sending?.owner, files)) {
+        return false;
+      }
+      files.dispose();
+      return true;
+    });
+  }
+
   /// Opens [root]'s thread of the selected conversation beside the chat.
   void openThread(String root) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    _pruneThreadFiles();
     _seeThread(root);
     _changed();
     unawaited(loadThread());
@@ -986,6 +1128,7 @@ class SuperTabController extends ChangeNotifier {
   void closeThread() {
     if (openedThread == null) return;
     openedThread = null;
+    _pruneThreadFiles();
     _changed();
   }
 
@@ -1077,20 +1220,33 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft to its root; [alsoSend] shows it in the
-  /// main stream too.
-  Future<Map<String, dynamic>?> sendThreadReply({bool alsoSend = false}) async {
+  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
+  /// main stream too. [onSending] is told when the reply is on its way, which
+  /// is after its files have gone up.
+  Future<Map<String, dynamic>?> sendThreadReply({
+    bool alsoSend = false,
+    VoidCallback? onSending,
+  }) async {
     final open = openedThread;
-    final text = threadDraft(open?.root ?? '').trim();
-    if (open == null ||
-        text.isEmpty ||
+    if (open == null) return null;
+    final text = threadDraft(open.root).trim();
+    final owner = threadAttachments(open.conversationId, open.root);
+    final files = owner.files;
+    if ((text.isEmpty && files.isEmpty) ||
         selected == null ||
         selected!.archived ||
         !canWrite ||
+        uploading ||
         saving ||
         _pending != null) {
       return null;
     }
+    final ids = await _uploadAll(open.conversationId, owner, (
+      open.conversationId,
+      open.root,
+    ));
+    if (ids == null) return null;
+    final before = _pending;
     final sending = command({
       'type': 'message.send',
       'conversationId': open.conversationId,
@@ -1098,12 +1254,19 @@ class SuperTabController extends ChangeNotifier {
       'replyTo': open.root,
       'recipientIds': const <String>[],
       if (alsoSend) 'alsoSend': true,
+      if (ids.isNotEmpty) 'attachmentIds': ids,
     });
-    if (_pending != null) {
-      _threadDrafts.remove(open.root);
+    if (_pending case final pending? when !identical(pending, before)) {
+      // Only a draft still holding what went: more may have been typed since.
+      if (_threadDrafts[open.root]?.trim() == text) {
+        _threadDrafts.remove(open.root);
+      }
+      onSending?.call();
       _changed();
     }
-    return await sending;
+    final result = await sending;
+    _forgetRefusedUploads(result);
+    return result;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -1113,20 +1276,41 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
-  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
+  /// review group's for [group], as its Reviewer recorded it (its result or
+  /// check evidence), else the newest `Ready:` message a reviewer of [group]
+  /// posted in the loaded history. Null without a reviewer.
   String? reviewLine(SuperTabConversation? group) {
     final state = snapshot;
-    if (group == null) return null;
-    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (group == null || state == null) return null;
+    final reviews =
+        state.conversations.where((c) => c.reviewOf == group.id).toList()
+          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
+    final reviewers = {
+      for (final r in [
+        ...state.reviewers(group),
+        for (final review in reviews) ...state.reviewers(review),
+      ])
+        r.id: r,
+    }.values;
     if (reviewers.isEmpty) return null;
     final ids = {for (final r in reviewers) r.id};
-    final verdict = messages(group.id).reversed
+    final recorded = reviews
+        .expand(
+          (review) => [
+            review.assignment?['result'],
+            for (final check in review.checks) check['evidence'],
+          ],
+        )
+        .whereType<String>();
+    final posted = messages(group.id).reversed
         .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => parseSuperTabVerdict(m.text))
-        .nonNulls
-        .firstOrNull;
-    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+        .map((m) => m.text);
+    final verdict = [
+      ...recorded,
+      ...posted,
+    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
+    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
     return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
   }
 
@@ -1259,6 +1443,7 @@ class SuperTabController extends ChangeNotifier {
     _rows.remove(id);
     _keepRows(id, rows);
     _messages[id] = page;
+    _staleHeld.remove(id);
     _before[id] = SuperTabPage.of(page.first);
     if (answer['next'] != null) {
       _readingBack.add(id);
@@ -1284,6 +1469,17 @@ class SuperTabController extends ChangeNotifier {
   /// in while the server is out of reach.
   int readMark(String id) =>
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
+
+  /// What the reader missed in [id] after [after] (backend catchUp.ts).
+  Future<SuperTabCatchUp> readCatchUp(String id, int after) async =>
+      SuperTabCatchUp.fromJson(
+        superTabMap(
+          await request(
+            'GET',
+            '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
+          ),
+        ),
+      );
 
   late final _serverMarks = SuperTabReadMarkSender(
     (id, sequence) => request(
@@ -1323,13 +1519,13 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
-      _poll = Timer.periodic(pollInterval, (_) {
+      _poll = Timer.periodic(_every, (_) {
         if (_pollDue) unawaited(refresh());
       });
       return;
     }
     if (accessRevoked || (_policy.pausesAway && _away)) return;
-    final wait = after ?? pollInterval;
+    final wait = after ?? _every;
     _poll = Timer(
       wait > Duration.zero ? wait : Duration.zero,
       () => unawaited(_tick()),
@@ -1347,7 +1543,7 @@ class SuperTabController extends ChangeNotifier {
           ? refresh()
           : _readMessages(selectedId, light: true));
     }
-    _schedule(pollInterval - clock.now().difference(began));
+    _schedule(_every - clock.now().difference(began));
   }
 
   bool get _fullReadDue {
@@ -1376,6 +1572,7 @@ class SuperTabController extends ChangeNotifier {
         return false;
       }
       _messages.remove(id);
+      _staleHeld.remove(id);
       _rows.remove(id);
       _before.remove(id);
       _quoted.remove(id);
@@ -1499,6 +1696,7 @@ class SuperTabController extends ChangeNotifier {
     _parts = null;
     _partsReadAt = null;
     _messages.clear();
+    _staleHeld.clear();
     _quoted.clear();
     _quoting.clear();
     _forgetThreads();
@@ -1532,6 +1730,7 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _staleHeld.clear();
     _forgetNewer();
     _quoted.clear();
     _quoting.clear();
@@ -1807,17 +2006,21 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
-  /// opens its chat. False when refused: [operationError] says why.
+  /// opens its chat. [setup] is sent for one of their own machines outside the
+  /// Swarm (prepareBuddyMachine). False when refused: [operationError] says
+  /// why.
   Future<bool> addBuddy({
     required String projectId,
     required String machineId,
     required String engine,
+    Map<String, dynamic>? setup,
   }) async {
     final result = await command({
       'type': 'buddy.create',
       'projectId': projectId,
       'machineId': machineId,
       'engine': engine,
+      'setup': ?setup,
     });
     if (result == null) return false;
     final id = result['conversationId'];
@@ -2076,7 +2279,14 @@ class SuperTabController extends ChangeNotifier {
       if (group.closed) closedOpenProjects.add(group.projectId);
     }
     _moveView(to: id);
+    // Held from an earlier visit: what arrived meanwhile is not among them.
+    if (_messages[id]?.isNotEmpty ?? false) {
+      _staleHeld.add(id);
+    } else {
+      _staleHeld.remove(id);
+    }
     openedThread = null;
+    _pruneThreadFiles();
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
@@ -2120,13 +2330,19 @@ class SuperTabController extends ChangeNotifier {
     _lastFullRead = clock.now();
     // Taken as the read starts: a push heard while it is out reads once more,
     // on the next allowed read, unless it repeats a time already told.
+    final told = _toldMain || _toldMachine;
     _toldMain = _toldMachine = false;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the
     // selection elsewhere.
     final earlyId = selectedId;
-    final earlyQuery = _earlyQuery(earlyId);
+    // Only when something may have happened: a first read, a saved view, a
+    // push, a message waiting for its receipt. Otherwise the messages wait
+    // for the state to say there is news (roadmap 2.5).
+    final earlyQuery = told || !_messagesCurrent(earlyId)
+        ? _earlyQuery(earlyId)
+        : null;
     final early = earlyQuery == null
         ? null
         : (request('GET', '${_messagesPath(earlyId)}$earlyQuery')..ignore());
@@ -2194,6 +2410,7 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
+        _staleHeld.removeWhere((id) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
         _quoting.removeWhere((id, _) => !allowed.contains(id));
         _forgetThreads(allowed.contains);
@@ -2241,14 +2458,21 @@ class SuperTabController extends ChangeNotifier {
       _readUnreadBuddyChats();
       _partsReadAt = clock.now();
       error = null;
-      await (selectedId == earlyId && messagesRead != null
-          ? messagesRead
-          : _readMessages(
-              selectedId,
-              early: selectedId == earlyId && early != null
-                  ? (query: earlyQuery!, page: early)
-                  : null,
-            ));
+      // A state that moved nothing, over messages read at that very state,
+      // has no news for the conversation: no read of it (roadmap 2.5).
+      if (early != null ||
+          !_messagesCurrent(selectedId) ||
+          read.full ||
+          read.changed) {
+        await (selectedId == earlyId && messagesRead != null
+            ? messagesRead
+            : _readMessages(
+                selectedId,
+                early: selectedId == earlyId && early != null
+                    ? (query: earlyQuery!, page: early)
+                    : null,
+              ));
+      }
       if (stateReads == 1) {
         // Where a first open's time went, from the tab asking to the chat it shows.
         appLog.debug(
@@ -2541,6 +2765,22 @@ class SuperTabController extends ChangeNotifier {
     return tail != null ? '?after=$tail' : '';
   }
 
+  /// The state's last change when [id]'s newest messages were read: while the
+  /// state has not moved past it, nothing new can be in the conversation.
+  final _messagesAt = <String, int>{};
+
+  /// [id]'s messages are as new as the state held, and nothing outside the
+  /// state is waited for: no receipt, no saved page, no newer page asked for.
+  bool _messagesCurrent(String id) =>
+      _policy.messagesWhenChanged &&
+      !_showingSaved &&
+      snapshot != null &&
+      _messages[id] != null &&
+      _messagesAt[id] == lastChangedAt &&
+      !_holding(id) &&
+      !_latestWanted.contains(id) &&
+      !_receiptOpen(id);
+
   /// The query of [id]'s messages read to start beside a state read, or null.
   /// On first open only for the conversation the saved state named; after
   /// that, for a conversation the state has and no read of it under way.
@@ -2581,6 +2821,7 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _staleHeld.clear();
       _forgetNewer();
       _quoted.clear();
       _quoting.clear();
@@ -2624,6 +2865,8 @@ class SuperTabController extends ChangeNotifier {
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
     final generation = _heldGeneration[id];
+    // What the Swarm's state had said when this read was asked for.
+    final stateAt = lastChangedAt;
     // What [id] held was replaced while newer messages were on their way.
     bool replaced() => !older && _heldGeneration[id] != generation;
     try {
@@ -2802,6 +3045,7 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
+      final settled = !older && _settleHeld(id, read: true);
       if (keepPlace) {
         _newer.add(id);
         _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
@@ -2811,6 +3055,7 @@ class SuperTabController extends ChangeNotifier {
       }
       _dropShownSends(id);
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
+      if (!older && !holding) _messagesAt[id] = stateAt;
       if (older || replacing || !_before.containsKey(id)) {
         _before[id] = SuperTabPage.read(answer['next']);
       }
@@ -2821,16 +3066,18 @@ class SuperTabController extends ChangeNotifier {
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();
-      if (!same) {
+      if (!same || settled) {
         if (id == selectedId) _viewVersion++;
         _changed();
       }
     } catch (failure) {
+      if (!older) _settleHeld(id, read: false);
       // The state read waits for a machine within the grace: so do these.
       if (!_inConnectGrace(failure)) _readFailure(failure, revokeTab: false);
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _staleHeld.remove(id);
         _forgetNewer(id);
         _quoted.remove(id);
         _quoting.remove(id);
@@ -2898,6 +3145,9 @@ class SuperTabController extends ChangeNotifier {
           for (final entry in _uploaded.entries.toList()) {
             if (sent.contains(entry.value)) {
               _attachments[id]?.remove(entry.key);
+              for (final MapEntry(:key, :value) in _threadAttachments.entries) {
+                if (key.$1 == id) value.remove(entry.key);
+              }
               _uploaded.remove(entry.key);
             }
           }
@@ -2922,8 +3172,11 @@ class SuperTabController extends ChangeNotifier {
     } catch (failure) {
       if (!_disposed && _isUpdateRequired(failure)) {
         _requireUpdate();
-        operationError = updateMessage;
-        operationErrorCode = 'UPDATE_REQUIRED';
+        _failOperation(
+          updateMessage,
+          command: superTabMap(pending['command']),
+          code: 'UPDATE_REQUIRED',
+        );
         // Refused by the backend: nothing was done, nothing to retry.
         _refuse(pending, operationError!);
         _pending = null;
@@ -2933,10 +3186,13 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed) {
-        operationError = failure is SuperTabFailure
-            ? failure.message
-            : 'The action is not confirmed. Retry to check it.';
-        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
+        _failOperation(
+          failure is SuperTabFailure
+              ? failure.message
+              : 'The action is not confirmed. Retry to check it.',
+          command: superTabMap(pending['command']),
+          code: failure is SuperTabFailure ? failure.code : null,
+        );
         if (failure is SuperTabFailure &&
             failure.statusCode >= 400 &&
             failure.statusCode < 500 &&
@@ -3023,19 +3279,29 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
+    // A tag the text still says: an agent's is a recipient, a person's a tag.
+    final said = mentions(selectedId).entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    final tagged = said.where(isPerson).toList();
     final addressed = recipients.isEmpty
-        ? mentions(selectedId).entries
-              .where((entry) => containsMention(text, entry.value))
-              .map((entry) => entry.key)
-              .toList()
+        ? said.where((id) => !isPerson(id)).toList()
         : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
-      operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
+      _failOperation(
+        'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',
+        command: {'conversationId': selectedId},
+      );
       _changed();
       return null;
     }
     final conversationId = selectedId;
-    final ids = await _uploadAll(conversationId, files);
+    final ids = await _uploadAll(
+      conversationId,
+      attachments(conversationId),
+      conversationId,
+    );
     if (ids == null) return null;
     final before = _pending;
     final tags = Map<String, String>.of(_mentions[conversationId] ?? const {});
@@ -3045,6 +3311,7 @@ class SuperTabController extends ChangeNotifier {
       'text': text,
       'replyTo': replyTo,
       'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     // On its way: the message shows in the chat, and the draft is free for
@@ -3059,14 +3326,18 @@ class SuperTabController extends ChangeNotifier {
       _changed();
     }
     final result = await sending;
-    // A refusal of the files themselves sends them up once more; one of the
-    // message (a mention, a recipient) leaves them uploaded.
+    _forgetRefusedUploads(result);
+    return result;
+  }
+
+  /// A refusal of the files themselves sends them up once more; one of the
+  /// message (a mention, a recipient) leaves them uploaded.
+  void _forgetRefusedUploads(Map<String, dynamic>? result) {
     if (result == null &&
         _pending == null &&
         operationErrorCode?.contains('ATTACHMENT') == true) {
       _uploaded.clear();
     }
-    return result;
   }
 
   /// Uploads each of [files] that has not gone up yet and returns their ids,
@@ -3074,15 +3345,17 @@ class SuperTabController extends ChangeNotifier {
   /// files stay where they are.
   Future<List<String>?> _uploadAll(
     String conversationId,
-    List<HarnessAttachment> files,
+    HarnessAttachments owner,
+    Object errorKey,
   ) async {
-    // Any send of this conversation answers its last refused upload.
-    _uploadErrors.remove(conversationId);
+    final files = owner.files;
+    // Any send from this box answers its last refused upload.
+    _uploadErrors.remove(errorKey);
     if (files.isEmpty) return const [];
     final run = ++_uploadRun;
     uploading = true;
     operationError = null;
-    _sending = (conversationId: conversationId, files: files);
+    _sending = (conversationId: conversationId, owner: owner, files: files);
     _uploaded.removeWhere((file, _) => !files.contains(file));
     _changed();
     try {
@@ -3101,7 +3374,7 @@ class SuperTabController extends ChangeNotifier {
     } catch (failure) {
       if (!_disposed && run == _uploadRun) {
         // Into the conversation the files were for, whichever is shown now.
-        _uploadErrors[conversationId] = failure is SuperTabFailure
+        _uploadErrors[errorKey] = failure is SuperTabFailure
             ? failure.message
             : failure is TimeoutException
             ? 'The upload stopped moving. Try again.'

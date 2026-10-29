@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,10 +11,11 @@ import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 
 import 'swarm_attachment_fakes.dart';
 
-/// A picture in a chat shows in place: a skeleton in a fixed 4:3 box while it
-/// loads, then the picture in the same box, decoded at the box's size, and a
-/// tap opens it full screen. Every other file, and a picture that cannot be
-/// shown, keeps the chip.
+/// A picture in a chat shows in place, as Slack shows one (Dee, 10-29): a
+/// skeleton in a 4:3 box while it loads, then the picture at its own shape, up
+/// to 360 points each way and never wider than its message, decoded at the
+/// size it shows; a tap opens it full screen. Every other file, and a picture
+/// that cannot be shown, keeps the chip.
 void main() {
   late Directory root;
   late FakeFileStorage storage;
@@ -100,19 +102,33 @@ void main() {
     await tester.pump(const Duration(minutes: 1));
   }
 
+  /// A real [width]×[height] PNG for the storage to serve.
+  Future<List<int>> png(WidgetTester tester, int width, int height) async =>
+      (await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawRect(
+          Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          Paint()..color = const Color(0xFF3060A0),
+        );
+        final image = await recorder.endRecording().toImage(width, height);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        return data!.buffer.asUint8List();
+      }))!;
+
   bool drawn(WidgetTester tester) => find
       .descendant(of: preview, matching: find.byType(RawImage))
       .evaluate()
       .any((e) => (e.widget as RawImage).image != null);
 
   testWidgets('a picture shows a skeleton in a 4:3 box while it loads, then '
-      'the picture in the same box', (tester) async {
+      'the picture at its own shape', (tester) async {
+    storage.bytes = await png(tester, 720, 360);
     storage.hold = Completer();
     await pump(tester);
     await tester.pump();
 
     expect(preview, findsOneWidget);
-    expect(tester.getSize(preview), const Size(240, 180));
+    expect(tester.getSize(preview), const Size(320, 240));
     expect(
       find.descendant(of: preview, matching: find.byType(Skeleton)),
       findsOneWidget,
@@ -123,7 +139,7 @@ void main() {
     storage.hold!.complete();
     await until(tester, () => drawn(tester));
 
-    expect(tester.getSize(preview), const Size(240, 180), reason: 'no jump');
+    expect(tester.getSize(preview), const Size(320, 160));
     expect(
       find.descendant(of: preview, matching: find.byType(Skeleton)),
       findsNothing,
@@ -131,11 +147,31 @@ void main() {
     final image = tester.widget<Image>(
       find.descendant(of: preview, matching: find.byType(Image)),
     );
-    expect(image.image, isA<ResizeImage>());
-    expect((image.image as ResizeImage).width, 480, reason: '240 at 2x');
+    final resized = image.image as ResizeImage;
+    expect(resized.policy, ResizeImagePolicy.fit);
+    expect((resized.width, resized.height), (640, 720), reason: 'at 2x');
 
     await closed(tester);
   });
+
+  for (final (width, height, message, shown) in [
+    (720, 360, 480.0, const Size(360, 180)),
+    (200, 800, 320.0, const Size(90, 360)),
+    (120, 80, 320.0, const Size(120, 80)),
+  ]) {
+    testWidgets(
+      'a ${width}x$height picture in a ${message.round()} wide message '
+      'shows at $shown',
+      (tester) async {
+        storage.bytes = await png(tester, width, height);
+        await pump(tester, width: message);
+        await until(tester, () => drawn(tester));
+
+        expect(tester.getSize(preview), shown);
+        await closed(tester);
+      },
+    );
+  }
 
   testWidgets('a narrow message makes the box narrower, still 4:3', (
     tester,

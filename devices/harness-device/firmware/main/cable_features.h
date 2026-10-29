@@ -13,6 +13,12 @@ enum {
     // device that does not see it keeps its own settings screens; nothing here is load-bearing for a
     // session, so an older daemon simply never asks.
     CABLE_FEATURE_SETTINGS = 1u << 6,
+    // Words reviewed on a Swarm face are posted in its chat by Send. Without it a reviewed draft would be typed into the
+    // Lead's terminal, so a Swarm face never asks an older daemon for review.
+    CABLE_FEATURE_SWARM_REVIEW = 1u << 7,
+    // A Lead on another machine may be named by its Swarm id: the daemon posts the words in its chat. An older daemon would
+    // hand that id to the pane focused in the window, so without it such a Lead is named to no one.
+    CABLE_FEATURE_SWARM_REMOTE = 1u << 8,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

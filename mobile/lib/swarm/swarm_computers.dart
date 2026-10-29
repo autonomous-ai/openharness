@@ -64,6 +64,29 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
     notifyListeners();
   }
 
+  /// The account's own computers, as the Buddy picker lists them: never one
+  /// shared with this person, nor a Harness Team account, nor one waiting for
+  /// a link.
+  @override
+  List<SwarmOwnComputer> get own => [
+    if (notifier.machinesAnswered)
+      for (final machine in notifier.machineStates.values)
+        if (!machine.machine.shared &&
+            machine.machine.sessionKind != 'team' &&
+            !machine.needsLink)
+          (
+            id: machine.machine.machineId,
+            name: machine.machine.displayName,
+            away: phoneMachineAway(machine),
+          ),
+  ];
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) => notifier.swarmAskComputer(machineId, payload);
+
   /// The machines tab's Try again: the account's list read again.
   @override
   Future<void> recheck() => notifier.retryMachines();

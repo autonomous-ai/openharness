@@ -102,6 +102,26 @@ describe('the Harness Team account, set up on its own', () => {
     expect(unreadable.log.join('\n')).toContain('could not remember')
   })
 
+  it('tells its own Desktop why there is no account: cancelled, failed with the reason, still running, or nothing yet', async () => {
+    const f = fake()
+    expect(await f.auto.status()).toEqual({ state: 'none' })
+    f.setDecision({ state: 'declined', at: 5 })
+    expect(await f.auto.status()).toEqual({ state: 'declined' })
+    f.setDecision({ state: 'failed', at: 5, detail: 'launchd would not start it' })
+    expect(await f.auto.status()).toEqual({ state: 'failed', detail: 'launchd would not start it' })
+    let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
+    ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    await f.auto.offer('manual')
+    expect(await f.auto.status()).toEqual({ state: 'running' })
+    finish({ code: 0, result: { ok: true } })
+    await f.auto.settled()
+    // Made since: whatever was remembered before no longer explains anything.
+    const made = fake({ accountExists: vi.fn(async () => true) })
+    made.setDecision({ state: 'declined', at: 5 })
+    expect(await made.auto.status()).toEqual({ state: 'exists' })
+    expect(made.deps.setup).not.toHaveBeenCalled()
+  })
+
   it('on Linux, offers it as on a Mac: wanted at a join, then started; an account there answers exists', async () => {
     const linux = fake({ platform: 'linux' })
     expect(await linux.auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
