@@ -108,3 +108,29 @@ it('a flush whose answer was lost and is sent again counts once', async () => {
   spy.mockRestore(); warn.mockRestore()
   expect(await connectTotal('relay_remote_sessions')).toBe((before ?? 0) + 1)
 }, 60000)
+
+it('sharing turned off through one server stops the next connect on another server at once; turned back on, it counts again after a few seconds', async () => {
+  const servers = []
+  for (let i = 0; i < 2; i++) { vi.resetModules(); servers.push(await import('../src/lib/productUsage.js')) }
+  const [one, other] = servers
+  const person = '6a0000000000000000000d01'
+  const day = new Date('2026-10-27T12:00:00Z')
+  const counted = async (): Promise<number> => {
+    await Promise.all(servers.map(each => each.flushRelayUsage()))
+    return (await connectTotal('relay_desktop_opens')) ?? 0
+  }
+  const before = await counted()
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  await other.setProductUsageChoice(person, false)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  // The off answer is kept by the server that read it; a change made through the other server is seen after the TTL.
+  await other.setProductUsageChoice(person, true)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  clock.mockRestore()
+  expect(await counted()).toBe(before + 2)
+}, 60000)

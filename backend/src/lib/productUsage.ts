@@ -15,7 +15,8 @@ import { createRelayTotals } from './productUsageRelay.js'
 const DAY = 86_400_000
 type Db = Pick<Prisma.TransactionClient, 'productUsagePreference' | 'analyticsMachineState'>
 
-/** A pre-existing off choice wins over the new default. Never cache an enabled answer. */
+/** A pre-existing off choice wins over the new default. Never cache an enabled answer: every caller reads it live.
+ * The one cache is `relayEnabled`'s, for counting connects, and it keeps only an off answer. */
 export async function productUsageChoice(userId: string, db: Db = prisma): Promise<ProductUsageChoice> {
   const saved = await db.productUsagePreference.findUnique({ where: { userId }, select: { enabled: true, revision: true } })
   if (saved) return saved
@@ -184,33 +185,34 @@ export type RelayUsageMetric = 'relay_desktop_opens' | 'relay_tui_opens' | 'rela
   | 'relay_mobile_debug_opens' | `breakdown:release:phone:${string}:relay_mobile_opens`
 
 let warnedAt = 0
-// What a connect needs of the preference is one yes or no, and a person's sockets open in bursts, so a process keeps
-// the answer a few seconds (and shares a read already under way). Only counting uses it: the activity marks are
-// about a person and always read the preference itself. Another process learns of a change within the TTL: a
-// connect it counts in that time is a total with no identity in it. A change in this process drops the entry at
-// once, and a read that began before the change is not kept.
+// A person who turned sharing off still opens sockets, so a process keeps that off answer a few seconds and skips the
+// read. An on answer is never kept: sharing turned off anywhere stops the next connect here at once (a burst of
+// connects that arrive while one read is under way share it). The cost is on the safe side: when a person turns
+// sharing back on elsewhere, this process goes on not counting for up to the TTL. Only counting uses it: the
+// activity marks are about a person and always read the preference itself. A change in this process drops the entry
+// at once, and a read that began before the change is not kept.
 const RELAY_CHOICE_TTL_MS = 5_000
 const RELAY_CHOICE_MAX = 10_000
-const relayChoices = new Map<string, { enabled: boolean; until: number }>()
+const relayOff = new Map<string, number>()
 const relayReads = new Map<string, Promise<boolean>>()
 let relayChoiceEpoch = 0
 
 function dropRelayChoice(userId: string): void {
   relayChoiceEpoch++
-  relayChoices.delete(userId)
+  relayOff.delete(userId)
   relayReads.delete(userId)
 }
 
 async function relayEnabled(userId: string): Promise<boolean> {
-  const kept = relayChoices.get(userId)
-  if (kept && kept.until > Date.now()) return kept.enabled
+  const until = relayOff.get(userId)
+  if (until !== undefined && until > Date.now()) return false
   const reading = relayReads.get(userId)
   if (reading) return reading
   const epoch = relayChoiceEpoch
   const read = productUsageChoice(userId).then(({ enabled }) => {
-    if (epoch === relayChoiceEpoch) {
-      if (relayChoices.size >= RELAY_CHOICE_MAX) relayChoices.clear()
-      relayChoices.set(userId, { enabled, until: Date.now() + RELAY_CHOICE_TTL_MS })
+    if (!enabled && epoch === relayChoiceEpoch) {
+      if (relayOff.size >= RELAY_CHOICE_MAX) relayOff.clear()
+      relayOff.set(userId, Date.now() + RELAY_CHOICE_TTL_MS)
     }
     return enabled
   }).finally(() => { if (relayReads.get(userId) === read) relayReads.delete(userId) })
@@ -240,7 +242,7 @@ const relayTotals = createRelayTotals({ write: writeRelayBatch })
 export const flushRelayUsage = relayTotals.flush
 /** Run in each process that takes connections. The stop it returns flushes what is waiting: call it on shutdown. */
 export const startRelayUsageFlush = relayTotals.start
-export function resetRelayUsageForTests(): void { relayChoices.clear(); relayReads.clear(); relayChoiceEpoch++; relayTotals.reset() }
+export function resetRelayUsageForTests(): void { relayOff.clear(); relayReads.clear(); relayChoiceEpoch++; relayTotals.reset() }
 
 /** Older clients still contribute totals. These are events, never distinct users or installations.
  *  [also]: more totals the same event adds to, under the one preference read. Counted in memory and

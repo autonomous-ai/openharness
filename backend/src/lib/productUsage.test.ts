@@ -322,13 +322,12 @@ describe('relay connects', () => {
     expect(JSON.stringify([db.$runCommandRaw.mock.calls, db.productUsageReceipt.createMany.mock.calls])).not.toContain('private-account')
   })
 
-  it('many connects in a minute are one write per day and metric with the per-connect sum, and one preference read per person', async () => {
+  it('many connects in a minute are one write per day and metric with the per-connect sum', async () => {
     choose(true)
     for (let i = 0; i < 50; i++) await recordRelayUsage('a', now, 'relay_tui_opens')
     for (let i = 0; i < 30; i++) await recordRelayUsage('b', now, 'relay_tui_opens', ['relay_mobile_debug_opens'])
     await recordRelayUsage('a', new Date('2026-10-14T00:00:01Z'), 'relay_tui_opens')
     expect(db.$runCommandRaw).not.toHaveBeenCalled()
-    expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
     await flushRelayUsage()
     expect(db.$transaction).toHaveBeenCalledOnce()
     expect(db.$runCommandRaw).toHaveBeenCalledOnce()
@@ -404,8 +403,8 @@ describe('relay connects', () => {
   })
 
   describe('the preference read', () => {
-    it('is kept for a few seconds, and read again after them', async () => {
-      choose(true)
+    it('keeps an off answer for a few seconds, and reads again after them', async () => {
+      choose(false)
       const clock = vi.spyOn(Date, 'now')
       clock.mockReturnValue(1_000_000)
       await recordRelayUsage('a', now, 'relay_tui_opens')
@@ -413,26 +412,36 @@ describe('relay connects', () => {
       await recordRelayUsage('a', now, 'relay_tui_opens')
       expect(db.productUsagePreference.findUnique).toHaveBeenCalledOnce()
       clock.mockReturnValue(1_006_000)
-      choose(false)
+      choose(true)
       await recordRelayUsage('a', now, 'relay_tui_opens')
       expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
       await flushRelayUsage()
-      expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 2]])
+      expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 1]])
       clock.mockRestore()
     })
 
-    it('is dropped when the person changes it: the next connect is not counted', async () => {
+    it('never keeps an on answer: sharing turned off elsewhere stops the next connect at once', async () => {
       choose(true)
       await recordRelayUsage('a', now, 'relay_tui_opens')
-      db.productUsagePreference.upsert.mockResolvedValue({ enabled: false, revision: 2 })
-      await setProductUsageChoice('a', false)
       choose(false, 2)
       await recordRelayUsage('a', now, 'relay_tui_opens')
+      expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
       await flushRelayUsage()
       expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 1]])
     })
 
-    it('is dropped when the person turns it back on, so the next connect is counted at once', async () => {
+    it('shares one read between connects that arrive while it is under way', async () => {
+      let answer!: (value: { enabled: boolean; revision: number }) => void
+      db.productUsagePreference.findUnique.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      const burst = Promise.all([1, 2, 3].map(() => recordRelayUsage('a', now, 'relay_tui_opens')))
+      answer({ enabled: true, revision: 1 })
+      await burst
+      expect(db.productUsagePreference.findUnique).toHaveBeenCalledOnce()
+      await flushRelayUsage()
+      expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 3]])
+    })
+
+    it('drops an off answer when the person turns sharing back on: the next connect is counted at once', async () => {
       choose(false)
       await recordRelayUsage('a', now, 'relay_tui_opens')
       db.productUsagePreference.upsert.mockResolvedValue({ enabled: true, revision: 3 })
@@ -443,15 +452,15 @@ describe('relay connects', () => {
       expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 1]])
     })
 
-    it('does not keep an answer that was being read while the person changed it', async () => {
+    it('does not keep an off answer that was being read while the person turned sharing on', async () => {
       let answer!: (value: { enabled: boolean; revision: number }) => void
       db.productUsagePreference.findUnique.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
       const inFlight = recordRelayUsage('a', now, 'relay_tui_opens')
-      db.productUsagePreference.upsert.mockResolvedValue({ enabled: false, revision: 2 })
-      await setProductUsageChoice('a', false)
-      answer({ enabled: true, revision: 1 })
+      db.productUsagePreference.upsert.mockResolvedValue({ enabled: true, revision: 2 })
+      await setProductUsageChoice('a', true)
+      answer({ enabled: false, revision: 1 })
       await inFlight
-      choose(false, 2)
+      choose(true, 2)
       await recordRelayUsage('a', now, 'relay_tui_opens')
       expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
       await flushRelayUsage()
@@ -463,6 +472,7 @@ describe('relay connects', () => {
       await recordRelayUsage('off', now, 'relay_tui_opens')
       await recordRelayUsage('on', now, 'relay_tui_opens')
       await recordRelayUsage('off', now, 'relay_tui_opens')
+      expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
       await flushRelayUsage()
       expect(sent()).toEqual([['2026-10-13', 'relay_tui_opens', 1]])
     })
