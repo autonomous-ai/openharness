@@ -517,6 +517,8 @@ class NewHarnessController extends ChangeNotifier {
     // its machine, whatever machine this form was opened on.
     if (this.integration case final request? when request.pending) {
       _machineId = request.machineId ?? _machineId;
+      // Its person chose that machine when it was sent.
+      _leadPicked = request.machineId != null;
       if (request.engine case final engine?) {
         _engine = engine;
         _harnessId = null;

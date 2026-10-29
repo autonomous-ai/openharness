@@ -826,6 +826,28 @@ void main() {
   for (final (what, rows) in [
     ('has no Team account', [machineRow('rig', '2x 4090 Rig', lead: true)]),
     (
+      'has an offline Team account',
+      [
+        machineRow('rig', '2x 4090 Rig', lead: true),
+        {
+          ...machineRow(
+            'rig-team',
+            '2x 4090 Rig',
+            host: 'rig',
+            kind: 'team',
+            available: 1,
+            lead: true,
+          ),
+          'observation': {
+            'receivedAt': 0,
+            'sessionKind': 'team',
+            'runningHarnessIds': <String>[],
+            'capabilities': ['leadStart'],
+          },
+        },
+      ],
+    ),
+    (
       'has a Team account that cannot take it now',
       [
         machineRow('rig', '2x 4090 Rig', lead: true),
@@ -884,6 +906,13 @@ void main() {
         ),
       ],
       'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+    ),
+    (
+      'is paused',
+      [
+        {...machineRow('rig', '2x 4090 Rig', lead: true), 'paused': true},
+      ],
+      'Paused in this Swarm',
     ),
     (
       'runs an older Harness',

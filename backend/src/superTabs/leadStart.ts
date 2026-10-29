@@ -56,10 +56,10 @@ function leadPool(state: SuperTabState, project: SwarmProject, machineId: string
   return team && !refusal(team) && takesLead(state, project, team) ? team : named
 }
 
-/** Whether a Team account can host [project]'s Product Manager now: its host starts one, and it runs no other project's work
- *  (it will serve only this project, machines.ts productManagerOn). */
-const takesLead = (state: SuperTabState, project: SwarmProject, pool: ContributedMachine): boolean =>
-  !!pool.observation?.capabilities?.includes(LEAD_CAPABILITY) && ![...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)
+/** Whether a Team account can host [project]'s Product Manager now: not paused, its host starts one, and it runs no other
+ *  project's work (it will serve only this project, machines.ts productManagerOn). */
+const takesLead = (state: SuperTabState, project: SwarmProject, pool: ContributedMachine): boolean => !pool.paused
+  && !!pool.observation?.capabilities?.includes(LEAD_CAPABILITY) && ![...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)
 
 /** Records the start of [project]'s Product Manager on [machineId] for [by], and marks the project starting. Refuses, and
  *  changes nothing, when that machine cannot take it now. */

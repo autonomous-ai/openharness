@@ -85,6 +85,13 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.state.starts).toEqual([expect.objectContaining({ machineOwnerId: 'mate', contributorId: 'mate',
       request: expect.objectContaining({ machineId: 'mate-mac', cwd: `/swarm/${f.app.projectId}` }) })])
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-mac', machineName: 'MacBook Pro' })
+    // Offline, or paused, the same.
+    const offline = swarm()
+    offline.machine('mate-team').observation = { ...reading('team', PASSED), receivedAt: NOW - 10 * MINUTE }
+    expect(offline.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+    const paused = swarm()
+    paused.machine('mate-team').paused = true
+    expect(paused.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
   })
 
   it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {

@@ -327,7 +327,17 @@ class SuperTabLaunch {
                 'Update Harness on $name to run a Product Manager there.',
               _ => null,
             };
-      final team = teamReading && teamRefusal == null;
+      bool fresh(Map<String, dynamic> observation) =>
+          switch (observation['receivedAt']) {
+            final num received =>
+              at - received < kSuperTabMachineOfflineAfter.inMilliseconds,
+            _ => false,
+          };
+      final team =
+          teamReading &&
+          teamRefusal == null &&
+          fresh(observation) &&
+          reading['paused'] != true;
       final mac = part(pool['observation']);
       final macTakes =
           pool['hostMachineId'] == null &&
@@ -335,14 +345,12 @@ class SuperTabLaunch {
           (mac['capabilities'] as List?)?.contains('leadStart') == true;
       // Where it would run: the Mac itself when its Team account cannot.
       final host = teamReading && !team ? pool : reading;
-      final received = observation['receivedAt'];
-      final online =
-          received is num &&
-          at - received < kSuperTabMachineOfflineAfter.inMilliseconds;
-      final running = part(host['observation'])['runningHarnessIds'];
+      final hostReading = part(host['observation']);
+      final online = fresh(hostReading);
+      final running = hostReading['runningHarnessIds'];
       final max = host['maxAgents'];
-      final checkouts = part(observation['readiness'])['checkouts'];
-      final device = part(observation['resources'])['deviceType'];
+      final checkouts = part(hostReading['readiness'])['checkouts'];
+      final device = part(hostReading['resources'])['deviceType'];
       return LeadMachine(
         id: id,
         name: name,
@@ -397,6 +405,8 @@ class SuperTabLaunch {
                   : capable
                   ? null
                   : 'Not connected to this computer')
+            : host['paused'] == true
+            ? 'Paused in this Swarm'
             : team || macTakes
             ? null
             : teamRefusal ??
