@@ -3,6 +3,7 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
+import { suspendedEngines } from '../engineHealth.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentWithoutMachine, groupWithoutMachines, isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
@@ -114,8 +115,10 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
+    const suspended = suspendedEngines(stored, now)
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
-      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}) }] as const
+      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
+      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,

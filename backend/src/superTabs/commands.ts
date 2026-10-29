@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
   activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY,
+  finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, forRecipients,
   type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -15,8 +15,9 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
+import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
+import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -26,6 +27,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
@@ -89,6 +91,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
     ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
+  z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -279,7 +282,8 @@ export interface CommandContext {
     hostMachineId?: string }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies). */
-  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null }
+  /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
+  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; agentOnly?: true }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
@@ -459,7 +463,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+    || command.type === 'machine.engineResume') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -1119,6 +1124,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const team of teamPoolsOf(state, pool)) if (!team.removal) team.paused = command.paused
       break
     }
+    case 'machine.engineResume': {
+      // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
+      // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      const asked = actor.kind === 'agent' && command.askedIn && context.askedIn
+      const ownerAsked = !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
+        && context.now - asked.createdAt <= RULE_MESSAGE_MS && !!state.conversations.find(c => c.id === command.askedIn!.conversationId)?.leadId
+        && state.conversations.find(c => c.id === command.askedIn!.conversationId)!.leadId === actor.agentId
+      if (!(actor.kind === 'person' && actor.userId === pool.contributorId) && !ownerAsked) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
+      }
+      resumeEngine(pool, command.engine)
+      break
+    }
     case 'machine.remove': {
       // Its owner takes the machine out with every Swarm agent on it, each removed like one agent (its host closes the
       // session; a Product Manager refuses it, protectLead). A contributed machine then stays listed, paused, while its
@@ -1234,7 +1253,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.proposalMessageId) recordProposal(state.conversations.at(-1)!, proposalOf(state, project, context.proposal))
       result.conversationId = operationId
       result.number = number
-      if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
+      if (brief) {
+        message(operationId, brief, [], null, SYSTEM_ROW)
+        bindTaskCard(state.conversations.at(-1)!, effects.messages.at(-1)!)
+      }
       break
     }
     case 'decision.ask': {
@@ -1284,7 +1306,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
-      if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
+      // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
+      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card.
+      const card = pullRequestCard(group, command.pullRequestUrl)
+      if (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt) {
+        message(group.id, `Merged ${command.pullRequestUrl}`, [], card?.messageId ?? null, SYSTEM_ROW)
+        if (card) effects.messages.at(-1)!.thread = card.messageId
+        else bindPullRequestCards(group, effects.messages.at(-1)!)
+      }
+      recordCardMerged(group, command.pullRequestUrl, mergedAt)
       break
     }
     case 'conversation.archive': {
@@ -1565,7 +1595,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
+        // Only its first failure counts against its engine: the server may have timed it out before its host said so (liveness.ts).
+        const counted = !start.error
         start.error = command.error
+        const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A Product Manager's start says so in its project's conversation (leadStart.ts).
         if (start.request.leadFor) {
           const ended = leadStartFailed(state, start, command.error)
@@ -1576,7 +1609,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-        message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
+        // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
+        message(group.id, `${failureNotice(start.request.name, command.error)}${suspended ? `\n\n${suspended}` : ''}`, lead ? [lead] : [], null, SYSTEM_ROW,
+          undefined, suspended && start.machineOwnerId ? [start.machineOwnerId] : undefined)
         if (start.request.gridModel && !activeWork(group)) steppedUp(group, GRID_START_FAILED, start.id)
         break
       }
@@ -1595,11 +1630,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
+        ...(!start.request.gridModel && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
         ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
+      noteStartSucceeded(state, start)
       result.agentId = agentId
       if (start.request.leadFor) {
         // Taking over from a Lead that left, as agent.add does.
@@ -1643,6 +1680,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A new terminal is not the session that lost its task, nor one started on a grid model: it reports its own.
       delete target.lostTask
       delete target.gridModel
+      delete target.launchedDefault
       target.configuration = command.configuration
       target.configurationVersion = operationId
       if (command.startedSession) target.startedSession = command.startedSession
@@ -1866,8 +1904,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
-      // A reply joins its message's thread, always at the root, so threads never nest.
-      const thread = command.replyTo ? context.reply?.thread : null
+      // A reply joins its message's thread, always at the root, so threads never nest. A reply to a notice only its
+      // recipients read (the Lead answering a stalled alert) stays in the chat: people open a thread from its root.
+      const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread : null
       if (thread) Object.assign(effects.messages.at(-1)!, { thread, ...(command.alsoSend ? { alsoInChat: true } : {}) })
       recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
@@ -1984,6 +2023,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else delete group.task
       group.checks = command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null }))
       message(group.id, group.brief, [], null, SYSTEM_ROW)
+      bindTaskCard(group, effects.messages.at(-1)!)
       break
     }
     case 'work.assign': {
@@ -2128,7 +2168,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.result = command.reason
       if (!lost) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
-        gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
+        // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
+        gone ? [] : [assignment.agentId], null, gone ? SYSTEM_ROW : forRecipients(SYSTEM_ROW))
       break
     }
     case 'work.resume': {
@@ -2151,9 +2192,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       delete group.lostAttempt
       delete worker.lostTask
       renewLease(assignment, context.now)
-      effects.messages.push(...toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
+      effects.messages.push(...leadNoticeRows(toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
         recipients: [], text: `${worker.displayName ?? worker.name} resumed its task after its usage limit reset.`,
-        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } }))
+        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } })))
       break
     }
     case 'work.check': {
@@ -2202,6 +2243,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (clean.removed.length) { draft.text = clean.text; removed.push(...clean.removed) }
   }
   if (removed.length) Object.assign(result, credentialResult(removed))
+  for (const draft of effects.messages) {
+    const group = state.conversations.find(c => c.id === draft.conversationId)
+    if (group) bindPullRequestCards(group, draft)
+  }
   return effects
 }
 
