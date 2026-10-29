@@ -101,8 +101,27 @@ describe('built-in Swarm skills', () => {
     ['default', 'dev', "- Mark ready for review, with the revision and the PR link, when the work needs review: the Swarm opens the review from your handoff. Otherwise mark done.\n",
       "- Mark ready for review when the group has a Reviewer; otherwise mark done.\n"],
   ]
+  // The Swarm wakes the Lead when a task stalls (Ken, 2026-10-29; liveness.ts recordTaskStates): each Lead's 6-hour rule gives
+  // way to acting on that wake within minutes. [mode, new text, approved text].
+  const stallWake: Array<['orchestration' | 'default', string, string]> = [
+    ['orchestration', 'when the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits; ',
+      'reassign work that has not moved for 6 hours; '],
+    ['default', '- When the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits.\n',
+      '- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.\n'],
+  ]
   const approved = (text: string, mode: 'orchestration' | 'default') =>
-    autoReview.filter(([m]) => m === mode).reduce((t, [, , line, before]) => t.replace(line, before), text)
+    [...autoReview.filter(([m]) => m === mode).map(([, , line, before]) => [line, before] as const),
+      ...stallWake.filter(([m]) => m === mode).map(([, line, before]) => [line, before] as const)].reduce((t, [line, before]) => t.replace(line, before), text)
+  it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
+    for (const [mode, line, before] of stallWake) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text, `${mode} ${role}`).not.toContain(before)
+        if (role !== 'lead') expect(text, `${mode} ${role}`).not.toContain('a task stalled')
+      }
+    }
+  })
   it('tells each Lead the Swarm opens reviews by itself, and each Builder to hand off with a pull request link', () => {
     for (const [mode, role, line, before] of autoReview) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
@@ -144,9 +163,9 @@ describe('built-in Swarm skills', () => {
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, ''))).toBe(sha256)
     }
   })
-  it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
+  it('adds the 2-hour line to section 7 right after the stall rule', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+    expect(text).toContain(`post in its chat why it waits; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
   })
   it('adds the failed-start line right after each Lead skill\'s local models line, and to no other role', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -213,7 +232,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`${twoHours}${lost}`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- Work with no progress`)
+    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- When the Swarm tells you a task stalled`)
   })
   it('adds the usage-limit and digest lines right after each Lead skill\'s lost-work line', () => {
     for (const mode of ['orchestration', 'default'] as const) {
