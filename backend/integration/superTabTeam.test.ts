@@ -760,6 +760,15 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     await expect(store.observeMachine(person, f.tab, 'team-mac', capable(generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
     // Its own team session still is its host.
     await expect(store.deliveries(team, f.tab, pm)).resolves.toBeInstanceOf(Array)
+    // An ordinary sign-in connecting as the Team computer resets its account row's mark (lib/adapterWs.ts): the Swarm's own
+    // record that it is a Team account still refuses the owner (security re-check 2 of #2089).
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'computer' } })
+    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'team' } }) })
+    await expect(store.messages(person, f.tab, chat, {}, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.deliveries(person, f.tab, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.observeMachine(person, f.tab, 'team-mac', capable(generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(rosterRows(store, person, 'team-mac')).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'team' } })
     // And no other project's work starts there while it runs.
     await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
       cwd: '/team/lead', worktree: true, requirements } })).rejects.toMatchObject({ code: 'TEAM_ACCOUNT_HELD' })

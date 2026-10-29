@@ -306,6 +306,9 @@ export function projectsOnMachine(state: SuperTabState, machineId: string): Set<
 export function productManagerOn(state: SuperTabState, machineId: string): string | null {
   const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
   if (led) return ledProject(state, led.id)!.id
+  // One removed whose host has not yet confirmed its data there is deleted (commands.ts removeAgent).
+  const closing = state.closingSessions?.find(c => c.machineId === machineId && c.heldFor)
+  if (closing) return closing.heldFor!
   return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
 }
 

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+const teamDaemon = vi.hoisted(() => ({ value: false }))
+vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -281,6 +286,25 @@ it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead o
   expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
   expect(payload.prompt).not.toContain('Your lead will assign')
   expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+// Security re-check 2 of #2089 (the Lead's option A): a Codex Product Manager in a Team account runs in an engine home of
+// its own, deleted whole when the Swarm ends it; a Claude Code one in the shared home, scrubbed then (inCore/teamApps.ts).
+it('starts a Codex Product Manager on a Team daemon in an engine home of its own, and no other agent or daemon so', async () => {
+  const launch = async (engine: string, lead: boolean, team: boolean) => {
+    teamDaemon.value = team
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, ...(lead ? { leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } : {}) } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `home-${engine}-${lead}-${team}`, request: f.start.request }, f.scoped, where, f.open)
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.codexHome
+  }
+  expect(await launch('codex', true, true)).toBe(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))
+  // Made before the launch: Codex refuses a CODEX_HOME that is not there.
+  expect(existsSync(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))).toBe(true)
+  expect(await launch('claude', true, true)).toBeUndefined()
+  expect(await launch('codex', false, true)).toBeUndefined()
+  expect(await launch('codex', true, false)).toBeUndefined()
+  teamDaemon.value = false
 })
 
 describe('the skills of the project the agent joins', () => {

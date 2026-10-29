@@ -85,8 +85,9 @@ describe('the Swarm\'s agents, as the core lets it close and reopen them', () =>
   })
 
   // A Product Manager removed or replaced for good on a Team daemon: the Swarm keeps its chats, and its session files go
-  // (superTabs/inCore/teamApps.ts createConfidentialPurge, security re-review of #2089).
-  it('deletes, once it closed a member or found it gone, what the Team daemon purges, and says so if that fails', async () => {
+  // (superTabs/inCore/teamApps.ts createConfidentialPurge). A purge that fails fails the close, so its host tries again with
+  // backoff and its Team account stays held (security re-check 1 and 2 of #2089).
+  it('deletes, once it closed a member or found it gone, what the Team daemon purges, and fails the close until it has', async () => {
     const closeAgent = vi.fn(async () => ({ closed: true as const }))
     const byAgent = (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined
     const purgeEnded = vi.fn(async (_agentId: string) => ({ ok: true }))
@@ -98,22 +99,43 @@ describe('the Swarm\'s agents, as the core lets it close and reopen them', () =>
     harnesses.mockReturnValue(new Set())
     expect(await swarm.closeMember('live')).toEqual({ error: 'NOT_A_MEMBER' })
     expect(purgeEnded).toHaveBeenCalledTimes(2)
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     purgeEnded.mockRejectedValueOnce(new Error('EIO'))
-    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
-    purgeEnded.mockResolvedValueOnce({ error: 'NOT_FOUND' } as never)
-    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
+    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'EIO' })
+    purgeEnded.mockResolvedValueOnce({ error: 'SCRUB_INCOMPLETE', detail: 'Something still names the session: /x' } as never)
+    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'Something still names the session: /x' })
     purgeEnded.mockRejectedValueOnce('disk full')
-    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
-    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[super-tabs] could not delete the session data of absent: EIO',
-      '[super-tabs] could not delete the session data of absent: NOT_FOUND', '[super-tabs] could not delete the session data of absent: disk full'])
+    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'disk full' })
+    purgeEnded.mockResolvedValueOnce({ error: 'NOT_FOUND' } as never)
+    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'NOT_FOUND' })
     // A close that failed deletes nothing: the session is still there.
     harnesses.mockReturnValue(new Set(['live']))
     closeAgent.mockResolvedValueOnce({ error: 'AGENT_CHANGED' } as never)
     purgeEnded.mockClear()
     expect(await swarm.closeMember('live')).toEqual({ error: 'AGENT_CHANGED' })
     expect(purgeEnded).not.toHaveBeenCalled()
-    warn.mockRestore()
+  })
+
+  // A worker in a private chat ends through the stop path, which never purged (security re-check 1 of #2089).
+  it('purges on the Swarm\'s stop too, closed now or already gone, and fails the stop until it has', async () => {
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
+    let present = true
+    const byAgent = vi.fn(() => present ? session as RegisteredSession : undefined)
+    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
+    const purgeEnded = vi.fn(async (_agentId: string) => ({ ok: true }))
+    const swarm = createSwarmAgents({ ...deps({ byAgent, closeAgent, creationStatus }), members: NO_MEMBERS, purgeEnded })
+    expect(await swarm.closeSwarm(request)).toEqual({ closed: true })
+    expect(purgeEnded).toHaveBeenCalledWith('worker')
+    // A stop that failed deletes nothing.
+    closeAgent.mockResolvedValueOnce({ error: 'AGENT_CHANGED' } as never)
+    purgeEnded.mockClear()
+    expect(await swarm.closeSwarm(request)).toEqual({ error: 'AGENT_CHANGED' })
+    expect(purgeEnded).not.toHaveBeenCalled()
+    present = false
+    purgeEnded.mockResolvedValueOnce({ error: 'SCRUB_INCOMPLETE', detail: 'left' } as never)
+    expect(await swarm.closeSwarm(request)).toEqual({ error: 'PURGE_FAILED', detail: 'left' })
+    expect(await swarm.closeSwarm(request)).toEqual({ closed: true })
   })
 
   it('closes now only a Super Tab member the host retains, and treats an absent one as closed', async () => {

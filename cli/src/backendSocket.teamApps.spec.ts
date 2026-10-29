@@ -88,20 +88,34 @@ describe('the account\'s own apps under a remote app policy', () => {
 
   // Security re-review of #2089: turn cards, agent questions and commander events go to the account's paired devices
   // through sendCommander, and a Team daemon seals them for the Mac owner's devices.
-  it('withholds from the account\'s devices, the Wi-Fi device and its browsers what the policy withholds', () => {
+  it('withholds from the account\'s paired devices and its browsers what the policy withholds', () => {
     const { socket, gw } = session()
     const commander = vi.spyOn(gw, 'commander').mockImplementation(() => {})
-    const device = vi.spyOn(gw, 'device').mockImplementation(() => true)
     const user = vi.spyOn(gw, 'user').mockImplementation(() => {})
     socket.sendCommander({ type: 'question', payload: { agentId: 'pm', question: 'Approve the launch slip?' } })
     socket.sendCommander({ type: 'turn_card', payload: { agentId: 'worker', recap: 'Tests pass.' } })
-    socket.deviceFrame('dial', 'card', { agentId: 'pm', text: 'private' })
-    socket.deviceFrame('dial', 'card', { agentId: 'worker', text: 'hello' })
     socket.sendUser({ type: 'notice', payload: { agentId: 'pm' } })
     socket.sendUser({ type: 'notice', payload: { agentId: 'worker' } })
     expect(commander.mock.calls.map(([frame]) => (frame as { payload: { agentId: string } }).payload.agentId)).toEqual(['worker'])
-    expect(device.mock.calls.map(([, , payload]) => (payload as { agentId: string }).agentId)).toEqual(['worker'])
     expect(user.mock.calls.map(([frame]) => (frame as { payload: { agentId: string } }).payload.agentId)).toEqual(['worker'])
+  })
+
+  // Security re-check 2 of #2089: the relay seals the Wi-Fi device's frames before the socket sees them, its events name
+  // their agent a level down, and its own doors (core/wifiAgents.ts) never ask the policy. On a Team daemon it is off.
+  it('with the Wi-Fi device off, hands it none of the relay\'s sessions or requests, and sends it nothing', async () => {
+    const { socket, gw } = session()
+    const wifi = { session: vi.fn(), dropped: vi.fn(), request: vi.fn(), revoked: vi.fn() }
+    socket.disableWifi()
+    socket.useWifi(wifi as never)
+    const device = vi.spyOn(gw, 'device').mockImplementation(() => true)
+    // As the gateway hands them on: a device session, its sealed request opened, its revocation.
+    socket.fromGateway.client('dial-1', { role: 'device', label: 'Wi-Fi device', identity: 'dial', direct: true, accountOwner: true })
+    await socket.fromGateway.device?.('dial-1', { type: 'e2e', payload: {} }, { type: 'wifi_view', payload: { requestId: 'v1' } })
+    socket.fromGateway.deviceRevoked?.('dial')
+    await socket.fromGateway.disconnected('dial-1')
+    socket.deviceFrame('dial-1', 'wifi_view_result', { agents: [{ agentId: 'worker' }] })
+    expect([wifi.session, wifi.request, wifi.revoked, wifi.dropped].map(f => f.mock.calls.length)).toEqual([0, 0, 0, 0])
+    expect(device).not.toHaveBeenCalled()
   })
 
   it('closes a confidential session\'s terminal to the account\'s own apps, unknown connections too, and to no guest or window here', () => {

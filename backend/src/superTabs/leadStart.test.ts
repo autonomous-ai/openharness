@@ -405,6 +405,27 @@ describe('a Team account hosting a Product Manager', () => {
     expect(g.state.agents.find(a => a.harnessId === 'web-worker')).toMatchObject({ teamAccount: true })
   })
 
+  // Security re-check 2 of #2089: the hold went the moment the Product Manager left the roster, before its host deleted its
+  // saved session there. It stays until the host confirms the close, which it does only once that data is deleted.
+  it('stays held after its Product Manager is removed, until its host confirms its data is gone, and says so if that lasts', async () => {
+    const { sweepLiveness, PURGE_NOTICE_MS } = await import('./liveness.js')
+    const f = swarm(), web = other(f)
+    const startId = f.lead('mate-mac').result.startId as string
+    const contribution = { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null }
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { contribution }).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null }, owner, { contribution })
+    f.run({ type: 'project.delete', projectId: f.app.projectId })
+    expect(f.state.agents.some(a => a.id === pm)).toBe(false)
+    expect(refusal(() => web.start())?.code).toBe('TEAM_ACCOUNT_HELD')
+    // Still not confirmed after a while: its project's conversation is gone with it, so the Swarm's Lead conversation hears.
+    const later = sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + MINUTE)
+    expect(later.map(m => [m.conversationId, m.source])).toEqual([['lead', { kind: 'system' }]])
+    expect(later[0]!.text).toBe('The saved session of a removed agent that held people\'s private chats, on MacBook Pro, is not deleted yet, so its Harness Team account takes no other project\'s work until it is.')
+    expect(sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + 2 * MINUTE)).toEqual([])
+    f.run({ type: 'agent.sessionClosed', agentId: pm, harnessId: 'pm' }, mate)
+    expect(web.start().result.startId).toBeTruthy()
+  })
+
   it('leaves the project owner\'s own machine as it is', () => {
     const f = swarm()
     f.lead('owner-mac')

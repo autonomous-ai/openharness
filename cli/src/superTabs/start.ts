@@ -1,4 +1,6 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
+import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -7,6 +9,7 @@ import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -364,6 +367,14 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
       for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
+      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
+      // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
+      const pmHome = lead ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      if (pmHome) {
+        // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
+        mkdirSync(pmHome, { recursive: true, mode: 0o700 })
+        payload.codexHome = pmHome
+      }
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
       launched = canLaunch && launchesWithModel(resources.capacity, request.engine)

@@ -10,7 +10,7 @@ import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
-import { GrantReads, type SuperTabStore } from '../store.js'
+import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readLastChangedAts, readMachines } from '../cachedReads.js'
 import { retryTransient } from '../retry.js'
@@ -80,6 +80,8 @@ export class HostReads {
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
+      // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
+      if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
       const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.

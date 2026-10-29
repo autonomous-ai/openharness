@@ -289,7 +289,10 @@ export interface SuperTabState {
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+  /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
+   *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
+   *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */

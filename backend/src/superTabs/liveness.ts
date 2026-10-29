@@ -5,6 +5,7 @@ import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPO
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
+import { projectsOf } from './projects.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -190,7 +191,27 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now)]
+  return [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+}
+
+/** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */
+export const PURGE_NOTICE_MS = 15 * 60_000
+
+/** A removed confidential session whose host has not confirmed its data deleted (commands.ts removeAgent `heldFor`): its
+ *  Team account keeps serving only its project, and its project's conversation hears once, or the Swarm's first one when
+ *  its project went with it. Its host keeps trying (cli superTabs/host.ts endSession). */
+function unpurged(state: SuperTabState, now: number): MessageDraft[] {
+  const owner = state.people.find(p => p.id === state.ownerId)
+  return (state.closingSessions ?? []).flatMap(closing => {
+    if (!closing.heldFor || closing.noticed || closing.since === undefined || now - closing.since <= PURGE_NOTICE_MS || !owner) return []
+    closing.noticed = true
+    const project = projectsOf(state).find(p => p.id === closing.heldFor) ?? projectsOf(state)[0]
+    if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
+    return [{ id: stableId('unpurged', closing.agentId, closing.harnessId), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+      author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
+      text: `The saved session of a removed agent that held people's private chats, on ${machineName(state, closing.machineId)}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`,
+      source: { kind: 'system' } }]
+  })
 }
 
 /** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
