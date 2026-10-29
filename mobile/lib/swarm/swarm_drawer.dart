@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'identity.dart';
 import 'model.dart';
@@ -588,9 +589,8 @@ class SwarmDrawerRow extends StatelessWidget {
                                 aside,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
+                                style: AppType.caption(
                                   color: AppPalette.textFaint,
-                                  fontSize: 13,
                                 ),
                               ),
                             ),

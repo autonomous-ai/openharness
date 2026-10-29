@@ -46,7 +46,7 @@
   },
   "mobile/lib/swarm/swarm_project_page.dart": {
     "material-color": 1,
-    "font-size": 8,
+    "font-size": 7,
     "edge-insets": 14,
     "border-radius": 2
   },
