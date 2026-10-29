@@ -39,8 +39,20 @@ Mac's Harness Team account, with a chat-only Buddy. Security review 1 found it u
    - **Purge is pending until acknowledged.** The session's data on that machine is deleted when its host next connects
      and confirms it, as the existing closing-session hold (`heldFor`) does for confidential sessions. Until then the
      record says "purge pending", and the Team account keeps taking only that project's work.
-   - **Rollback keeps revocation.** Revoked sign-ins stay revoked after a rollback: revocation is a server record checked
-     before any token is accepted, and tokens expire on their own (lease length), so an older backend can't revive one.
+   - **No rollback past enforcement while team-machine Buddies exist.** A backend from before this design doesn't know
+     a revocation record, and its actor path lets the Team account's sign-in act as any agent resident there
+     (`store.ts actor`). So revocation and expiry alone don't make a rollback safe. The rule, enforced by the release
+     check rather than by hand:
+     1. The first backend that enforces Buddy-bound sign-ins is the **floor** for any Swarm with a team-machine Buddy.
+        The release/rollback check (`make release-backend` and the rollback runbook) queries every Swarm and refuses to
+        deploy a backend below the floor while any team-machine Buddy agent or pending team-machine Buddy start exists.
+     2. To roll back below the floor: first stop new ones (the server refuses every team-machine Buddy start from then
+        on, recorded per environment so the old backend can't undo it before the revert lands), then remove every
+        team-machine Buddy the way `buddy.remove` does (fail its starts, remove the agent, close its session, queue the
+        host cleanup), and only then revert. The check above passes only when none are left.
+     3. **Purge pending stays explicit.** Removed sessions whose host hasn't confirmed the purge stay as closing-session
+        holds (`heldFor`), which older backends already keep. The Team account keeps taking only that project's work
+        until its host confirms, before and after the revert.
 5. **A chat-only read.** Full and change-feed reads give that Buddy only its person, its project's name, its chat and
    itself: no roster, emails, members, progress or repository (red tests are on the closed branch).
 6. **Pickers match the server.** Eligibility (Team account present, private, not removed) and the account chosen come
@@ -107,8 +119,9 @@ staying "your machines" only. Requirement 1 decides when team machines appear in
   2 GB, as now), shown by the machine's slots.
 - **Compatibility:** older hosts never receive a team-machine Buddy start: it is offered only to hosts reporting a new
   capability, as the Product Manager start is.
-- **Migration and rollback:** new records only. Rolling back stops team-machine Buddies first (the `buddy.remove`
-  steps), and their revoked sign-ins stay revoked (requirement 4).
+- **Migration and rollback:** new records only. Rolling back below the enforcing backend is refused by the release check
+  while any team-machine Buddy or start exists. Before reverting, stop new starts, remove every team-machine Buddy, and
+  keep their purges pending until hosts confirm (requirement 4).
 - **Audience:** every rule is on the server: placement, token scope, chat-only reads, privacy stops.
 - **Identity:** the Buddy acts only with its own sign-in, never the Team account's or the Mac owner's.
 - **Failure:** a sandbox or user that can't be set up, or a required control that is missing, refuses the start with a
