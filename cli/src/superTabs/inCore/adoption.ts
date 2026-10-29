@@ -1,7 +1,7 @@
 /** Older Swarm sessions predate role metadata. Adopt only at restart/resume, from current membership,
  * before native launch authority is captured; changing the live row later would revoke that launch. */
 import type { AdoptSwarmSkill } from '../../core/api.js'
-import type { registry } from '../../lib/registry.js'
+import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 /** How long a held adoption waits after its first unanswered role read, doubling up to the last. Each read is itself bounded
@@ -9,6 +9,9 @@ import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 const HOLD_FIRST_MS = 2000
 const HOLD_MAX_MS = 30_000
 const pause = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms).unref?.() })
+/** A Swarm start's session: started by an agent (superTabs/start.ts `startedBy: 'agent'`, since the first Super Tab), and
+ *  not by one of this machine's harnesses (`harness new` records its parent, core/agents/launches.ts). */
+const swarmStarted = (session: RegisteredSession) => session.startedBy === 'agent' && !session.parentAgentId
 
 export function createSwarmSkillAdoption(deps: {
   role(harnessId: string): Promise<SwarmSkillGrant | null | undefined>
@@ -26,9 +29,12 @@ export function createSwarmSkillAdoption(deps: {
     if (!current()) return null
     if (session.swarmSkill || session.guest || !session.cwd || (session.engine !== 'claude' && session.engine !== 'codex')) return session
     if (noRole.has(session.agentId)) return session
-    // The host's last confirmed roster is only a cheap candidate filter; the live backend remains authoritative. One that
-    // cannot be read cannot clear a session as personal, so the backend is asked.
-    try { if (!deps.candidate(session.agentId)) return session } catch { /* asked below */ }
+    // The host's last confirmed roster is only a cheap candidate filter for the person's own sessions; the live backend
+    // remains authoritative. One that cannot be read cannot clear a session as personal, so the backend is asked. A session
+    // the Swarm started is always asked: the roster lapses after a week nobody confirms it and leaves out a member of only
+    // archived chats, and its "not a member" opened an old Buddy without its role (security review 2 of #2255). Every
+    // Buddy is one (superTabs/start.ts); a harness another agent opened names that agent, and the person's own is not one.
+    if (!swarmStarted(session)) try { if (!deps.candidate(session.agentId)) return session } catch { /* asked below */ }
     const owns = deps.authority(session.agentId)
     const saved = structuredClone(session)
     // A Swarm session whose role cannot be read is held, never resumed without it: an old Buddy came back without its guard

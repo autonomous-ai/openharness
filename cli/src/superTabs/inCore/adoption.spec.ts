@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 import { createLaunchAuthority } from '../../core/agents/launchAuthority.js'
+import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../retention.js'
 import { createSwarmSkillAdoption } from './adoption.js'
 
 const row = (over: Partial<RegisteredSession> = {}) => ({ agentId: 'old-session', engine: 'claude', sessionId: 'conversation',
@@ -114,6 +118,37 @@ describe('old Swarm role adoption', () => {
     await t.adopt(t.saved, t.current)
     await t.adopt(t.saved, t.current)
     expect(t.role).toHaveBeenCalledTimes(1)
+  })
+  // Security review 2 of #2255: the local roster lapses after a week unconfirmed and leaves out a member whose only chat is
+  // archived, so its "not a member" opened an old Buddy without its role. A session the Swarm started is always asked.
+  describe('a session the Swarm started, which the local roster does not list', () => {
+    const roots: string[] = []
+    afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+    const roster = (rows: unknown[], at: number) => {
+      const dir = mkdtempSync(join(tmpdir(), 'adoption-roster-')); roots.push(dir)
+      retainContributions(dir, 'machine', rows, at)
+      return (id: string) => retainedHarnesses(dir).has(id)
+    }
+    const listed = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { harnessId: 'old-session', machineId: 'machine' }, ...extra })
+    it.each([
+      ['a roster nobody confirmed for over a week', () => roster([listed()], Date.now() - RETENTION_LAPSE_MS - 60_000)],
+      ['a roster that leaves out a member of only archived chats', () => roster([listed({ active: false })], Date.now())],
+      ['no roster at all', () => () => false],
+    ] as const)('is asked and held, then adopts its Buddy role, with %s', async (_case, candidate) => {
+      const t = setup(row({ startedBy: 'agent' }))
+      const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: candidate(), wait: t.wait, log: t.log })
+      t.role.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ role: 'buddy' })
+      expect(await adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'buddy', key: 'old-session' } })
+      expect(t.role).toHaveBeenCalledTimes(2)
+    })
+    it('leaves a harness another agent opened, or the person\'s own, to the local roster, unasked', async () => {
+      for (const over of [{ startedBy: 'agent', parentAgentId: 'parent' }, {}] as Partial<RegisteredSession>[]) {
+        const t = setup(row(over))
+        const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: () => false, wait: t.wait, log: t.log })
+        expect(await adopt(t.saved, t.current)).toBe(t.saved)
+        expect(t.role).not.toHaveBeenCalled()
+      }
+    })
   })
   it('can adopt after a local roster snapshot first excludes the session', async () => {
     const t = setup()

@@ -1,4 +1,6 @@
-import { homedir } from 'node:os'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -12,6 +14,7 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
+import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../../superTabs/retention.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
@@ -165,6 +168,24 @@ describe('restarting an agent', () => {
     const run = setup(session, { adoptSwarmSkill })
     expect(await run.restart('a1')).toMatchObject({ ok: true })
     expect(restartAgent).toHaveBeenCalledOnce()
+  })
+
+  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Buddy
+  // without its role.
+  it('restarts an old Buddy with its role after the local roster lapsed', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'restart-roster-'))
+    try {
+      retainContributions(data, 'machine', [{ tabId: 'tab', agent: { harnessId: 'a1', machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
+      const session = agent({ startedBy: 'agent' })
+      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(data).has(id),
+        authority: createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false }) })
+      const run = setup(session, { adoptSwarmSkill })
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      expect(role).toHaveBeenCalledOnce()
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+        expect.anything(), expect.any(Function), undefined)
+    } finally { rmSync(data, { recursive: true, force: true }) }
   })
 
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
