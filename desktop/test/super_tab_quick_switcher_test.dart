@@ -567,6 +567,56 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
+  testWidgets('your Buddy is a chat destination, never an agent-list result', (
+    tester,
+  ) async {
+    final (f, c) = await setup(tester);
+    (f.connection.server.state['agents'] as List).add({
+      'id': 'own-buddy',
+      'name': 'Buddy',
+      'displayName': 'Moss',
+      'projectId': 'lead',
+      'machineId': 'm1',
+      'harnessId': 'own-buddy-harness',
+      'contributorId': c.accountId,
+      'buddyOf': {'personId': c.accountId},
+      'configuration': {'engine': 'claude', 'model': 'opus'},
+    });
+    final chat = (f.connection.server.state['conversations'] as List)
+        .cast<Map>()
+        .singleWhere((g) => g['id'] == 'buddy-mine');
+    chat['agentIds'] = ['own-buddy'];
+    f.connection.server.revision++;
+    await c.refresh();
+    await tester.pump();
+    expect(c.snapshot!.agent('own-buddy')!.isBuddy, isTrue);
+    await open(tester);
+    final query = find.byKey(const ValueKey('swarm-quick-query'));
+    await tester.enterText(query, 'Moss');
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('swarm-quick-agent:own-buddy')),
+      findsNothing,
+    );
+    expect(find.text('No matches'), findsOneWidget);
+    await tester.enterText(query, 'Casey');
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('swarm-quick-agent:casey')),
+      findsOneWidget,
+    );
+    await tester.enterText(query, 'My Buddy');
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('swarm-quick-conversation:buddy-mine')),
+      findsOneWidget,
+    );
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'buddy-mine');
+    await close(tester, f, c);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
   final shots = Platform.environment['SWARM_QUICK_SWITCHER_SHOTS'];
   setUpAll(() => loadCaptureFonts(shots));
   for (final brightness in Brightness.values) {
