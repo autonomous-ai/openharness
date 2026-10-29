@@ -285,39 +285,90 @@ class SuperTabController extends ChangeNotifier {
   DateTime? pushUntil;
 
   /// Told of a change since the last read began: one of its main parts, or a
-  /// machine's reading alone. And told while a read was out, which may have
-  /// missed it.
-  bool _toldMain = false, _toldMachine = false, _rereadAfter = false;
+  /// machine's reading alone; the newest change time told, and the newest a
+  /// read under way was sent after.
+  bool _toldMain = false, _toldMachine = false;
+  int _toldAt = -1, _readCovers = -1;
 
   bool get _pushing {
     final until = pushUntil;
     return until != null && clock.now().isBefore(until);
   }
 
-  /// The server said this Swarm changed. A change to its main parts reads now,
-  /// or once more after a read already out; a machine's reading alone waits
-  /// for the next poll, so it is read no more often than before pushes.
-  void told({required bool main}) {
+  /// The server said this Swarm changed, at [at] when it names the commit's
+  /// time. A change its last read, or the read under way, already covers is
+  /// dropped: a phone hears each push once per machine socket (review of
+  /// #2121). The rest is read on the next allowed read: now if the old poll
+  /// would have read by now, else on the tick that would ([_readGap]), so a
+  /// busy Swarm reads no more often than before pushes. A machine's reading
+  /// alone always waits for the tick. Not on screen while the reading pauses,
+  /// nothing is read until it is shown again, which reads at once.
+  void told({required bool main, int? at}) {
     if (_disposed || accessRevoked || updateRequired) return;
-    if (!main) {
+    if (main && at != null) {
+      if (at <= lastChangedAt || (_refreshing != null && at <= _readCovers)) {
+        return;
+      }
+      _toldAt = max(_toldAt, at);
+    }
+    if (main) {
+      _toldMain = true;
+    } else {
       _toldMachine = true;
+    }
+    _readWhenAllowed();
+  }
+
+  /// One read at the next allowed moment for what it was told: now if the
+  /// gap since the last read has passed, else when it does; after a read
+  /// under way, for a change heard while it was out.
+  Timer? _toldRead;
+  void _readWhenAllowed() {
+    if (_toldRead != null || _disposed || !(_toldMain || _toldMachine)) return;
+    if (_policy.pausesAway && _away) return;
+    // A read under way reads again, if it must, once it ends (refresh).
+    if (_refreshing != null) return;
+    final last = _lastFullRead;
+    final wait = last == null
+        ? Duration.zero
+        : _readGap - clock.now().difference(last);
+    if (wait <= Duration.zero) {
+      unawaited(refresh());
       return;
     }
-    _toldMain = true;
-    if (_refreshing != null) {
-      _rereadAfter = true;
-      return;
+    _toldRead = Timer(wait, () {
+      _toldRead = null;
+      if (_disposed || accessRevoked || updateRequired) return;
+      if (!(_toldMain || _toldMachine) || (_policy.pausesAway && _away)) {
+        return;
+      }
+      if (_refreshing == null) unawaited(refresh());
+    });
+  }
+
+  /// How often the poll read before pushes: every [pollInterval], or
+  /// [SuperTabReading.quietPoll] once the person has been quiet a while.
+  Duration get _readGap {
+    final quiet = _policy.quietPoll;
+    if (quiet != null &&
+        clock.now().difference(_lastActivity) >= _policy.quietAfter) {
+      return quiet;
     }
-    unawaited(refresh());
+    return pollInterval;
+  }
+
+  bool get _gapPassed {
+    final last = _lastFullRead;
+    return last == null || clock.now().difference(last) >= _readGap;
   }
 
   /// Whether this poll reads. Always, unless the server pushes: then only when
-  /// told, when the safety net is due, or while the person's own message in
-  /// the open conversation waits for its receipt, which no push names.
+  /// told and the old poll would have read by now, when the safety net is
+  /// due, or while the person's own message in the open conversation waits
+  /// for its receipt, which no push names.
   bool get _pollDue {
-    if (!_pushing || _toldMain || _toldMachine || _receiptOpen(selectedId)) {
-      return true;
-    }
+    if (!_pushing || _receiptOpen(selectedId)) return true;
+    if ((_toldMain || _toldMachine) && _gapPassed) return true;
     final last = _lastFullRead;
     return last == null || clock.now().difference(last) >= kSwarmPushSafetyNet;
   }
@@ -1610,10 +1661,8 @@ class SuperTabController extends ChangeNotifier {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
     return _refreshing ??= _read().whenComplete(() {
       _refreshing = null;
-      if (_rereadAfter && !_disposed) {
-        _rereadAfter = false;
-        unawaited(refresh());
-      }
+      // A change heard while it was out: read on the next allowed read.
+      if (_pushing) _readWhenAllowed();
     });
   }
 
@@ -1626,8 +1675,10 @@ class SuperTabController extends ChangeNotifier {
     loading = snapshot == null;
     if (!quiet) _changed();
     _lastFullRead = clock.now();
-    // Taken as the read starts: a push heard while it is out reads once more.
+    // Taken as the read starts: a newer push heard while it is out reads once
+    // more, on the next allowed read; one it covers is dropped.
     _toldMain = _toldMachine = false;
+    _readCovers = _toldAt;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the
@@ -2673,6 +2724,7 @@ class SuperTabController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _toldRead?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();
     for (final files in _attachments.values) {

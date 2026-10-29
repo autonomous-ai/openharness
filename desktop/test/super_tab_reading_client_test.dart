@@ -313,10 +313,13 @@ void main() {
 /// as the app hands them on (`AppNotifier`, a `swarm_changed` frame).
 void _heard(SuperTabClient client, [Map<String, dynamic> payload = const {}]) =>
     client.swarmChanged(payload);
+
+/// Each change newer than the last: a push no read has covered yet.
+var _changedAt = DateTime.utc(2100).millisecondsSinceEpoch;
 Map<String, dynamic> _change(
   String id, [
   List<String> parts = const ['main'],
-]) => {'tabId': id, 'lastChangedAt': 1, 'parts': parts};
+]) => {'tabId': id, 'lastChangedAt': ++_changedAt, 'parts': parts};
 
 void _pushGroup() {
   group('Swarms the server pushes', () {
@@ -326,6 +329,8 @@ void _pushGroup() {
         final client = _client(backend)..bind('owner');
         async.elapse(const Duration(seconds: 1));
         _heard(client);
+        // The word that it pushes asked for one discovery, at the 15 s gap.
+        async.elapse(const Duration(seconds: 16));
         backend.paths.clear();
         async.elapse(const Duration(seconds: 60));
         expect(backend.discoveries, 0);
@@ -352,6 +357,8 @@ void _pushGroup() {
           client.open('tab');
           async.elapse(const Duration(seconds: 1));
           _heard(client);
+          // The word that it pushes read the open Swarm once, at the 3 s gap.
+          async.elapse(const Duration(seconds: 5));
           backend.paths.clear();
           _heard(client, _change('tab'));
           _heard(client, _change('other'));
@@ -415,6 +422,43 @@ void _pushGroup() {
       });
     });
 
+    // Review of #2121, 5: the list read about once a second in a busy Swarm.
+    test('discovery reads no more often than every 15 s, however busy', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 30));
+        backend.paths.clear();
+        for (var i = 0; i < 60; i++) {
+          _heard(client, _change(i.isEven ? 'tab' : 'other'));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(backend.discoveries, inInclusiveRange(4, 5));
+        client.dispose();
+      });
+    });
+
+    // Review of #2121, 6: a daemon that reconnects only says it pushes again;
+    // what changed meanwhile was not pushed.
+    test('the server saying it pushes again reads the open Swarm and the list once', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 50));
+        backend.paths.clear();
+        _heard(client);
+        async.elapse(const Duration(seconds: 2));
+        expect(backend.states('tab'), 1);
+        expect(backend.discoveries, 1);
+        client.dispose();
+      });
+    });
+
     test('a frame that names a Swarm wrongly changes nothing', () {
       fakeAsync((async) {
         final backend = _Backend();
@@ -422,6 +466,7 @@ void _pushGroup() {
         client.open('tab');
         async.elapse(const Duration(seconds: 1));
         _heard(client);
+        async.elapse(const Duration(seconds: 16));
         backend.paths.clear();
         _heard(client, {
           'tabId': 7,

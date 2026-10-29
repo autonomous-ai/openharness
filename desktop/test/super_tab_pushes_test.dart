@@ -117,15 +117,19 @@ void main() {
           reads
             ..clear()
             ..holdState = [];
-          c.told(main: true);
+          c.told(main: true, at: c.lastChangedAt + 100);
           async.flushMicrotasks();
-          for (var i = 0; i < 3; i++) {
-            c.told(main: true);
+          for (var i = 1; i <= 3; i++) {
+            c.told(main: true, at: c.lastChangedAt + 100 + i);
           }
           expect(reads.states, 1);
           reads.holdState!.single.complete();
           reads.holdState = null;
           async.flushMicrotasks();
+          // Review of #2121: the read they may have missed waits for the
+          // next allowed one, never sooner than the 3 s poll.
+          expect(reads.states, 1);
+          async.elapse(const Duration(seconds: 3));
           expect(reads.states, 2);
           async.elapse(const Duration(seconds: 10));
           expect(reads.states, 2);
@@ -142,14 +146,19 @@ void main() {
         _pushes(c);
         async.elapse(const Duration(seconds: 10));
         reads.clear();
-        c.told(main: false);
+        // Past the poll's gap: read now. Within it: at the gap's end, once.
         c.told(main: false);
         async.flushMicrotasks();
-        expect(reads.states, 0);
-        async.elapse(const Duration(seconds: 2));
         expect(reads.states, 1);
+        async.elapse(const Duration(seconds: 1));
+        c.told(main: false);
+        c.told(main: false);
+        async.elapse(const Duration(milliseconds: 1900));
+        expect(reads.states, 1);
+        async.elapse(const Duration(milliseconds: 200));
+        expect(reads.states, 2);
         async.elapse(const Duration(seconds: 30));
-        expect(reads.states, 1);
+        expect(reads.states, 2);
         c.dispose();
       });
     });
@@ -216,5 +225,87 @@ void main() {
         });
       },
     );
+
+    // Review of #2121, 5: a busy Swarm read more than before pushes.
+    test('never reads more often than the 3 s poll, however busy', () {
+      fakeAsync((async) {
+        final reads = _Reads(ConversationServer()..append('Hello'));
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        async.elapse(const Duration(seconds: 10));
+        reads.clear();
+        for (var i = 1; i <= 20; i++) {
+          c.told(main: true, at: c.lastChangedAt + 1000 + i);
+          async.elapse(const Duration(milliseconds: 500));
+        }
+        expect(reads.states, inInclusiveRange(3, 4));
+        c.dispose();
+      });
+    });
+
+    test('in the browser, a quiet Swarm reads no more often than 15 s', () {
+      fakeAsync((async) {
+        final reads = _Reads(ConversationServer()..append('Hello'));
+        final c = _controller(reads, reading: _web)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        async.elapse(const Duration(seconds: 40));
+        reads.clear();
+        for (var i = 1; i <= 30; i++) {
+          c.told(main: true, at: c.lastChangedAt + 1000 + i);
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(reads.states, inInclusiveRange(2, 3));
+        c.dispose();
+      });
+    });
+
+    // Review of #2121, 4: the web paused reads of a Swarm not on screen.
+    test('in the browser, reads nothing while away, and once when shown', () {
+      fakeAsync((async) {
+        final reads = _Reads(ConversationServer()..append('Hello'));
+        final c = _controller(reads, reading: _web)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        c.away = true;
+        async.elapse(const Duration(seconds: 20));
+        reads.clear();
+        for (var i = 1; i <= 10; i++) {
+          c.told(main: true, at: c.lastChangedAt + 1000 + i);
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(reads.paths, isEmpty);
+        c.away = false;
+        async.flushMicrotasks();
+        expect(reads.states, 1);
+        c.dispose();
+      });
+    });
+
+    // Review of #2121, 7: a phone hears each push once per machine socket.
+    test('drops a push its last or current read already covers', () {
+      fakeAsync((async) {
+        final reads = _Reads(ConversationServer()..append('Hello'));
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        async.elapse(const Duration(seconds: 10));
+        reads
+          ..clear()
+          ..holdState = [];
+        final at = c.lastChangedAt + 5000;
+        c.told(main: true, at: at);
+        async.flushMicrotasks();
+        c.told(main: true, at: at);
+        reads.holdState!.single.complete();
+        reads.holdState = null;
+        async.flushMicrotasks();
+        c.told(main: true, at: c.lastChangedAt);
+        async.elapse(const Duration(seconds: 30));
+        expect(reads.states, 1);
+        c.dispose();
+      });
+    });
   });
 }
