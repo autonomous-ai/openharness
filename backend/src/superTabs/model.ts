@@ -374,7 +374,7 @@ export const AGENT_ONLY = { kind: 'agent-only' }
  *  2026-10-29: shown under the Lead's name in the project chat, they read as requests to act). By kind, so the ones already
  *  stored are hidden as well. */
 const RECIPIENT_NOTICES = new Set<unknown>([AGENT_ONLY.kind, 'work-stalled', 'work-lost', 'work-resumed', 'update-request', 'digest-request'])
-/** Marks a notice of a kind people also read (a cancel, a failed start) as its recipients' alone. */
+/** Marks a notice of a kind people also read (a cancel to its worker) as its recipients' alone. */
 export const forRecipients = (source: Record<string, unknown>) => ({ ...source, recipientsOnly: true as const })
 export const agentOnly = (source: unknown): boolean => {
   const notice = source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
