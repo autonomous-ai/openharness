@@ -25,6 +25,8 @@ import 'unread_line.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
+import 'live_card.dart';
+import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
@@ -175,6 +177,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// What this computer's GitHub says of the pull requests on live cards.
+  late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
+    widget.app?.readPullRequestsStatus,
+  );
+
   /// A device with a Lead of this Swarm open scrolls the chat on screen.
   late final _dial = DialListScroll(() => _scroll[c.selectedId]);
   VoidCallback? _unregisterDial;
@@ -244,6 +251,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
+      _facts.dispose();
+      _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
     }
     if (oldWidget.controller != c) {
       _board.dispose();
@@ -567,6 +576,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _facts.dispose();
     c.removeListener(_changed);
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
@@ -2308,11 +2318,23 @@ class _SuperTabViewState extends State<SuperTabView>
     final thread = inThread || root != message.id
         ? null
         : c.thread(message.conversationId, message.id);
+    final group = inThread
+        ? null
+        : c.snapshot?.conversation(message.conversationId);
+    final card = group?.cards.of(message.id);
     return SuperTabMessageRow(
       key: ValueKey(
         '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
       ),
       message: message,
+      card: card == null
+          ? null
+          : SuperTabLiveCard(
+              group: group!,
+              card: card,
+              controller: c,
+              facts: _facts,
+            ),
       author: _shownAuthor(c, message),
       proposalOwner: _proposalOwner(message),
       // A person is named by their username, as they are tagged.
