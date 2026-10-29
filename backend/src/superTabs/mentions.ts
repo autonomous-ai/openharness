@@ -57,19 +57,26 @@ export async function resolveByReply(tx: Tx, tabId: string, conversationId: stri
     data: { resolvedAt: new Date(now), resolvedBy: 'reply' } })
 }
 
-/** A worker took the group: its held tags are over. One not yet listed is dropped, as if never made; a listed one moves to Earlier. */
+/** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never
+ *  made. Run before [dropHeldTags] of the same command, which would drop the listed ones too. */
 export async function resolveWhenWorked(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
   const held = { tabId, conversationId, holdUntil: { isSet: true as const }, ...waiting }
-  await tx.superTabMention.deleteMany({ where: { ...held, holdUntil: { gt: new Date(now) } } })
-  await tx.superTabMention.updateMany({ where: held, data: { resolvedAt: new Date(now), resolvedBy: 'worker' } })
+  await tx.superTabMention.updateMany({ where: { ...held, holdUntil: { lte: new Date(now) } }, data: { resolvedAt: new Date(now), resolvedBy: 'worker' } })
+  await tx.superTabMention.deleteMany({ where: held })
 }
 
-/** Whether a tag is listed: a held one only once its time has come, while its group still has no worker and the Lead has not
- *  acted on it since the notice; one answered before it came up was never listed. */
-function listed(row: { createdAt: Date; resolvedAt: Date | null; holdUntil?: Date | null }, group: Conversation, now: number): boolean {
+/** The group's Lead acted on it (leadAction in the state): the held tags made before that are dropped for good, listed or not.
+ *  Dropped, not resolved, so a later reply or assignment cannot bring one back in Earlier. */
+export async function dropHeldTags(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
+  await tx.superTabMention.deleteMany({ where: { tabId, conversationId, holdUntil: { isSet: true }, createdAt: { lt: new Date(now) }, ...waiting } })
+}
+
+/** Whether a tag is listed: a held one only once its time has come, while its group still has no worker; one answered before
+ *  it came up was never listed. */
+function listed(row: { resolvedAt: Date | null; holdUntil?: Date | null }, group: Conversation, now: number): boolean {
   if (!row.holdUntil) return true
   if (row.resolvedAt) return row.resolvedAt >= row.holdUntil
-  return now >= row.holdUntil.getTime() && !group.archived && !activeWork(group) && !(group.leadAction && group.leadAction.at > row.createdAt.getTime())
+  return now >= row.holdUntil.getTime() && !group.archived && !activeWork(group)
 }
 
 /** The tags a person's post in this conversation is about to answer (resolveByReply), for the leaderboard's credit

@@ -3279,6 +3279,35 @@ describe('Lead mentions', () => {
       expect(await waitingAt(tab, 24)).toEqual([])
     })
 
+    const earlierAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'earlier')).mentions
+    const as = (minutes: number, user: AuthUser, tab: string, command: Command, agent?: string) =>
+      after(minutes).execute(user, tab, { operationId: randomUUID(), command }, agent)
+    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it.', replyTo: null, recipientIds: [] })
+
+    it('keeps a tag the Lead acted on out of Waiting and Earlier, also when a worker is assigned or the requester replies later', async () => {
+      const { tab, lead, group } = await held()
+      await as(5, host, tab, post(group), lead)
+      await assignAt(tab, group, lead, 22)
+      expect(await waitingAt(tab, 22)).toEqual([])
+      expect(await earlierAt(tab, 22)).toEqual([])
+      const again = await held()
+      await as(5, host, again.tab, post(again.group), again.lead)
+      await as(25, peer, again.tab, post(again.group))
+      expect(await waitingAt(again.tab, 25)).toEqual([])
+      expect(await earlierAt(again.tab, 25)).toEqual([])
+    })
+
+    it('moves a listed tag to Earlier when the requester replies after minute 20, and never lists one answered before', async () => {
+      const late = await held()
+      await as(25, peer, late.tab, post(late.group))
+      expect(await waitingAt(late.tab, 25)).toEqual([])
+      expect(await earlierAt(late.tab, 25)).toEqual([expect.objectContaining({ messageId: late.messageId, resolvedBy: 'reply' })])
+      const early = await held()
+      await as(10, peer, early.tab, post(early.group))
+      expect(await waitingAt(early.tab, 25)).toEqual([])
+      expect(await earlierAt(early.tab, 25)).toEqual([])
+    })
+
     it('keeps a tag out of the lists when its group has no worker but was archived', async () => {
       const { tab, group } = await held()
       await run(tab, { type: 'conversation.archive', conversationId: group, archived: true } as Command)
