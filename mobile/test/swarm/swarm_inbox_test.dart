@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
@@ -877,5 +878,48 @@ void main() {
 
     expect(i.reader('a'), isNull);
     expect(store.values['swarm_read_marks.$me.a'], isNull);
+  });
+
+  test('an inbox closing keeps its read marks: the next one, for the same '
+      'account, reads what came since as unread', () async {
+    const key = 'swarm_read_marks.$me.a';
+    final store = MemoryKeyValueStore();
+    final first = SwarmInbox(
+      accountId: me,
+      request: backend({
+        'a': [groupData('g1', lastMessageSequence: 3)],
+      }).request,
+      readMarks: store,
+    );
+    await first.refresh();
+    await settle();
+    await until(() => store.values[key] != null);
+
+    first.dispose();
+    await settle();
+
+    expect(store.values[key], isNotNull, reason: 'kept, not forgotten');
+    expect(jsonDecode(store.values[key]!), {
+      'marks': {'g1': 3},
+    });
+    final next = SwarmInbox(
+      accountId: me,
+      request: backend({
+        'a': [groupData('g1', lastMessageSequence: 6)],
+      }).request,
+      readMarks: store,
+    );
+    addTearDown(next.dispose);
+    await next.refresh();
+    await settle();
+    final reader = next.reader('a')!;
+    await until(
+      () => reader.readMarks!.unread(reader.snapshot!.conversation('g1')!),
+    );
+
+    expect(
+      reader.readMarks!.unread(reader.snapshot!.conversation(leadChat)!),
+      isFalse,
+    );
   });
 }

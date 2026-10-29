@@ -469,16 +469,21 @@ class SwarmInbox extends ChangeNotifier {
     return reader;
   }
 
-  /// A Swarm off the list: what a screen still holds of it is taken back
-  /// ([SwarmReader.revoke]) before it is dropped.
-  void _drop(String id) {
+  /// A Swarm off the list ([lost]), or the inbox closing: what a screen
+  /// still holds of it is taken back ([SwarmReader.revoke]) before it is
+  /// dropped.
+  void _drop(String id, {bool lost = true}) {
     _asks.remove(id)?.dispose();
-    // Revoked first, so its read marks leave the phone too.
-    _readers.remove(id)
-      ?..removeListener(_relay)
-      ..revoke()
-      ..readMarks?.dispose()
-      ..dispose();
+    final reader = _readers.remove(id)?..removeListener(_relay);
+    if (reader != null) {
+      final marks = reader.readMarks;
+      // Lost, it is revoked first, so its read marks leave the phone too;
+      // the inbox closing keeps them, written now, for the next one.
+      if (!lost) marks?.dispose();
+      reader.revoke();
+      if (lost) marks?.dispose();
+      reader.dispose();
+    }
     _workSeen.remove(id);
   }
 
@@ -584,7 +589,7 @@ class SwarmInbox extends ChangeNotifier {
     _disposed = true;
     _poll?.cancel();
     for (final id in _readers.keys.toList()) {
-      _drop(id);
+      _drop(id, lost: false);
     }
     super.dispose();
   }

@@ -60,8 +60,8 @@ class SwarmConversation extends ChangeNotifier {
   /// Oldest first.
   List<SuperTabMessage> messages = const [];
 
-  /// On screen, and no other screen covers it: what it shows is read
-  /// ([SwarmReader.readMarks]), now and as new messages come.
+  /// On screen, no other screen covers it and Harness is in front: what it
+  /// shows is read ([SwarmReader.readMarks]), now and as new messages come.
   bool get shown => _shown;
   bool _shown = true;
   set shown(bool value) {
@@ -70,11 +70,29 @@ class SwarmConversation extends ChangeNotifier {
     _markRead();
   }
 
-  /// Read through the newest message shown, while it is [shown].
+  /// While the person reads back, the newest message they saw at the foot,
+  /// or the one a notice opened the chat at: those after it are unseen and
+  /// unread until they go down to them. Null at the foot.
+  String? get heldAt => _heldAt;
+  String? _heldAt;
+  set heldAt(String? value) {
+    if (_heldAt == value) return;
+    _heldAt = value;
+    _markRead();
+  }
+
+  /// Read through the newest message seen, while it is [shown]: [heldAt]
+  /// once it is read, else the last.
   void _markRead() {
-    if (_shown && messages.isNotEmpty) {
-      reader.readMarks?.markRead(id, messages.last.sequence);
-    }
+    if (!_shown) return;
+    final held = _heldAt;
+    final at = held == null ? -1 : messages.lastIndexWhere((m) => m.id == held);
+    final seen = held == null
+        ? messages.lastOrNull
+        : at < 0
+        ? null
+        : messages[at];
+    if (seen != null) reader.readMarks?.markRead(id, seen.sequence);
   }
 
   /// What the last read or post could not do, as a sentence.
