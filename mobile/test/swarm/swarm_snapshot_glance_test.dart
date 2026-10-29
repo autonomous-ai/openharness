@@ -79,9 +79,7 @@ void main() {
     final glance = swarmTeamGlance(read, projectId: project);
     expect(glance.line, '1 waiting');
 
-    await tester.tap(key('swarm-menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-drawer-project-$tab-$project'));
+    await tester.tap(key('swarm-project-$tab-$project'));
     await tester.pumpAndSettle();
     await tester.tap(key('swarm-project-menu'));
     await tester.pumpAndSettle();

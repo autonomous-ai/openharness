@@ -179,20 +179,20 @@ class SwarmDrawer extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (SwarmScope.computersOf(context) != null)
-                    SwarmDrawerRow(
-                      key: const ValueKey('swarm-drawer-devices'),
-                      leading: const _Glyph(LucideIcons.monitor300),
-                      title: 'Your devices',
-                      onTap: () => then(
-                        () => navigator.push(
-                          phoneRoute(
-                            (_) => const SwarmDevicesPage(),
-                            listensForItself: true,
-                          ),
+                  // The account's computers, and each Swarm's machines.
+                  SwarmDrawerRow(
+                    key: const ValueKey('swarm-drawer-devices'),
+                    leading: const _Glyph(LucideIcons.monitor300),
+                    title: 'Your devices',
+                    onTap: () => then(
+                      () => navigator.push(
+                        phoneRoute(
+                          (_) => const SwarmDevicesPage(),
+                          listensForItself: true,
                         ),
                       ),
                     ),
+                  ),
                 ],
               ),
             ),

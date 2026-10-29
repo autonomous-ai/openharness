@@ -8,6 +8,8 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
+import 'package:harness_mobile/swarm/swarm_home_rows.dart';
+import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -217,11 +219,11 @@ void main() {
       addTearDown(tester.view.reset);
       await pump(tester, backend(), const SwarmPage());
 
-      // The open decision says who asks and where in one line.
-      final asks = find.textContaining('River asks you', findRichText: true);
+      // Two of what waits, then See all.
+      final asks = key('swarm-home-need-decision:d1');
       expect(asks, findsOneWidget);
-      expect(find.text('River tagged you'), findsOneWidget);
-      expect(find.text('Nova needs you'), findsOneWidget);
+      expect(key('swarm-home-need-mention:m1'), findsOneWidget);
+      expect(key('swarm-needs-all'), findsOneWidget);
       expect(
         tester.getTopLeft(asks).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
@@ -232,13 +234,15 @@ void main() {
         reason: 'one Swarm: its projects, not its name',
       );
 
-      await tester.tap(find.text('River tagged you'));
+      await tester.tap(key('swarm-home-need-mention:m1'));
       await tester.pumpAndSettle();
       expect(
         find.text('Open chat'),
         findsOneWidget,
         reason: 'the Naming System: a Swarm chat, not a conversation',
       );
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
       final row = key('swarm-project-$tab-$project');
       expect(
         find.descendant(of: row, matching: find.text('@1')),
@@ -246,9 +250,9 @@ void main() {
         reason: "River's tag, waiting in it",
       );
       expect(
-        find.descendant(of: row, matching: find.textContaining('waiting')),
-        findsNothing,
-        reason: 'no team line (Team at a glance is gone, as on the desktop)',
+        find.descendant(of: row, matching: find.byType(SwarmTeamDots)),
+        findsOneWidget,
+        reason: 'its team in coloured dots (prototype B1)',
       );
     });
 
@@ -256,7 +260,7 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmPage());
+      await pump(tester, fake, const SwarmNeedsPage());
 
       await tester.tap(key('swarm-option-d1-0'));
       await tester.pump();
@@ -273,7 +277,7 @@ void main() {
       'again',
       (tester) async {
         final fake = backend();
-        final host = await pump(tester, fake, const SwarmPage());
+        final host = await pump(tester, fake, const SwarmNeedsPage());
         await tester.tap(key('swarm-option-d1-0'));
         await tester.pump();
         expect(find.text('Sending “Yes”'), findsOneWidget);
@@ -310,7 +314,7 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmPage());
+      await pump(tester, fake, const SwarmNeedsPage());
 
       await tester.tap(key('swarm-option-d1-1'));
       await tester.pump(const Duration(seconds: 2));
@@ -333,7 +337,7 @@ void main() {
         fake.routes['/api/super-tabs/$tab/commands'] = (_) => lost
             ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
             : {'result': <String, dynamic>{}};
-        await pump(tester, fake, const SwarmPage());
+        await pump(tester, fake, const SwarmNeedsPage());
 
         await tester.tap(key('swarm-option-d1-1'));
         await tester.pump(const Duration(seconds: 4));
@@ -358,7 +362,7 @@ void main() {
 
     testWidgets('a tag is marked done from its row', (tester) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmPage());
+      await pump(tester, fake, const SwarmNeedsPage());
       await tester.tap(key('swarm-need-row-mention:m1'));
       await tester.pumpAndSettle();
 
@@ -372,7 +376,7 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmPage());
+      await pump(tester, fake, const SwarmNeedsPage());
       final confirmed = Completer<Object?>();
       fake.routes['/api/super-tabs/$tab/commands'] = (_) => confirmed.future;
       await tester.tap(key('swarm-need-row-mention:m1'));
@@ -393,7 +397,7 @@ void main() {
 
     testWidgets('a Done that fails says so on its row', (tester) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmPage());
+      await pump(tester, fake, const SwarmNeedsPage());
       fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
           throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
       await tester.tap(key('swarm-need-row-mention:m1'));
@@ -416,13 +420,13 @@ void main() {
     testWidgets('a need opens the conversation it was asked in', (
       tester,
     ) async {
-      await pump(tester, backend(), const SwarmPage());
+      await pump(tester, backend(), const SwarmNeedsPage());
       await tester.tap(find.text('Nova needs you'));
       await tester.pumpAndSettle();
       expect(
         find.byType(SwarmConversationPage),
         findsNothing,
-        reason: 'the first tap opens it on Home, where another was open',
+        reason: 'the first tap opens it in place, where another was open',
       );
 
       // Open, it says who asks and where in one line, and that opens it.

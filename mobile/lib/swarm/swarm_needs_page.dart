@@ -61,6 +61,8 @@ class _SwarmNeedsPageState extends State<SwarmNeedsPage> {
     if (session == _session) return;
     _session?.leave();
     _session = session?..enter();
+    // Joins Home's read when it opened from Home.
+    if (session != null) unawaited(session.inbox.refresh());
   }
 
   @override

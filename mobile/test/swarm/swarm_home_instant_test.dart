@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -59,10 +60,13 @@ void main() {
   /// A cold start over the Home kept (none when [keep] is false), with the
   /// account's [computers]. Unless [list] answers it, no computer answers:
   /// the list never comes back. Pumped until the kept view is read off disk.
+  /// [readMarks] keeps the phone's marks and Home's choices; by default on
+  /// disk, as on the phone.
   Future<({SwarmHost host, FakeSwarm fake})> coldStart(
     WidgetTester tester, {
     bool keep = true,
     FakeComputers? computers,
+    LocalKeyValueStore? readMarks,
     FutureOr<Object?> Function(Map<String, dynamic>? body)? list,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
@@ -84,6 +88,7 @@ void main() {
         ..value = {PhoneExperiment.swarm},
       computers: computers,
       homeCache: cache,
+      readMarks: readMarks,
     );
     addTearDown(host.dispose);
 
@@ -112,7 +117,11 @@ void main() {
   testWidgets(
     'a cold start draws the Home kept before the first read answers',
     (tester) async {
-      final (:host, :fake) = await coldStart(tester);
+      // Nothing is read, nor anything pumped after: no disk to wait on.
+      final (:host, :fake) = await coldStart(
+        tester,
+        readMarks: MemoryKeyValueStore(),
+      );
 
       expect(key('swarm-projects-loading-$tab'), findsNothing);
       expect(
@@ -121,9 +130,12 @@ void main() {
       );
       expect(find.text('Mobile'), findsWidgets);
       expect(
-        find.byKey(const ValueKey('swarm-home-buddy-$tab-$project')),
+        find.descendant(
+          of: key('swarm-project-$tab-$project'),
+          matching: find.textContaining('1 waiting', findRichText: true),
+        ),
         findsOneWidget,
-        reason: 'its Buddies',
+        reason: 'its team',
       );
       expect(find.textContaining('Fix login'), findsOneWidget);
       expect(host.session!.inbox.loaded, isFalse, reason: 'nothing read yet');
@@ -132,7 +144,7 @@ void main() {
   );
 
   testWidgets(
-    'a cold start lists the projects kept in the drawer, with none on their '
+    'a cold start lists the Swarms kept in the drawer, with none on their '
     'way',
     (tester) async {
       await coldStart(tester);
@@ -141,8 +153,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
-      expect(key('swarm-drawer-project-$tab-$project'), findsOneWidget);
-      expect(key('swarm-drawer-loading'), findsNothing);
+      expect(key('swarm-drawer-swarm-$tab'), findsOneWidget);
+      expect(key('swarm-drawer-home'), findsOneWidget);
+      expect(find.byType(SwarmSkeletonRows), findsNothing);
     },
   );
 
