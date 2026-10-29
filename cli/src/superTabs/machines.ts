@@ -9,7 +9,7 @@ import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
+import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -206,6 +206,12 @@ export class ContributedMachines {
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
    *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
+  /** The account reader's last answer, when it was read and until when it stands ([USAGE_FRESH_MS] and the rest). */
+  private usageRead: { value: Record<string, unknown>; at: number; until: number } | null = null
+  /** Per engine, its last readable allowance windows and when they were read, kept [USAGE_KEEP_MS] through failed reads. */
+  private readonly goodQuota = new Map<string, { windows: ReturnType<typeof quotaOf>['windows']; at: number }>()
+  /** Until when the reading leaves out why an allowance is unknown, which the backend refused. */
+  private quotaReasonsRefusedUntil = 0
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
   private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
@@ -226,6 +232,29 @@ export class ContributedMachines {
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
     return value
+  }
+  /** The account reader's answer, read again only once the last one is [USAGE_FRESH_MS] old: sooner, and Anthropic refuses
+   *  the reads for 5 minutes. A refused or failed read is not repeated sooner than its own wait. */
+  private async allowance(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }) {
+    const now = this.deps.now()
+    if (this.usageRead && now < this.usageRead.until) return this.usageRead
+    const value = object(await local.request('usage_read', {}, 20_000).catch(() => null))
+    const providers = list(value.providers)
+    const wait = !Array.isArray(value.providers) ? USAGE_RETRY_MS
+      : providers.some(p => p.outcome === 'answered' && p.httpStatus === 429) ? USAGE_LIMITED_MS : USAGE_FRESH_MS
+    return this.usageRead = { value, at: now, until: now + wait }
+  }
+  /** What the reading says of [engine]'s allowance. Windows that could not be read again stand for [USAGE_KEEP_MS] after
+   *  they were read, unless the engine signed out; past that, unknown says why. */
+  private quotaFor(read: { value: Record<string, unknown>; at: number }, engine: string) {
+    const q = quotaOf(read.value, engine, false)
+    if (q.known) { this.goodQuota.set(engine, { windows: q.windows, at: read.at }); return { engine, known: true, windows: q.windows } }
+    // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+    if (meteredEngine(engine, this.deps.env ?? process.env)) return { engine, known: true, windows: [] }
+    if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
+    const kept = this.goodQuota.get(engine)
+    if (kept && this.deps.now() - kept.at <= USAGE_KEEP_MS) return { engine, known: true, windows: kept.windows }
+    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
    *  until the first read is in. */
@@ -375,9 +404,8 @@ export class ContributedMachines {
         if (!last || last.signature !== signature || last.starting || began - last.at >= MACHINE_HEARTBEAT_MS) {
         try {
         local ??= await this.deps.open(where)
-        // The existing usage reader owns its provider cache. Raw responses and
-        // account credentials never leave this machine.
-        const readings = usage ??= await local.request('usage_read', {}, 20_000).catch(() => ({}))
+        // Raw responses and account credentials never leave this machine.
+        const readings = usage ??= await this.allowance(local)
         const sampledAt = this.deps.now()
         const probeTools = tools.filter(name => (this.toolCache.get(name)?.until ?? 0) <= sampledAt)
         const observed = await this.deps.capabilities({ cwd: pool.cwd, tools: probeTools, devices: [] })
@@ -430,9 +458,13 @@ export class ContributedMachines {
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
         const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
+        const allowances = engines.map(engine => this.quotaFor(readings, engine))
+        const quotaReasons = began >= this.quotaReasonsRefusedUntil
+          ? Object.fromEntries(allowances.flatMap(q => 'reason' in q && q.reason ? [[q.engine, q.reason]] : [])) : {}
         // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
         // every reading with it.
         const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+          ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
@@ -446,11 +478,7 @@ export class ContributedMachines {
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
-          quotas: engines.map(engine => {
-            const q = quotaOf(readings, engine, false)
-            // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
-            return { engine, known: q.known || meteredEngine(engine, this.deps.env ?? process.env), windows: q.windows }
-          }), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         this.sending.add(String(row.tabId))
@@ -462,7 +490,8 @@ export class ContributedMachines {
           // readiness, progress, then privacy): a backend that takes everything else keeps the local models it reads. Their
           // boolean-only view still safely refuses an unverified tool, and a reading without privacy is never one a Team
           // machine passes on.
-          const { harnessTokens: _tokens, ...untokened } = observation
+          const { quotaReasons: _reasons, ...unreasoned } = observation
+          const { harnessTokens: _tokens, ...untokened } = unreasoned
           const { preparingStartIds: _preparing, ...unprepared } = untokened
           const { harnessUncommitted: _uncommitted, ...known } = unprepared
           const { readiness: _readiness, ...ready } = known
@@ -472,7 +501,7 @@ export class ContributedMachines {
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('harnessTokens' in observation ? [observation] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+          const attempts = [...('quotaReasons' in observation ? [observation] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
             ...('harnessUncommitted' in unprepared ? [unprepared] : []),
             ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
@@ -485,7 +514,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
+              if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
               else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
               else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
@@ -795,6 +825,15 @@ export class ContributedMachines {
  *  probe that failed is tried again. */
 const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
+/** How long an allowance reading stands. 2026-10-29: Anthropic answered 5 reads in a row, then refused them for 5 minutes
+ *  (HTTP 429, retry-after 300); read on every 15-second report, Claude's allowance showed as unknown. */
+const USAGE_FRESH_MS = 3 * 60_000
+/** After a refused read: Anthropic's own retry-after. */
+const USAGE_LIMITED_MS = 5 * 60_000
+/** After the reader on this machine did not answer at all. */
+const USAGE_RETRY_MS = 60_000
+/** How long the last readable windows stand while later reads fail; past it the allowance is unknown, with why. */
+const USAGE_KEEP_MS = 20 * 60_000
 /** The backend's limit on one reading's checkouts (`machineObservationSchema`). */
 const MAX_CHECKOUTS = 64
 type ReadyEngine = { engine: string; installed: true | null; signedIn: boolean | null }

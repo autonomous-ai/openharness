@@ -1885,3 +1885,93 @@ describe('removed machine cleanup', () => {
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
   })
 })
+
+// 2026-10-29: Anthropic answered 5 quick allowance reads, then refused them for 5 minutes (HTTP 429, retry-after 300). Each
+// machine read the allowance on every 15-second report, so Claude's showed as unknown on Ken's MacBook Pro while its
+// agents ran there. The reading is now kept for a while, and an unknown one says why.
+describe('the allowance a machine reports', () => {
+  const reads = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'usage_read').length
+  const last = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).at(-1)![3] as Record<string, unknown>
+  const answer = (codex: Record<string, unknown>) => async (type: string): Promise<Record<string, unknown>> =>
+    type === 'usage_read' ? { providers: [{ provider: 'codex', account: 'k', ...codex }] } : {}
+  const limited = answer({ outcome: 'answered', httpStatus: 429, body: { error: {} } })
+
+  it('is read from the vendor at most once in 3 minutes, however often the machine reports', async () => {
+    const f = fixture()
+    await f.machine.tick(); f.advance(); await f.machine.tick(); f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).length).toBe(3)
+    expect(reads(f)).toBe(1)
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+  })
+
+  it('keeps the last good windows while the vendor limits reads, and asks again only after 5 minutes', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(limited)
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true, windows: [{ usedPercent: 25 }] }] })
+    expect(last(f).quotaReasons).toBeUndefined()
+    f.step(180_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+    f.step(120_000); await f.machine.tick()
+    expect(reads(f)).toBe(3)
+  })
+
+  it('says unknown, and why, once the last good windows are 20 minutes old', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(limited)
+    for (let i = 0; i < 4; i++) { f.step(300_000); await f.machine.tick() }
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true }] })
+    // The next report, past the 15-second beat, still on the 429 read: the kept windows are now too old.
+    f.step(16_000); await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }],
+      quotaReasons: { codex: 'OpenAI is limiting how often the allowance can be read.' } })
+  })
+
+  it('drops the kept windows at once when the engine signs out', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    f.step(180_000); await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }],
+      quotaReasons: { codex: 'No subscription sign-in is stored on this machine.' } })
+  })
+
+  it('reads again a minute after the reader did not answer', async () => {
+    const f = fixture()
+    f.request.mockImplementation(async type => { if (type === 'usage_read') throw new Error('timed out'); return {} })
+    await f.machine.tick()
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false }], quotaReasons: { codex: 'The allowance reader on this machine did not answer.' } })
+    f.step(61_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+  })
+
+  it("says a Harness Team account's allowance is read on its owner's machine", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    await f.machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
+  it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    f.request.mockImplementation(limited)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.quotaReasons) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: quotaReasons', 400)
+      return original(core, method, path, body)
+    })
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => 'quotaReasons' in (c[3] as object))
+    await f.machine.tick()
+    expect(posts()).toEqual([true, false])
+    expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false }] })
+    f.advance(); await f.machine.tick()
+    expect(posts().at(-1)).toBe(false)
+    expect(posts()).toHaveLength(3)
+    f.step(600_000); await f.machine.tick()
+    expect(posts().slice(-2)).toEqual([true, false])
+  })
+})
