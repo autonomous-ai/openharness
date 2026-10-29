@@ -1,9 +1,12 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart' show CurrentUserProfile;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_link_host.dart';
+import 'package:harness/super_tabs/message_link_swarms.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -93,13 +96,132 @@ void main() {
       expect(swarmListed(app, 'someone-elses'), isFalse);
     });
 
-    test('a Swarm the account does not list is neither loaded nor loading', () {
-      final app = appInSwarm();
-      final swarms = AppLinkSwarms(app);
-      final source = swarms.controllerFor('someone-elses', () {});
-      expect(source.controller, isNull);
-      expect(source.loading, isFalse);
+    Map<String, dynamic> row({String author = 'other'}) => {
+      'messages': [
+        {
+          'id': 'message-1',
+          'conversationId': 'lead',
+          'sequence': 1,
+          'text': 'Closed note',
+          'attachments': <dynamic>[],
+          'createdAt': '2026-10-18T00:00:00Z',
+          'author': {
+            'kind': 'person',
+            'id': author,
+            'name': 'dee.tran@example.com',
+          },
+          'deliveries': <dynamic>[],
+        },
+      ],
+    };
+
+    AppNotifier signedIn() => appInSwarm()
+      ..currentUser = const CurrentUserProfile(id: 'me', email: 'me@x.test');
+
+    test('a Swarm the account does not list is unavailable, and not asked', () {
+      final paths = <String>[];
+      final swarms = AppLinkSwarms(
+        signedIn(),
+        get: (path) async {
+          paths.add(path);
+          return row();
+        },
+      );
+      final target = swarms.read(
+        const SwarmMessageLink(
+          tabId: 'someone-elses',
+          conversationId: 'lead',
+          messageId: 'message-1',
+        ),
+        () {},
+      );
+      expect(target.isUnavailable, isTrue);
+      expect(paths, isEmpty);
     });
+
+    test(
+      'a Swarm not loaded is read as that one message, and none is opened',
+      () async {
+        final app = signedIn();
+        final paths = <String>[];
+        var told = 0;
+        final swarms = AppLinkSwarms(
+          app,
+          get: (path) async {
+            paths.add(path);
+            return row();
+          },
+        );
+        expect(swarms.read(link, () => told++).isLoading, isTrue);
+        await Future<void>.delayed(Duration.zero);
+        final target = swarms.read(link, () => told++);
+        expect(target.message?.text, 'Closed note');
+        expect(target.author, 'dee.tran');
+        expect(told, 1);
+        expect(paths, [
+          '/api/super-tabs/tab/conversations/lead/messages?messageId=message-1',
+        ]);
+        // Nothing was opened for the preview, so nothing polls or badges.
+        expect(app.superTabs.loadedControllers, isEmpty);
+        expect(app.superTabs.peek('tab'), isNull);
+      },
+    );
+
+    test('your own message reads You', () async {
+      final swarms = AppLinkSwarms(
+        signedIn(),
+        get: (_) async => row(author: 'me'),
+      );
+      swarms.read(link, () {});
+      await Future<void>.delayed(Duration.zero);
+      expect(swarms.read(link, () {}).author, 'You');
+    });
+
+    test(
+      'a refused read is unavailable, asked again only after a minute',
+      () async {
+        var asked = 0;
+        var now = DateTime(2026, 10, 29, 9);
+        final swarms = AppLinkSwarms(
+          signedIn(),
+          get: (_) async {
+            asked++;
+            throw const SuperTabFailure('FORBIDDEN', 'No.', statusCode: 403);
+          },
+        );
+        await withClock(Clock(() => now), () async {
+          swarms.read(link, () {});
+          await Future<void>.delayed(Duration.zero);
+          expect(swarms.read(link, () {}).isUnavailable, isTrue);
+          expect(asked, 1);
+          now = now.add(const Duration(seconds: 30));
+          swarms.read(link, () {});
+          expect(asked, 1);
+          now = now.add(const Duration(minutes: 1));
+          swarms.read(link, () {});
+          await Future<void>.delayed(Duration.zero);
+          expect(asked, 2);
+        });
+      },
+    );
+
+    test(
+      'a message from another conversation is not taken as the link’s',
+      () async {
+        final swarms = AppLinkSwarms(
+          signedIn(),
+          get: (_) async {
+            final answer = row();
+            ((answer['messages'] as List).single as Map)['conversationId'] =
+                'elsewhere';
+            return answer;
+          },
+        );
+        swarms.read(link, () {});
+        await Future<void>.delayed(Duration.zero);
+        expect(swarms.read(link, () {}).isUnavailable, isTrue);
+      },
+    );
   });
 
   group('SwarmMessageLinkHost', () {

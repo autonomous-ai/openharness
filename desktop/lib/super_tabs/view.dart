@@ -30,7 +30,7 @@ import 'model.dart';
 import 'pm_chat.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
-import 'message_link_host.dart';
+import 'message_link_swarms.dart';
 import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
@@ -1273,27 +1273,25 @@ class _SuperTabViewState extends State<SuperTabView>
     if (mounted) setState(() {});
   }
 
-  /// The controller that reads [tabId]: this Swarm's, or another the account
-  /// lists. `controller` is null for one it does not list, or not loaded yet.
-  ({SuperTabController? controller, bool loading}) _linkSource(String tabId) {
-    if (tabId == c.tabId) return (controller: c, loading: false);
-    final source = _linkSwarms?.controllerFor(tabId, _linkSourceChanged);
-    if (source == null) return (controller: null, loading: false);
-    if (source.controller case final other? when _linkSources.add(other)) {
+  /// The controller that reads [tabId] for a preview: this Swarm's, or one
+  /// already loaded here. None is loaded for a preview, so a Swarm the account
+  /// closed is never left polling.
+  SuperTabController? _linkSource(String tabId) {
+    if (tabId == c.tabId) return c;
+    final other = _linkSwarms?.loaded(tabId);
+    if (other != null && _linkSources.add(other)) {
       other.addListener(_linkSourceChanged);
     }
-    return source;
+    return other;
   }
 
   /// What [link] points at for the preview under a message that says it. The
   /// Swarm it names reads it with its own session, so the server decides.
   SuperTabLinkTarget _linkTarget(SwarmMessageLink link) {
-    final source = _linkSource(link.tabId);
-    final controller = source.controller;
+    final controller = _linkSource(link.tabId);
     if (controller == null) {
-      return source.loading
-          ? const SuperTabLinkTarget.loading()
-          : const SuperTabLinkTarget.unavailable();
+      return _linkSwarms?.read(link, _linkSourceChanged) ??
+          const SuperTabLinkTarget.unavailable();
     }
     final target = controller.linkTarget(link);
     if (target == null) return const SuperTabLinkTarget.unavailable();

@@ -3,7 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_link.dart';
-import 'package:harness/super_tabs/message_link_host.dart';
+import 'package:harness/super_tabs/message_link_preview.dart';
+import 'package:harness/super_tabs/message_link_swarms.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
@@ -17,10 +18,11 @@ class _Swarms implements SwarmLinkSwarms {
   final opened = <String>[];
 
   @override
-  ({SuperTabController? controller, bool loading}) controllerFor(
-    String tabId,
-    VoidCallback onLoaded,
-  ) => (controller: controllers[tabId], loading: false);
+  SuperTabController? loaded(String tabId) => controllers[tabId];
+
+  @override
+  SuperTabLinkTarget read(SwarmMessageLink link, VoidCallback onRead) =>
+      const SuperTabLinkTarget.unavailable();
 
   @override
   Future<bool> open(SwarmMessageLink link) async {
