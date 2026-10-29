@@ -2,6 +2,10 @@ import type { EngineLaunch } from '../facets/launch.js'
 
 const permissionModes = {
   auto: ['--approve-for-me'],
+  // A Buddy's (superTabs/start.ts): it reads in the sandbox, and Codex asks the person at its terminal before anything
+  // outside it, the person's own config notwithstanding. Ahead of readOnly, whose flags it contains: a process's argv is
+  // read back as the first mode it matches (lib/processTable.ts), so a relaunched Buddy keeps asking.
+  readOnlyAsk: ['--ask-for-approval', 'on-request', '--sandbox', 'read-only'],
   readOnly: ['--sandbox', 'read-only'],
   ask: [],
   full: ['--dangerously-bypass-approvals-and-sandbox'],

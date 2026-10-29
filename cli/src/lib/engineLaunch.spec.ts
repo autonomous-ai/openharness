@@ -824,6 +824,9 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
+    // A Codex Buddy: reads in the sandbox, and asks the person at the terminal before anything outside it (Lead, 10-29).
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
+      .toEqual([engineBin('codex'), '--ask-for-approval', 'on-request', '--sandbox', 'read-only', ...CODEX_SCREEN])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
