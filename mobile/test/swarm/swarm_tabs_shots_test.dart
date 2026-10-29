@@ -135,6 +135,7 @@ void main() {
           part('mac-1', 1, {
             'machineId': 'mac-1',
             'name': 'Studio',
+            'contributorId': me,
             'observation': {
               'receivedAt': now.millisecondsSinceEpoch,
               'localModels': [
@@ -186,11 +187,17 @@ void main() {
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
       final account = ValueNotifier<String?>(me);
-      final computers = FakeComputers(const [
-        (name: 'Studio', away: false),
-        (name: 'Laptop', away: false),
-        (name: 'Mini', away: true),
-      ]);
+      final computers =
+          FakeComputers(const [
+              (name: 'Studio', away: false),
+              (name: 'Laptop', away: false),
+              (name: 'Mini', away: true),
+            ])
+            ..own = [
+              (id: 'studio', name: 'Studio', away: false),
+              (id: 'laptop', name: 'Laptop', away: false),
+              (id: 'mini', name: 'Mini', away: true),
+            ];
       final host = SwarmHost(
         accountId: () => me,
         account: account,

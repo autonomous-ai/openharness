@@ -605,16 +605,24 @@ typedef SuperTabLocalModelRow = ({
   String kind,
 });
 
-/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`).
+/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`). With
+/// [lentBy], only those of the machines that person lends the Swarm: never a teammate's, nor a Harness Team account's,
+/// which runs teammates' work.
 List<SuperTabLocalModelRow> superTabLocalModelRows(
   SuperTabSnapshot? snapshot, {
   required DateTime now,
   Duration freshFor = const Duration(seconds: 45),
+  String? lentBy,
 }) {
   final local = snapshot?.localModels;
   if (local == null || !local.enabled) return const [];
   final rows = <SuperTabLocalModelRow>[];
   for (final pool in snapshot!.machines) {
+    if (lentBy != null &&
+        (pool['contributorId'] != lentBy ||
+            snapshot.placeOf('${pool['machineId']}') != pool['machineId'])) {
+      continue;
+    }
     final observation = pool['observation'];
     if (observation is! Map) continue;
     final at = observation['receivedAt'];

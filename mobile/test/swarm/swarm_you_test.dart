@@ -26,10 +26,12 @@ import 'swarm_fixture.dart';
 /// and Your devices with what is ready, and Settings.
 void main() {
   /// The Swarms [swarms], each with the person as tony@example.com, [status]
-  /// set when given, its models on, and [models] served by its machine
-  /// Studio, read just now.
+  /// set when given, its models on, and [models] served by the person's
+  /// machine Studio, read just now; and [others], more machines read just
+  /// now, as given.
   FakeSwarm backend({
     List<Map<String, dynamic>> models = const [],
+    List<Map<String, dynamic>> others = const [],
     Map<String, dynamic>? status,
     List<({String id, String name})> swarms = const [
       (id: tab, name: 'Autonomous'),
@@ -60,6 +62,7 @@ void main() {
           part('mac-1', 1, {
             'machineId': 'mac-1',
             'name': 'Studio',
+            'contributorId': me,
             'observation': {
               'receivedAt': DateTime.now().millisecondsSinceEpoch,
               'localModels': [
@@ -67,6 +70,17 @@ void main() {
               ],
             },
           }),
+          for (final m in others)
+            part(m['machineId'] as String, 1, {
+              ...m,
+              'observation': {
+                'receivedAt': DateTime.now().millisecondsSinceEpoch,
+                'localModels': [
+                  for (final model in m['models'] as List)
+                    {'grid': 'grid-${s.id}', ...model as Map},
+                ],
+              },
+            }),
         ];
         return data;
       };
@@ -136,6 +150,8 @@ void main() {
       find.descendant(of: key(k), matching: matching);
 
   const studio = (name: 'Studio', away: false);
+  SwarmOwnComputer own(SwarmComputer computer) =>
+      (id: computer.name, name: computer.name, away: computer.away);
   const laptop = (name: 'Laptop', away: false);
   const mini = (name: 'Mini', away: true);
   const threeModels = [
@@ -227,6 +243,55 @@ void main() {
     expect(find.byType(SwarmModelsPage), findsOneWidget);
   });
 
+  testWidgets('Your models counts only what the person\'s own machines '
+      'offer: not a teammate\'s, nor their Harness Team account\'s; and '
+      'opens on those alone', (tester) async {
+    await pump(
+      tester,
+      backend(
+        models: [threeModels[1]],
+        others: [
+          {
+            'machineId': 'mac-ken',
+            'name': 'Ken Workstation',
+            'contributorId': 'ken',
+            'models': [
+              {'model': 'gemma-4', 'name': 'Gemma 4', 'kind': 'local'},
+              {'model': 'mistral-9', 'name': 'Mistral 9', 'kind': 'shared'},
+            ],
+          },
+          {
+            // The person's Harness Team account on Studio: it runs
+            // teammates' work.
+            'machineId': 'team-1',
+            'name': 'Harness Team',
+            'contributorId': me,
+            'hostMachineId': 'mac-1',
+            'models': [
+              {'model': 'phi-5', 'name': 'Phi 5', 'kind': 'local'},
+            ],
+          },
+        ],
+      ),
+    );
+
+    expect(inside('swarm-you-models', find.text('1 ready now')), findsOne);
+
+    await tester.tap(key('swarm-you-models'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Qwen3 Coder'), findsOneWidget);
+    for (final theirs in [
+      'Gemma 4',
+      'Mistral 9',
+      'Phi 5',
+      'Ken Workstation',
+      'Harness Team',
+    ]) {
+      expect(find.textContaining(theirs), findsNothing, reason: theirs);
+    }
+  });
+
   testWidgets('Your models with one, and with none running', (tester) async {
     await pump(tester, backend(models: [threeModels[1]]));
     expect(inside('swarm-you-models', find.text('1 ready now')), findsOne);
@@ -235,9 +300,10 @@ void main() {
     expect(inside('swarm-you-models', find.text('None ready now')), findsOne);
   });
 
-  testWidgets('Your devices counts the computers online and offline, follows '
-      'them, and opens them', (tester) async {
-    final computers = FakeComputers(const [studio, laptop, mini]);
+  testWidgets('Your devices counts the person\'s own computers online and '
+      'offline, follows them, and opens them', (tester) async {
+    final computers = FakeComputers(const [studio, laptop, mini])
+      ..own = [own(studio), own(laptop), own(mini)];
     await pump(tester, backend(), computers: computers);
 
     expect(
@@ -245,11 +311,15 @@ void main() {
       findsOneWidget,
     );
 
-    computers.set(const [studio]);
+    computers
+      ..own = [own(studio)]
+      ..set(const [studio]);
     await tester.pump();
     expect(inside('swarm-you-devices', find.text('1 online')), findsOne);
 
-    computers.set(const []);
+    computers
+      ..own = []
+      ..set(const []);
     await tester.pump();
     expect(
       inside('swarm-you-devices', find.text('No computers yet')),
@@ -259,6 +329,27 @@ void main() {
     await tester.tap(key('swarm-you-devices'));
     await tester.pumpAndSettle();
     expect(find.byType(SwarmDevicesPage), findsOneWidget);
+  });
+
+  testWidgets('Your devices counts none shared with the person, nor a Harness '
+      'Team account, nor one waiting for a link: of five on the account, '
+      'their own two', (tester) async {
+    const shared = (name: 'Ken MacBook', away: false);
+    const team = (name: 'Harness Team', away: false);
+    const unlinked = (name: 'New Mac', away: true);
+    final computers = FakeComputers(const [
+      studio,
+      mini,
+      shared,
+      team,
+      unlinked,
+    ])..own = [own(studio), own(mini)];
+    await pump(tester, backend(), computers: computers);
+
+    expect(
+      inside('swarm-you-devices', find.text('1 online · 1 offline')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('before the computers are read, Your devices counts none and '
@@ -278,7 +369,8 @@ void main() {
 
   testWidgets('out of sight, as under another tab, You draws nothing new, '
       'and what changed meanwhile once back', (tester) async {
-    final computers = FakeComputers(const [studio, laptop]);
+    final computers = FakeComputers(const [studio, laptop])
+      ..own = [own(studio), own(laptop)];
     final hidden = ValueNotifier(false);
     addTearDown(hidden.dispose);
     await pump(tester, backend(), computers: computers, hidden: hidden);
@@ -286,7 +378,9 @@ void main() {
 
     hidden.value = true;
     await tester.pump();
-    computers.set(const [studio, laptop, mini]);
+    computers
+      ..own = [own(studio), own(laptop), own(mini)]
+      ..set(const [studio, laptop, mini]);
     await tester.pump();
 
     expect(inside('swarm-you-devices', find.text('2 online')), findsOne);
@@ -347,7 +441,7 @@ void main() {
     await pump(
       tester,
       backend(models: threeModels),
-      computers: FakeComputers(const [studio]),
+      computers: FakeComputers(const [studio])..own = [own(studio)],
     );
 
     for (final row in ['status', 'models', 'devices', 'settings']) {

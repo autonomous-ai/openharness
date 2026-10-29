@@ -27,9 +27,11 @@ import 'swarm_style.dart';
 /// You, the person's own tab, as Tony's prototype C4 draws it (2026-10-30):
 /// who they are in the Swarm Home shows — their face, their name and that
 /// Swarm — then their status, and Change for their profile, where it is set
-/// ([showSwarmProfile]); Your models, with how many the Swarms can use now,
-/// and Your devices, with how many of their computers are online; and
-/// Settings. Each count comes from what Home already reads, and none shows
+/// ([showSwarmProfile]); Your models, with how many of their own machines'
+/// models the Swarms can use now, and Your devices, with how many of their
+/// own computers are online; and Settings. Only what is theirs counts: not a
+/// teammate's, not one shared with them, not a Harness Team account's (#2253's
+/// review). Each count comes from what Home already reads, and none shows
 /// before it is read.
 class SwarmYouPage extends StatelessWidget {
   const SwarmYouPage({super.key, this.onSettings, this.now = DateTime.now});
@@ -136,7 +138,7 @@ class SwarmYouPage extends StatelessWidget {
             key: const ValueKey('swarm-you-devices'),
             leading: const _Glyph(LucideIcons.laptop300),
             title: 'Your devices',
-            detail: switch (_devices(computers?.computers)) {
+            detail: switch (_devices(computers)) {
               null => null,
               final line => SwarmRow.line(line),
             },
@@ -161,8 +163,8 @@ class SwarmYouPage extends StatelessWidget {
     ];
   }
 
-  /// How many models every Swarm read can use now; null while none is read
-  /// with its models on.
+  /// How many models every Swarm read can use now from the person's own
+  /// machines; null while none is read with its models on.
   int? _models(SwarmInbox? inbox, List<SwarmListing> swarms) {
     int? count;
     for (final swarm in swarms) {
@@ -171,7 +173,12 @@ class SwarmYouPage extends StatelessWidget {
           ? null
           : reader.snapshot;
       if (snapshot == null) continue;
-      if (swarmModelList(snapshot, now: now()) case final list?) {
+      final mine = swarmModelList(
+        snapshot,
+        now: now(),
+        lentBy: reader!.accountId,
+      );
+      if (mine case final list?) {
         count =
             (count ?? 0) +
             list.apis.length +
@@ -182,12 +189,14 @@ class SwarmYouPage extends StatelessWidget {
     return count;
   }
 
-  /// "2 online · 1 offline"; null before the computers are read.
-  static String? _devices(List<SwarmComputer>? computers) {
-    if (computers == null) return null;
-    if (computers.isEmpty) return 'No computers yet';
-    final away = computers.where((computer) => computer.away).length;
-    final online = computers.length - away;
+  /// "2 online · 1 offline", of the person's own computers ([SwarmComputers.own]);
+  /// null before the account's computers are read.
+  static String? _devices(SwarmComputers? computers) {
+    if (computers?.computers == null) return null;
+    final own = computers!.own;
+    if (own.isEmpty) return 'No computers yet';
+    final away = own.where((computer) => computer.away).length;
+    final online = own.length - away;
     return [
       if (online > 0) '$online online',
       if (away > 0) '$away offline',
