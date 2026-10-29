@@ -85,6 +85,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Answer questions, blockers and completions at once.
 - Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+- Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.

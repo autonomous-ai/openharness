@@ -641,6 +641,22 @@ describe('which messages still need an answer', () => {
     // A person's email is passed as the backend sent it.
     expect((value.messages[0]!.author as { name: string }).name).toBe('sam@example.com')
   })
+  it('names the thread root on each thread reply only, so an agent reading one feed sees which thread a reply is in', async () => {
+    const t = setup()
+    const feed = [
+      { id: 'r1', sequence: 1, author: person, recipientIds: [], replyTo: null, thread: 'r1' },
+      { id: 'r2', sequence: 2, author: person, recipientIds: [t.agentId], replyTo: 'r1', thread: 'r1' },
+      { id: 'r3', sequence: 3, author: person, recipientIds: [], replyTo: 'old', thread: 'r3' },
+      { id: 'r4', sequence: 4, author: person, recipientIds: [], replyTo: null, thread: null },
+    ]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/messages') ? { messages: feed, next: null, threads: [{ id: 'r1', replies: 1 }] } : swarmData(t.agent, path) } }))
+    const value = (await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner) as
+      { value: { messages: Record<string, unknown>[]; threads: unknown[] } }).value
+    expect(value.messages.map(m => m.thread)).toEqual([undefined, 'r1', undefined, undefined])
+    expect(value.messages.map(m => 'thread' in m)).toEqual([false, true, false, false])
+    expect(value.threads).toEqual([{ id: 'r1', replies: 1 }])
+  })
   it('reads the later messages of one exact message to tell whether it was answered', async () => {
     const t = setup()
     vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
