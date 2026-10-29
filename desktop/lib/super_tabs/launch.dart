@@ -106,7 +106,11 @@ class SuperTabLaunch {
                           integration.projectVisibility ?? 'public';
                     }
                     try {
-                      if (start.machineId case final machine?) {
+                      // A start already sent is repeated as it is: the server may
+                      // have committed it and taken the machine's last slot, so
+                      // its answer decides, not a fresh check.
+                      if (start.machineId case final machine?
+                          when saved['leadStartRequest'] == null) {
                         await launch.recheckLeadMachine(integration, machine);
                       }
                       await launch.startInSwarm(start);

@@ -163,4 +163,40 @@ void main() {
     expect(starts.toSet(), hasLength(1));
     expect(recovered, NewHarnessOutcome.created, reason: box.error);
   });
+
+  test('a start that took its machine’s last slot recovers after its reply is lost', () async {
+    final f = SuperTabLaunchFixture(
+      connectionFactory: (store) => LostReplyConnection(store, 'lead.start'),
+    );
+    configure(f);
+    final machine = <String, Object>{
+      'machineId': 'far',
+      'name': 'Office Mini',
+      'contributorId': 'owner',
+      'maxAgents': 1,
+      'availableSlots': 1,
+      'paused': false,
+      'observation': {
+        'receivedAt': DateTime.now().millisecondsSinceEpoch,
+        'runningHarnessIds': <String>[],
+        'capabilities': ['leadStart'],
+      },
+    };
+    (f.connection.server.state['machines'] as List).add(machine);
+    final box = await f.box(newProject: true);
+    box.chooseLeadMachine('far');
+    expect(await box.create(), NewHarnessOutcome.failed);
+    // The server holds capacity for the start it just committed.
+    machine['availableSlots'] = 0;
+    final recovered = await box.create();
+    expect(recovered, NewHarnessOutcome.created, reason: box.error);
+    final c = f.connection as LostReplyConnection;
+    final starts = c.attempts
+        .where((p) => (p['command'] as Map)['type'] == 'lead.start')
+        .map((p) => p['operationId'])
+        .toList();
+    // The same start, repeated: the server's receipt decides.
+    expect(starts, hasLength(2));
+    expect(starts.toSet(), hasLength(1));
+  });
 }
