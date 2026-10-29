@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_style.dart';
 import 'team_glance.dart';
@@ -19,7 +20,7 @@ class SwarmTeamLine extends StatelessWidget {
   const SwarmTeamLine(
     this.glance, {
     super.key,
-    this.size = 13.5,
+    this.size = AppType.captionSize,
     this.spread = false,
     this.kept = false,
     this.only,
@@ -35,7 +36,8 @@ class SwarmTeamLine extends StatelessWidget {
   /// Counted from the Home kept, not read again yet ([swarmHomeKept]).
   final bool kept;
 
-  /// The words' size: 13.5 under a row's title, 13 in the drawer, 14 alone.
+  /// The words' size: the caption's under a row's title and in the drawer, 14
+  /// alone.
   final double size;
 
   /// Its parts wider apart: the project's team card.

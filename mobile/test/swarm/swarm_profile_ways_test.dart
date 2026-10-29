@@ -132,6 +132,47 @@ void main() {
     expect(key('swarm-person-edit'), findsNothing);
   });
 
+  testWidgets('who they are is dimmed as every sheet is and inset 16 across '
+      'and 24 below, with the name a heading of 17, its status a body of 17 '
+      'and its email and role captions of 13', (tester) async {
+    await pump(
+      tester,
+      const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+    );
+    await tester.tap(key('swarm-author-msg-1'));
+    await frames(tester);
+
+    expect(
+      ModalRoute.of(tester.element(key('swarm-person')))!.barrierColor,
+      Colors.black54,
+    );
+    expect(
+      tester.widget<Padding>(key('swarm-person')).padding,
+      const EdgeInsets.fromLTRB(16, 8, 16, 24),
+    );
+    final grabber = find.byWidgetPredicate(
+      (w) => w is Container && w.constraints?.maxWidth == 36,
+    );
+    expect(
+      tester.getSize(
+        find.descendant(of: grabber, matching: find.byType(DecoratedBox)),
+      ),
+      const Size(36, 4),
+    );
+    expect(
+      tester.widget<Container>(grabber).margin,
+      const EdgeInsets.only(bottom: 16),
+    );
+    TextStyle styleOf(String text) =>
+        tester.widget<Text>(inside('swarm-person', find.text(text))).style!;
+    expect(styleOf('person-tony').fontSize, 17);
+    expect(styleOf('person-tony').fontWeight, FontWeight.w600);
+    expect(styleOf('🍽️ At lunch').fontSize, 17);
+    for (final line in ['person-tony@example.com', 'Collaborator']) {
+      expect(styleOf(line).fontSize, 13, reason: line);
+    }
+  });
+
   testWidgets('your own face opens yours, with Edit profile', (tester) async {
     await pump(
       tester,

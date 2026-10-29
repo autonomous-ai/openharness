@@ -150,6 +150,36 @@ void main() {
     await closed(tester);
   });
 
+  testWidgets('the box sits 8 points under what is above it, and the skeleton '
+      'and the picture share the row corner of 10', (tester) async {
+    storage.hold = Completer();
+    await pump(tester);
+    await tester.pump();
+
+    expect(tester.getTopLeft(preview).dy, 8);
+    expect(
+      tester
+          .widget<Skeleton>(
+            find.descendant(of: preview, matching: find.byType(Skeleton)),
+          )
+          .radius,
+      10,
+    );
+    storage.hold!.complete();
+    await until(tester, () => drawn(tester));
+
+    expect(
+      tester
+          .widget<ClipRRect>(
+            find.descendant(of: preview, matching: find.byType(ClipRRect)),
+          )
+          .borderRadius,
+      BorderRadius.circular(10),
+    );
+
+    await closed(tester);
+  });
+
   testWidgets('a file that is not a picture keeps the chip, and nothing is '
       'fetched', (tester) async {
     await pump(tester, file: attachment(mime: 'application/pdf'));

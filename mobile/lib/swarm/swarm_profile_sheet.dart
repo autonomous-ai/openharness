@@ -7,7 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'identity.dart';
@@ -58,7 +61,6 @@ Future<void> showSwarmProfile(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
-  barrierColor: Colors.black.withValues(alpha: .55),
   shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope].
   builder: (_) => SwarmProfileSheet(swarmId: swarmId, pickPhoto: pickPhoto),
@@ -159,10 +161,10 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
         child: Padding(
           // Above the keyboard while the status is typed.
           padding: EdgeInsets.fromLTRB(
-            14,
-            8,
-            14,
-            16 + MediaQuery.viewInsetsOf(context).bottom,
+            AppSpace.l,
+            AppSpace.s,
+            AppSpace.l,
+            AppSpace.l + MediaQuery.viewInsetsOf(context).bottom,
           ),
           child: inbox == null
               ? const SizedBox.shrink()
@@ -207,29 +209,31 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The grabber: a capsule as wide as the two largest steps.
         Center(
           child: Container(
-            width: 36,
-            height: 5,
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
+            width: AppSpace.xl + AppSpace.m,
+            height: AppSpace.xs,
+            margin: const EdgeInsets.only(bottom: AppSpace.s),
+            decoration: ShapeDecoration(
               color: AppGlass.hair,
-              borderRadius: BorderRadius.circular(3),
+              shape: const StadiumBorder(),
             ),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 2, 6),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            0,
+            AppSpace.xs,
+            AppSpace.s,
+          ),
           child: Row(
             children: [
               Expanded(
                 child: Text(
                   'Your profile',
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: AppType.heading(color: AppPalette.textPrimary),
                 ),
               ),
               SwarmIconButton(
@@ -264,7 +268,12 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            AppSpace.s,
+            AppSpace.xs,
+            AppSpace.xs,
+          ),
           child: Row(
             children: [
               SwarmAvatar(
@@ -284,21 +293,14 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
                       name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textPrimary,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: AppType.heading(color: AppPalette.textPrimary),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       status?.label ?? 'No status',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textSecondary,
-                        fontSize: 14,
-                      ),
+                      style: AppType.caption(color: AppPalette.textSecondary),
                     ),
                   ],
                 ),
@@ -379,14 +381,14 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
           enabled: edit,
           maxLength: 80,
           textCapitalization: TextCapitalization.sentences,
-          style: TextStyle(color: AppPalette.textPrimary, fontSize: 16),
+          style: AppType.body(color: AppPalette.textPrimary),
           decoration: InputDecoration(
             hintText: 'What are you up to?',
             hintStyle: TextStyle(color: AppPalette.textFaint),
             filled: true,
             fillColor: AppPalette.swarmField,
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(AppControl.radius),
               borderSide: BorderSide.none,
             ),
           ),
@@ -400,10 +402,15 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
           }),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            AppSpace.xs,
+            AppSpace.xs,
+            AppSpace.s,
+          ),
           child: Text(
             'Clears',
-            style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
+            style: AppType.caption(color: AppPalette.textSecondary),
           ),
         ),
         Wrap(
@@ -471,11 +478,16 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
         ],
         if (_error case final error?)
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
             child: Text(
               error,
               key: const ValueKey('swarm-profile-error'),
-              style: TextStyle(color: AppColors.danger, fontSize: 14),
+              style: AppType.caption(color: AppColors.danger),
             ),
           ),
       ],
@@ -490,11 +502,8 @@ class _Note extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
-    child: Text(
-      text,
-      style: TextStyle(color: AppPalette.textSecondary, fontSize: 13.5),
-    ),
+    padding: const EdgeInsets.fromLTRB(AppSpace.xs, AppSpace.m, AppSpace.xs, 0),
+    child: Text(text, style: AppType.caption(color: AppPalette.textSecondary)),
   );
 }
 
@@ -540,7 +549,10 @@ class _Picture extends StatelessWidget {
             child: Text(
               glyph,
               textScaler: TextScaler.noScaling,
-              style: const TextStyle(fontSize: 26, height: 1),
+              style: const TextStyle(
+                fontSize: AppIconSize.standalone,
+                height: 1,
+              ),
             ),
           ),
         ),
@@ -581,16 +593,13 @@ class _Chip extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 44),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+            padding: AppControl.padding,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   label,
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 14.5,
-                  ),
+                  style: AppType.caption(color: AppPalette.textPrimary),
                 ),
               ],
             ),
@@ -612,7 +621,6 @@ Future<void> showSwarmPerson(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
-  barrierColor: Colors.black.withValues(alpha: .55),
   shape: AppControl.sheetShape,
   builder: (sheet) => SwarmPersonSheet(
     swarmId: swarmId,
@@ -644,7 +652,12 @@ class SwarmPersonSheet extends StatelessWidget {
       top: false,
       child: Padding(
         key: const ValueKey('swarm-person'),
-        padding: const EdgeInsets.fromLTRB(18, 8, 18, 20),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.l,
+          AppSpace.s,
+          AppSpace.l,
+          AppSpace.xl,
+        ),
         child: reader == null
             ? const SizedBox.shrink()
             : ListenableBuilder(
@@ -663,14 +676,15 @@ class SwarmPersonSheet extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The grabber: a capsule as wide as the two largest steps.
         Center(
           child: Container(
-            width: 36,
-            height: 5,
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
+            width: AppSpace.xl + AppSpace.m,
+            height: AppSpace.xs,
+            margin: const EdgeInsets.only(bottom: AppSpace.l),
+            decoration: ShapeDecoration(
               color: AppGlass.hair,
-              borderRadius: BorderRadius.circular(3),
+              shape: const StadiumBorder(),
             ),
           ),
         ),
@@ -699,27 +713,19 @@ class SwarmPersonSheet extends StatelessWidget {
                           name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: AppPalette.textPrimary,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: AppType.heading(color: AppPalette.textPrimary),
                         ),
                         if (status != null) ...[
                           const SizedBox(height: 2),
                           Text(
                             status.label,
-                            style: TextStyle(
-                              color: AppPalette.textPrimary,
-                              fontSize: 15,
-                            ),
+                            style: AppType.body(color: AppPalette.textPrimary),
                           ),
                           if (status.until case final until?)
                             Text(
                               'Clears at ${_time(context, until)}',
-                              style: TextStyle(
+                              style: AppType.caption(
                                 color: AppPalette.textFaint,
-                                fontSize: 13,
                               ),
                             ),
                         ],
@@ -728,17 +734,13 @@ class SwarmPersonSheet extends StatelessWidget {
                           person.email,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                          style: AppType.caption(
                             color: AppPalette.textSecondary,
-                            fontSize: 13.5,
                           ),
                         ),
                         Text(
                           _role(person.role),
-                          style: TextStyle(
-                            color: AppPalette.textFaint,
-                            fontSize: 13,
-                          ),
+                          style: AppType.caption(color: AppPalette.textFaint),
                         ),
                       ],
                     ),
