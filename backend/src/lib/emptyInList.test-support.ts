@@ -133,8 +133,8 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
         if (ts.isObjectLiteralExpression(value)) {
           if (!seen.has(value)) { seen.add(value); lookFor(value) }
         } else if (ts.isConditionalExpression(value)) {
-          visitValue(value.whenTrue, at, strict)
-          visitValue(value.whenFalse, at, strict)
+          visitValue(value.whenTrue, value.whenTrue, strict)
+          visitValue(value.whenFalse, value.whenFalse, strict)
         } else if (ts.isIdentifier(value)) follow(value, strict)
         else if (strict) found.push({ file, line: sf.getLineAndCharacterOfPosition(at.getStart()).line + 1, list: at.getText() })
       }
@@ -145,9 +145,10 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
         else if (strict) found.push({ file, line: sf.getLineAndCharacterOfPosition(id.getStart()).line + 1, list: id.text })
       }
       function lookFor(inner: ts.Node) {
-        if (ts.isPropertyAssignment(inner) && inner.name.getText() === 'where' && ts.isIdentifier(inner.initializer)) follow(inner.initializer, true)
+        // Whatever stands as the filter, or is spread into one, is read where it is built: a name, a conditional, a call's result.
+        if (ts.isPropertyAssignment(inner) && inner.name.getText() === 'where') visitValue(inner.initializer, inner.initializer, true)
         else if (ts.isShorthandPropertyAssignment(inner) && inner.name.text === 'where') follow(inner.name, true)
-        else if (ts.isSpreadAssignment(inner) && ts.isIdentifier(inner.expression)) follow(inner.expression, false)
+        else if (ts.isSpreadAssignment(inner)) visitValue(inner.expression, inner.expression, false)
         if (ts.isPropertyAssignment(inner) && ['in', '$in'].includes(inner.name.getText().replaceAll(/['"]/g, ''))
           && !ts.isArrayLiteralExpression(inner.initializer) && !(ts.isIdentifier(inner.initializer) && CONSTANT.test(inner.initializer.text))) {
           const list = inner.initializer.getText()
@@ -157,10 +158,12 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
         }
         ts.forEachChild(inner, lookFor)
       }
-      for (const argument of node.arguments) ts.isIdentifier(argument) ? follow(argument, true) : lookFor(argument)
+      for (const argument of node.arguments) visitValue(argument, argument, true)
     }
     ts.forEachChild(node, visitCall)
   }
   visitCall(sf)
-  return found
+  // A list reached by several routes (both branches of a conditional, a name and its object) is one finding.
+  const once = new Set<string>()
+  return found.filter(f => !once.has(`${f.line}:${f.list}`) && !!once.add(`${f.line}:${f.list}`))
 }

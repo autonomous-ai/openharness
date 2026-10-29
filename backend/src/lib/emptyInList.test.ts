@@ -102,6 +102,22 @@ describe('the empty id list check', () => {
     expect(lint(`async function f(tx, where) { return tx.swarmMachine.findMany({ where }) }`)).toEqual([])
   })
 
+  it('follows a filter named inside a conditional, in either branch, wherever the conditional stands', () => {
+    const f = (where: string) => lint(`async function f(tx, ids, on) { const filter = { id: { in: ids } }; return tx.user.findMany(${where}) }`)
+    expect(f('{ where: on ? filter : {} }')).toEqual(['ids'])
+    expect(f('{ where: on ? {} : filter }')).toEqual(['ids'])
+    expect(f('{ where: on ? { ok: true } : (filter) }')).toEqual(['ids'])
+    expect(f('{ where: { ...(on ? filter : {}), ok: true } }')).toEqual(['ids'])
+    expect(f('on ? { where: filter } : {}')).toEqual(['ids'])
+    expect(f('on ? { where: {} } : { where: filter }')).toEqual(['ids'])
+    // A branch it cannot see into is flagged; one that holds no list is not.
+    expect(f('{ where: on ? build(ids) : {} }')).toEqual(['build(ids)'])
+    expect(f('{ where: on ? { ok: true } : {} }')).toEqual([])
+    expect(lint(`async function f(tx, ids, on) { if (!ids.length) return []; const filter = { id: { in: ids } }; return tx.user.findMany({ where: on ? filter : {} }) }`)).toEqual([])
+    // One finding for one list, however many ways the read reaches it.
+    expect(f('{ where: on ? filter : filter }')).toEqual(['ids'])
+  })
+
   it('sees an earlier declarator of the same statement', () => {
     expect(lint(`function f(tx, ids) { const base = { id: { in: ids } }, where = base; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
     expect(lint(`function f(tx, ids) { const base = { id: { in: ids } }, where = { ...base, ok: true }; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
