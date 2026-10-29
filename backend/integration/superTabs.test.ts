@@ -1029,6 +1029,51 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(store.start(team.session, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
+  // Ken, 2026-10-28: work kept landing on engines that could not run on their machine. Two failed starts suspend the engine
+  // there, saved with the machine; a reading that shows it signed in with quota, or its owner, offers it again.
+  it('suspends an engine after two failed starts on a machine, keeps why its allowance is unknown, and offers it again', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Engine health')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'health-host', userId: host.sub, apiKey: 'fixture-health-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('health-host')
+    await run(tab, { type: 'machine.contribute', machineId: 'health-host', name: 'Health laptop', cwd: '/project', engines: ['codex'], maxAgents: 2 }, host)
+    const generation = (await poolRows(store, team.session, 'health-host'))[0]!.machine.generation
+    const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+      projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [],
+      privacy: team.privacy, quotas: [{ engine: 'codex', known: false, windows: [] }], quotaReasons: { codex: 'OpenAI could not be reached.' } }
+    await store.observeMachine(team.session, tab, 'health-host', observation)
+    const pool = async () => (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'health-host')! as Record<string, any>
+    expect((await pool()).observation.quotaReasons).toEqual({ codex: 'OpenAI could not be reached.' })
+    const request = { permissionMode: 'full', conversationId: 'lead', machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'health-host')
+    for (let i = 0; i < 2; i++) {
+      const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
+      await hostRun({ type: 'agent.startDispatch', startId })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' })
+    }
+    expect((await pool()).suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
+    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('Codex is suspended'))
+    expect(notices.map(m => m.mentions)).toEqual([[host.sub]])
+    await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
+    // Signed in, with quota left: the reading offers it again.
+    await store.observeMachine(team.session, tab, 'health-host', { ...observation, quotaReasons: undefined,
+      quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }],
+      readiness: { engines: [{ engine: 'codex', installed: true, signedIn: true }] } })
+    expect((await pool()).suspendedEngines).toBeUndefined()
+    // Suspended again, and resumed by its owner.
+    for (let i = 0; i < 2; i++) {
+      const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
+      await hostRun({ type: 'agent.startDispatch', startId })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' })
+    }
+    expect((await pool()).suspendedEngines).toHaveProperty('codex')
+    await expect(run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' })).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' }, host)
+    expect((await pool()).suspendedEngines).toBeUndefined()
+  })
+
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {
     const { tab, lead } = await fixture()
     const question = (await run(tab, message('Should pending edits survive restart?'), host, lead)).result.messageId as string
