@@ -1488,7 +1488,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   final experimentalFeatures = ExperimentalFeaturesStore(
-    pollInterval: kUnderTest ? Duration.zero : const Duration(seconds: 30),
+    pollInterval: kUnderTest
+        ? Duration.zero
+        : ExperimentalFeaturesStore.safetyNet,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
