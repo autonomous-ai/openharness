@@ -89,6 +89,44 @@ class AppSelectField<T> extends StatefulWidget {
     this.semanticLabel,
   });
 
+  /// The gap between the label and the chevron in the closed control.
+  static const double chevronGap = 6;
+
+  /// The width at which the closed control shows its widest of [labels] whole:
+  /// the labels as [textStyle] sets them at the current text scale, then the
+  /// control's own padding, chevron gap, chevron and border. For a field
+  /// that is as wide as its choices (pass it as [width]) rather than its row.
+  static double fitWidth(
+    BuildContext context, {
+    required Iterable<String> labels,
+    TextStyle? textStyle,
+    EdgeInsetsGeometry padding = const EdgeInsets.only(left: 10, right: 8),
+  }) {
+    final style =
+        textStyle ??
+        AppType.label(
+          fontWeight: AppControl.fontWeight,
+          color: AppPalette.textPrimary,
+        );
+    var widest = 0.0;
+    for (final label in labels) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: 1,
+      )..layout();
+      widest = math.max(widest, painter.width);
+      painter.dispose();
+    }
+    final border = MediaQuery.highContrastOf(context) ? 2.0 : 1.5;
+    return widest.ceilToDouble() +
+        padding.horizontal +
+        chevronGap +
+        AppControl.iconSize +
+        2 * border;
+  }
+
   final T value;
   final List<SelectOption<T>> options;
   final ValueChanged<T> onChanged;
@@ -689,7 +727,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 6),
+                              const SizedBox(width: AppSelectField.chevronGap),
                               Icon(
                                 AppIcons.chevronDown,
                                 size: AppControl.iconSize,

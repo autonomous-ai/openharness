@@ -360,7 +360,9 @@ interrupted Codex leaves behind, no longer refuses a resume: it is kept as it is
 From CLI 0.4.3, an unconfirmed runtime counts as unknown and a concurrently changed harness as
 cancelled (legacy aggregate: unknown), rather than failed. Compare releases separately across this
 definition change; a lower failure rate alone is not proof the product improved.
-Receipts expire within 36 days and totals within 396 days through the existing Mongo TTL indexes.
+The backend accepts a signed-in report for today and the two UTC days before it; an older one answers `EXPIRED`, adds
+nothing, and the CLI and Desktop count it as `health_<surface>_report_expired`. Receipts expire 4 days after the report
+day (36 until 2026-10-29) and totals within 396 days through the existing Mongo TTL indexes.
 No account deduplication markers or stable hashes enter these totals. People-based daily counts and
 D1/D2/D3/D7 returns come from one mark per sharing person per day under an HMAC pseudonym (no time,
 machine, agent, device, country or content), kept 10 days and then only as anonymous `people_*` totals;

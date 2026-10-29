@@ -560,6 +560,10 @@ model ProductUsageTotal {
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
+  /// Days the receipt lives past its report day (types/productUsageReceipt.ts). Required by the collection's rule once the
+  /// receipt sweep installs it (lib/productUsageReceiptSweep.ts): a server that writes receipts without it cannot count.
+  /// Absent on receipts written before 2026-10-29.
+  life      Int?
 
   @@map("product_usage_receipts")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
@@ -1674,6 +1678,9 @@ model ExperimentalSettings {
   agentMessagesHideSummary Boolean @default(false)
   /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
   agentsTellAgents     Boolean @default(false)
+  /// A program acting for the person (a lamp's lamp-tasks, not an agent) may give more work to an idle harness of
+  /// theirs in a pane (`harness reply`, cli/src/messages/replyLocal.ts, #1628). Off by default.
+  programsReply        Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])
