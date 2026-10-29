@@ -60,6 +60,12 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'project.report': case 'project.repository': case 'project.skills':
       leadCheck(command.projectId)
       break
+    case 'person.tell':
+      // The line reads that its person still reads the Lead's project: their own part guards it, as a revoke touches the
+      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
+      member(command.personId)
+      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
+      break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
       for (const person of before.people) {
@@ -177,13 +183,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'route.modelResult':
       group(context.routeDecision?.conversationId)
       break
-    case 'conversation.audience': {
-      // Rule (b): everyone the change removes sees it through their own part (design section 1.2).
-      const kept = new Set(effects.state.conversations.find(c => c.id === command.conversationId)?.audience?.people.map(p => p.id))
-      for (const person of before.conversations.find(c => c.id === command.conversationId)?.audience?.people ?? []) if (!kept.has(person.id)) member(person.id)
-      group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
-      break
-    }
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))
       break

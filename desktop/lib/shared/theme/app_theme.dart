@@ -1454,6 +1454,12 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// Between one sidebar row and the next (design system: Geometry).
+  static const double listRowGap = 2;
+
+  /// A count badge's text from its capsule's ends, as in Notifications' count.
+  static const double badgeInset = 5;
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;

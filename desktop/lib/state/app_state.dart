@@ -1488,7 +1488,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   final experimentalFeatures = ExperimentalFeaturesStore(
-    pollInterval: kUnderTest ? Duration.zero : const Duration(seconds: 30),
+    pollInterval: kUnderTest
+        ? Duration.zero
+        : ExperimentalFeaturesStore.safetyNet,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
@@ -4843,6 +4845,20 @@ class AppNotifier extends ChangeNotifier {
   }
 
   static const offlineRetryInterval = Duration(seconds: 5);
+
+  /// How long an offline machine of another computer waits between asks while an agent waits on it
+  /// ([_pollOfflineMachine]); the last repeats. Each ask is a whole machine-list read from the
+  /// backend, since nothing pushes a machine coming back to this window: every 5 s it was 12 reads
+  /// a minute for one sleeping computer, in every window (WebSocket roadmap, Phase 2 item 4). It
+  /// ends at the backend's own retry-after for an offline machine (`OFFLINE_RETRY_AFTER_MS`), and
+  /// Retry asks at once. This computer's own daemon keeps [offlineRetryInterval]: that probe
+  /// never reaches the backend.
+  static const remoteOfflineRetryDelays = <Duration>[
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 20),
+    Duration(seconds: 30),
+  ];
 
   /// Waits before each automatic reattach of a pane whose stream died while its machine stayed
   /// reachable; the last one repeats. A pane used to get one reopen and then sit on Reconnect until
@@ -9897,10 +9913,32 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_offlineRetryTimers.containsKey(machineId)) return;
+    if (!machine.isLocalMachine) {
+      _scheduleRemoteOfflinePoll(machineId, 0);
+      return;
+    }
     _offlineRetryTimers[machineId] = Timer.periodic(
       offlineRetryInterval,
       (_) => unawaited(_pollOfflineMachine(machineId)),
     );
+  }
+
+  /// The [attempt]th ask of [remoteOfflineRetryDelays], then the next once it answered, until
+  /// [_stopOfflineRetry] takes its timer away.
+  void _scheduleRemoteOfflinePoll(String machineId, int attempt) {
+    final delay = remoteOfflineRetryDelays[min(
+      attempt,
+      remoteOfflineRetryDelays.length - 1,
+    )];
+    late final Timer timer;
+    timer = Timer(delay, () async {
+      await _pollOfflineMachine(machineId);
+      if (_disposed || !identical(_offlineRetryTimers[machineId], timer)) {
+        return;
+      }
+      _scheduleRemoteOfflinePoll(machineId, attempt + 1);
+    });
+    _offlineRetryTimers[machineId] = timer;
   }
 
   void _stopOfflineRetry(String machineId) {
