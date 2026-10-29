@@ -1,5 +1,6 @@
 import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
+import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -86,7 +87,7 @@ const task = z.object({
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
-    ifMissing: z.literal(true).optional() }).strict(),
+    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
@@ -168,6 +169,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
+  z.object({ type: z.literal('member.username'), username: z.string().max(64).nullable() }).strict(),
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
@@ -443,7 +445,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
+  // So does choosing one's own username (usernames.ts).
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -540,11 +543,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const invite = state.invitations.find(i => i.id === command.inviteId)
     if (!invite || invite.email !== actor.email.trim().toLowerCase()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
     if (invite.expiresAt <= context.now) fail('EXPIRED', 'This invitation expired.', 410)
-    if (!state.people.some(p => p.id === actor.userId)) {
+    const existing = state.people.find(p => p.id === actor.userId)
+    if (!existing) {
       state.people.push({ id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     result.conversationId = invite.conversationId
+    // As a link join answers (store.ts joinSwarm): Desktop adds the accepting computer only when this made a member.
+    result.alreadyMember = !!existing
+    result.role = existing?.role ?? invite.role
     return effects
   }
   // The host of a removed agent may have left the Swarm with it: the machine owner the request names confirms the close.
@@ -581,7 +588,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -1086,6 +1093,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       // Saving settings sends the whole contribution again; only machine.pause changes its pause (review of #2084).
       const paused = mac?.paused ?? state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
+      // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
+      // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
+      const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -1093,7 +1103,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}) })
+        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
@@ -1794,6 +1804,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
       break
+    case 'member.username':
+      setUsername(state, actor, command.username)
+      break
     case 'agent.avatar':
       setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
       break
@@ -2180,6 +2193,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
   assignAgentDisplayNames(state.agents)
+  keepUsernames(original, state)
   // The size limit is per stored part now (parts/commit.ts PART_LIMIT_BYTES); a Swarm as a whole has none.
   // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.
   for (const draft of effects.messages) {

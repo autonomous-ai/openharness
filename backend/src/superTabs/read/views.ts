@@ -10,6 +10,7 @@ import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
 import { withAvatarView } from '../profile.js'
+import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
 export interface ReaderParts {
@@ -85,12 +86,15 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
-  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), buddy = isBuddyReader(state, actor)
+  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
+  const buddy = isBuddyReader(state, actor)
   return {
     state,
     parts: {
       head: envelope(parts.head, head),
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, withAvatarView(m.data!) as MemberView)),
+      // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
+      // member parts happen to load in.
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
       agents: visible.agents.map(a => envelope(agentPart(a.id), buddy ? agentWithoutMachine(agentView(state.agents.find(s => s.id === a.id)!))
         : agentView(state.agents.find(s => s.id === a.id)!))),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),

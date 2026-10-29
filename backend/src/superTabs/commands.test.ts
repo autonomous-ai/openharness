@@ -385,6 +385,22 @@ describe('Super Tab collaboration policy', () => {
     expect(() => visibleState(f.state, peer)).toThrow('no longer have access')
   })
 
+  // Review of #2188: Desktop adds the accepting computer to the Swarm only when the accept made the person a member. One
+  // who joined by link on another computer while this invitation waited is a member already, and says so.
+  it('says whether the accept made the person a member, and as what', () => {
+    const f = fixture()
+    const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
+    expect(f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer).result)
+      .toEqual({ conversationId: 'lead', alreadyMember: false, role: 'collaborator' })
+    const again = f.run({ type: 'invite.create', email: 'late@example.com', role: 'collaborator', conversationId: 'lead' })
+    const late = { kind: 'person' as const, userId: 'late', email: 'late@example.com' }
+    // Joined by link elsewhere first, as a viewer: the invitation it still had changes nothing.
+    f.state.people.push({ id: 'late', email: 'late@example.com', role: 'viewer', generation: 'link' })
+    expect(f.run({ type: 'invite.accept', inviteId: again.result.inviteId as string }, late).result)
+      .toEqual({ conversationId: 'lead', alreadyMember: true, role: 'viewer' })
+    expect(f.state.people.filter(p => p.id === 'late')).toHaveLength(1)
+  })
+
   it('requires the addressed account to accept an unexpired invitation and keeps other invitations private', () => {
     const f = fixture()
     const invited = f.run({ type: 'invite.create', email: 'PEER@example.com', role: 'collaborator', conversationId: 'lead' })
@@ -2904,17 +2920,17 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('refuses a person, a non-Lead agent and another project’s Lead', () => {
+  it('refuses a non-Lead agent, another project’s Lead and any tag in the Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
-    expect(() => f.run(send(group, ['peer']))).toThrow('Only a project’s Lead can tag people.')
+    expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     expect(() => f.run(send(group, ['peer']), as(worker))).toThrow('Only a project’s Lead can tag people.')
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('A Lead can tag people only in its own project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('Nobody is tagged in the Leads conversation.')
   })
 
   it('refuses a person who cannot read the conversation or is not in the Swarm', () => {
     const { f, secret } = swarm()
-    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer@example.com cannot read this conversation.')
+    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer cannot read this conversation.')
     expect(() => f.run(send(secret.conversationId, ['stranger']), as(secret.lead))).toThrow('Tag a person in this Swarm.')
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
