@@ -2093,6 +2093,21 @@ static void swarm_buddy_checks(const char *dir) {
     drag_v(330, 150);
     assert(down_reports == 1 && moves > 0 && ups == 1 && travel != 0);
     assert(!swarm_sent && pm_dots() && !lilac_ring());
+    // A tap while that fling coasts on the desktop stops it there (review of #2232: the tap was swallowed and the chat
+    // kept scrolling).
+    { int before = down_reports; habitat_touch(true, 233, 260, fake_ms + 700); habitat_touch(false, 233, 260, fake_ms + 760);
+      assert(down_reports == before + 1); }
+    // A thumb that rests before it flicks still switches the side: the drag's time runs from when it starts to move.
+    buddy_setup(); down_reports = moves = ups = 0;
+    fake_ms += 1000; habitat_touch(true, 233, 330, fake_ms); habitat_touch(true, 233, 330, fake_ms + 400);
+    habitat_touch(true, 233, 240, fake_ms + 450); habitat_touch(false, 233, 150, fake_ms + 500); scene_take();
+    assert(!moves && swarm_sent == 1 && !strcmp(swarm_wire[0], "side s1 buddy") && lilac_ring());
+    // A daemon that came back has forgotten the Lead open here (the dial's link dropped, as ui_set_connected(false)
+    // leaves it): the next frame tells it again, so a drag scrolls its Swarm and recaps reach the face (review of #2232).
+    buddy_setup(); sw.opened = false;
+    buddy_card("lead");
+    assert(wire_has(0, "open s1 B0") && wire_has(0, "recap.get s1 B0"));
+    { int n = swarm_sent; buddy_card("lead"); assert(swarm_sent == n); }
     buddy_setup();
     // The PM chat's recap is on the face.
     ui_supertab_recap("s1", "B0", "lead-web", "Merged.", 1792560000u, false); scene_take(); assert(scene_says("Merged."));

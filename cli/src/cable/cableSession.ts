@@ -187,6 +187,8 @@ function chatLead(l: SwarmLead, chat = l.chat): Record<string, unknown> {
 function buddyLead(l: SwarmLead): Record<string, unknown> {
   return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: { ...l.buddy } } : {}) }
 }
+/** A Swarm agent's id as the backend makes it; a harness's id is a UUID, so the two never meet. */
+const SWARM_AGENT_ID = /^[0-9a-f]{24}$/
 /** The byte cuts a name is shortened through, on a character, when a frame would not fit. */
 const NAME_CUTS = [24, 12, 6, 3, 1, 0]
 /**
@@ -1730,13 +1732,16 @@ export class CableSession {
         // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
         const dialFace = plain ? this.swarmFaceOf(str('agentId')!) : undefined
-        const focused = plain && !dialFace ? this.host.appFocus?.() : undefined
+        // A Swarm Lead's id (the backend's 24 hex; a harness's is a UUID) with no card here yet (the devices process just
+        // restarted) or any more: words for a Lead on another machine, which the focused pane must not take (review of #2232).
+        const swarmId = plain && !dialFace && SWARM_AGENT_ID.test(str('agentId')!)
+        const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
         const swarmFace = dialFace ?? (agentId ? this.swarmFaceOf(agentId) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
-          ...(swarmFace && agentId && !this.swarmLeadHere(agentId) ? { swarmRemote: true } : {}),
+          ...((swarmFace && agentId && !this.swarmLeadHere(agentId)) || swarmId ? { swarmRemote: true } : {}),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
           // The DIAL's rate, never this side's guess. Describing 8 kHz audio as 16 kHz does not make the

@@ -322,6 +322,8 @@ int main(void) {
     assert(s.voice_retry_until==1); now=1; habitat_tick(); assert(!s.voice_retry_until);
     begin(); done(); finish_audio(); ui_voice_error("Didn't catch that");
     ui_set_connected(false); assert(!s.voice_retry_until);
+    // The daemon a link drops forgets the Swarm Lead open here: the next one is told again (test_touch_ui.py).
+    sw.opened = true; ui_set_connected(false); assert(!sw.opened);
 
     reset(); begin(); now = 601000; habitat_tick();
     assert(stops == 1 && s.voice_waiting);

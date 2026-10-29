@@ -614,6 +614,11 @@ static EXT_RAM_BSS_ATTR struct {
     // The voice turn on the face was started on the Buddy side: its ring and "Sending to your Buddy", pinned at the start as
     // its chat and engine are, so a side change while it records or sends never says another chat (batch check, #2207).
     bool voice_buddy;
+    // When the finger began its vertical drag on a Swarm's face (0: not yet): a drag that outlasts a flick scrolls.
+    uint32_t drag_at;
+    // The daemon was told the Lead on the face (supertab.open) on this link: one that came back is told again, or a drag
+    // scrolled the focused pane and no recap came (review of #2232).
+    bool opened;
 } sw;
 static bool swarm_mode(void)
 {
@@ -738,13 +743,14 @@ static void swarm_show(const ht_supertab_t *t, int i, bool select)
     swarm_buddy_seen();
     swarm_send(SUPERTAB_OPEN, t->id, sw.lead);
     swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
+    sw.opened = true;
     change();
 }
 static void swarm_leave(void)
 {
     if (!swarm_mode()) return;
     swarm_send(SUPERTAB_OPEN, sw.tab, "");
-    sw.tab[0] = sw.lead[0] = sw.desk[0] = 0; sw.at = 0;
+    sw.tab[0] = sw.lead[0] = sw.desk[0] = 0; sw.at = 0; sw.opened = false;
     ht_supertabs_recap_open(&swarm, "", "", ms());
     change();
 }
@@ -1495,7 +1501,7 @@ static void render_swarm_face(ht_scene_t *f)
             for (int i = 0; i < f->count; i++) {
                 const ht_run_t *r = &f->runs[i];
                 int top = r->y;
-                if (r->box.h && r->w >= 300) top = r->y;
+                if (r->box.h && r->w >= 300) {}
                 else if (r->text[0] && !r->arc && r->y >= 90 && r->y <= 380) {
                     ht_rect_t b = ht_run_bounds(r);
                     if (b.x >= 279 || b.x + b.w <= 187) continue;
@@ -3488,8 +3494,8 @@ static void worker(void *unused)
     }
 }
 // A Swarm's face, with its Lead open on the daemon: what a drag there scrolls is that Swarm's chat on the desktop (Diego's
-// dial, 2026-10-29: scrolling the recap did not scroll the chat). Only once the contact has been down 250 ms: a flick is
-// shorter, and stays the side's.
+// dial, 2026-10-29: scrolling the recap did not scroll the chat). Only once the drag has moved for 250 ms: a flick is
+// shorter, and stays the side's, after any rest before it (review of #2232).
 static bool swarm_scroll_reportable(uint32_t held)
 {
     return held >= 250 && s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && swarm_mode() &&
@@ -3518,6 +3524,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         sw.auto_tabs = false; sw.lost.tab[0] = 0;   // the person's TABS from here on, and no Swarm comes back over it
         s.touch_cancelled = false;
         s.touch_brake = s.coasting && (int32_t)(now - s.coast_until) < 0;
+        sw.drag_at = 0;
         s.coasting = false;
         ht_scroll_cancel(&scroll);
         scroll = (ht_scroll_t){0};
@@ -3559,6 +3566,10 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                     ht_scroll_cancel(&scroll);
                 }
             } else ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
+        } else if (s.touch_brake && surface && swarm_scroll_reportable(250)) {
+            // A touch stops a Swarm chat's fling on the desktop, as it does a terminal's.
+            ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
+            ht_scroll_cancel(&scroll);
         }
     } else if (down && !s.touch_cancelled) {
         ht_gesture_move(&gesture, x, y);
@@ -3587,7 +3598,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else {
             // A Swarm's face scrolls the Swarm chat the desktop has open (the daemon names its tab), once a vertical drag
             // has outlasted a flick: a quick flick up or down is still the side's (swarm_side_swipe) and sends nothing.
-            if (!scroll.live && surface && gesture.axis == 1 && swarm_scroll_reportable(now - s.touch_started))
+            if (gesture.axis == 1 && !sw.drag_at) sw.drag_at = now | 1;   // | 1: 0 is "not yet", so it may be now + 1
+            uint32_t dragged = sw.drag_at && (int32_t)(now - sw.drag_at) > 0 ? now - sw.drag_at : 0;
+            if (!scroll.live && surface && gesture.axis == 1 && swarm_scroll_reportable(dragged))
                 ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
             ht_scroll_move(&scroll, x, y, now);
         }
@@ -4151,6 +4164,7 @@ void ui_set_connected(bool value)
 {
     display_lock();
     if (!value) {
+        sw.opened = false;
         desktop_companion = HT_CHARACTER_COUNT;
         desktop_identity=(ui_companion_t){.colour=-1}; companion_celebrating=false;
         select_companion();
@@ -5263,6 +5277,13 @@ bool ui_supertab(const ht_supertab_t *in)
         int i = swarm_lead_index(t, sw.lead);
         if (i >= 0) {
             sw.at = i;
+            if (!sw.opened) {
+                sw.retried = false;
+                ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
+                swarm_send(SUPERTAB_OPEN, t->id, sw.lead);
+                swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
+                sw.opened = true;
+            } else
             // The face's chat moved (a side the daemon took, the desktop) and what is held is another chat's: asked for
             // again. That chat's recap can come before this frame, and is refused as another chat's (a card is held 300 ms,
             // a recap is not): the Buddy side showed no last message (Diego's dial, 2026-10-29).

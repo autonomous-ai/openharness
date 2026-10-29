@@ -4879,6 +4879,23 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // Review of #2232: a dial still on a remote Lead's face names its Swarm id to a daemon whose cards are not read yet (the
+    // devices process just restarted) or no longer hold it. The window's focused pane must not take the words.
+    it('a Swarm id with no card here is an error, never the focused pane\'s turn', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))
+      const host = cardHost({ cards: [] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay,
+        appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY); await settle()
+        port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+        expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
+        expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
     it('words for a Lead on another machine that the Swarm cannot take are an error, never a terminal turn', async () => {
       const chat = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
       for (const swarmSay of [vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') }), vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))]) {
