@@ -17,7 +17,10 @@ typedef SuperTabPullRequestRead = Future<Map<String, dynamic>> Function(
 /// Every watched pull request is read again [every], merged and closed ones
 /// too: a sign-out or another GitHub account must not leave their private
 /// titles behind. This computer's reader answers a final state from its own
-/// cache, kept per GitHub account (cli lib/pullRequestsStatus.ts).
+/// cache, kept per GitHub account (cli lib/pullRequestsStatus.ts). Each
+/// answer names the account it was read as: a change forgets every fact
+/// before the answer is taken, failed reads included, and an answer that
+/// cannot say shows nothing private.
 class SuperTabPullRequestFacts extends ChangeNotifier {
   SuperTabPullRequestFacts(this._read);
 
@@ -28,6 +31,9 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
   final SuperTabPullRequestRead? _read;
   final _entries = <String, SuperTabPullRequestEntry>{};
   final _watchers = <String, int>{};
+
+  /// The account [_entries] were read as; null when none can be told.
+  String? _account;
   Timer? _timer;
   bool _reading = false, _disposed = false;
 
@@ -78,6 +84,7 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
       for (var i = 0; i < urls.length; i += _batch) {
         final answer = await read(urls.skip(i).take(_batch).toList());
         if (_disposed) return;
+        if (!_readAs(answer['account'])) break;
         if (_signedOut.contains(answer['error'])) {
           // Another account's private titles never stay under a changed login.
           _entries.clear();
@@ -86,13 +93,23 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
         _take(answer['rows'], urls);
       }
     } catch (_) {
-      // An unreachable computer keeps what it read last.
+      // Which account an unreachable computer reads as is unknown.
+      _readAs(null);
     } finally {
       _reading = false;
     }
     if (_disposed) return;
     _schedule();
     notifyListeners();
+  }
+
+  /// Whether [account] is the one the facts were read as. Another account,
+  /// or none to tell, forgets them all first.
+  bool _readAs(Object? account) {
+    if (account is String && account == _account) return true;
+    _entries.clear();
+    _account = account is String ? account : null;
+    return _account != null;
   }
 
   void _take(Object? rows, List<String> asked) {

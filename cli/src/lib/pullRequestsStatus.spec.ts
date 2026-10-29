@@ -11,7 +11,7 @@ const runner = (over = {}) => vi.fn<Run>(async () => ({ stdout: JSON.stringify(v
 describe('linked pull requests read directly from GitHub', () => {
   it('reads by URL and retains title, change counts, times and merge/review inputs', async () => {
     const run = runner(), read = createPullRequestsStatusReader(run, () => 0)
-    expect(await read([url()])).toEqual({ checkedAt: '1970-01-01T00:00:00.000Z', rows: [{
+    expect(await read([url()])).toEqual({ checkedAt: '1970-01-01T00:00:00.000Z', account: expect.stringMatching(/^[0-9a-f]{16}$/), rows: [{
       url: url(), status: 'found', title: 'Fix reconnect', state: 'Open', mergedAt: '', closedAt: '',
       updatedAt: '2026-10-22T07:00:00Z', additions: 32, deletions: 6, ci: 'passing',
       checks: { passed: 1, failed: 0, pending: 0, total: 1 }, reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', autoMerge: false,
@@ -146,6 +146,26 @@ describe('linked pull requests read directly from GitHub', () => {
     expect((await read([url()])).rows[0]).toEqual({ url: url(), status: 'no_access' })
     account = null; answer = 'signed-out'
     expect(await read([url()])).toMatchObject({ error: 'GH_SIGNED_OUT', rows: [{ status: 'unavailable' }] })
+  })
+  it('names the account every answer was read as, so a switch shows even when the reads then fail', async () => {
+    let account: string | null = 'ada', fail = false
+    const run = vi.fn<Run>(async () => {
+      if (fail) throw { killed: true }
+      return { stdout: JSON.stringify(view({ title: 'Private fix' })) }
+    })
+    const read = createPullRequestsStatusReader(run, () => 0, async () => account)
+    const ada = await read([url()])
+    expect(ada.account).toMatch(/^[0-9a-f]{16}$/)
+    expect((await read([url()])).account).toBe(ada.account)
+    account = 'grace'; fail = true
+    const grace = await read([url()])
+    expect(grace).toMatchObject({ error: 'TIMEOUT', rows: [{ status: 'unavailable' }] })
+    expect(grace.account).toMatch(/^[0-9a-f]{16}$/)
+    expect(grace.account).not.toBe(ada.account)
+    account = null
+    const none = await read([url()])
+    expect([none.account, none.account === grace.account]).toEqual([expect.stringMatching(/^[0-9a-f]{16}$/), false])
+    expect(none.account).not.toContain('ada')
   })
   it('reads the account as a hash of the token gh holds, and none without one', async () => {
     const tokens = vi.fn<Run>(async () => ({ stdout: 'gho_secret\n' }))

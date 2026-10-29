@@ -1,5 +1,5 @@
 /** Read linked PRs as this computer's own GitHub account, independent of running agents or checked-out branches. */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { ciCounts, ciOf, ghError, ghRun, MERGE_STATES, pooled, type CiCounts, type Run } from './github.js'
 import { validPullRequestUrl } from './sessionWorkWire.js'
 import { cleanText } from './cleanText.js'
@@ -15,7 +15,9 @@ export interface PullRequestRow {
   reviewDecision?: string; mergeStateStatus?: string; autoMerge?: boolean
   error?: string
 }
-export interface PullRequestsResult extends Record<string, unknown> { rows: PullRequestRow[]; checkedAt: string; error?: string; detail?: string }
+/** `account`: which GitHub account the answer was read as, failed reads included, so a reader forgets another account's
+ *  answers before taking this one's. Opaque: a hash under this reader's own random salt, never the token. */
+export interface PullRequestsResult extends Record<string, unknown> { rows: PullRequestRow[]; checkedAt: string; account?: string; error?: string; detail?: string }
 
 const FIELDS = 'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'
 const text = (value: unknown, max = 40): string => cleanText(value, max)
@@ -37,6 +39,8 @@ export function createPullRequestsStatusReader(run: Run = ghRun, now: () => numb
   // The account the cache was read as. Its answers, final ones too, are that account's: a private title must not outlive a
   // sign-out or a switch to another account.
   let readAs: string | null | undefined
+  const salt = randomBytes(16).toString('hex')
+  const named = (id: string | null) => createHash('sha256').update(`${salt}:${id ?? 'signed-out'}`).digest('hex').slice(0, 16)
   // Several panes can ask together. Their distinct URLs still share four subprocess slots.
   let active = 0
   const waiting: (() => void)[] = []
@@ -93,6 +97,6 @@ export function createPullRequestsStatusReader(run: Run = ghRun, now: () => numb
     await pooled(unique, 4, async url => { rows.set(url, await read(url)) })
     const ordered = unique.map(url => rows.get(url)!)
     const error = ['GH_MISSING', 'GH_SIGNED_OUT', 'RATE_LIMITED', 'TIMEOUT', 'GH_FAILED'].find(code => ordered.some(row => row.error === code))
-    return { rows: ordered, checkedAt: new Date(now()).toISOString(), ...(error ? { error } : {}) }
+    return { rows: ordered, checkedAt: new Date(now()).toISOString(), account: named(current), ...(error ? { error } : {}) }
   }
 }

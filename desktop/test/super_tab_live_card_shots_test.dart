@@ -55,6 +55,7 @@ ConversationServer server() {
 
 SuperTabPullRequestFacts github() => SuperTabPullRequestFacts(
   (_) async => {
+    'account': 'ada',
     'rows': [
       found(pr, passed: 8, pending: 4),
       {...found(other, state: 'Merged'), 'title': 'Avatars on the phone'},

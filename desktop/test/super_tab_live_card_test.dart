@@ -107,7 +107,7 @@ SuperTabPullRequestFacts reading(
   void Function(List<String>)? onRead,
 }) => SuperTabPullRequestFacts((urls) async {
   onRead?.call(urls);
-  return {'rows': answer()};
+  return {'account': 'ada', 'rows': answer()};
 });
 
 void main() {
@@ -202,17 +202,19 @@ void main() {
     'a sign-out or another GitHub account clears a card, even one whose PRs are all merged',
     (tester) async {
       Map<String, dynamic> answer = {
+        'account': 'ada',
         'rows': [found(pr, state: 'Merged')],
       };
       final facts = SuperTabPullRequestFacts((_) async => answer);
       addTearDown(facts.dispose);
       await show(tester, cardServer(), facts, 'message-2');
       expect(find.text('Round avatars'), findsOneWidget);
-      answer = {'error': 'GH_SIGNED_OUT'};
+      answer = {'account': 'none', 'error': 'GH_SIGNED_OUT'};
       await tester.pump(SuperTabPullRequestFacts.every);
       await tester.pump();
       expect(find.text('Round avatars'), findsNothing);
       answer = {
+        'account': 'ada',
         'rows': [found(pr, state: 'Merged')],
       };
       await tester.pump(SuperTabPullRequestFacts.every);
@@ -220,6 +222,7 @@ void main() {
       expect(find.text('Round avatars'), findsOneWidget);
       // Another account, which cannot read that repository.
       answer = {
+        'account': 'grace',
         'rows': [
           {'url': pr, 'status': 'no_access'},
         ],
@@ -232,16 +235,61 @@ void main() {
   );
 
   testWidgets(
+    'a switch to another GitHub account clears a card at once, even while its reads fail',
+    (tester) async {
+      Map<String, dynamic> answer = {
+        'account': 'ada',
+        'rows': [found(pr)],
+      };
+      final facts = SuperTabPullRequestFacts((_) async => answer);
+      addTearDown(facts.dispose);
+      await show(tester, cardServer(), facts, 'message-2');
+      expect(find.text('Round avatars'), findsOneWidget);
+      expect(find.text('12 checks passed'), findsOneWidget);
+      for (final error in ['TIMEOUT', 'RATE_LIMITED']) {
+        answer = {
+          'account': 'grace-$error',
+          'error': error,
+          'rows': [
+            {'url': pr, 'status': 'unavailable', 'error': error},
+          ],
+        };
+        await tester.pump(SuperTabPullRequestFacts.every);
+        await tester.pump();
+        expect(find.text('Round avatars'), findsNothing, reason: error);
+        expect(find.text('12 checks passed'), findsNothing, reason: error);
+        expect(find.text('app · PR #7'), findsOneWidget, reason: error);
+      }
+    },
+  );
+
+  testWidgets('an answer that names no account shows no private details', (
+    tester,
+  ) async {
+    final facts = SuperTabPullRequestFacts(
+      (_) async => {
+        'rows': [found(pr)],
+      },
+    );
+    addTearDown(facts.dispose);
+    await show(tester, cardServer(), facts, 'message-2');
+    expect(find.text('Round avatars'), findsNothing);
+    expect(find.textContaining('check'), findsNothing);
+    expect(find.text('app · PR #7'), findsOneWidget);
+  });
+
+  testWidgets(
     'a merge the Swarm recorded wins over an open read, even while GitHub fails',
     (tester) async {
       Map<String, dynamic> answer = {
+        'account': 'ada',
         'rows': [found(pr, passed: 3, pending: 9)],
       };
       final facts = SuperTabPullRequestFacts((_) async => answer);
       addTearDown(facts.dispose);
       await show(tester, cardServer(), facts, 'message-2');
       expect(find.text('Open'), findsOneWidget);
-      answer = {'error': 'RATE_LIMITED'};
+      answer = {'account': 'ada', 'error': 'RATE_LIMITED'};
       final c = cardServer(mergedAt: 5).controller();
       addTearDown(c.dispose);
       await c.refresh();
