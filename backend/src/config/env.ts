@@ -42,6 +42,11 @@ const envSchema = z.object({
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
+  // On: a per-user web-ws socket that says it is a daemon's relay, a link or a group sync (`?client=`) starts the
+  // account's feeds (machine and device statuses, the machine-list, desk/zoo and E2EE-pair channels) only when it asks
+  // for them, lib/webWs.ts. Off (the default): every socket starts them as it connects, as before.
+  WEB_WS_LAZY_FEEDS: z.enum(['on', 'off']).default('off'),
+
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
   BACKEND_INSTANCE_ID: z.string().default(''),

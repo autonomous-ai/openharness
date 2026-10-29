@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentTokenUsageCache } from './agentTokenUsage.js'
+import { validUsage } from './agentUsageWire.js'
 import type { RegisteredSession } from './registry.js'
 
 const at = '2026-09-22T16:00:00Z'
@@ -353,4 +354,74 @@ it('exports normalized input, output and cached input without double-counting', 
     store.get(target); await store.settled()
     expect(store.get(target)).toMatchObject({ totalTokens: 420, inputTokens: 380, outputTokens: 40, cachedTokens: 160 })
   } finally { store.dispose(); await store.settled(); await rm(dir, { recursive: true, force: true }) }
+})
+
+describe('token counts by model (Swarm cost records)', () => {
+  let dir: string
+  let store: AgentTokenUsageCache
+  let target: Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'transcriptPath' | 'registeredAt'>
+  const read = async () => { store.changed(target); await store.settled(); return store.get(target) }
+  const reply = (id: string, model: string | undefined, usage: Record<string, number>) => JSON.stringify({ type: 'assistant', timestamp: at,
+    sessionId: 'conversation', requestId: `req-${id}`, message: { id, ...(model ? { model } : {}), usage } }) + '\n'
+  const settings = (model: string) => JSON.stringify({ type: 'turn_context', timestamp: at, payload: { model, effort: 'high' } }) + '\n'
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'harness-token-models-'))
+    target = { agentId: 'harness', sessionId: 'conversation', engine: 'claude', transcriptPath: join(dir, 'transcript.jsonl'), registeredAt: 1 }
+    store = new AgentTokenUsageCache(join(dir, 'cache'))
+  })
+  afterEach(async () => { store.dispose(); await store.settled(); await rm(dir, { recursive: true, force: true }) })
+
+  it('splits Claude usage by the model that answered, merging streaming repeats once', async () => {
+    await writeFile(target.transcriptPath!,
+      reply('one', 'claude-opus-5-5', { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 })
+      + reply('one', 'claude-opus-5-5', { input_tokens: 10, output_tokens: 7, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 })
+      + reply('two', 'claude-haiku-5-5', { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+      + reply('three', undefined, { input_tokens: 1, output_tokens: 1 }))
+    expect((await read())?.models).toEqual({
+      'claude-opus-5-5': { input: 10, output: 7, cacheRead: 100, cacheWrite: 20 },
+      'claude-haiku-5-5': { input: 3, output: 2, cacheRead: 0, cacheWrite: 0 },
+      unknown: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    })
+  })
+
+  it('files Codex deltas under the model its turn settings name, with cache reads out of input', async () => {
+    target.engine = 'codex'
+    await writeFile(target.transcriptPath!, settings('gpt-5.5-codex') + codex(100, 20) + settings('gpt-5.4-mini') + codex(200, 50, [100, 30]))
+    // codex(): cached input is half of input, and reasoning is already inside output.
+    expect((await read())?.models).toEqual({
+      'gpt-5.5-codex': { input: 50, output: 20, cacheRead: 50, cacheWrite: 0 },
+      'gpt-5.4-mini': { input: 50, output: 30, cacheRead: 50, cacheWrite: 0 },
+    })
+  })
+
+  it('files models past the limit together under one reserved bucket, so the reading stays valid however many a session names', async () => {
+    const one = { input_tokens: 1, output_tokens: 1 }
+    await writeFile(target.transcriptPath!, Array.from({ length: 20 }, (_, i) => reply(`m${i}`, `model-${i}`, one)).join('')
+      + reply('late', 'model-3', one) + reply('odd', 'two words', one))
+    const usage = await read()
+    expect(Object.keys(usage!.models!)).toHaveLength(16)
+    expect(usage!.models!['model-3']).toEqual({ input: 2, output: 2, cacheRead: 0, cacheWrite: 0 })
+    // model-15 to model-19 and the unnamed one: six replies past the fifteen named models.
+    expect(usage!.models!.other).toEqual({ input: 6, output: 6, cacheRead: 0, cacheWrite: 0 })
+    expect(validUsage(usage)).toBe(true)
+  })
+
+  it('keeps a model name that is not a plain identifier out of the counts', async () => {
+    await writeFile(target.transcriptPath!, reply('one', 'evil model\nname', { input_tokens: 4, output_tokens: 1 }))
+    expect(Object.keys((await read())?.models ?? {})).toEqual(['unknown'])
+  })
+
+  it('replays a checkpoint from before model counts once', async () => {
+    await writeFile(target.transcriptPath!, reply('one', 'claude-opus-5-5', { input_tokens: 10, output_tokens: 5 }))
+    await read()
+    const file = join(dir, 'cache', (await readdir(join(dir, 'cache')))[0])
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    const { models: _models, codexModel: _codexModel, ...before } = { ...saved, version: 5 }
+    await writeFile(file, JSON.stringify(before))
+    store.dispose()
+    store = new AgentTokenUsageCache(join(dir, 'cache'))
+    const usage = await read()
+    expect(usage?.totalTokens).toBe(15)
+    expect(usage?.models).toEqual({ 'claude-opus-5-5': { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 } })
+  })
 })

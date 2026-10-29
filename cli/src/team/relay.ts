@@ -25,7 +25,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { recordAcceptanceIn } from '../engines/kit/folderTrust.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { engineAccount } from '../lib/engineAccount.js'
-import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, codexRelayAuth, codexRelaySignInArgs, isCodexRelayAuth, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, isCodexRelayAuth, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 
 /** The owner's folder for the hand-off, per owner so two people's Macs never share one. */
@@ -219,9 +219,8 @@ export interface TeamRelayLaunchDeps {
   /** Claude Code that never ran in the team account opens on its first-run screens, which nobody is there to answer:
    *  recorded as done, in the team account's own home, before the first launch on the relay. */
   onboarded(engine: 'claude' | 'codex'): void
-  /** Codex's sign-in for the relay (lib/subscriptionRelay.ts codexRelayAuth), in the team account's own Codex home;
-   *  false when it could not be written. */
-  codexSignIn(token: string): boolean
+  /** Codex's home made ready for the relay before each launch ([prepareCodexHome]). Never throws. */
+  codexHome(grant: TeamRelayGrant): Promise<void>
 }
 
 /** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. */
@@ -235,24 +234,58 @@ export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunch
   if (!grant) return null
   try { deps.onboarded(engine) } catch { /* The engine asks on its screen, as it would have. */ }
   if (engine === 'claude') return { env: claudeRelayEnv(grant.url, grant.token), args: [] }
-  // As a ChatGPT sign-in, so Codex has the owner's models (codexRelaySignInArgs); as an API key, as before, when the
-  // sign-in could not be written.
-  let signIn = false
-  try { signIn = deps.codexSignIn(grant.token) } catch { signIn = false }
-  return { env: codexRelayEnv(grant.token), args: signIn ? codexRelaySignInArgs(grant.url) : codexRelayArgs(grant.url) }
+  await deps.codexHome(grant).catch(() => {})
+  return { env: codexRelayEnv(grant.token), args: codexRelayArgs(grant.url) }
 }
 
-/** Writes the relay's sign-in to [dir]/auth.json, unless a sign-in of the account's own is there. Private to the account. */
-export function writeCodexRelaySignIn(dir: string, token: string, now: number): boolean {
-  const file = join(dir, 'auth.json')
-  let existing: unknown = null
-  try { existing = JSON.parse(readFileSync(file, 'utf8')) } catch { existing = null }
-  if (existing && !isCodexRelayAuth(existing)) return false
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const next = `${file}.harness-relay-${process.pid}`
-  writeFileSync(next, codexRelayAuth(token, now), { mode: 0o600 })
-  renameSync(next, file)
-  return true
+/** The Codex version a model list is asked for when the account's own Codex cannot be read. */
+export const CODEX_CLIENT_VERSION_FALLBACK = '0.163.0'
+
+export interface CodexHomeDeps {
+  fetch: typeof fetch
+  /** The account's own Codex version (the npm package it installed), or null. */
+  version(): string | null
+  now(): number
+}
+
+/**
+ * The team account's Codex home made ready for the owner's relay, before each Codex launch.
+ *
+ * Codex reaches the relay as an API-key provider, and so never reads the account's model list: its /model picker offered
+ * only its built-in models, the model a Swarm start asked for (gpt-6.1-sol) could not be chosen, and the agent stayed on
+ * gpt-5.5, which ChatGPT does not offer the owner's account ("The 'gpt-5.5' model is not supported when using Codex with
+ * a ChatGPT account": every Codex start in a Harness Team account, 2026-10-29). Codex does read a `models_cache.json` in
+ * its home whatever the provider, so the owner's list is fetched through the relay and kept there: Codex then starts on
+ * the owner's default and its picker offers the owner's models. A list that cannot be fetched leaves the one before.
+ *
+ * CLI 0.5.1 instead signed Codex in to ChatGPT through the relay, which `codex exec` takes but Codex's own screen does not:
+ * it checks the workspace with ChatGPT before it opens and exited ("account/read failed during TUI bootstrap"). Its
+ * sign-in is removed here, so a team account it reached starts Codex again.
+ */
+export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps: CodexHomeDeps): Promise<void> {
+  const auth = join(dir, 'auth.json')
+  try { if (isCodexRelayAuth(JSON.parse(readFileSync(auth, 'utf8')))) rmSync(auth, { force: true }) } catch { /* none, or the account's own */ }
+  const version = deps.version() ?? CODEX_CLIENT_VERSION_FALLBACK
+  try {
+    const answer = await deps.fetch(`${grant.url.replace(/\/$/, '')}/codex/models?client_version=${encodeURIComponent(version)}`, {
+      headers: { authorization: `Bearer ${grant.token}`, accept: 'application/json' }, signal: AbortSignal.timeout(10_000),
+    })
+    if (!answer.ok) return
+    const models = ((await answer.json()) as { models?: unknown }).models
+    if (!Array.isArray(models) || !models.length) return
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const file = join(dir, 'models_cache.json'), next = `${file}.harness-${process.pid}`
+    writeFileSync(next, JSON.stringify({ fetched_at: new Date(deps.now()).toISOString(), client_version: version, models }), { mode: 0o600 })
+    renameSync(next, file)
+  } catch { /* The relay or ChatGPT did not answer: Codex keeps the list it had. */ }
+}
+
+/** The version of the Codex the team account installed for itself (team/script.ts TEAM_ENGINES_INSTALL, in ~/.local). */
+export function installedCodexVersion(home: string): string | null {
+  try {
+    const version = (JSON.parse(readFileSync(join(home, '.local', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), 'utf8')) as { version?: unknown }).version
+    return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version) ? version : null
+  } catch { return null }
 }
 
 /** The team daemon's own: its sign-in, the root-owned config, its engines' sign-ins in its own home. */
@@ -263,7 +296,8 @@ export const realTeamRelayLaunch = (engine: AgentEngine) => teamRelayLaunch(engi
   signedIn: async (e) => (await engineAccount(e, { home: homedir(), env: process.env, lastUsed: false })).signedIn === true,
   read: (config) => readTeamRelay(config),
   onboarded: (e) => { if (e === 'claude') recordAcceptanceIn(join(homedir(), '.claude.json'), 'hasCompletedOnboarding') },
-  codexSignIn: (token) => writeCodexRelaySignIn(process.env.CODEX_HOME || join(homedir(), '.codex'), token, Date.now()),
+  codexHome: (grant) => prepareCodexHome(process.env.CODEX_HOME || join(homedir(), '.codex'), grant,
+    { fetch, version: () => installedCodexVersion(homedir()), now: Date.now }),
 })
 
 /** In the team daemon: whether the owner's relay is there for its engines (superTabs/machines.ts readiness). */

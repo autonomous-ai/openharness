@@ -65,6 +65,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
 - Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
+- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac's own account and its Team account are different: the Team account has none of the owner's tools, devices or sign-ins. If none has it, tag the requester with the choice.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -107,7 +108,8 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Say in the group that you took it and what you will do first; mark it working.
 - Read the whole brief: why, wanted, owned code, hand back, checks, most likely wrong, needs.
 - Read how the code behaves today before changing it.
-- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don't depend on it.
+- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
+- If the brief needs a person, check they are available; if not, post a "Needs:" line and do the parts that don't depend on it.
 - Harness already created your worktree; work there.
 
 ## 2. Do the work
@@ -123,6 +125,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - A person's decision: mark needs-human with one short question.
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
 - Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
+- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.
 - Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
 
 ## 4. Hand off
@@ -162,7 +165,7 @@ You give an independent verdict on one revision. Work otherwise the way you norm
 4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. When
-Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead.
+Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead. In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task.
 
 ## 2. What to look for
 - Wrong behaviour, missed cases, and what the brief asked for but is missing.

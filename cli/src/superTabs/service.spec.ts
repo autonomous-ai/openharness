@@ -1107,3 +1107,34 @@ describe('mentions on a post', () => {
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
   })
 })
+
+// Review of #2106: an attempt ends with every token its session used, read as it finishes, not the last machine report's.
+describe('finishing your own work', () => {
+  const opus = { 'claude-opus-5-5': { input: 7000, output: 1200, cacheRead: 0, cacheWrite: 0 } }
+  const status = (status: string) => ({ type: 'work.status', conversationId: 'g1', assignmentId: 'a1', status, result: 'Shipped.' })
+  const posts = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(c => c[0] === 'POST' && c[1] === '/api/super-tabs/tab/commands').map(c => (c[2] as { command: Record<string, unknown> }).command)
+
+  it('sends Done and Stopped with your session’s totals read now, and nothing with any other status or without a reading', async () => {
+    const t = setup()
+    const fresh = vi.fn(async (_agentId: string) => ({ totalTokens: 8200, updatedAt: '2026-10-29T00:00:00Z', models: opus }))
+    t.core.usageFresh = fresh
+    for (const s of ['done', 'stopped', 'review']) await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: `op-${s}`, command: status(s) }, owner)
+    expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, { ...status('stopped'), tokens: opus }, status('review')])
+    expect(fresh).toHaveBeenCalledWith('native')
+    fresh.mockResolvedValueOnce({ totalTokens: null, updatedAt: '2026-10-29T00:00:00Z' } as never)
+    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-none', command: status('done') }, owner)
+    fresh.mockRejectedValueOnce(new Error('unreadable'))
+    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-fail', command: status('done') }, owner)
+    expect(posts(t).slice(-2)).toEqual([status('done'), status('done')])
+  })
+
+  it('sends Done again without the totals to a backend from before them', async () => {
+    const t = setup()
+    t.core.usageFresh = async () => ({ totalTokens: 8200, updatedAt: '2026-10-29T00:00:00Z', models: opus })
+    const answer = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (method, path, body) => (body as { command?: { tokens?: unknown } })?.command?.tokens
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "tokens"' } } } : answer(method, path, body))
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op', command: status('done') }, owner)).toMatchObject({ ok: true })
+    expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, status('done')])
+  })
+})
