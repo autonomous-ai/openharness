@@ -1,5 +1,7 @@
 import { assignAgentDisplayNames } from './agentNames.js'
-import { fail, person, type Actor, type Person, type SuperTabState } from './model.js'
+import { isBuddy } from './buddies.js'
+import { fail, person, type Actor, type Agent, type Person, type SuperTabState } from './model.js'
+import { agentProjectId, canReadAgent, projectsOf } from './projects.js'
 
 /** A username as a person types it: 2 to 32 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit. */
 const SHAPE = /^[a-z0-9][a-z0-9._-]{1,31}$/
@@ -15,7 +17,7 @@ function base(email: string): string {
 
 /**
  * Every person's username, by id: the one they chose (or one kept for them), else their email prefix, numbered (`ken2`,
- * `ken3`) after the names of everyone who joined before them, every chosen name and every agent's name, so nobody is
+ * `ken3`) after the names of everyone who joined before them, every chosen name and [agentNames], so nobody is
  * `@River` beside the Product Manager. [people] are in join order (the state's own order). Readers get these names from
  * the server (read/views.ts, model.ts visibleState); Desktop works out the same defaults only for an older server.
  */
@@ -36,15 +38,24 @@ export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'u
   return names
 }
 
-/** The names the Swarm shows its agents, as `assignAgentDisplayNames` gives them, without changing [state]. */
-export function agentNames(state: Pick<SuperTabState, 'agents'>): string[] {
+/** The names the Swarm shows its agents, as `assignAgentDisplayNames` gives them, without changing [state], for those [counts]
+ *  keeps. A Buddy never counts: it is one person's, named for them. */
+function agentNames(state: Pick<SuperTabState, 'agents'>, counts: (agent: Agent) => boolean): string[] {
   const named = state.agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
-  return named.map(agent => agent.displayName ?? agent.name)
+  return named.filter(agent => !isBuddy(agent) && counts(agent)).map(agent => agent.displayName ?? agent.name)
 }
 
+/** Agents every member sees, those of shared projects: only these number a default, which every member reads. An agent some
+ *  members cannot see never shapes a name they can (review of #2088). */
+const sharedAgentNames = (state: SuperTabState): string[] => agentNames(state, agent => {
+  // An agent of a project that is gone counts for nobody; every read works this out, so it never throws.
+  const project = projectsOf(state).find(p => p.id === agentProjectId(state, agent))
+  return !!project && project.visibility !== 'private'
+})
+
 /** Every person's username in [state], by id. */
-export const swarmUsernames = (state: Pick<SuperTabState, 'people' | 'agents'>): Map<string, string> => usernames(state.people, agentNames(state))
+export const swarmUsernames = (state: SuperTabState): Map<string, string> => usernames(state.people, sharedAgentNames(state))
 export const usernameOf = (state: SuperTabState, id: string): string | undefined => swarmUsernames(state).get(id)
 
 /** `member.username`: a person chooses their own name, or clears it to go back to their default. Unique in the Swarm. */
@@ -55,7 +66,11 @@ export function setUsername(state: SuperTabState, actor: Actor, input: string | 
   if (input === null) return void delete member.username
   const name = input.trim().toLowerCase()
   if (!SHAPE.test(name)) fail('INVALID_USERNAME', 'Use 2 to 32 letters, digits, dots, dashes or underscores, starting with a letter or digit.', 400)
-  if (agentNames(state).some(agent => agent.toLowerCase() === name)) fail('USERNAME_TAKEN', `${name} is an agent’s name here.`, 409)
+  // Only agents this person can see, the scope their reads use: refusing another's name would tell them it exists.
+  const sees = (agent: Agent) => projectsOf(state).some(p => p.id === agentProjectId(state, agent)) && canReadAgent(state, actor, agent)
+  if (agentNames(state, sees).some(agent => agent.toLowerCase() === name)) {
+    fail('USERNAME_TAKEN', `${name} is an agent’s name here.`, 409)
+  }
   for (const [id, other] of swarmUsernames(state)) {
     if (id !== member.id && other === name) fail('USERNAME_TAKEN', `${name} is taken.`, 409)
   }

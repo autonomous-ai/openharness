@@ -153,6 +153,49 @@ describe('member.username', () => {
     expect(() => f.run({ type: 'member.username', username: shown.toLowerCase() })).toThrow(expect.objectContaining({ code: 'USERNAME_TAKEN' }))
   })
 
+  /** A Swarm with `peer`, a private project's Lead `Hush` that only the owner reads, and the owner's Buddy `Pal`. */
+  function hidden() {
+    const f = fixture()
+    const peer = person('peer', 'peer@example.com')
+    f.join(peer)
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { conversationId: string }
+    f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'hidden', machineId: 'machine', name: 'Hush', configuration,
+      lead: true }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    const generation = f.state.people[0]!.generation
+    f.state.agents.push({ id: 'buddy', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'owner', contributorId: 'owner',
+      membershipGeneration: generation, name: 'Pal', configuration, buddyOf: { personId: 'owner', generation } })
+    return { f, peer }
+  }
+
+  it('lets a member take the name of an agent they cannot see, or of a Buddy, and says nothing about it', () => {
+    const { f, peer } = hidden()
+    f.run({ type: 'member.username', username: 'hush' }, peer)
+    expect(f.name('peer')).toBe('hush')
+    f.run({ type: 'member.username', username: 'pal' }, peer)
+    expect(f.name('peer')).toBe('pal')
+  })
+
+  it('refuses the name of a private agent to someone who can see it', () => {
+    const { f } = hidden()
+    expect(() => f.run({ type: 'member.username', username: 'hush' })).toThrow(expect.objectContaining({ code: 'USERNAME_TAKEN' }))
+  })
+
+  it('reads a Swarm whose agent’s project is gone', () => {
+    const f = fixture()
+    f.state.agents.push({ id: 'stray', projectId: 'removed', machineId: 'machine', harnessId: 'h', machineOwnerId: 'owner', contributorId: 'owner',
+      membershipGeneration: 'g', name: 'Stray', configuration })
+    expect(f.name('owner')).toBe('ken15')
+    f.run({ type: 'member.username', username: 'stray' })
+    expect(f.name('owner')).toBe('stray')
+  })
+
+  it('does not number a default around an agent some members cannot see, or a Buddy', () => {
+    const { f } = hidden()
+    f.join(person('hush', 'hush@example.com'))
+    f.join(person('pal', 'pal@example.com'))
+    expect([f.name('hush'), f.name('pal')]).toEqual(['hush', 'pal'])
+  })
+
   it('keeps a person’s name when an agent named like them arrives later', () => {
     const f = fixture()
     f.join(person('river', 'river@autonomous.ai'))
