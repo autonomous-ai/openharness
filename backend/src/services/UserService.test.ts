@@ -37,6 +37,7 @@ const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  userService.forgetCachedUsers()
   create.mockImplementation(({ data }: { data: Record<string, unknown> }) => ({ id: 'new', ...data }))
   update.mockImplementation(({ data }: { data: Record<string, unknown> }) => row(data))
   remove.mockResolvedValue({})
