@@ -58,9 +58,8 @@ class SwarmTeamGlance {
 
 const _finished = {'done', 'stopped', 'cancelled'};
 
-/// The team of [snapshot], or of its project [projectId]: an agent is in the
-/// project it records, else in the one whose work it is in (the desktop's
-/// roster rule). A Buddy is no one's team ([swarmTeamAgents]).
+/// The team of [snapshot], or of its project [projectId]: an agent is in
+/// [swarmAgentProject]. A Buddy is no one's team ([swarmTeamAgents]).
 ///
 /// Counted once per read and project: Home, the drawer and the project's page
 /// share one glance until the read is replaced, or until [now] crosses an
@@ -78,6 +77,13 @@ SwarmTeamGlance swarmTeamGlance(
   read.glances[projectId] = counted;
   return counted.glance;
 }
+
+/// The project [agent] is in: the one it records, else the one whose work it
+/// is first in (the desktop's roster rule); null for neither. An agent keeps
+/// its id when its terminal is added again elsewhere, so this, not the id,
+/// says whether it is a project's. Worked out once per read.
+String? swarmAgentProject(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
+    (_reads[snapshot] ??= _ReadGlances(snapshot)).projectOf(agent);
 
 /// Each read's glances, kept with the read: a replaced read takes its own
 /// with it, so nothing counted from an earlier read is shown.
@@ -108,7 +114,7 @@ class _ReadGlances {
     final agents =
         [
           for (final agent in swarmTeamAgents(snapshot))
-            if (projectId == null || _projectOfAgent(agent) == projectId)
+            if (projectId == null || projectOf(agent) == projectId)
               _glance(snapshot, agent, _taskOf[agent.id], at),
         ]..sort((a, b) {
           final rank = _rank(a.state).compareTo(_rank(b.state));
@@ -128,7 +134,7 @@ class _ReadGlances {
     return _Kept(SwarmTeamGlance._(List.unmodifiable(agents)), from, until);
   }
 
-  String? _projectOfAgent(SuperTabAgent agent) =>
+  String? projectOf(SuperTabAgent agent) =>
       agent.hasProjectId ? agent.projectId : _projectOf[agent.id];
 }
 

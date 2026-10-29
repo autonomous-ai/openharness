@@ -64,6 +64,31 @@ void main() {
     },
   );
 
+  test("the leaderboard's model names are the desktop's modelDisplayName", () {
+    // Copied into the reader, as the phone cannot import it: its body stays
+    // the desktop's, so a model is named alike on both.
+    String body(String path, String declaration) {
+      final source = File(path).readAsStringSync();
+      final start = source.indexOf(declaration);
+      expect(start, isNot(-1), reason: '$declaration is gone from $path');
+      return source.substring(
+        start + declaration.length,
+        source.indexOf('\n}\n', start) + 2,
+      );
+    }
+
+    expect(
+      body(
+        'lib/swarm/swarm_leaderboard_reader.dart',
+        'String _modelDisplayName(String model) {',
+      ),
+      body(
+        '../desktop/lib/core/runtime_model_name.dart',
+        'String modelDisplayName(String model) {',
+      ),
+    );
+  });
+
   for (final MapEntry(key: phone, value: desktop) in _copies.entries) {
     test("$phone matches the desktop's $desktop", () {
       final source = File('../desktop/$desktop');

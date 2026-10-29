@@ -204,6 +204,34 @@ void main() {
 
       expect({for (final a in glance.agents) a.agent.id}, {'mine', 'placed'});
     });
+
+    test("an agent's project: the one it records, else the work it is in, "
+        'as a worker or its Lead; none for neither', () {
+      final snapshot = swarm(
+        agents: [
+          agent('mine'),
+          {...agent('other'), 'projectId': 'project-2'},
+          {...agent('worker'), 'projectId': null},
+          {...agent('lead'), 'projectId': null},
+          {...agent('unplaced'), 'projectId': null},
+        ],
+        groups: [
+          {
+            ...groupData('g2', agentIds: ['worker']),
+            'projectId': 'project-2',
+          },
+          groupData('g1', leadId: 'lead'),
+        ],
+      );
+      String? projectOf(String id) =>
+          swarmAgentProject(snapshot, snapshot.agent(id)!);
+
+      expect(projectOf('mine'), project);
+      expect(projectOf('other'), 'project-2');
+      expect(projectOf('worker'), 'project-2');
+      expect(projectOf('lead'), project);
+      expect(projectOf('unplaced'), isNull);
+    });
   });
 
   group('once per Swarm read', () {

@@ -253,7 +253,7 @@ void main() {
       );
       final approvals = swarmModelApprovals([
         score('codex', 'gpt-5.6-sol', reviewed: 16, passed: 13),
-        // One model at two efforts is one row: 11 of 12.
+        // One model at two efforts, on two engines, is one row: 11 of 12.
         score(
           'claude',
           'claude-opus-5-5',
@@ -262,13 +262,18 @@ void main() {
           passed: 7,
         ),
         score(
-          'claude',
+          'cursor',
           'claude-opus-5-5',
           effort: 'xhigh',
           reviewed: 4,
           passed: 4,
         ),
         score('claude', 'claude-sonnet-5-5', reviewed: 10, passed: 7),
+        // Three first reviews across its efforts: enough, at 2 and 1.
+        score('codex', 'gpt-5.6-luna', effort: 'low', reviewed: 2, passed: 1),
+        score('codex', 'gpt-5.6-luna', effort: 'high', reviewed: 1),
+        // Two first reviews say nothing yet, even all passed.
+        score('claude', 'claude-haiku-5-5', reviewed: 2, passed: 2),
         // Nothing reviewed yet: no share to show.
         score('codex', 'gpt-5.5', effort: 'medium'),
       ]);
@@ -276,6 +281,7 @@ void main() {
         (name: 'Opus 5.5', reviewed: 12, passed: 11, percent: 92),
         (name: 'GPT-5.6 Sol', reviewed: 16, passed: 13, percent: 81),
         (name: 'Sonnet 5.5', reviewed: 10, passed: 7, percent: 70),
+        (name: 'GPT-5.6 Luna', reviewed: 3, passed: 1, percent: 33),
       ]);
       expect(swarmModelApprovals(const []), isEmpty);
     });
@@ -293,13 +299,33 @@ void main() {
       expect(
         [
           for (final a in swarmModelApprovals([
-            score('b-model', 2, 1),
-            score('a-model', 2, 1),
-            score('c-model', 4, 2),
+            score('b-model', 6, 3),
+            score('a-model', 6, 3),
+            score('c-model', 8, 4),
           ]))
             a.name,
         ],
         ['c-model', 'a-model', 'b-model'],
+      );
+    });
+
+    test('the share orders, not its rounding', () {
+      SwarmModelScore score(String model, int reviewed, int passed) =>
+          SwarmModelScore.fromJson(
+            modelScoreData(
+              'codex',
+              model: model,
+              reviewed: reviewed,
+              passed: passed,
+            ),
+          );
+      // Both read 67%; 67 of 100 is the higher share, though reviewed less.
+      expect(
+        swarmModelApprovals([score('more', 200, 133), score('less', 100, 67)]),
+        [
+          (name: 'less', reviewed: 100, passed: 67, percent: 67),
+          (name: 'more', reviewed: 200, passed: 133, percent: 67),
+        ],
       );
     });
 
@@ -309,8 +335,8 @@ void main() {
           SwarmModelScore.fromJson(
             modelScoreData('claude', model: 'opus', reviewed: 3, passed: 5),
           ),
-        ]).single.percent,
-        100,
+        ]).single,
+        (name: 'Opus', reviewed: 3, passed: 3, percent: 100),
       );
     });
 

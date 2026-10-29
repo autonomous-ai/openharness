@@ -494,6 +494,13 @@ void main() {
           reviewed: 10,
           passed: 7,
         ),
+        // Two first reviews say nothing yet, even all passed.
+        modelScoreData(
+          'claude',
+          model: 'claude-haiku-5-5',
+          reviewed: 2,
+          passed: 2,
+        ),
         modelScoreData('codex', model: 'gpt-5.5', effort: 'medium', reviews: 5),
       ],
     };
@@ -687,7 +694,8 @@ void main() {
       expect(inModel('Opus 5.5', find.text('92%')), findsOneWidget);
       expect(inModel('GPT-5.6 Sol', find.text('81%')), findsOneWidget);
       expect(inModel('Sonnet 5.5', find.text('70%')), findsOneWidget);
-      // Nothing reviewed this week: no share, no row.
+      // Fewer than three first reviews this week: no share, no row.
+      expect(model('Haiku 5.5'), findsNothing);
       expect(model('GPT-5.5'), findsNothing);
       expect(
         y(tester, 'swarm-leaderboard-model-Opus 5.5'),
@@ -730,14 +738,17 @@ void main() {
       );
     });
 
-    testWidgets('no agent and no model reviewed: no Agents or Models, and '
-        'the people as ever', (tester) async {
+    testWidgets('no agent, and no model with three first reviews: no Agents '
+        'or Models, and the people as ever', (tester) async {
       tall(tester);
       final fake = backend();
       fake.routes[path] = (_) => {
         ...board(),
         'agents': <Object>[],
-        'byModel': [modelScoreData('codex', model: 'gpt-5.5', shipped: 3)],
+        'byModel': [
+          modelScoreData('codex', model: 'gpt-5.5', shipped: 3),
+          modelScoreData('claude', model: 'opus', reviewed: 2, passed: 2),
+        ],
       };
       await pump(tester, fake);
       await tester.pumpAndSettle();

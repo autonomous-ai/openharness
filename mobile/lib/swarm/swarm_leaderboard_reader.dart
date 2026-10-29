@@ -208,29 +208,34 @@ typedef SwarmModelApproval = ({
   int percent,
 });
 
-/// Each model whose work had a first review this week, by name across its
-/// efforts, the most approved first, then the most reviewed (the desktop's
-/// Models list, 10-29: the number alone). A model with nothing reviewed has
-/// no share to show, and is left out.
+/// Fewer first reviews than this in a week say nothing about a model (the
+/// desktop's `leaderboardModelMinReviewed`).
+const swarmModelMinReviewed = 3;
+
+/// The week's models with at least [swarmModelMinReviewed] first reviews, one
+/// row per name whichever engine ran it at whichever effort, the most often
+/// approved first; of two alike, the one reviewed more, then by name (the
+/// desktop's `leaderboardModelShares`, 10-29: the number alone).
 List<SwarmModelApproval> swarmModelApprovals(List<SwarmModelScore> scores) {
   final counts = <String, (int, int)>{};
   for (final score in scores) {
-    if (score.reviewed <= 0) continue;
     final name = swarmModelLabel(score.engine, score.model);
     final (reviewed, passed) = counts[name] ?? (0, 0);
     counts[name] = (reviewed + score.reviewed, passed + score.passed);
   }
   return [
     for (final MapEntry(key: name, value: (reviewed, passed)) in counts.entries)
-      (
-        name: name,
-        reviewed: reviewed,
-        passed: passed,
-        percent: (passed.clamp(0, reviewed) * 100 / reviewed).round(),
-      ),
+      if (reviewed >= swarmModelMinReviewed)
+        (
+          name: name,
+          reviewed: reviewed,
+          passed: passed.clamp(0, reviewed),
+          percent: (passed.clamp(0, reviewed) * 100 / reviewed).round(),
+        ),
   ]..sort(
-    (a, b) => switch (b.percent.compareTo(a.percent)) {
-      0 => switch (b.reviewed.compareTo(a.reviewed)) {
+    // The share itself, not its rounding: 67 of 100 is above 133 of 200.
+    (a, b) => switch (b.passed * a.reviewed - a.passed * b.reviewed) {
+      0 => switch (b.reviewed - a.reviewed) {
         0 => a.name.compareTo(b.name),
         final order => order,
       },
@@ -242,7 +247,8 @@ List<SwarmModelApproval> swarmModelApprovals(List<SwarmModelScore> scores) {
 /// A model as people know it: "Opus 5.5" for `claude-opus-5-5`, "Opus" for
 /// the `opus` alias, "GPT-5.6 Sol" for `gpt-5.6-sol`. Other names stay
 /// exact. The desktop's `modelDisplayName`
-/// (`desktop/lib/core/runtime_model_name.dart`), copied as it stands.
+/// (`desktop/lib/core/runtime_model_name.dart`), copied as it stands and
+/// held to it by `test/swarm/desktop_parity_test.dart`.
 String _modelDisplayName(String model) {
   // Claude may report only a family alias. Never invent a version for it.
   final claude = RegExp(
