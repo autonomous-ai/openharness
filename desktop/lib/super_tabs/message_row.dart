@@ -453,7 +453,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   padding: EdgeInsets.only(
                                     top: message.text.isEmpty ? 0 : 8,
                                   ),
-                                  child: SuperTabAttachmentChips(
+                                  child: SuperTabAttachments(
                                     message.attachments,
                                   ),
                                 ),
