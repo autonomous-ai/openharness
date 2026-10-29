@@ -405,3 +405,88 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
 })
+
+describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', () => {
+  /** peer's Buddy and its proposal in the project chat, sent on peer's ask. */
+  async function proposed() {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only',
+      priority: 'normal' }, peer, agentId)).result.messageId)
+    const pm = (text: string, extra: { replyTo?: string; mentions?: string[] } = {}) => f.execute({ type: 'message.send', conversationId: 'lead', text,
+      replyTo: extra.replyTo ?? null, recipientIds: [], ...extra.mentions ? { mentions: extra.mentions } : {} }, owner, f.lead)
+    /** What peer's host is handed for the Buddy from outside its own chat, by message. */
+    const heard = async () => (await f.store.deliveries(peer, f.tab, agentId)).filter(d => d.conversationId !== chat).map(d => d.messageId)
+    return { f, chat, agentId, proposal, pm, heard }
+  }
+
+  it('hears the PM\'s answer in its proposal\'s thread, a tag of its person and the assignment, and nothing else', async () => {
+    const { f, agentId, proposal, pm, heard } = await proposed()
+    const unrelated = String((await pm('Batch AB is merging.')).result.messageId)
+    const answer = String((await pm('Taking it: a task opens now.', { replyTo: proposal })).result.messageId)
+    const followUp = String((await pm('It goes to a builder next.', { replyTo: answer })).result.messageId)
+    const tag = String((await pm('@peer does this cover drafts?', { mentions: [peer.sub] })).result.messageId)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub, proposalMessageId: proposal }, owner, f.lead)).result.conversationId)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
+    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
+    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/) })
+    const got = await heard()
+    expect(got).toEqual([answer, followUp, tag, notice.id])
+    expect(got).not.toContain(unrelated)
+
+    // Picked up as project news: the host tells the Buddy it is news for its owner, not a message to answer there.
+    const news = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === answer)!
+    const claimed = await f.store.delivery(peer, f.tab, agentId, news.id, { type: 'claim', claimId: randomUUID() })
+    expect(claimed).toMatchObject({ buddyNews: true, message: { id: answer, conversationId: 'lead' } })
+
+    // Readers never see whose Buddy listens: not among the answer's recipients, nor its deliveries; the notice is the Buddy's alone.
+    const chat = await f.store.messages(owner, f.tab, 'lead', {})
+    const shown = chat.messages.find(m => m.id === answer)!
+    expect(shown.recipientIds).not.toContain(agentId)
+    expect(shown.deliveries.map(d => d.agentId)).not.toContain(agentId)
+    expect((await f.store.messages(owner, f.tab, group, {})).messages.map(m => m.id)).not.toContain(notice.id)
+    expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
+  })
+
+  it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {
+    const { f, agentId, proposal, pm, heard } = await proposed()
+    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const waiting = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.conversationId === 'lead')
+    expect(waiting?.messageId).toBe(answer)
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    await expect(f.store.delivery(peer, f.tab, agentId, waiting!.id, { type: 'claim', claimId: randomUUID() })).rejects.toThrow('no longer authorized')
+    expect(await heard()).toEqual([])
+    const later = String((await pm('One more question.', { replyTo: proposal })).result.messageId)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: later, agentId } })).toBe(0)
+  })
+
+  it('hears nothing of an answer written while its person loses the project (the write is checked again on retry)', async () => {
+    const { f, agentId, proposal } = await proposed()
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    }), () => Date.now())
+    const answer = String((await racing.execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead',
+      text: 'Taking it.', replyTo: proposal, recipientIds: [] } }, f.lead)).result.messageId)
+    expect(raced).toBe(true)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: answer, agentId } })).toBe(0)
+  })
+
+  it('hears no assignment of a task its person cannot read', async () => {
+    const { f, agentId } = await proposed()
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub }, owner, f.lead)).result.conversationId)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })).toBe(0)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId, conversationId: group } })).toBe(0)
+  })
+})

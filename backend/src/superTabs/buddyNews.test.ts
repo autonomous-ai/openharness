@@ -78,6 +78,13 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
     expect(f.pmPost('@owner please approve.', { mentions: ['owner'] }).buddyRecipients).toBeUndefined()
   })
 
+  it('is nobody for a routing row, whatever it carries: a Buddy reads no routing (security review 2 of #2115)', () => {
+    const f = setup()
+    const row = (kind: string): MessageDraft => ({ id: kind, conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm, name: 'pm',
+      membershipGeneration: 'first' }, text: 'Rule set.', replyTo: null, recipients: [], mentions: ['peer'], source: { kind } })
+    for (const kind of ['route', 'route-override', 'rule']) expect(buddiesTold(f.state, row(kind), null)).toEqual([])
+  })
+
   it('is nobody for the person\'s own words: they know what they wrote', () => {
     const f = setup(), sent = f.propose()
     expect(f.pmPost('Thanks, go ahead.', { replyTo: sent }, peer).buddyRecipients).toBeUndefined()
