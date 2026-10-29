@@ -4,11 +4,13 @@ import 'model.dart';
 import 'swarm_reader.dart';
 
 /// What a closed chat held: its messages, oldest first, where the earlier
-/// ones start, and the reaction counter they were read with.
+/// ones start, the reaction counter they were read with, and the thread lines
+/// of their roots.
 typedef SwarmChatKept = ({
   List<SuperTabMessage> messages,
   SuperTabPage? before,
   int? reactionSeq,
+  Map<String, SuperTabThread> threads,
 });
 
 /// The chats last read on this phone, so one opened again shows at once what
@@ -42,18 +44,21 @@ abstract final class SwarmChatCache {
       messages: kept.messages,
       before: kept.before,
       reactionSeq: kept.reactionSeq,
+      threads: kept.threads,
     );
   }
 
   /// Keeps chat [id] as [reader] read it — its newest [page] of [messages],
-  /// oldest first, and where the earlier ones start — as the newest kept;
-  /// unless its Swarm's read no longer has it, or nothing of it was read.
+  /// oldest first, where the earlier ones start, and the [threads] of the
+  /// roots among them — as the newest kept; unless its Swarm's read no longer
+  /// has it, or nothing of it was read.
   static void keep(
     SwarmReader reader,
     String id, {
     required List<SuperTabMessage> messages,
     required SuperTabPage? before,
     int? reactionSeq,
+    Map<String, SuperTabThread> threads = const {},
   }) {
     _kept.remove((reader, id));
     if (messages.length > page) {
@@ -61,11 +66,16 @@ abstract final class SwarmChatCache {
       before = SuperTabPage.of(messages.first);
     }
     if (messages.isNotEmpty && _holds(reader, id, reader.generation)) {
+      final roots = {for (final m in messages) m.id};
       _kept[(reader, id)] = _Kept(
         messages,
         before,
         reader.generation,
         reactionSeq,
+        Map.unmodifiable({
+          for (final MapEntry(key: root, value: thread) in threads.entries)
+            if (roots.contains(root)) root: thread,
+        }),
       );
       while (_kept.length > size) {
         _kept.remove(_kept.keys.first);
@@ -120,10 +130,17 @@ abstract final class SwarmChatCache {
 }
 
 class _Kept {
-  _Kept(this.messages, this.before, this.generation, this.reactionSeq);
+  _Kept(
+    this.messages,
+    this.before,
+    this.generation,
+    this.reactionSeq,
+    this.threads,
+  );
   final List<SuperTabMessage> messages;
   final SuperTabPage? before;
   final int? reactionSeq;
+  final Map<String, SuperTabThread> threads;
 
   /// The reader's [SwarmReader.generation] it was read under.
   final int generation;
