@@ -1277,6 +1277,11 @@ describe('the permission gates', () => {
     expect(held.choice).toEqual({ permissionMode: 'readOnlyAsk', bypassPermission: false })
     expect(held.droppedFlag).toBeNull()
     expect(held.nativeHold).toContain('does not support --ask-for-approval')
+    // A Claude Buddy's, too: a Claude Code with no --permission-mode is not relaunched in its own default.
+    fakeEngine(binDir, 'claude', '--resume')
+    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'dontAsk', bypassPermission: false }, bashProbeShell())
+    expect([claude.choice.permissionMode, claude.droppedFlag]).toEqual(['dontAsk', null])
+    expect(claude.nativeHold).toContain('does not support --permission-mode')
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {

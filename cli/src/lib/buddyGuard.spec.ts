@@ -99,6 +99,8 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'rg --pre=sh needle',
     'rg --pre-glob "*" needle',
     'rg -z needle',
+    'rg --hostname-bin /bin/echo --hyperlink-format default needle',
+    'rg --hostname-bin=/bin/echo needle',
     // Everything else.
     'git commit -m x',
     'git checkout main',

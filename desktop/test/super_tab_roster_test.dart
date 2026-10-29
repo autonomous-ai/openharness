@@ -629,6 +629,31 @@ void main() {
   );
 
   testWidgets(
+    'a Claude Buddy\'s mode, which New Harness does not offer, reads by name',
+    (tester) async {
+      final f = await fixture(tester);
+      f.app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a1',
+          name: 'Multiply',
+          engine: 'claude',
+          permissionMode: 'dontAsk',
+        ),
+      ];
+      (f.server.state['agents'] as List)[1]['configuration'] = {
+        'engine': 'claude',
+      };
+      await f.controller.refresh();
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Reads only, never asks'), findsOneWidget);
+      expect(find.text('Unrecognized setting'), findsNothing);
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'question details name the machine owner only for an on-screen question',
     (tester) async {
       final f = await fixture(tester);

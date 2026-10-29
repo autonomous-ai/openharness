@@ -201,11 +201,16 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.
-- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
+- A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
+  dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
+  Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
+  list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
+  no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
+  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`). The guard's refusal
+  outranks any allow rule in the machine owner's own settings or the project's checked-in ones, and a guard that
+  cannot run refuses the call. File editing is turned off, and the files in its own copy of the project are read-only.
+  A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
   Harness GitHub App's token.
-  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
-  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
   asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
   `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once

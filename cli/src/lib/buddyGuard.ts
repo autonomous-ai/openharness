@@ -13,7 +13,7 @@
  * redirects, `;`, `&`, `$()`, globs, braces, `~`, comments, a newline) refuses the whole command, so a read command cannot
  * carry another one. The read commands' own ways to write or run something are refused too: git's `--output`, `-O`/
  * `--open-files-in-pager` and `--ext-diff` (git takes any unique prefix of a long option, so prefixes too), gh's `--web`,
- * and rg's `--pre`, `--pre-glob` and `-z`.
+ * and rg's `--pre`, `--pre-glob`, `-z` and `--hostname-bin`, which runs a program (rg 14.1.1, tried).
  *
  * Plain JavaScript with no imports, written into the Buddy's folder and run by Harness's node: the tests run this exact
  * text (lib/buddyGuard.spec.ts, and Claude Code itself in lib/buddyGuard.claude.spec.ts).
@@ -25,7 +25,7 @@ const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
 const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
 const GH = { issue: new Set(['view', 'list']), pr: new Set(['view', 'list', 'diff']) }
 const GIT_LONG = ['output', 'open-files-in-pager', 'ext-diff']
-const RG_LONG = ['pre', 'pre-glob', 'search-zip']
+const RG_LONG = ['pre', 'pre-glob', 'search-zip', 'hostname-bin']
 const MAY = 'A Buddy only reads, so this was refused and nobody will be asked. Read the code with Read, Grep and Glob. ' +
   'In the shell, run one plain command at a time (no pipes, redirects, ;, &&, $() or globs): git grep, log, show, diff, ' +
   'blame or status; gh issue view or list; gh pr view, list or diff; ls, cat, rg, head, tail, wc or grep; or harness super-tab.'
@@ -82,7 +82,7 @@ function bashAllowed(command) {
       && !rest.some((word) => word === '--web' || word.startsWith('--web=') || (short(word) && word.includes('w')))
   }
   if (name === 'rg') {
-    return !rest.some((word) => (word.startsWith('--') && RG_LONG.includes(word.slice(2).split('=')[0])) || (short(word) && word.includes('z')))
+    return !rest.some((word) => longNames(word, RG_LONG) || (short(word) && word.includes('z')))
   }
   return false
 }
