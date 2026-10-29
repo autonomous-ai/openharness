@@ -36,7 +36,8 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
   for (const pool of state.machines ?? []) of(pool.machineId).contribution = pool
   for (const { machineId, harnessId, generation, renewed } of state.harnessReservations ?? []) of(machineId).reservations.push({ harnessId, generation, renewed })
   for (const { machineId, harnessId } of state.releasedHarnesses ?? []) of(machineId).released.push(harnessId)
-  for (const { machineId, agentId, harnessId, machineOwnerId } of state.closingSessions ?? []) of(machineId).closingSessions.push({ agentId, harnessId, machineOwnerId })
+  // With its Team account hold (`heldFor`, `since`, `noticed`): dropped here, the account was free on the next read (review of #2142).
+  for (const { machineId, ...closing } of state.closingSessions ?? []) of(machineId).closingSessions.push(closing)
   for (const { machineId, ...cleanup } of state.machineCleanups ?? []) of(machineId).cleanups.push(cleanup)
   return machines
 }
@@ -119,7 +120,7 @@ export function reassemble(parts: SwarmParts, { share = false }: { share?: boole
   const contributed: ContributedMachine[] = machines.flatMap(m => m.contribution ? [m.contribution] : [])
   const reservations = flat(m => m.reservations.map(r => ({ machineId: m.machineId, ...r })))
   const released = flat(m => m.released.map(harnessId => ({ machineId: m.machineId, harnessId })))
-  const closing = flat(m => m.closingSessions.map(c => ({ agentId: c.agentId, machineId: m.machineId, harnessId: c.harnessId, machineOwnerId: c.machineOwnerId })))
+  const closing = flat(m => m.closingSessions.map(c => ({ ...c, machineId: m.machineId })))
   const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, ...c })))
   const list = <K extends typeof LISTS[number]>(key: K, items: NonNullable<SuperTabState[K]>) => {
     if (items.length || present.has(key)) state[key] = copy(items)
