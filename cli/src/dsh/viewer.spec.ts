@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InstalledDsh } from './installed.js'
+import { spawnDshCommand } from './shell.js'
 import { DshViewerManager, buildViewerUrl, freeLoopbackPort, resolveViewer, waitForLoopbackPort } from './viewer.js'
 
 // Off by default: set `net.fake` to hand the viewer a scripted server or socket instead of a real one.
@@ -15,6 +16,21 @@ vi.mock('node:net', async (importOriginal) => {
   const createServer = ((...args: Parameters<typeof actual.createServer>) => (net.fake?.createServer ? net.fake.createServer() : actual.createServer(...args))) as typeof actual.createServer
   const connect = ((...args: Parameters<typeof actual.connect>) => (net.fake?.connect ? net.fake.connect() : (actual.connect as (...a: unknown[]) => unknown)(...args))) as typeof actual.connect
   return { ...actual, createServer, connect, default: { ...actual, createServer, connect } }
+})
+
+// Every artifact watcher the manager opens, and whether it was closed: what a viewer that failed must not keep.
+const watchers = vi.hoisted(() => [] as Array<{ closed: boolean }>)
+vi.mock('chokidar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('chokidar')>()
+  const watch = ((...args: Parameters<typeof actual.watch>) => {
+    const watcher = actual.watch(...args)
+    const seen = { closed: false }
+    watchers.push(seen)
+    const close = watcher.close.bind(watcher)
+    watcher.close = () => { seen.closed = true; return close() }
+    return watcher
+  }) as typeof actual.watch
+  return { ...actual, watch, default: { ...actual.default, watch } }
 })
 
 function fakeChild(): ChildProcess & { exitWith: (code: number) => void } {
@@ -450,6 +466,61 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
     expect(urls).toEqual([])
     expect(logs).toContain('[dsh] acme/thing viewer did not listen on 4790 within 60s')
+  })
+
+  describe('a viewer whose start failed or timed out keeps nothing running', () => {
+    const watched = () => dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] })
+    let workspace: string
+    beforeEach(() => {
+      watchers.length = 0
+      workspace = join(root, 'ws')
+      mkdirSync(workspace)
+    })
+
+    it('on Windows without Git Bash: says the viewer could not start, closes its watch, and is not tried again on every attach', async () => {
+      let tries = 0
+      const noGitBash = ((script: string, opts: Parameters<typeof spawnDshCommand>[1]) => {
+        tries++
+        return spawnDshCommand(script, { ...opts, host: { platform: 'win32', gitBash: () => null } })
+      }) as typeof spawnDshCommand
+      const { logs, urls, manager } = setup({ spawn: noGitBash })
+      await manager.start('a1', watched(), workspace)
+      expect(logs).toContain("[dsh] acme/thing viewer could not start · This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.")
+      expect(watchers).toHaveLength(1)
+      expect(watchers[0].closed).toBe(true)
+      // The agents' scans attach every live agent again; the same viewer that just failed is not started each time.
+      await manager.start('a1', watched(), workspace)
+      expect(tries).toBe(1)
+      // A stop, as when the agent restarts, lets it try again.
+      await manager.stop('a1')
+      await manager.start('a1', watched(), workspace)
+      expect(tries).toBe(2)
+      expect(urls).toEqual([])
+    })
+
+    it('a viewer that never listens is stopped for good: not restarted, its watch closed', async () => {
+      const { spawned, logs, manager } = setup({ waitForPort: async () => false })
+      await manager.start('a1', watched(), workspace)
+      expect(logs).toContain('[dsh] acme/thing viewer did not listen on 4790 within 60s')
+      // The stop ends the child; its exit is not a crash to restart.
+      spawned[0].emit('exit', null, 'SIGTERM')
+      await settle(1_200)
+      expect(spawned).toHaveLength(1)
+      expect(logs.filter((line) => line.includes('restarting'))).toEqual([])
+      expect(watchers[0].closed).toBe(true)
+      await manager.start('a1', watched(), workspace)
+      expect(spawned).toHaveLength(1)
+    })
+
+    it('a viewer whose process could not be started, or that found no port, closes its watch', async () => {
+      const failing = setup({ waitForPort: async () => { failing.spawned[0].emit('error', new Error('spawn EACCES')); return false } })
+      await failing.manager.start('a1', watched(), workspace)
+      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+      expect(watchers[0].closed).toBe(true)
+      const noPort = setup({ freePort: async () => { throw new Error('EMFILE') } })
+      await noPort.manager.start('a2', watched(), workspace)
+      expect(watchers[1].closed).toBe(true)
+    })
   })
 
   it('follows the newest artifact as files change, in a workspace whose own path has an ignored name in it', async () => {

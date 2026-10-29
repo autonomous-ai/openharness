@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // already out there) is refused at once, with how long to wait; a phone or the web viewer still waits attached.
 const m = vi.hoisted(() => ({
   auth: vi.fn(), upgrade: vi.fn(), presence: vi.fn(), online: vi.fn(), attach: vi.fn(),
-  machineFindUnique: vi.fn(),
+  machineFindUnique: vi.fn(), shared: vi.fn(), warn: vi.fn(), info: vi.fn(),
 }))
+vi.mock('../utils/logger.js', () => ({ logger: { warn: m.warn, info: m.info, error: vi.fn(), debug: vi.fn() } }))
+vi.mock('./machineAccess.js', async original => ({ ...await original<typeof import('./machineAccess.js')>(), sharedMachineAccess: m.shared }))
 vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./ssoAuth.js')>(), authenticateAccessToken: m.auth }))
 vi.mock('./wsServer.js', async original => ({ ...await original<typeof import('./wsServer.js')>(), createWss: () => ({ handleUpgrade: m.upgrade }) }))
 vi.mock('./prisma.js', () => ({
@@ -84,4 +86,71 @@ it.each(['mobile', 'web'])('a %s client still attaches to an offline machine and
   const ws = await selects({}, `&client=${client}`)
   expect(m.attach).toHaveBeenCalledOnce()
   expect(ws.sent()).toContainEqual(expect.objectContaining({ type: 'connected', payload: expect.objectContaining({ machineId: 'owner-mac' }) }))
+})
+
+// Prod logs 2026-10-28: about 45 refused selects an hour, and the log did not say why.
+describe('a refused machine select', () => {
+  it.each([
+    ['unknown', null, null],
+    ['deleted', { ...mac, deletedAt: new Date('2026-10-01T00:00:00Z') }, null],
+    ['not_shared', { ...mac, userId: 'someone-else' }, null],
+    ['share_check_failed', { ...mac, userId: 'someone-else' }, new Error('database down')],
+  ])('logs why: %s', async (reason, binding, failure) => {
+    m.machineFindUnique.mockResolvedValue(binding)
+    if (failure) m.shared.mockRejectedValue(failure)
+    else m.shared.mockResolvedValue(null)
+    const ws = await selects({}, '&client=web')
+    expect(ws.sent()).toContainEqual({ type: 'machine_select_error', payload: { machineId: 'owner-mac', error: 'NOT_YOUR_MACHINE' } })
+    expect(m.warn).toHaveBeenCalledWith('machine_select rejected', { userId: 'owner', machineId: 'owner-mac', reason })
+  })
+})
+
+// Prod, 2026-10-28: 2,304 of 2,308 opens in 15 minutes declared no client and lived a median 0.4 s, and the disconnect
+// line said only who. It now says which client and version, how the socket closed, after how long, and what its selects
+// were answered (lib/wsAttribution.ts), so a relay's churn can be told apart from a person's reconnects.
+describe('a closed socket', () => {
+  const lines = (message: string) => m.info.mock.calls.filter(c => c[0] === message).map(c => c[1])
+
+  it('logs a relay refused as offline with its client, close, lifetime and select', async () => {
+    const ws = await selects({}, '&client=relay&v=0.9.1')
+    ws.emit('close', 1000, Buffer.from('handshake failed'))
+    const [connected] = lines('web user connected')
+    expect(connected).toMatchObject({ endpoint: 'web', client: 'relay', version: '0.9.1', userId: 'owner' })
+    expect(lines('web user disconnected')).toEqual([{ ...connected, code: 1000, reason: 'handshake failed',
+      aliveMs: expect.any(Number), selects: 1, select: 'MACHINE_OFFLINE' }])
+  })
+
+  it('logs a phone with its release, the machine it had selected, and the select accepted', async () => {
+    m.online.mockResolvedValue(true)
+    const ws = await selects({}, '&client=mobile&release=1.4.2')
+    ws.emit('close', 1006, Buffer.alloc(0))
+    expect(lines('web user disconnected')).toEqual([expect.objectContaining({ client: 'mobile', version: '1.4.2', machineId: 'owner-mac',
+      code: 1006, selects: 1, select: 'accepted' })])
+  })
+
+  // Review of #2029: `ws` emits an error before the close; the line must carry the close's code, not none.
+  it('takes the close code from the close, not an error before it', async () => {
+    const ws = await selects({}, '&client=relay')
+    ws.emit('error', new Error('read ECONNRESET'))
+    ws.emit('close', 1006, Buffer.alloc(0))
+    expect(lines('web user disconnected')).toEqual([expect.objectContaining({ code: 1006 })])
+  })
+
+  // Review of #2029: the old per-agent key path was upgraded and never tracked, so each of its sockets counted as refused.
+  it('tracks a legacy per-agent socket like any other', async () => {
+    const ws = new Socket()
+    m.upgrade.mockImplementation((_r, _s, _h, done) => done(ws))
+    m.attach.mockReturnValue({ connId: 'legacy-conn', detach: vi.fn(), sendDown: vi.fn() })
+    handleWebUpgrade({ url: '/api/web-ws', headers: { 'sec-websocket-protocol': 'a'.repeat(64) } } as never, raw() as never, Buffer.alloc(0))
+    await flush()
+    ws.emit('close', 1001, Buffer.from('going away'))
+    expect(lines('web client (legacy) disconnected')).toEqual([expect.objectContaining({ endpoint: 'web', client: 'unknown',
+      machineId: expect.any(String), code: 1001, reason: 'going away', aliveMs: expect.any(Number) })])
+  })
+
+  it('logs a client that declared nothing as unknown', async () => {
+    const ws = await selects({})
+    ws.emit('close', 1000, Buffer.alloc(0))
+    expect(lines('web user disconnected')[0]).toMatchObject({ client: 'unknown', version: null })
+  })
 })

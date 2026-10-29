@@ -244,6 +244,30 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy skill, talking in its owner\'s chat and waiting for no assignment', async engine => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('buddy')
+  expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+it('starts a Claude Buddy in asking mode, never with full permissions, and no Buddy with the GitHub App\'s token', async () => {
+  for (const [engine, mode, bypass] of [['claude', 'ask', false], ['codex', 'full', true]] as const) {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,
+      f.scoped, where, f.open)
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, mode, bypass, undefined])
+    expect(payload.prompt).not.toContain('GitHub')
+  }
+})
+
 describe('the skills of the project the agent joins', () => {
   const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
     projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })
@@ -271,6 +295,30 @@ describe('the skills of the project the agent joins', () => {
     ['a state it cannot read', new Error('offline')],
   ])('reads %s as Harness orchestration', async (_name, state) => {
     expect(await started(state)).toMatchObject({ swarmSkillMode: 'orchestration' })
+  })
+
+  // Prod logs 2026-10-28: a contributed machine's host asked for a Swarm read it may not make (a 400 at every start) and
+  // launched every agent on Harness orchestration. Its start read names the project's skills instead.
+  const hosted = async (skillMode?: string) => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { poolGeneration: 'pool-1', ...(skillMode ? { skillMode } : {}) })
+    expect(await startAgent({ tabId: 'tab', startId: 'start', hostDispatch: true }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.scoped.mock.calls.map(c => c[0].action)).not.toContain('status')
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  }
+  it('starts a contributed machine\'s agent with the skills its start read names, without reading the Swarm', async () => {
+    const payload = await hosted('default')
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default' })
+    expect(payload.prompt).toContain('Use the swarm-dev skill for this session: the team process; otherwise work your usual way.')
+  })
+  it('starts a contributed machine\'s agent on Harness orchestration when an older backend\'s start read names no skills', async () => {
+    expect(await hosted()).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'orchestration' })
+  })
+  it('takes the start read\'s skills for a Lead\'s own start too', async () => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { skillMode: 'default' })
+    await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]).toMatchObject({ swarmSkillMode: 'default' })
   })
 })
 

@@ -2,7 +2,6 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/finger_target.dart';
@@ -19,7 +18,7 @@ const _halfGap = _gap / 2;
 
 /// The avatar the Agents rows below draw, so without a rank column a person's
 /// name starts where an agent's does.
-const _avatarSize = 24.0;
+const _avatarSize = SuperTabAvatar.rowSize;
 
 /// Numbers and rankings (desktop design system): the rank a bold numeral in
 /// secondary ink, the points the one emphasized number, every figure in a
@@ -35,23 +34,15 @@ TextStyle _pointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-TextStyle _trendStyle(Color color) =>
-    DesktopChrome.metadata(color: color)
-        .copyWith(fontFeatures: grid.AppFont.tabularFigures);
-
 /// A person as the leaderboard names them: the board's display name, else the
 /// email's first part, as before the board had names.
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
     score?.displayName ?? superTabPersonName(person.email);
 
-/// "Up 6 from last week", "down 7 …"; null when level, or from a server
-/// without last week.
-String? leaderboardTrend(SuperTabPersonScore score) {
-  final before = score.prevWeekPoints;
-  if (before == null || before == score.points) return null;
-  final change = score.points - before;
-  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
-}
+/// Whether a person wears the crown: first on the board, with points. At the
+/// start of a week everyone ties at 0, and no one has taken #1 yet.
+bool leaderboardCrowned(SuperTabPersonScore? score) =>
+    score != null && score.rank == 1 && score.points > 0;
 
 /// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
 /// read zero, in words; empty when all would.
@@ -65,13 +56,9 @@ List<String> leaderboardNumbers(SuperTabPersonScore score) {
 }
 
 /// The board's fixed numeric columns, each as wide as its widest value at
-/// the current text size, so rank, trend and points line up on every row.
+/// the current text size, so rank and points line up on every row.
 class LeaderboardColumns {
-  const LeaderboardColumns({
-    required this.rank,
-    required this.points,
-    this.trend,
-  });
+  const LeaderboardColumns({required this.rank, required this.points});
 
   factory LeaderboardColumns.of(
     BuildContext context,
@@ -93,35 +80,23 @@ class LeaderboardColumns {
     String widest(Iterable<int> values) => values
         .map((value) => '$value')
         .fold('0', (a, b) => b.length > a.length ? b : a);
-    final changes = [
-      for (final score in scores)
-        if (score.prevWeekPoints case final before? when before != score.points)
-          (score.points - before).abs(),
-    ];
     return LeaderboardColumns(
       rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
       points: width(
         widest(scores.map((score) => score.points)),
         _pointsStyle(),
       ),
-      trend: changes.isEmpty
-          ? null
-          : AppIcons.metadataSize +
-                width(widest(changes), _trendStyle(DesktopChrome.muted)),
     );
   }
 
   final double rank, points;
-
-  /// Null when no one on the board moved against last week.
-  final double? trend;
 }
 
 /// One person in the Humans section: their rank as a bold numeral in its own
-/// column, avatar, name and status, and a quiet line of their non-zero
-/// numbers beneath; at the right the change against last week, then their
-/// points, the one emphasized number. The viewer's own row carries
-/// the selected fill. Without a [score] (no board yet, or a server without
+/// column, avatar, name (number one's with a crown beside it) and status, and
+/// a quiet line of their non-zero numbers beneath; at the right their points,
+/// the one number (Dee, 2026-10-29). The viewer's own row carries the selected
+/// fill. Without a [score] (no board yet, or a server without
 /// one) only the name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
@@ -131,6 +106,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     required this.onTap,
     this.columns,
     this.own = false,
+    this.weekName = 'this week',
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
@@ -142,6 +118,9 @@ class LeaderboardPersonRow extends StatelessWidget {
   /// Whether this is the viewer's own row.
   final bool own;
 
+  /// The week the board shows, "this week", "last week", …, as the crown says it.
+  final String weekName;
+
   @override
   Widget build(BuildContext context) {
     final score = this.score;
@@ -149,7 +128,6 @@ class LeaderboardPersonRow extends StatelessWidget {
     final numbers = score == null
         ? const <String>[]
         : leaderboardNumbers(score);
-    final trend = score == null ? null : leaderboardTrend(score);
     final radius = BorderRadius.circular(DesktopChrome.rowRadius);
     Widget column(String kind, double width, Widget? child) => Padding(
       padding: const EdgeInsets.only(left: _gap),
@@ -218,18 +196,6 @@ class LeaderboardPersonRow extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (columns?.trend case final width?)
-                    column(
-                      'trend-column',
-                      width,
-                      trend == null || score == null
-                          ? null
-                          : _Trend(
-                              personId: person.id,
-                              score: score,
-                              trend: trend,
-                            ),
-                    ),
                   if (columns != null && score != null)
                     column(
                       'points',
@@ -253,15 +219,30 @@ class LeaderboardPersonRow extends StatelessWidget {
     );
   }
 
-  /// The name, then the status quietly; the email on hover.
+  /// The name, number one's crown, then the status quietly; on hover the whole name, which a long one cut short
+  /// needs, and the email. The crown is content artwork beside the name, said in words, at the metadata size so a
+  /// crowned row is as tall as any other (Team and celebration, design system).
   Widget _name() => Tooltip(
-    message: person.email,
+    message: '${leaderboardName(person, score)}\n${person.email}',
     child: SuperTabUntil(
       until: person.status?.until,
       builder: (context) => Text.rich(
         TextSpan(
           text: leaderboardName(person, score),
           children: [
+            if (leaderboardCrowned(score))
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: _halfGap),
+                  child: Semantics(
+                    key: ValueKey('leaderboard-crown-${person.id}'),
+                    label: 'Number one $weekName',
+                    excludeSemantics: true,
+                    child: Text('\u{1F451}', style: DesktopChrome.metadata()),
+                  ),
+                ),
+              ),
             if (person.statusAt(clock.now()) case final status?)
               TextSpan(
                 text: '  ${status.text}',
@@ -321,51 +302,6 @@ class _Numbers extends StatelessWidget {
             style: style,
           );
         },
-      ),
-    );
-  }
-}
-
-/// An arrow and the change against last week, by shape and colour both: up in
-/// the online green, down in the theme's error ink.
-class _Trend extends StatelessWidget {
-  const _Trend({
-    required this.personId,
-    required this.score,
-    required this.trend,
-  });
-  final String personId;
-  final SuperTabPersonScore score;
-  final String trend;
-
-  @override
-  Widget build(BuildContext context) {
-    final up = score.points > score.prevWeekPoints!;
-    final color = up
-        ? grid.AppPalette.online
-        : Theme.of(context).colorScheme.error;
-    return Tooltip(
-      key: ValueKey('leaderboard-trend-$personId'),
-      message: capitalized(trend),
-      excludeFromSemantics: true,
-      child: Semantics(
-        label: capitalized(trend),
-        excludeSemantics: true,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              up ? AppIcons.arrowUp : AppIcons.arrowDown,
-              size: AppIcons.metadataSize,
-              color: color,
-            ),
-            Text(
-              '${(score.points - score.prevWeekPoints!).abs()}',
-              style: DesktopChrome.metadata(color: color)
-                  .copyWith(fontFeatures: grid.AppFont.tabularFigures),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -447,35 +383,79 @@ class LeaderboardPersonWeek extends StatelessWidget {
   }
 }
 
-/// The three lists behind a person's numbers, each saying so when empty. A
-/// long week scrolls inside the window.
-class _LeaderboardPersonDetails extends StatelessWidget {
+/// The three lists behind a person's numbers, each with its count, its newest
+/// five and the rest one click away, and saying so when empty. The dialog
+/// around it scrolls (Ken, 2026-10-28).
+class _LeaderboardPersonDetails extends StatefulWidget {
   const _LeaderboardPersonDetails({required this.score, required this.details});
   final SuperTabPersonScore score;
   final SuperTabPersonDetails details;
 
   @override
+  State<_LeaderboardPersonDetails> createState() =>
+      _LeaderboardPersonDetailsState();
+}
+
+class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
+  /// The newest a list shows before Show all.
+  static const _shown = 5;
+  final _expanded = <String>{};
+
+  @override
   Widget build(BuildContext context) {
-    final trend = leaderboardTrend(score);
+    final score = widget.score, details = widget.details;
     final quiet = DesktopChrome.metadata();
-    Widget section(String title, String empty, List<Widget> items) => Padding(
-      padding: const EdgeInsets.only(top: _gap + _halfGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: DesktopChrome.control(
-              color: DesktopChrome.foreground,
-              medium: true,
+    final figures = quiet.copyWith(fontFeatures: grid.AppFont.tabularFigures);
+    Widget section(String title, String empty, List<Widget> items) {
+      final all = _expanded.contains(title) || items.length <= _shown;
+      return Padding(
+        padding: const EdgeInsets.only(top: _gap * 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  title,
+                  style: DesktopChrome.control(
+                    color: DesktopChrome.foreground,
+                    medium: true,
+                  ),
+                ),
+                if (items.isNotEmpty) ...[
+                  const SizedBox(width: _gap),
+                  Text('${items.length}', style: figures),
+                ],
+              ],
             ),
-          ),
-          const SizedBox(height: _halfGap),
-          if (items.isEmpty) Text(empty, style: quiet) else ...items,
-        ],
-      ),
-    );
-    // Items stand the spacing scale's smallest step apart.
+            const SizedBox(height: _halfGap),
+            if (items.isEmpty)
+              Text(empty, style: quiet)
+            else ...[
+              ...all ? items : items.take(_shown),
+              if (!all)
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      side: BorderSide.none,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                    ),
+                    onPressed: () => setState(() => _expanded.add(title)),
+                    child: Text('Show all ${items.length}'),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // One line each, the whole title on hover; items stand the spacing scale's smallest step apart.
     Widget item(Widget title, String trailing) => Padding(
       padding: const EdgeInsets.symmetric(vertical: _halfGap / 2),
       child: Row(
@@ -484,74 +464,69 @@ class _LeaderboardPersonDetails extends StatelessWidget {
           Expanded(child: title),
           if (trailing.isNotEmpty) ...[
             const SizedBox(width: _gap + _halfGap),
-            Text(
-              trailing,
-              style: quiet.copyWith(fontFeatures: grid.AppFont.tabularFigures),
-            ),
+            Text(trailing, style: figures),
           ],
         ],
       ),
     );
     final text = DesktopChrome.control();
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .5,
+    Widget line(String value, {TextStyle? style}) => Tooltip(
+      message: value,
+      excludeFromSemantics: true,
+      child: Text(
+        value,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style ?? text,
       ),
-      // The small form's width, less the dialog's own content inset.
-      child: SizedBox(
-        width: grid.AppDesktop.formWidth - 2 * grid.AppDesktop.panelPadding,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                trend == null
-                    ? '${score.points} pts'
-                    : '${score.points} pts · $trend',
-                style: quiet,
-              ),
-              section('Shipped', 'No pull requests merged yet', [
-                for (final shipped in details.shipped)
-                  item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
-                    // Only a web page opens: a link from the server is data,
-                    // and any other scheme could open a file or an app.
-                    final link?
-                        when const {'http', 'https'}.contains(link.scheme) =>
-                      Semantics(
-                        link: true,
-                        child: InkWell(
-                          onTap: () => launchUrl(
-                            link,
-                            mode: LaunchMode.externalApplication,
-                          ),
-                          child: Text(
-                            shipped.title,
-                            style: text.copyWith(color: DesktopChrome.accent),
-                          ),
-                        ),
-                      ),
-                    _ => Text(shipped.title, style: text),
-                  }, ''),
-              ]),
-              section('Unblocked', 'No questions answered yet', [
-                for (final unblocked in details.unblocked)
-                  item(
-                    Text(unblocked.title, style: text),
-                    'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
-                  ),
-              ]),
-              section('Lent', 'No machines lent yet', [
-                for (final lent in details.lent)
-                  item(
-                    Text(superTabMachineName(lent.machineName), style: text),
-                    '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
-                  ),
-              ]),
-            ],
-          ),
+    );
+    final before = score.prevWeekPoints;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          [
+            '${plural(score.points, 'point')} this week',
+            if (before != null) '$before last week',
+          ].join(' · '),
+          style: quiet,
         ),
-      ),
+        section('Shipped', 'No pull requests merged yet', [
+          for (final shipped in details.shipped)
+            item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
+              // Only a web page opens: a link from the server is data,
+              // and any other scheme could open a file or an app.
+              final link? when const {'http', 'https'}.contains(link.scheme) =>
+                Semantics(
+                  link: true,
+                  child: InkWell(
+                    onTap: () =>
+                        launchUrl(link, mode: LaunchMode.externalApplication),
+                    child: line(
+                      shipped.title,
+                      style: text.copyWith(color: DesktopChrome.accent),
+                    ),
+                  ),
+                ),
+              _ => line(shipped.title),
+            }, ''),
+        ]),
+        section('Unblocked', 'No questions answered yet', [
+          for (final unblocked in details.unblocked)
+            item(
+              line(unblocked.title),
+              'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
+            ),
+        ]),
+        section('Lent', 'No machines lent yet', [
+          for (final lent in details.lent)
+            item(
+              line(superTabMachineName(lent.machineName)),
+              '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
+            ),
+        ]),
+      ],
     );
   }
 }

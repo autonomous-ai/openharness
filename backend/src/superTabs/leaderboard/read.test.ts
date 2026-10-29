@@ -19,7 +19,7 @@ describe('the dormant groups the leaderboard sums', () => {
     const { tx, asked } = reading([{ data: { id: 'g1', requesterId: 'peer', ledger: { shippedAt: since + 1 }, assignment: { id: 'a1', status: 'done' } } }])
     expect(await recentDormantGroups(tx, 'tab', 'web', since)).toEqual([{ id: 'g1', requesterId: 'peer', ledger: { shippedAt: since + 1 }, assignment: { id: 'a1', status: 'done' } }])
     const [{ pipeline }] = asked as [{ pipeline: Array<Record<string, Record<string, unknown>>> }]
-    expect(pipeline[0]!.$match).toEqual({ tabId: 'tab', deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } }, projectId: 'web' })
+    expect(pipeline[0]!.$match).toEqual({ tabId: 'tab', deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } }, projectId: { $in: ['web'] } })
     expect(Object.keys(pipeline[1]!.$project!).sort()).toEqual(['_id', ...['archived', 'assignment.id', 'assignment.status', 'audience', 'id', 'kind', 'ledger',
       'projectId', 'pullRequestUrls', 'requesterId', 'reviewOf', 'title'].map(field => `data.${field}`)].sort())
   })
@@ -27,7 +27,7 @@ describe('the dormant groups the leaderboard sums', () => {
   it('reads the default project\'s groups stored with no project too', async () => {
     const { tx, asked } = reading([])
     await recentDormantGroups(tx, 'tab', 'lead', since)
-    expect((asked[0] as { pipeline: Array<Record<string, Record<string, unknown>>> }).pipeline[0]!.$match).toMatchObject({ $or: [{ projectId: 'lead' }, { projectId: null }] })
+    expect((asked[0] as { pipeline: Array<Record<string, Record<string, unknown>>> }).pipeline[0]!.$match).toMatchObject({ projectId: { $in: ['lead', null] } })
   })
 })
 

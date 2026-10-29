@@ -14,6 +14,7 @@ import { publishDown, subscribeUp, subscribeShareChanged, subscribeSwarmAccessCh
 import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
 import { createOrderedInbox } from './orderedInbox.js'
+import { declaredKind, trackSocket } from './wsAttribution.js'
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 const RECHECK_MS = 60_000
@@ -29,19 +30,25 @@ export function handleObserverUpgrade(req: IncomingMessage, socket: Duplex, head
     const user = token ? await authenticateAccessToken(token, autonomousEnv) : null
     const share = linkMode ? await recipientLink(id, user, autonomousEnv) : await recipientShare(id, user!)
     if (socket.destroyed) return
+    const declared = declaredKind(url.searchParams)
     wss.handleUpgrade(req, socket, head, ws => {
       if (!share) { ws.close(4403, 'Sharing ended or invitation expired'); return }
-      void attachObserver(ws, user, share, linkMode ? autonomousEnv : undefined).catch(() => ws.close(1013, 'Sharing temporarily unavailable'))
+      void attachObserver(ws, user, share, linkMode ? autonomousEnv : undefined, declared)
+        .catch(() => ws.close(1013, 'Sharing temporarily unavailable'))
     })
   })().catch(() => { if (!socket.destroyed) socket.destroy() })
 }
 
 /** Separate from the machine hub: no group key, machine inventory, P2P, or generic RPC route. */
 export async function attachObserver(ws: WebSocket, user: AuthUser | null,
-  share: { id: string; machineId: string; ownerId: string; superTabId?: string | null }, linkEnv?: AutonomousEnvironment): Promise<void> {
+  share: { id: string; machineId: string; ownerId: string; superTabId?: string | null }, linkEnv?: AutonomousEnvironment,
+  declared: ReturnType<typeof declaredKind> = { client: 'unknown', version: null }): Promise<void> {
+  // Its connect and disconnect lines (lib/wsAttribution.ts). Never the share or link id: a link's is its address.
+  const track = trackSocket('observer', 'observer', ws, { ...declared, userId: user?.sub, machineId: share.machineId })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
   const connId = `observer:${randomUUID()}`
   const send = (frame: unknown) => guardedSendJson(ws, frame, 'must')
-  const disposers: Array<() => void> = [trackSocketLiveness(ws)]
+  const disposers: Array<() => void> = [trackSocketLiveness(ws, 'observer')]
   let closed = false
   let opened = false
   const down = (type: string, payload: unknown) => publishDown(share.machineId, { connId, frame: { type, payload } })

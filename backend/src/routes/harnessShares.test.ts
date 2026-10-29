@@ -6,7 +6,15 @@ const mocks = vi.hoisted(() => ({
     machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() }, harnessLink: { findMany: vi.fn() } },
   mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
-vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare } }))
+// The list asks about every share at once; share by share it answers as mayOpenShare would (integration/harnessSharesList.test.ts).
+vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class {
+  mayOpenShare = mocks.mayOpenShare
+  openableShares = async (user: unknown, shares: unknown[]) => {
+    const open = []
+    for (const share of shares) if (await mocks.mayOpenShare(user, share)) open.push(share)
+    return open
+  }
+} }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))

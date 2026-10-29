@@ -46,6 +46,8 @@ const HELP = {
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
+  // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
+  buddies: 'Buddies, once the Swarm owner turns them on (tab.buddies): each person may add their own Buddy per project (buddy.create with projectId, machineId of a Swarm machine, engine claude or codex) and remove it (buddy.remove with projectId). It brainstorms with them in a chat only they read. propose OPERATION_ID JSON: a Buddy only, when its owner asks: {"conversationId":"its chat","ownerMessageId":"their message asking","goal":"...","scope":"...","priority":"low|normal|high"}. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
@@ -360,19 +362,27 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat).
+          const chat = payload.chat === true
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
-            cards().want(payload.on === true, include)
+            const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
+            const focus = cardId(asked.tabId) && cardId(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+            cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
-          if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId) }
+          if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim()) }
+            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim(), chat) }
+          }
+          // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
+          if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
+            return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
-            cards().open(payload.session, payload.tabId, payload.leadId)
+            cards().open(payload.session, payload.tabId, payload.leadId, chat)
             return { ok: true }
           }
           return { error: 'INVALID_REQUEST' }

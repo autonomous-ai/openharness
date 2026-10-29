@@ -10,6 +10,8 @@ import { CacheView } from './cache.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, SwarmParts } from './parts/index.js'
 import { startFinished } from './parts/write.js'
+import { retryTransient } from './retry.js'
+import { retryStaleIndex } from './parts/indexed.js'
 
 type Db = Pick<PrismaClient, '$transaction'> & Prisma.TransactionClient
 type LightOptions = NonNullable<Parameters<typeof store.loadLight>[2]>
@@ -28,9 +30,10 @@ const FEED_SLACK_MS = 15_000
 export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabId: string) =>
   view.get(tabId, 'machines', 'all', () => store.loadMachines(db, tabId))
 
-/** The active parts, then the machines: one read of the base in a transaction, so its parts are one snapshot. */
+/** The active parts, then the machines: one read of the base in a transaction, so its parts are one snapshot. A transaction
+ *  that meets a lock it cannot get in 5 ms (an index build, a release) is tried again as a write's would be (retry.ts). */
 const base = (db: Db, view: CacheView, tabId: string) => Promise.all([
-  view.get(tabId, 'parts', 'main', () => db.$transaction(tx => store.loadReadBase(tx, tabId))),
+  view.get(tabId, 'parts', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId))))),
   readMachines(db, view, tabId),
 ])
 
@@ -41,13 +44,13 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
   const extra: Part<GroupData>[] = []
   const add = (groups: Part<GroupData>[]) => { for (const g of groups) if (!held.has(g.key)) { held.add(g.key); extra.push(g) } }
   if (named.allGroups || named.agentIds?.length || named.projectIds?.length) {
-    const dormant = await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, { dormant: true }))
+    const dormant = await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, 'dormancy', { dormant: true }))
     const agents = new Set(named.agentIds ?? []), projects = new Set(named.projectIds ?? [])
     // A group stored with no project belongs to the default one (projects.ts groupProject).
     add(named.allGroups ? dormant : dormant.filter(g => g.data!.agentIds.some(id => agents.has(id)) || projects.has(g.data!.projectId ?? 'lead')))
   }
   for (const id of named.groupIds ?? []) {
-    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, { key: id })))
+    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id })))
   }
   const startIds = new Set(named.startIds ?? []), startAgents = new Set(named.startAgentIds ?? [])
   const agentOf = (start: AgentStart) => start.harnessId ? stableId(start.request.machineId, start.harnessId) : null
@@ -61,7 +64,7 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
   const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
-    view.get(tabId, name, 'main', () => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))),
+    view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }
@@ -70,6 +73,19 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
 /** The Swarm's newest data change (parts/load.ts lastChangedAt), held at its main stamp: a machine's reading leaves it. */
 export async function readLastChangedAt(db: Db, view: CacheView, tabId: string): Promise<number | null> {
   return view.get(tabId, 'lastChangedAt', 'main', async () => (await store.lastChangedAt(db, [tabId])).get(tabId) ?? null)
+}
+
+/** The same per-Swarm entries, with this read's misses collected into one seven-kind query (also without a cache). */
+export async function readLastChangedAts(db: Db, view: CacheView, tabIds: string[]): Promise<Map<string, number | null>> {
+  const missing: string[] = []
+  let batch: Promise<Map<string, number>> | undefined
+  return new Map(await Promise.all(tabIds.map(async tabId => [tabId, await view.get(tabId, 'lastChangedAt', 'main', () => {
+    missing.push(tabId)
+    // get starts miss loaders synchronously. Defer the query one microtask so every miss joins before it starts;
+    // hits and entries already loading at this stamp never enter the batch.
+    batch ??= Promise.resolve().then(() => store.lastChangedAt(db, missing))
+    return batch.then(newest => newest.get(tabId) ?? null)
+  })] as const)))
 }
 
 /** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */

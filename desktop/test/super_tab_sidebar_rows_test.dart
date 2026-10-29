@@ -161,25 +161,124 @@ void main() {
     },
   );
 
-  testWidgets('an unread project shows its dot just left of the chevron', (
+  // Unread is a bold name and nothing else drawn (Dee, 2026-10-29): no dot
+  // beside it, so nothing in the status column to line up.
+  Finder unreadDot(Finder row) => find.descendant(
+    of: row,
+    matching: find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration! as BoxDecoration).shape == BoxShape.circle &&
+          // A dot holds nothing; an avatar holds its initial.
+          w.child == null,
+    ),
+  );
+  // What a screen reader says for the row, its children merged into it.
+  String spoken(WidgetTester tester, Finder row) =>
+      tester.getSemantics(row).getSemanticsData().label;
+  FontWeight? weightOf(WidgetTester tester, Finder row, String text) => tester
+      .widget<RichText>(
+        find
+            .descendant(
+              of: row,
+              matching: find.byWidgetPredicate(
+                (w) => w is RichText && w.text.toPlainText() == text,
+              ),
+            )
+            .first,
+      )
+      .text
+      .style
+      ?.fontWeight;
+
+  testWidgets(
+    'an unread project and workgroup show their names in bold, with no dot',
+    (tester) async {
+      // Not "Offline editing": it waits for a person, which shows "?" there.
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      final g1 = find.byKey(const ValueKey('super-group-g1'));
+      final name = tester
+          .widget<RichText>(
+            find.descendant(of: g1, matching: find.byType(RichText)).first,
+          )
+          .text
+          .toPlainText();
+      // Read: the project open (medium), the workgroup in ordinary weight.
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
+      expect(weightOf(tester, g1, name), grid.AppFont.regular);
+
+      server.append('New work', conversationId: 'g1');
+      await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
+      expect(weightOf(tester, g1, name), grid.AppFont.semibold);
+      expect(unreadDot(project), findsNothing);
+      expect(unreadDot(g1), findsNothing);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'a screen reader hears an unread row as unread, and a read one not',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 2);
+      final controller = await show(tester, server);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      final g1 = find.byKey(const ValueKey('super-group-g1'));
+      final g2 = find.byKey(const ValueKey('super-group-g2'));
+      expect(spoken(tester, project), isNot(contains('Unread messages')));
+      expect(spoken(tester, g1), isNot(contains('Unread messages')));
+
+      server.append('New work', conversationId: 'g1');
+      await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(spoken(tester, project), contains('Unread messages'));
+      expect(spoken(tester, g1), contains('Unread messages'));
+      expect(spoken(tester, g2), isNot(contains('Unread messages')));
+      semantics.dispose();
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('an unread Buddy row is bold with no dot, and heard as unread', (
     tester,
   ) async {
-    // Not "Offline editing": it waits for a person, which shows "?" there.
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    server.append('New work', conversationId: 'g1');
-    await controller.refresh();
-    await tester.pumpAndSettle();
-    final dot = find.descendant(
-      of: project,
-      matching: find.byWidgetPredicate(
-        (w) => w is Semantics && w.properties.label == 'Unread messages',
+    final semantics = tester.ensureSemantics();
+    Future<void> row({required bool unread}) => tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: SuperTabPmChatRow(
+            key: const ValueKey('pm'),
+            agentId: null,
+            name: 'Buddy',
+            tooltip: 'Your Buddy · Pilot',
+            unread: unread,
+            onTap: () {},
+          ),
+        ),
       ),
     );
-    expect(dot, findsOneWidget);
-    expect(tester.getCenter(dot).dx, lessThan(tester.getRect(toggle).left));
-    await close(tester, controller);
+    final pm = find.byKey(const ValueKey('pm'));
+    final tappable = find.descendant(of: pm, matching: find.byType(InkWell));
+    await row(unread: false);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.regular);
+    expect(spoken(tester, tappable), isNot(contains('Unread messages')));
+    await row(unread: true);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.semibold);
+    expect(unreadDot(pm), findsNothing);
+    expect(spoken(tester, tappable), contains('Unread messages'));
+    semantics.dispose();
   });
 
   testWidgets(

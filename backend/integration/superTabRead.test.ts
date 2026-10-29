@@ -395,9 +395,11 @@ describe('host form (design 4.10)', () => {
     expect(tab.lastChangedAt).toBe(MIGRATED)
     const rows = new Map<string, Row>(tab.roster.filter((r: Row) => r.agent).map((r: Row) => [r.agent!.id, r]))
     expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle, s.more.loner].sort())
-    // Nobody but its machine's owner watches a Lead (final review, Critical 1); a Builder's readers still do.
-    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED, observers: [] })
-    expect(rows.get(s.worker)).toMatchObject({ observers: [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }] })
+    // A Lead's readers watch it, view only (Ken, 2026-10-28), as a Builder's do; marked, its host lets nobody else.
+    const readers = [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }]
+    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED, observers: readers,
+      confidential: true, membersWatch: true })
+    expect(rows.get(s.worker)).toMatchObject({ observers: readers, confidential: false, membersWatch: false })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
     expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })
     expect(tab.pool).toMatchObject({ tabId: s.tabId, machine: { machineId: machine }, starts: [{ id: 'queued' }, { id: 'queued-in-dormant' }] })
@@ -697,6 +699,37 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, owner, 'open', s.lead)).toEqual([expect.objectContaining({ id: second })])
   })
 
+  it('leaves a decision to the PM: the recommended option, listed as the PM\'s, and the PM\'s line in the person\'s quiet Chat with PM', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
+      questions: [{ ...question('Ship how?'), recommended: 1 }] }, owner, s.lead)
+    const id = (asked.body.data.result.decisionIds as string[])[0]!
+    // The person's Chat with PM went quiet: it is not in a command's usual load.
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.dormant = true })
+    const left = await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, peer)
+    expect(left.status, JSON.stringify(left.body)).toBe(200)
+    expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ choice: 1, delegated: true })
+    const listed = { id, choice: 1, delegated: true, answer: 'PM decided: To everyone' }
+    expect(await decisions(s.tabId, peer, 'settled')).toEqual([expect.objectContaining(listed)])
+    // An older Desktop reads the person's answered decisions and labels each "You chose": it is not given this one.
+    expect(await decisions(s.tabId, peer, 'answered')).toEqual([])
+    // Agents read it as answered, as before, now saying who decided.
+    expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining(listed)])
+    const line = (await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: s.privateId } })).at(-1)
+    expect(line).toMatchObject({ text: 'PM decided: To everyone — Ship how?', recipientIds: [], source: { kind: 'decision-delegated', decisionId: id } })
+    expect(line!.author).toMatchObject({ kind: 'agent', id: s.lead })
+    // Only the person asked may leave it to the PM, and only while it is open.
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, owner)).status).toBe(404)
+    // A person's own answer is listed as theirs.
+    const mine = ((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Name it?')] }, owner, s.lead))
+      .body.data.result.decisionIds as string[])[0]!
+    await post(s.tabId, { type: 'decision.answer', decisionId: mine, choice: 0 }, peer)
+    expect((await decisions(s.tabId, peer, 'settled')).find(d => d.id === mine)).toMatchObject({ delegated: false, answer: 'Behind a flag' })
+    expect((await decisions(s.tabId, peer, 'answered')).map(d => d.id)).toEqual([mine])
+  })
+
   it('takes an answer in a conversation that went quiet and was archived, counts it on a fresh first load, and tells both agents', async () => {
     const s = await scene()
     clock = Date.now()
@@ -761,6 +794,35 @@ describe('decisions asked of one person (v2)', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived.decisionsDigest).toBe(left.decisionsDigest)
   })
 
+  it('marks which tags wait, so an answer and a new tag read again though the count stays, an unrelated post not', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const tag = async (conversationId: string) => expect((await post(s.tabId, { type: 'message.send', conversationId, text: 'Please look.', replyTo: null,
+      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)).status).toBe(200)
+    const derived = async (as: AuthUser = peer) => (await get(`/api/super-tabs/${s.tabId}/parts`, as)).body.data
+    await tag(s.web)
+    const before = await derived()
+    expect(before.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: expect.any(String) })
+    const [mention] = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ id: string }>
+    expect(before.derived.mentionsDigest).not.toContain(mention!.id)
+    // Someone else's post changes the Swarm and no tag.
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Unrelated.', replyTo: null, recipientIds: [] })).status).toBe(200)
+    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.cursor}`, peer)).body.data
+    expect(changes.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.derived.mentionsDigest })
+    // Answered by the person's reply, and tagged in another conversation: still one waiting, another one.
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
+    await tag(s.privateId)
+    const replaced = (await derived()).derived
+    expect(replaced.mentionsWaiting).toBe(1)
+    expect(replaced.mentionsDigest).not.toBe(before.derived.mentionsDigest)
+    // 30 days on it expires; with none left it is the same as for anyone with none.
+    clock = Date.now() + 30 * DAY + 1000
+    const expired = (await derived()).derived
+    expect(expired.mentionsWaiting).toBe(0)
+    expect(expired.mentionsDigest).not.toBe(replaced.mentionsDigest)
+    expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
+  })
+
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
     const s = await scene()
     clock = Date.now()
@@ -785,6 +847,7 @@ describe('decisions asked of one person (v2)', () => {
     const waiting = await counted.$transaction(async tx => {
       const state = parts.reassemble(await parts.loadActive(tx, s.tabId))
       whole.length = 0
+      quiet.length = 0
       return decisionsWaiting(tx, s.tabId, state, { kind: 'person', userId: peer.sub, email: peer.email })
     })
     expect(waiting.count).toBe(150)

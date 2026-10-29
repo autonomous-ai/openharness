@@ -2,7 +2,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { fetchDefaultBranch } from '../lib/gitProject.js'
 import { otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
-import { swarmGitPrepareEnv } from '../lib/swarmGitHub.js'
+import { revokeGitHubToken, swarmGitPrepareEnv } from '../lib/swarmGitHub.js'
 import { identifier, object } from './wire.js'
 import { repairSwarmCloneTrust, swarmCloneRoot } from './cloneTrust.js'
 
@@ -52,13 +52,19 @@ export async function startGitHub(core: CoreApi, row: Json, start: Json, deps: {
  * core/agents/launches.ts). Returns whom the work is for, for the start; null when this machine's own login is right for it.
  */
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
-  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchDefaultBranch }): Promise<{ requester: string } | null> {
+  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchDefaultBranch; revoke?: (token: string) => Promise<void> }):
+  Promise<{ requester: string } | null> {
   const github = await startGitHub(core, row, start, deps)
   const gitEnv = github ? swarmGitPrepareEnv(github.token) : undefined
-  if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
-  const request = object(start.request)
-  if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
-    await (deps.fetch ?? fetchDefaultBranch)(resolve(request.cwd), gitEnv)
+  try {
+    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
+    const request = object(start.request)
+    if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
+      await (deps.fetch ?? fetchDefaultBranch)(resolve(request.cwd), gitEnv)
+    }
+  } finally {
+    // The read-only token is done with: the agent gets a token of its own for its task (superTabs/github.ts).
+    if (github) await (deps.revoke ?? revokeGitHubToken)(github.token).catch(error => console.warn(`[super-tabs] could not revoke the clone token: ${(error as Error).message}`))
   }
   return github ? { requester: github.requester } : null
 }

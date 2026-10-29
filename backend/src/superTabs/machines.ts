@@ -32,10 +32,16 @@ export interface ContributedMachine {
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
-/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
+/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
+ *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
+/** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
+ *  owner's add (commands.ts machine.contribute). Diego's Mac, 2026-10-28: its cleanup never finished, and adding it back
+ *  said 'still cleaning up' for good. */
+export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
+  !cleanup.requestedAt || now - Date.parse(cleanup.requestedAt) >= REMOVAL_FALLBACK_MS
 /** Why a removal ended: its host confirmed, it was offline, or it kept reporting without confirming for REMOVAL_FALLBACK_MS. */
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
@@ -205,6 +211,10 @@ export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people
  *  runs every teammate's work as one macOS user, so it serves one Workspace's teammates at a time (swarm-workspaces design). */
 export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired(), otherWorkspace = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
+  // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
+  // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
+  // named it (local Team account run, 2026-10-28).
+  if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
   if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
@@ -388,7 +398,8 @@ export function machineOffline(pool: ContributedMachine, now: number): boolean {
 /** A removal its host cannot acknowledge (offline) or has not acknowledged in REMOVAL_FALLBACK_MS: the machine's records go, and the
  *  cleanup waits for its host on its next connection. */
 export function expireRemoval(state: SuperTabState, pool: ContributedMachine, now: number): RemovalEnd {
-  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
+  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId,
+    requestedAt: pool.removal!.requestedAt })
   state.machines = state.machines!.filter(m => m !== pool)
   return machineOffline(pool, now) ? 'offline' : 'timedOut'
 }
@@ -490,8 +501,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  // Before the request's own fields: a machine that takes none of this project's work says so first.
-  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
+  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

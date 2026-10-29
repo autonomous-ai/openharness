@@ -63,26 +63,45 @@ class IssuedTokens {
 /// calls them (cli.ts `loginCommand`, authSession.ts `refreshRequest`). No bearer rides these:
 /// they are how one is got.
 class DirectAuthApi {
-  DirectAuthApi({required this.config, Dio? dio, String? clientId})
-    : clientId = clientId ?? ssoClientId,
-      _dio =
-          dio ??
-          attachHttpLog(
-            Dio(
-              BaseOptions(
-                baseUrl: config.apiBaseUrl,
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 30),
-                validateStatus: (status) => status != null && status < 600,
-              ),
-            ),
-          );
+  DirectAuthApi({
+    required this.config,
+    Dio? dio,
+    String? clientId,
+    this.harnessSessionLabel,
+  }) : clientId = clientId ?? ssoClientId,
+       _dio =
+           dio ??
+           attachHttpLog(
+             Dio(
+               BaseOptions(
+                 baseUrl: config.apiBaseUrl,
+                 connectTimeout: const Duration(seconds: 15),
+                 receiveTimeout: const Duration(seconds: 30),
+                 validateStatus: (status) => status != null && status < 600,
+               ),
+             ),
+           );
 
   final AppConfig config;
 
   /// The auth-service client this build signs in as (`auth/sso_client.dart`).
   final String clientId;
+
+  /// What this device calls itself, set by a build that holds a Harness session in place of SSO
+  /// tokens (backend `lib/ssoSession.ts`): a native one ([viewerSessionLabel]). It asks for one when
+  /// it signs in and when it renews an SSO sign-in; a backend from before it answers with the SSO
+  /// tokens as ever. Null — the browser build — asks for nothing.
+  final String? harnessSessionLabel;
   final Dio _dio;
+
+  Map<String, String>? get _harnessSessionAsk {
+    final label = harnessSessionLabel;
+    return label == null ? null : {'kind': 'viewer', 'label': label};
+  }
+
+  /// A refresh token Harness issued itself, not the account service.
+  static bool isHarnessRefreshToken(String token) =>
+      token.startsWith('hnr_') || token.startsWith('htr_');
 
   static const _unavailable =
       'Could not renew your sign-in. That is usually the sign-in service having a moment — '
@@ -161,6 +180,7 @@ class DirectAuthApi {
           'state': state,
           'tx': tx,
           if (attribution.isNotEmpty) 'attribution': attribution,
+          'harnessSession': ?_harnessSessionAsk,
         },
       ),
     );
@@ -170,29 +190,45 @@ class DirectAuthApi {
 
   // -- signing in by a QR a signed-in phone approves (backend routes/qrSignIn.ts) --
 
-  Future<({String code, String pollToken, int expiresIn})> qrStart({required String label}) async {
+  Future<({String code, String pollToken, int expiresIn})> qrStart({
+    required String label,
+  }) async {
     final data = unwrapApiResponse(
-      await _dio.post('/api/auth/qr/start', data: {'label': label, 'kind': 'viewer'}),
+      await _dio.post(
+        '/api/auth/qr/start',
+        data: {'label': label, 'kind': 'viewer'},
+      ),
     );
-    final code = data is Map ? data['code'] : null, poll = data is Map ? data['pollToken'] : null;
+    final code = data is Map ? data['code'] : null,
+        poll = data is Map ? data['pollToken'] : null;
     final expiresIn = data is Map ? data['expiresIn'] : null;
     if (code is! String || poll is! String || expiresIn is! int) {
-      throw const DirectAuthException('Sign-in by phone is not available here.');
+      throw const DirectAuthException(
+        'Sign-in by phone is not available here.',
+      );
     }
     return (code: code, pollToken: poll, expiresIn: expiresIn);
   }
 
   /// `pending`, `denied`, `expired`, or `approved` with the account's email.
   Future<({String status, String? email})> qrPoll(String pollToken) async {
-    final data = unwrapApiResponse(await _dio.post('/api/auth/qr/poll', data: {'pollToken': pollToken}));
-    final status = data is Map ? data['status'] : null, email = data is Map ? data['email'] : null;
-    return (status: status is String ? status : 'expired', email: email is String ? email : null);
+    final data = unwrapApiResponse(
+      await _dio.post('/api/auth/qr/poll', data: {'pollToken': pollToken}),
+    );
+    final status = data is Map ? data['status'] : null,
+        email = data is Map ? data['email'] : null;
+    return (
+      status: status is String ? status : 'expired',
+      email: email is String ? email : null,
+    );
   }
 
   /// The same code, alive a while longer; null when it can live no longer.
   Future<int?> qrExtend(String pollToken) async {
     try {
-      final data = unwrapApiResponse(await _dio.post('/api/auth/qr/extend', data: {'pollToken': pollToken}));
+      final data = unwrapApiResponse(
+        await _dio.post('/api/auth/qr/extend', data: {'pollToken': pollToken}),
+      );
       final expiresIn = data is Map ? data['expiresIn'] : null;
       return expiresIn is int ? expiresIn : null;
     } catch (_) {
@@ -201,7 +237,9 @@ class DirectAuthApi {
   }
 
   Future<IssuedTokens> qrClaim(String pollToken) async {
-    final data = unwrapApiResponse(await _dio.post('/api/auth/qr/claim', data: {'pollToken': pollToken}));
+    final data = unwrapApiResponse(
+      await _dio.post('/api/auth/qr/claim', data: {'pollToken': pollToken}),
+    );
     return IssuedTokens.fromData(data) ??
         (throw const DirectAuthException('Sign-in returned no access token.'));
   }
@@ -232,6 +270,8 @@ class DirectAuthApi {
           'refreshToken': refreshToken,
           'autonomousEnv': autonomousEnv,
           'clientId': ?clientId,
+          if (!isHarnessRefreshToken(refreshToken))
+            'harnessSession': ?_harnessSessionAsk,
         },
       );
     } on DioException {
@@ -245,9 +285,32 @@ class DirectAuthApi {
         signedOut: true,
       );
     }
+    // A Harness session the account service has not confirmed for 7 days (backend `lib/ssoSession.ts`):
+    // the person is asked to sign in again, and the session is kept — not signed out — so the account
+    // service coming back renews it.
+    if (error['code'] == 'SIGN_IN_AGAIN') {
+      throw const DirectAuthException(
+        'Sign in again: this sign-in could not be confirmed with your Autonomous account for 7 days.',
+      );
+    }
     final tokens = body['success'] == false
         ? null
         : IssuedTokens.fromData(body['data']);
     return tokens ?? (throw const DirectAuthException(_unavailable));
+  }
+
+  /// Ends a Harness session on the server, as signing out does. False for an SSO refresh token,
+  /// which is not the backend's to end, and when the server did not confirm it.
+  Future<bool> revoke(String refreshToken) async {
+    if (!isHarnessRefreshToken(refreshToken)) return false;
+    try {
+      final res = await _dio.post(
+        '/api/auth/revoke',
+        data: {'refreshToken': refreshToken},
+      );
+      return res.statusCode == 200;
+    } on DioException {
+      return false;
+    }
   }
 }

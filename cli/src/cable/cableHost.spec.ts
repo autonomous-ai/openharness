@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
@@ -1000,19 +1000,96 @@ describe('Swarm cards', () => {
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
   })
 
+  it('names the conversation the window has open in the active Swarm tab, when it names one', () => {
+    const host = new DaemonCableHost(wiring())
+    const swarms = [
+      { id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1' },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Work', agentIds: [], panes: 0, conversationId: 'c1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+  })
+
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => true),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
     host.swarmCardsWanted(true); host.swarmCardOpen('c1', 'st1', 'l1'); host.superTabSelected('st1', 'p1')
     expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
-    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1')
+    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1', false)
     expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
     expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
+    // A dial that speaks swarmChat asks for the chat on the face: the flag goes on to the wiring.
+    host.swarmCardOpen('c1', 'st1', 'l1', true)
+    expect(w.swarmCardOpen).toHaveBeenLastCalledWith('c1', 'st1', 'l1', true)
+    await host.swarmCardRecap('st1', 'l1', true)
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', true)
+    expect(await host.swarmSay('h1', 'ship it', true)).toBe(true)
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await host.swarmSay('h1', 'ship it')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', false)
     const bare = new DaemonCableHost(wiring())
     bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+  })
+})
+
+describe('firmware release lookup', () => {
+  // A dial on 9.9.9 is never offered the manifest's 0.0.1, so each call ends after the manifest read and
+  // the count below is exactly the GETs a plugged-in dial costs.
+  const manifest = { circle: { version: '0.0.1', url: 'https://x/fw.bin', sha256: 'a'.repeat(64), size: 1 } }
+  function stubManifest(ok = () => true) {
+    const fetch = vi.fn(async () => (ok() ? new Response(JSON.stringify(manifest)) : new Response('', { status: 503 })))
+    vi.stubGlobal('fetch', fetch)
+    return fetch
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('answers repeat keepalives from the release it read, for 30 minutes', async () => {
+    vi.useFakeTimers()
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    for (let i = 0; i < 19; i++) {
+      vi.advanceTimersByTime(15_000)
+      await host.firmwareFor('9.9.9', 'circle', true)
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(30 * 60_000)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the manifest at once unless a keepalive asks, and per OTA key', async () => {
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await host.firmwareFor('9.9.9', 'harness-pro', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('never keeps a failed read: the next keepalive asks again', async () => {
+    let up = true
+    const fetch = stubManifest(() => up)
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    up = false
+    // Nor does an earlier good read stand in for it.
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+    up = true
+    await host.firmwareFor('9.9.9', 'circle', true)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 })

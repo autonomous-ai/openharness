@@ -59,6 +59,7 @@ import {
   terminalP2pPolicy,
 } from './p2pSignaling.js'
 import { presenceTracker, recordRemoteUsage, touchClientOnlineDay, type ClientBuild } from './dailyTracking.js'
+import { declaredKind, trackSocket } from './wsAttribution.js'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 
 // How often an open mobile/web socket refreshes its person's `user_daily_client_presence` row.
@@ -113,7 +114,7 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
     void (async () => {
       const binding = await prisma.machine.findUnique({ where: { machineId: machineId } })
       if (!binding || binding.deletedAt || !machineBillingAllowsDataPlane(binding)) { socket.destroy(); return }
-      wss.handleUpgrade(req, socket, head, (ws) => attachWebClient(ws, machineId))
+      wss.handleUpgrade(req, socket, head, (ws) => attachWebClient(ws, machineId, declaredKind(new URL(req.url ?? '/', 'http://x').searchParams)))
     })().catch((err) => { logger.warn('web-ws legacy upgrade failed', { error: String(err) }); socket.destroy() })
     return
   }
@@ -126,9 +127,10 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
       // the daemon's relay (and any older client) says nothing and is never counted as a person.
       const { surface, build } = declaredClient(query)
+      const declared = declaredKind(query)
       const user = await authenticateAccessToken(cred, requestedEnvironment)
       if (socket.destroyed) return
-      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface, build))
+      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface, build, declared))
     } catch (err) {
       if (socket.destroyed) return
       const invalid = err instanceof SsoAuthError && err.code === 'INVALID_TOKEN'
@@ -149,7 +151,8 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
 }
 
 /** PER-USER socket: starts unattached; `machine_select` scopes it to one owned machine at a time. */
-function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null, build: ClientBuild): void {
+function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null, build: ClientBuild,
+  declared: ReturnType<typeof declaredKind> = { client: 'unknown', version: null }): void {
   let client: HubClient | null = null
   let currentAgentId: string | null = null
   let currentBinding: Machine | null = null
@@ -162,7 +165,13 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   const p2pSignalRate = new P2pSignalRateGuard()
 
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { userId: user.sub })
-  logger.info('web user connected', { userId: user.sub })
+  // Its connect and disconnect lines (lib/wsAttribution.ts): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes
+  // declared no client and lived a median 0.4 s, and these lines named only the user.
+  const track = trackSocket('web', 'web user', ws, { ...declared, userId: user.sub })
+  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number }): void => {
+    track.selected(payload.error)
+    send({ type: 'machine_select_error', payload })
+  }
   send({ type: 'connected', payload: { userId: user.sub } })
 
   // The desktop app never dials this socket — the local daemon does, one per FOREIGN machine it relays —
@@ -185,7 +194,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // registry-driven sweep can't see it — it would be killed by LB idle timeouts, or never reaped when
   // dead. This used to be a second heartbeat loop here, carefully disabled while attached so the two
   // sweeps couldn't race; the hub now tracks the socket itself, which is one sweep for both states.
-  const releaseLiveness = trackSocketLiveness(ws)
+  const releaseLiveness = trackSocketLiveness(ws, 'web')
 
   // ── Live Machines-list feed ──────────────────────────────────────────────────────────────────
   // Subscribe node_status for EVERY agent the user owns and forward it tagged with the machineId (the
@@ -332,6 +341,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
 
   // ── Agent selection ──────────────────────────────────────────────────────────────────────────
   const ack = (machineId: string): void => {
+    track.selected('accepted')
     send({
       type: 'connected',
       payload: { machineId: machineId, p2p: terminalP2pPolicy(user.sub, machineId) },
@@ -354,25 +364,29 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (closed || gen !== selectGen) return // superseded by a newer select
     // Another account's machine is selected only while it is shared with this one (lib/machineAccess.ts),
     // with the same rights as the owner's own; its daemon decides again whether to trust this account.
+    let shareCheckFailed = false
     const shared = binding && !binding.deletedAt && binding.userId !== user.sub
-      ? await sharedMachineAccess(user, binding).catch(() => null) : null
+      ? await sharedMachineAccess(user, binding).catch(() => { shareCheckFailed = true; return null }) : null
     if (closed || gen !== selectGen) return
     if (!binding || binding.deletedAt || (binding.userId !== user.sub && !shared)) {
-      logger.warn('machine_select rejected', { userId: user.sub, machineId })
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'NOT_YOUR_MACHINE' } })
+      // About 45 an hour in prod said nothing more (2026-10-28): a machine removed since, or one no longer shared, is the
+      // client's stale list; a failed share check is ours.
+      const reason = !binding ? 'unknown' : binding.deletedAt ? 'deleted' : shareCheckFailed ? 'share_check_failed' : 'not_shared'
+      logger.warn('machine_select rejected', { userId: user.sub, machineId, reason })
+      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE' })
       return
     }
     if (storedAutonomousEnvironment(binding.autonomousEnv) !== user.autonomousEnv) {
       logger.warn('machine_select environment rejected', { userId: user.sub, machineId, autonomousEnv: user.autonomousEnv })
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_ENV_MISMATCH' } })
+      refuse({ machineId: machineId, error: 'MACHINE_ENV_MISMATCH' })
       return
     }
     if (binding.billingStatus === 'pending') {
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_PAYMENT_PENDING' } })
+      refuse({ machineId: machineId, error: 'MACHINE_PAYMENT_PENDING' })
       return
     }
     if (binding.billingStatus === 'suspended') {
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_SUBSCRIPTION_REQUIRED' } })
+      refuse({ machineId: machineId, error: 'MACHINE_SUBSCRIPTION_REQUIRED' })
       return
     }
     try {
@@ -380,7 +394,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     } catch (err) {
       if (!closed && gen === selectGen) {
         const code = err instanceof Error && 'code' in err ? String((err as { code?: unknown }).code) : 'MACHINE_START_FAILED'
-        send({ type: 'machine_select_error', payload: { machineId: machineId, error: code } })
+        refuse({ machineId: machineId, error: code })
       }
       return
     }
@@ -394,7 +408,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     // the web viewer waits attached for the machine to come back, as before.
     if ((refuseOffline || !surface) && !await machineOnline(machineId, !!await getAgentPresence(machineId))) {
       if (!closed && gen === selectGen) {
-        send({ type: 'machine_select_error', payload: { machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS } })
+        refuse({ machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS })
       }
       return
     }
@@ -429,7 +443,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       client = null
       currentAgentId = null
       currentBinding = null
-      send({ type: 'machine_select_error', payload: { machineId, error: 'NOT_YOUR_MACHINE' } })
+      refuse({ machineId, error: 'NOT_YOUR_MACHINE' })
       ws.close(4403, 'Sharing ended')
     }
     void subscribeMachineShareChanged(machineId, () => { void recheck().catch(() => { /* the next change asks again */ }) })
@@ -621,18 +635,20 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
     if (documentsUnsub) { documentsUnsub(); documentsUnsub = null }
-    logger.info('web user disconnected', { userId: user.sub, machineId: currentAgentId ?? undefined })
   }
-  ws.on('close', cleanup)
-  ws.on('error', cleanup)
+  // The line takes its code from the close: `ws` emits an error first on a broken socket, which has none (review of #2029).
+  ws.on('close', (code: number, reason: Buffer) => { cleanup(); track.closed(code, reason?.toString(), { machineId: currentAgentId ?? undefined }) })
+  ws.on('error', () => cleanup())
 }
 
 /** LEGACY per-agent socket (old bundle during rolling deploys): bound to one agent for life. */
-function attachWebClient(ws: WebSocket, machineId: string): void {
+function attachWebClient(ws: WebSocket, machineId: string, declared: ReturnType<typeof declaredKind>): void {
   const client = attachHubClient(ws, machineId, 'web')
   const terminalRate = new TerminalRateGuard()
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, connId: client.connId })
-  logger.info('web client connected (legacy)', { machineId, connId: client.connId })
+  // Tracked like the per-user socket (lib/wsAttribution.ts); untracked, each one counted as refused (review of #2029).
+  const track = trackSocket('web', 'web client (legacy)', ws, { ...declared, machineId, hubConnId: client.connId })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
 
   send({ type: 'connected', payload: { machineId: machineId } })
 
@@ -676,7 +692,6 @@ function attachWebClient(ws: WebSocket, machineId: string): void {
     if (closed) return // 'error' is followed by 'close': detach (and its __client_disconnected) only once
     closed = true
     client.detach()
-    logger.info('web client disconnected (legacy)', { machineId, connId: client.connId })
   }
   ws.on('close', cleanup)
   ws.on('error', cleanup)

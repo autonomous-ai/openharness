@@ -1,5 +1,5 @@
 import type { AgentStart, Conversation, SuperTabState } from '../model.js'
-import { isLeads, nextConversationNumber } from '../model.js'
+import { isLeads, knownKind, nextConversationNumber } from '../model.js'
 import type { ContributedMachine, MachineCleanup } from '../machines.js'
 import type { SwarmProject } from '../projects.js'
 import type { HeadData, MachineData, Part, PartKind, ProgressData, SwarmParts } from './types.js'
@@ -7,8 +7,8 @@ import type { HeadData, MachineData, Part, PartKind, ProgressData, SwarmParts } 
 /** The legacy report progress (`SuperTab.state`), in tab revisions. */
 interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; requestedRevision: number; since: number; requestedAt?: number; requestMessageId?: string }
 
-/** Conversation kinds this release knows; a part of another kind is kept aside unchanged (model.ts parkLaterConversations). */
-export const knownKind = (group: Conversation) => group.kind == null || group.kind === 'leads'
+// The kinds this release knows are listed once (model.ts knownKind): a second list here once set Buddy chats aside, so no host or change read saw them.
+export { knownKind }
 const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActivityAt'] as const
 /** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */
 const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups'] as const
@@ -37,7 +37,7 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
   for (const { machineId, harnessId, generation, renewed } of state.harnessReservations ?? []) of(machineId).reservations.push({ harnessId, generation, renewed })
   for (const { machineId, harnessId } of state.releasedHarnesses ?? []) of(machineId).released.push(harnessId)
   for (const { machineId, agentId, harnessId, machineOwnerId } of state.closingSessions ?? []) of(machineId).closingSessions.push({ agentId, harnessId, machineOwnerId })
-  for (const { machineId, removalId, machineOwnerId } of state.machineCleanups ?? []) of(machineId).cleanups.push({ removalId, machineOwnerId })
+  for (const { machineId, ...cleanup } of state.machineCleanups ?? []) of(machineId).cleanups.push(cleanup)
   return machines
 }
 
@@ -120,7 +120,7 @@ export function reassemble(parts: SwarmParts, { share = false }: { share?: boole
   const reservations = flat(m => m.reservations.map(r => ({ machineId: m.machineId, ...r })))
   const released = flat(m => m.released.map(harnessId => ({ machineId: m.machineId, harnessId })))
   const closing = flat(m => m.closingSessions.map(c => ({ agentId: c.agentId, machineId: m.machineId, harnessId: c.harnessId, machineOwnerId: c.machineOwnerId })))
-  const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, removalId: c.removalId, machineOwnerId: c.machineOwnerId })))
+  const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, ...c })))
   const list = <K extends typeof LISTS[number]>(key: K, items: NonNullable<SuperTabState[K]>) => {
     if (items.length || present.has(key)) state[key] = copy(items)
   }

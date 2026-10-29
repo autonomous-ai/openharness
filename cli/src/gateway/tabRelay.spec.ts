@@ -12,6 +12,7 @@ vi.mock('../lib/wsLiveness.js', () => ({
 }))
 import { SHARED_TAB_FRAME_MAX } from '../lib/e2ee/tabSession.js'
 import { TAB_RELAY_MAX_FRAME, TAB_RELAY_QUEUE, TAB_RELAY_READY_WAIT_MS, TAB_RELAY_SEND_DEADLINE_MS, TabRelaySockets } from './tabRelay.js'
+import { VERSION } from '../version.js'
 
 const TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6'
 const TAB2 = 'b1b2c3d4e5f6a1b2c3d4e5f6'
@@ -92,7 +93,9 @@ describe('the gateway\'s sockets to the shared tabs\' relay', () => {
     await relay.open(TAB)
     await relay.open(TAB)
     await until(() => server.conns.length === 1)
-    expect(server.conns[0].url).toBe(`/api/agent-messages-ws?share=${TAB}&machine=bob-mini&autonomousEnv=staging`)
+    // It says it is a daemon's relay, and which CLI (WebSocket roadmap Phase 0).
+    expect(server.conns[0].url).toBe(`/api/agent-messages-ws?share=${TAB}&machine=bob-mini&autonomousEnv=staging`
+      + `&client=relay&v=${encodeURIComponent(VERSION)}`)
     expect(server.conns[0].protocol).toBe('tok-1')
     await relay.open(TAB)
     await sleep(30)

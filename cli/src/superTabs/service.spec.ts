@@ -650,7 +650,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), say: vi.fn(async () => true), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -660,11 +660,11 @@ describe('the Swarm cards the devices ask for', () => {
   it('starts and stops the reader as a capable Pro comes and goes, and hands what it reads to the core', async () => {
     const t = withCards()
     expect(await t.ask({ action: 'cardsWanted', on: true }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, [])
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, [], null)
     expect(await t.ask({ action: 'cardsWanted', on: true, include: ['s1', 'bad id', 'x'.repeat(48), 7] }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'])
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], null)
     expect(await t.ask({ action: 'cardsWanted', on: false }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(false, [])
+    expect(t.cards.want).toHaveBeenLastCalledWith(false, [], null)
     // One reader for the machine, whose answers go to the core.
     expect(t.make).toHaveBeenCalledOnce()
     ;(t.cards.onCards as (items: unknown[]) => void)([])
@@ -685,13 +685,42 @@ describe('the Swarm cards the devices ask for', () => {
     const t = withCards()
     expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true, tabId: 't1', leadId: 'l1', text: 'Shipped', at: 5, none: false })
     expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
-    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1')
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', false)
     expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }, owner)).toEqual({ ok: true })
-    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null)
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null, false)
     for (const bad of [{ action: 'cardRecap', tabId: 'bad id', leadId: 'l1' }, { action: 'cardRecap', tabId: 't1' }, { action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'bad id' }, { action: 'cardOpen', session: 's1', leadId: null },
       { action: 'cardOpen', tabId: 't1', leadId: null }, { action: 'cardRecap', tabId: 'x'.repeat(48), leadId: 'l1' }]) {
       expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
     }
+  })
+  it('cardsWanted passes focus to the cards; cardRecap, cardOpen and cardSay pass chat', async () => {
+    const t = withCards()
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', extra: 1 } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
+    // A focus that is not two ids is none.
+    for (const focus of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 's1', conversationId: 'x'.repeat(48) }, { tabId: 's1' }, 'g1']) {
+      await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus }, owner)
+      expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], null)
+    }
+    await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }, owner)
+    expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', true)
+    await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' }, owner)
+    expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', false)
+    await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }, owner)
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', true)
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: ' ship it ', chat: true }, owner)).toEqual({ ok: true, said: true })
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', false)
+  })
+  it('cardWorker says whether a machine\'s harness is one of a Swarm\'s workers, for the devices to keep its failure quiet', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: true })
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm1', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: false })
+    for (const bad of [{ action: 'cardWorker', machineId: 'bad id', harnessId: 'h-r1' }, { action: 'cardWorker', machineId: 'm2' }, { action: 'cardWorker', harnessId: 'h-r1' }]) {
+      expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, { local: false, owner: true })).toEqual({ error: 'OWNER_REQUIRED' })
   })
   it('answers a backend refusal while reading a recap as the service does any other', async () => {
     const t = withCards()

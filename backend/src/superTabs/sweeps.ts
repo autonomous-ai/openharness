@@ -3,6 +3,7 @@ import type { AgentStart, Conversation } from './model.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
+import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -11,13 +12,13 @@ import { swarmTransaction } from './cache.js'
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
-    await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] })
+    await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
   // Workspaces (workspaceStore.ts): a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
   for (const collection of ['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']) {
-    await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 }] })
+    await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 })
   }
-  await db.$runCommandRaw({ createIndexes: 'SwarmWorkspaceInvitation', indexes: [{ key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 }] })
+  await ensureIndex(db, 'SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 })
 }
 
 /** A removed person, agent or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds

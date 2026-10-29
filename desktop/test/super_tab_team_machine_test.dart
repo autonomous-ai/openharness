@@ -296,6 +296,73 @@ void main() {
     },
   );
 
+  // Local Team account run, 2026-10-28: after `harness team remove` its pool stays listed, and the Mac's owner read
+  // "Harness Team account offline" with no way to set one up again.
+  testWidgets(
+    'a removed Harness Team account leaves its Mac a Mac without one: not set up, and Set up for its owner',
+    (tester) async {
+      final app = createApp(connected: true)..macOSForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      final server = _swarm();
+      server.state['machines'] = [
+        _pool(
+          'm',
+          contributor: 'owner',
+          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
+        ),
+        _pool(
+          'm-team',
+          contributor: 'owner',
+          host: 'm',
+          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
+        ),
+      ];
+      final c = server.controller(account: 'owner');
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, app: app, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_problemText(tester, 'm'), "Teammates' agents paused: not set up");
+      expect(
+        find.byKey(const ValueKey('super-machine-team-setup-m')),
+        findsOneWidget,
+      );
+      await _unmount(tester, c);
+      app.dispose();
+    },
+  );
+
+  // Local Team account run, 2026-10-28 (group #646, item 5): a teammate's Lead computer, never added to the Swarm, read
+  // "Unavailable machine" with an empty dot. Named by its owner, as the Swarm knows no name for it.
+  testWidgets(
+    'another person\'s computer that only runs their agents is named by them, and live while an agent there is up',
+    (tester) async {
+      final server = _swarm();
+      server.state['machines'] = <Map<String, dynamic>>[];
+      server.state['agents'] = [_agent('a1', 'peer-air')];
+      var c = await _mount(tester, server);
+      expect(find.text("peer's computer"), findsOneWidget);
+      expect(find.text('Unavailable machine'), findsNothing);
+      expect(_state('peer-air', 'live'), findsOneWidget);
+      await _unmount(tester, c);
+      server.state['agents'] = [
+        {
+          ..._agent('a1', 'peer-air'),
+          'downSince': DateTime.now().toUtc().toIso8601String(),
+        },
+      ];
+      c = await _mount(tester, server);
+      expect(find.text("peer's computer"), findsOneWidget);
+      expect(_state('peer-air', 'offline'), findsOneWidget);
+      await _unmount(tester, c);
+    },
+  );
+
   testWidgets('the line stays away when it would say nothing new', (
     tester,
   ) async {

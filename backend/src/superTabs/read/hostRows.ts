@@ -6,14 +6,14 @@
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, teamAccountSwarm, type MachineCleanup } from '../machines.js'
-import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
+import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
   people: Array<{ id: string; email: string }>
-  /** Its agents whose session is confidential in some Swarm (confidential.ts): nobody but its machine's person watches them. */
+  /** Its agents whose session is confidential in another Swarm (confidential.ts): nobody but its machine's person watches them. */
   confidential: Set<string>
   /** Throws a SuperTabError when the agent's machine grant is gone (store.ts agentGrant). */
   agentGrant(target: Agent): Promise<void>
@@ -86,6 +86,8 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       .map(p => ({ email: p.email, userId: p.id })),
     // The host refuses every share of a confidential session, ordinary ones too, and remembers it (cli observers.ts).
     confidential: isConfidential(state, target, closed),
+    // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
+    membersWatch: isConfidential(state, target, closed) && !watchClosed(state, target, closed),
   }
 }
 
@@ -93,15 +95,19 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
   let contribution
   try { contribution = machineContribution(state, machineId) } catch (error) { if (error instanceof SuperTabError) return null; throw error }
   if (!contribution || contribution.contributorId !== user.sub) return null
-  const starts = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === contribution.generation
+  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === contribution.generation
     && (!s.harnessId || !s.poolSettled) && !s.error)
+  // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one.
+  const starts = pending.filter(s => !s.request.buddyOf), buddyStarts = pending.filter(s => s.request.buddyOf)
+  const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
-  return { tabId, paused: state.paused, machine: contribution, starts,
-    ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => starts.some(s =>
+  return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}),
+    ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s =>
       groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
-        // A private conversation is chat only and never runs work here, so its id stays with its audience.
-        conversationIds: state.conversations.filter(c => !isLeads(c) && !c.audience && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+        // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose
+        // Buddy starts here is named, so the host may prepare the project's folder for it.
+        conversationIds: state.conversations.filter(c => !isLeads(c) && (!c.audience || buddyChats.has(c.id)) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
     ...hostLocalGrid(state),
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),

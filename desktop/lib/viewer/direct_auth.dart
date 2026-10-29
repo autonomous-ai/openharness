@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import '../api/access_token_source.dart';
+import '../logging/app_log.dart';
 import '../auth/auth_session.dart';
 import 'direct_auth_api.dart';
 
@@ -60,10 +63,35 @@ class DirectAuth implements AccessTokenSource {
     });
   }
 
-  Future<void> signOut() {
+  /// Signs this device out, and ends a Harness session on the server too. The server's part is
+  /// best effort and not waited on: signing out never waits on, or fails over, the network.
+  Future<void> signOut() async {
     final revision = ++_revision;
     _refreshing = null;
-    return _write(revision, session.clear);
+    String? ended;
+    await _write(revision, () async {
+      ended = await session.refreshToken();
+      await session.clear();
+    });
+    final refreshToken = ended;
+    if (refreshToken != null &&
+        DirectAuthApi.isHarnessRefreshToken(refreshToken)) {
+      unawaited(_endOnServer(refreshToken));
+    }
+  }
+
+  Future<void> _endOnServer(String refreshToken) async {
+    var ended = false;
+    try {
+      ended = await api.revoke(refreshToken);
+    } catch (_) {}
+    if (!ended) {
+      appLog.warn(
+        'auth',
+        'Could not end this sign-in on the server; it can no longer be used from here, '
+            'and ends on its own after 90 days unused.',
+      );
+    }
   }
 
   // A stale request is no longer allowed to decide that the CURRENT account

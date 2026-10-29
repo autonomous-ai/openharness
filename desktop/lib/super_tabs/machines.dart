@@ -24,6 +24,7 @@ import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import 'agent_details.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
@@ -338,11 +339,16 @@ class _MachinePickerState extends State<_MachinePicker> {
               child: ExcludeSemantics(
                 child: Row(
                   children: [
+                    // A long hostname reads whole, over two lines if it must (Ken, 2026-10-28).
                     Expanded(
-                      child: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: Tooltip(
+                        message: label,
+                        excludeFromSemantics: true,
+                        child: Text(
+                          label,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                     if (current?.unavailable != null) ...[
@@ -765,100 +771,85 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               final own = ownedMachines();
               final canSave =
                   machineId != null && canSelect(app.stateOf(machineId!));
-              return AlertDialog(
-                title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
-                content: SizedBox(
-                  width: 360,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (own.isNotEmpty)
-                          _MachinePicker(
-                            value: machineId,
-                            busy: busy,
-                            choices: [
-                              for (final m in own)
-                                _MachineChoice(
-                                  id: m.machine.machineId,
-                                  label: labelFor(m),
-                                  unavailable: unavailable(m),
-                                ),
-                            ],
-                            onChanged: (id) {
-                              if (busy || !canSelect(app.stateOf(id))) return;
-                              update(() {
-                                machineId = id;
-                                setupId = null;
-                                error = null;
-                                // Another machine has its own number: the one it
-                                // already offers, or its own suggestion.
-                                slots = slotsFor(id);
-                                slotsEdited = false;
-                              });
-                              unawaited(suggestSlots());
-                            },
-                          )
-                        else
-                          Text(
-                            'No computer is connected to this account yet.',
-                            style: DesktopChrome.text(),
-                          ),
-                        const SizedBox(height: 16),
-                        if (own.isNotEmpty) ...[
-                          Text(
-                            'Let the product manager run agents here using this machine’s signed-in accounts.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Agents the Swarm starts on this machine run without asking for permission.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Harness clones each project into ~/harnesses/swarms and lets '
-                            "the Swarm's agents work in it.",
-                            style: DesktopChrome.text(),
-                          ),
-                        ] else ...[
-                          Text(
-                            'To add another computer, install Harness on it and sign in with '
-                            'this account, or approve a device with no screen from Machines.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 4),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              onPressed: () {
-                                Navigator.pop(context);
-                                app.requestMachines();
-                              },
-                              child: const Text('Open Machines'),
+              return SuperTabDetailDialog(
+                title: isConfigure ? 'Configure machine' : 'Add machine',
+                body: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (own.isNotEmpty)
+                      _MachinePicker(
+                        value: machineId,
+                        busy: busy,
+                        choices: [
+                          for (final m in own)
+                            _MachineChoice(
+                              id: m.machine.machineId,
+                              label: labelFor(m),
+                              unavailable: unavailable(m),
                             ),
-                          ),
                         ],
-                        if (own.isNotEmpty) ...[
-                          const SizedBox(height: 16),
-                          _AgentSlots(
-                            value: slots,
-                            maximum: maximumFor(machineId),
-                            busy: busy,
-                            onChanged: (next) => update(() {
-                              slots = next;
-                              slotsEdited = true;
-                            }),
-                          ),
-                        ],
-                        if (error != null) ...[
-                          const SizedBox(height: 12),
-                          Text(error!, style: DesktopChrome.metadata()),
-                        ],
-                      ],
-                    ),
-                  ),
+                        onChanged: (id) {
+                          if (busy || !canSelect(app.stateOf(id))) return;
+                          update(() {
+                            machineId = id;
+                            setupId = null;
+                            error = null;
+                            // Another machine has its own number: the one it
+                            // already offers, or its own suggestion.
+                            slots = slotsFor(id);
+                            slotsEdited = false;
+                          });
+                          unawaited(suggestSlots());
+                        },
+                      )
+                    else
+                      Text(
+                        'No computer is connected to this account yet.',
+                        style: DesktopChrome.text(),
+                      ),
+                    const SizedBox(height: 16),
+                    if (own.isNotEmpty) ...[
+                      Text(
+                        "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+                        'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
+                        style: DesktopChrome.text(),
+                      ),
+                    ] else ...[
+                      Text(
+                        'To add another computer, install Harness on it and sign in with '
+                        'this account, or approve a device with no screen from Machines.',
+                        style: DesktopChrome.text(),
+                      ),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            app.requestMachines();
+                          },
+                          child: const Text('Open Machines'),
+                        ),
+                      ),
+                    ],
+                    if (own.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _AgentSlots(
+                        value: slots,
+                        maximum: maximumFor(machineId),
+                        busy: busy,
+                        onChanged: (next) => update(() {
+                          slots = next;
+                          slotsEdited = true;
+                        }),
+                      ),
+                    ],
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(error!, style: DesktopChrome.metadata()),
+                    ],
+                  ],
                 ),
                 actions: [
                   if (own.isNotEmpty)
@@ -869,11 +860,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             ? (isConfigure ? 'Saving…' : 'Preparing…')
                             : (isConfigure ? 'Save' : 'Add machine'),
                       ),
-                    )
-                  else
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Close'),
                     ),
                 ],
               );
@@ -975,15 +961,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             (observedAt == null || sample.$2.isAfter(observedAt)));
     final readingAt = direct ? sample?.$2 : observedAt;
     final age = readingAt == null ? null : now.difference(readingAt);
-    final status = superTabMachineStatus(
-      age: age,
-      // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
-      unreachable: !direct && c.backendUnreachable,
-      refreshing: direct
-          ? _awaiting.contains(readId)
-          : _swarmReadsAtReturn != null && c.stateReads <= _swarmReadsAtReturn!,
-      connected: direct ? connected : null,
-    );
+    // A computer only running someone's agents, never added to the Swarm and not one this Desktop reads (a teammate's
+    // Lead computer): nothing reports it but its agents, so it is up while one of them is (group #646, item 5).
+    final agentsOnly = shared == null && team == null && state == null;
+    final status = agentsOnly
+        ? (agents.any((a) => a.downSince == null)
+              ? SuperTabMachineStatus.live
+              : SuperTabMachineStatus.offline)
+        : superTabMachineStatus(
+            age: age,
+            // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
+            unreachable: !direct && c.backendUnreachable,
+            refreshing: direct
+                ? _awaiting.contains(readId)
+                : _swarmReadsAtReturn != null &&
+                      c.stateReads <= _swarmReadsAtReturn!,
+            connected: direct ? connected : null,
+          );
     // Cached samples remain available to the refresh logic, but stale numbers are not presented as current.
     final dim =
         status == SuperTabMachineStatus.offline ||
@@ -1013,7 +1007,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (given == null || given.isEmpty ? null : given) ??
         shared?['name'] as String? ??
         app?.stateOf(id)?.machine.displayName ??
-        'Unavailable machine';
+        // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
+        (agentsOnly && person != null
+            ? "${superTabPersonName(person.email)}'s computer"
+            : 'Unavailable machine');
     final configured = (reading?['engines'] as List?)
         ?.whereType<String>()
         .toList();
@@ -1466,47 +1463,52 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           listenable: c,
           builder: (context, _) {
             final removeReason = _removeReason(id);
-            return AlertDialog(
-              title: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(child: Text(superTabMachineName(name))),
-                      // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
-                      if (_canRemove(id))
-                        AppIconButton(
-                          key: const ValueKey('super-machine-remove'),
-                          icon: AppIcons.trash2,
-                          tooltip: removeReason ?? 'Remove from Swarm',
-                          color: DesktopChrome.muted,
-                          destructive: true,
-                          onPressed: removeReason != null
-                              ? null
-                              : () {
-                                  if (_removeReason(id) != null) return;
-                                  Navigator.pop(context);
-                                  WidgetsBinding.instance.addPostFrameCallback((
-                                    _,
-                                  ) {
-                                    if (mounted) unawaited(_remove(v));
-                                  });
-                                },
-                        ),
-                    ],
+            Future<void> pause() async {
+              final result = await c.command({
+                'type': 'machine.pause',
+                'machineId': id,
+                'paused': !paused,
+              });
+              if (context.mounted && result != null) Navigator.pop(context);
+            }
+
+            void attach() {
+              final group = c.selected!;
+              Navigator.pop(context);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) widget.onAddAgent(group);
+              });
+            }
+
+            return SuperTabDetailDialog(
+              title: superTabMachineName(name),
+              headerActions: [
+                // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at, and says
+                // why on hover when it cannot.
+                if (_canRemove(id))
+                  AppIconButton(
+                    key: const ValueKey('super-machine-remove'),
+                    icon: AppIcons.trash2,
+                    tooltip: removeReason ?? 'Remove from Swarm',
+                    color: DesktopChrome.muted,
+                    destructive: true,
+                    onPressed: removeReason != null
+                        ? null
+                        : () {
+                            if (_removeReason(id) != null) return;
+                            Navigator.pop(context);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) unawaited(_remove(v));
+                            });
+                          },
                   ),
-                  if (_canRemove(id) && removeReason != null)
-                    Text(removeReason, style: DesktopChrome.metadata()),
-                ],
-              ),
-              content: SuperTabMachineDetails(
+              ],
+              body: SuperTabMachineDetails(
                 name: name,
                 owner: person?.email,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
-                cwd: shared?['cwd'] as String?,
                 engines: allowed,
                 accounts: dim ? const [] : accounts,
                 footer: SuperTabMachineLocalModels(
@@ -1515,21 +1517,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   now: widget.now,
                 ),
               ),
-              actions: [
+              // One clear action at the right; the rarer ones quiet at the left (Ken, 2026-10-28).
+              leadingActions: [
                 if (shared != null && contributor == c.accountId)
                   TextButton(
-                    onPressed: () async {
-                      final result = await c.command({
-                        'type': 'machine.pause',
-                        'machineId': id,
-                        'paused': !paused,
-                      });
-                      if (context.mounted && result != null) {
-                        Navigator.pop(context);
-                      }
-                    },
+                    style: superTabQuietAction,
+                    onPressed: () => unawaited(pause()),
                     child: Text(paused ? 'Resume new work' : 'Pause new work'),
                   ),
+                if (c.canWrite && c.selected != null)
+                  TextButton(
+                    style: superTabQuietAction,
+                    onPressed: attach,
+                    child: const Text('Attach running agent'),
+                  ),
+              ],
+              actions: [
                 if (contributor == c.accountId)
                   TextButton(
                     onPressed: () {
@@ -1540,21 +1543,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     },
                     child: const Text('Configure'),
                   ),
-                if (c.canWrite && c.selected != null)
-                  TextButton(
-                    onPressed: () {
-                      final group = c.selected!;
-                      Navigator.pop(context);
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) widget.onAddAgent(group);
-                      });
-                    },
-                    child: const Text('Attach running agent'),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
               ],
             );
           },

@@ -4,6 +4,12 @@ import 'dart:convert';
 import '../core/local_key_value_store.dart';
 import 'parts.dart';
 
+/// A store that keeps each view apart, and so can drop every view of an
+/// account it holds, its index's or not ([SuperTabSavedViews.forgetAccount]).
+abstract interface class SavedViewSweep {
+  Future<void> sweepAccount(String account);
+}
+
 /// The last view of a Swarm tab as read: the state the tab draws and the open
 /// conversation's last page, kept on this device so the next open draws it at
 /// once and reads after ([SuperTabReading.drawsSaved]; the web, where that
@@ -18,12 +24,19 @@ class SuperTabSavedViews {
   /// How many Swarms an account keeps a view of, most recently used first.
   static const maxTabs = 3;
 
-  String _key(String account, String tabId) => 'super_tab.view.$account.$tabId';
-  String _index(String account) => 'super_tab.views.$account';
+  /// What a view's key starts with; the account and the Swarm follow.
+  static const viewPrefix = 'super_tab.view.';
+
+  /// The Swarms an account keeps a view of, most recently used first.
+  static String indexKey(String account) => 'super_tab.views.$account';
+
+  String _key(String account, String tabId) => '$viewPrefix$account.$tabId';
+  String _index(String account) => indexKey(account);
 
   /// The account whose views this device keeps: the one to forget when
   /// another signs in, in this page or after a reload.
-  static const _owner = 'super_tab.saved_by';
+  static const ownerKey = 'super_tab.saved_by';
+  static const _owner = ownerKey;
 
   Future<void> _tail = Future.value();
 
@@ -160,6 +173,9 @@ class SuperTabSavedViews {
       await storage.delete(_key(account, tab));
     }
     await storage.delete(_index(account));
+    if (storage case final SavedViewSweep sweep) {
+      await sweep.sweepAccount(account);
+    }
   }
 
   /// Clear now: every view this device keeps, for [account] and for any

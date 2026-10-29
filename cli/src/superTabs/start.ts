@@ -6,7 +6,7 @@ import { admission, memoryShortIn, quotaOf, type Requirements } from './capacity
 import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
-import { swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -32,6 +32,10 @@ function requireSuccess(reply: Json): Json {
   if (reply.error || reply.ok !== true) throw Object.assign(new Error(String(reply.detail ?? reply.error ?? 'This Super Tab request did not succeed.')),
     { code: typeof reply.error === 'string' ? reply.error : null })
   return object(reply.value)
+}
+/** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
+function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
+  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 export async function inspectCapacity(target: Daemon, request: Json) {
   const wanted = object(request.requirements)
@@ -326,17 +330,24 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // Engines without a full mode retain their existing approving launch flags.
       // The backend starts a Reviewer only on Claude Code or Codex, the engines with built-in Swarm skills.
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
-      const role = reviewer ? 'review' : 'dev', facts = skilled ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
+      // A Buddy's start names its owner (backend buddies.ts): it brainstorms in their chat and is never assigned work.
+      const buddy = !!request.buddyOf && typeof request.buddyOf === 'object'
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
       // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
-      const hosted = input.hostDispatch === true ? object(input.github) : null
-      const mode = facts?.mode ?? null
-      const github = hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
-        ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      // Its Swarm read was refused with a 400 at every start until 2026-10-28, and its agents ran Harness orchestration
+      // whatever their project's skills: the start read names them, and a backend from before that keeps orchestration.
+      const role = buddy ? 'buddy' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
+      const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
+      const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
+      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token, and a Claude Buddy
+      // asks before anything but its Super Tab commands, which its folder's settings pre-approve (lib/swarmSkills.ts).
+      const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
+      const asks = buddy && request.engine === 'claude'
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
+        ...(asks ? { permissionMode: 'ask' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
-        prompt: `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
+        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode) : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
           ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
           : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
         ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,

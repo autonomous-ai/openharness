@@ -17,6 +17,7 @@ import { publishTabRelay, subscribeTabRelay, subscribeAgentMessageShareChanged }
 import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
 import { createOrderedInbox } from './orderedInbox.js'
+import { declaredKind, trackSocket } from './wsAttribution.js'
 
 const wss = createWss(WS_LIMITS.agentMessages, { echoFirstProtocol: true })
 /** The daemons' one ceiling for a shared tab's frame (cli lib/e2ee/tabSession.ts `SHARED_TAB_FRAME_MAX`). */
@@ -47,10 +48,11 @@ export function handleAgentMessagesUpgrade(req: IncomingMessage, socket: Duplex,
     }
     const allowed = await admits(user.sub, machine, share, env)
     if (socket.destroyed) return
+    const declared = declaredKind(url.searchParams)
     wss.handleUpgrade(req, socket, head, ws => {
       // 4403 is admission's answer alone: the account is not the tab's owner or an accepted member.
       if (!allowed) { ws.close(4403, 'Not in this shared tab'); return }
-      void attach(ws, user.sub, share, machine, env).catch(() => ws.close(1013, 'Shared tab temporarily unavailable'))
+      void attach(ws, user.sub, share, machine, env, declared).catch(() => ws.close(1013, 'Shared tab temporarily unavailable'))
     })
   })().catch(() => { if (!socket.destroyed) socket.destroy() })
 }
@@ -61,12 +63,16 @@ function refuse(socket: Duplex, status: string): void {
   socket.destroy()
 }
 
-async function attach(ws: WebSocket, userId: string, share: string, machine: string, env: ReturnType<typeof parseAutonomousEnvironment>) {
+async function attach(ws: WebSocket, userId: string, share: string, machine: string, env: ReturnType<typeof parseAutonomousEnvironment>,
+  declared: ReturnType<typeof declaredKind>) {
+  // Its connect and disconnect lines (lib/wsAttribution.ts). The shared tab's id is not logged.
+  const track = trackSocket('agentMessages', 'agent-messages', ws, { ...declared, userId, machineId: machine })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
   const key = `${share}:${machine}`
   live.get(key)?.close(4409, 'Replaced by a newer connection')
   live.set(key, ws)
   const send = (frame: unknown) => guardedSendJson(ws, frame, 'must')
-  const disposers: Array<() => void> = [trackSocketLiveness(ws)]
+  const disposers: Array<() => void> = [trackSocketLiveness(ws, 'agentMessages')]
   let closed = false
   ws.once('close', () => { closed = true; if (live.get(key) === ws) live.delete(key); for (const d of disposers.splice(0)) d() })
   const keep = (dispose: () => void) => { if (closed) dispose(); else disposers.push(dispose) }
