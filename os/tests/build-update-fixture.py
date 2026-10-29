@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSION = '999.0.1'
 BASE_URL = 'http://127.0.0.1:19447/'
 FILES = {'harness-tui', 'cli.js', 'notify.mjs'}
+# Beside them, for the package only (build-runtime.sh): never part of a fast update.
+PACKAGE_ONLY = {'playwright-mcp'}
 TARGETS = {'x86_64': ('linux-x64', 'x64', 62), 'aarch64': ('linux-arm64', 'arm64', 183)}
 
 
@@ -49,7 +51,7 @@ def verify_elf(path, architecture):
 
 
 def validate_runtime(runtime, commit, architecture, versions, baselines):
-    if {path.name for path in runtime.iterdir()} != FILES | {'source.json'}:
+    if {path.name for path in runtime.iterdir()} - PACKAGE_ONLY != FILES | {'source.json'}:
         raise ValueError('Use the complete, unmodified baseline runtime directory.')
     if (runtime / 'source.json').is_symlink():
         raise ValueError('The baseline identity cannot be a symlink.')

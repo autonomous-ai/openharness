@@ -441,3 +441,11 @@ it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whateve
     .toMatchObject({ action: 'command', operationId: 'op-1', command: { ...proposal, type: 'buddy.propose' } })
   expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1'], where)).toThrow('harness super-tab')
 })
+
+// Cost records (Dee, 2026-10-29): what routed attempts cost and how they went, over the last days.
+it('reads the cost summary of the last 7 days, or of --days N up to 90', () => {
+  expect(parseSuperTabArgs([...prefix, 'costs'], where).payload).toMatchObject({ action: 'costs', days: 7 })
+  expect(parseSuperTabArgs([...prefix, 'costs', '--days', '30'], where).payload).toMatchObject({ action: 'costs', days: 30 })
+  for (const argv of [[...prefix, 'costs', '--days'], [...prefix, 'costs', '--days', '0'], [...prefix, 'costs', '--days', '91'],
+    [...prefix, 'costs', '--days', '7x'], [...prefix, 'costs', 'extra']]) expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+})
