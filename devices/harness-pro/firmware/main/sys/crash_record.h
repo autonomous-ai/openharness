@@ -33,3 +33,15 @@ bool cr_valid(const crash_record_t *r);
 void cr_phase(crash_record_t *r, unsigned slot, const char *phase, uint32_t now_ms);
 // Text for the daemon's log, one '\n'-separated line per fact. Returns the length (always NUL-terminated).
 size_t cr_format(const crash_record_t *r, char *out, size_t cap);
+
+// What the hardware kept across the reset (wdt_pc.h): each core's raw reset code and, when the bootloader
+// saved them, each core's last PC and SP.
+typedef struct {
+    unsigned cause[2];
+    bool     have_pc;
+    uint32_t pc[2];
+    uint32_t sp[2];
+} cr_hw_t;
+
+// Same contract as cr_format.
+size_t cr_format_hw(const cr_hw_t *hw, char *out, size_t cap);
