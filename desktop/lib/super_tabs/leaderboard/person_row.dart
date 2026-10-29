@@ -23,12 +23,12 @@ const _avatarSize = SuperTabAvatar.rowSize;
 /// Numbers and rankings (desktop design system): the rank a bold numeral in
 /// secondary ink, the points the one emphasized number, every figure in a
 /// column of one width so the column holds row under row.
-TextStyle _rankStyle() => grid.AppType.label(
+TextStyle leaderboardRankStyle() => grid.AppType.label(
   fontWeight: FontWeight.w700,
   color: grid.AppPalette.textSecondary,
   fontFeatures: grid.AppFont.tabularFigures,
 );
-TextStyle _pointsStyle() => grid.AppType.label(
+TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontWeight: grid.AppFont.semibold,
   color: grid.AppPalette.textPrimary,
   fontFeatures: grid.AppFont.tabularFigures,
@@ -63,7 +63,18 @@ class LeaderboardColumns {
   factory LeaderboardColumns.of(
     BuildContext context,
     List<SuperTabPersonScore> scores,
-  ) {
+  ) => LeaderboardColumns.measure(
+    context,
+    ranks: scores.map((score) => score.rank),
+    points: scores.map((score) => score.points),
+  );
+
+  /// The columns for any ranked list: people, agents or models.
+  factory LeaderboardColumns.measure(
+    BuildContext context, {
+    required Iterable<int> ranks,
+    required Iterable<int> points,
+  }) {
     final scaler = MediaQuery.textScalerOf(context);
     double width(String text, TextStyle style) {
       final painter = TextPainter(
@@ -81,11 +92,8 @@ class LeaderboardColumns {
         .map((value) => '$value')
         .fold('0', (a, b) => b.length > a.length ? b : a);
     return LeaderboardColumns(
-      rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
-      points: width(
-        widest(scores.map((score) => score.points)),
-        _pointsStyle(),
-      ),
+      rank: width(widest(ranks), leaderboardRankStyle()),
+      points: width(widest(points), leaderboardPointsStyle()),
     );
   }
 
@@ -175,7 +183,7 @@ class LeaderboardPersonRow extends StatelessWidget {
                               '${score.rank}',
                               maxLines: 1,
                               textAlign: TextAlign.right,
-                              style: _rankStyle(),
+                              style: leaderboardRankStyle(),
                             ),
                     ),
                     const SizedBox(width: _gap),
@@ -189,7 +197,7 @@ class LeaderboardPersonRow extends StatelessWidget {
                       children: [
                         _name(),
                         if (numbers.isNotEmpty)
-                          _Numbers(
+                          LeaderboardNumbers(
                             key: ValueKey('leaderboard-meta-${person.id}'),
                             parts: numbers,
                           ),
@@ -206,7 +214,7 @@ class LeaderboardPersonRow extends StatelessWidget {
                         child: Text(
                           '${score.points}',
                           maxLines: 1,
-                          style: _pointsStyle(),
+                          style: leaderboardPointsStyle(),
                         ),
                       ),
                     ),
@@ -233,15 +241,7 @@ class LeaderboardPersonRow extends StatelessWidget {
             if (leaderboardCrowned(score))
               WidgetSpan(
                 alignment: PlaceholderAlignment.middle,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: _halfGap),
-                  child: Semantics(
-                    key: ValueKey('leaderboard-crown-${person.id}'),
-                    label: 'Number one $weekName',
-                    excludeSemantics: true,
-                    child: Text('\u{1F451}', style: DesktopChrome.metadata()),
-                  ),
-                ),
+                child: LeaderboardCrown(id: person.id, weekName: weekName),
               ),
             if (person.statusAt(clock.now()) case final status?)
               TextSpan(
@@ -258,21 +258,57 @@ class LeaderboardPersonRow extends StatelessWidget {
   );
 }
 
+/// Number one's crown beside their name: content artwork, said in words, at
+/// the metadata size so a crowned row is as tall as any other (Team and
+/// celebration, design system). [id] keys it per row.
+class LeaderboardCrown extends StatelessWidget {
+  const LeaderboardCrown({super.key, required this.id, required this.weekName});
+  final String id;
+
+  /// The week the board shows, as the crown says it: "Number one last week".
+  final String weekName;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(left: _halfGap),
+    child: Semantics(
+      key: ValueKey('leaderboard-crown-$id'),
+      label: 'Number one $weekName',
+      excludeSemantics: true,
+      child: Text('\u{1F451}', style: DesktopChrome.metadata()),
+    ),
+  );
+}
+
 /// A person's numbers joined by a spaced middle dot. Where the line does not
 /// fit, whole items fall off its end, never part of a word; the whole line,
 /// lent in agent-hours, is on hover.
-class _Numbers extends StatelessWidget {
-  const _Numbers({super.key, required this.parts});
+class LeaderboardNumbers extends StatelessWidget {
+  const LeaderboardNumbers({
+    super.key,
+    required this.parts,
+    this.tooltip,
+    this.lines = 1,
+  });
   final List<String> parts;
+
+  /// How many lines whole items may take: a model's numbers are the routing
+  /// measurement, so its row gives them two.
+  final int lines;
+
+  /// What hovering shows; the whole line, lent in agent-hours, when not given.
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     final style = DesktopChrome.metadata();
     final scaler = MediaQuery.textScalerOf(context);
     return Tooltip(
-      message: parts
-          .map((part) => part.replaceFirst(' hour', ' agent-hour'))
-          .join(' · '),
+      message:
+          tooltip ??
+          parts
+              .map((part) => part.replaceFirst(' hour', ' agent-hour'))
+              .join(' · '),
       child: LayoutBuilder(
         builder: (context, constraints) {
           bool fits(String text) {
@@ -280,7 +316,7 @@ class _Numbers extends StatelessWidget {
               text: TextSpan(text: text, style: style),
               textDirection: TextDirection.ltr,
               textScaler: scaler,
-              maxLines: 1,
+              maxLines: lines,
             )..layout(maxWidth: constraints.maxWidth);
             final fits = !painter.didExceedMaxLines;
             painter.dispose();
@@ -297,7 +333,7 @@ class _Numbers extends StatelessWidget {
           final wraps = !fits(text);
           return Text(
             text,
-            maxLines: wraps ? 2 : 1,
+            maxLines: wraps ? lines + 1 : lines,
             overflow: TextOverflow.ellipsis,
             style: style,
           );

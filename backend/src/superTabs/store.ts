@@ -61,8 +61,11 @@ type ReactCommand = Extract<Command, { type: 'message.react' }>
 const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
+type ProposeCommand = Extract<Command, { type: 'buddy.propose' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
+const unproposed = { OR: [{ proposedBy: null }, { proposedBy: { isSet: false } }] }
+const PROPOSED = 'This file already went with a proposal. Ask your owner to send it in your chat again.'
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 /** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
@@ -1024,6 +1027,13 @@ export class SuperTabStore {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
+      if (command.type === 'conversation.create' && command.proposalMessageId) {
+        // By id within this tab: the proposal a new group comes from (leaderboard/record.ts recordProposal).
+        const proposal = await tx.superTabMessage.findFirst({ where: { id: command.proposalMessageId, tabId },
+          select: { id: true, conversationId: true, author: true, source: true } })
+        if (proposal) context.proposal = { id: proposal.id, conversationId: proposal.conversationId, author: proposal.author as unknown as Author,
+          source: proposal.source as Record<string, unknown> | null }
+      }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
         // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
@@ -1053,7 +1063,14 @@ export class SuperTabStore {
         context.repeatedDecision = await repeatOf(tx, tabId, ask) ?? null
         context.openDecisions = context.repeatedDecision ? null : await fullFor(tx, tabId, ask)
       }
-      if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
+      // The files this command sends, and those it takes from the uploads waiting for a message: a chat file it sent before
+      // stays with that message, and a proposal may carry one its Buddy's owner sent in their chat.
+      let claimed: string[] = [], proposed: string[] = []
+      if (command.type === 'message.send' && command.attachmentIds?.length) {
+        context.attachments = await this.sendable(tx, tabId, actor, command)
+        claimed = context.attachments.map(a => a.id)
+      }
+      if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
@@ -1272,11 +1289,17 @@ export class SuperTabStore {
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
-      if (context.attachments?.length) {
+      if (claimed.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
-        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: claimed }, ...unused },
           data: { usedBy: effects.result.messageId as string } })
-        if (taken.count !== context.attachments.length) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
+        if (taken.count !== claimed.length) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
+      }
+      if (proposed.length) {
+        // Conflicts with a concurrent proposal carrying the same file of its owner's: only one can take it.
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: proposed }, ...unproposed },
+          data: { proposedBy: effects.result.messageId as string } })
+        if (taken.count !== proposed.length) fail('ATTACHMENT_USED', PROPOSED)
       }
       // On 2026-10-20 a Lead answered a message it had already read, then answered it again when the held
       // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
@@ -1477,6 +1500,25 @@ export class SuperTabStore {
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  /**
+   * The files a Buddy's proposal names (buddies.ts), and which of them it takes. Only what its owner handed it: its own upload
+   * to its chat, still unsent, which the proposal then takes like a chat message; or a file its owner sent in that chat,
+   * which stays with their message too and goes with one proposal at most. Nothing else is found, so the command refuses
+   * it, its own order of refusals first. The server cannot tell where an upload's bytes came from on the Buddy's machine:
+   * that is its CLI's folder check and its guard (lib/buddyGuard.ts), and here only what it uploaded to its own chat.
+   */
+  private async proposable(tx: Transaction, state: SuperTabState, actor: Actor, command: ProposeCommand): Promise<{ attachments: Attachment[]; claimed: string[]; proposed: string[] }> {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const ownerId = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId : undefined
+    if (!ownerId) return { attachments: [], claimed: [], proposed: [] }
+    const ids = [...new Set(command.attachmentIds)]
+    const rows = await tx.superTabAttachment.findMany({ where: { tabId: state.id, id: { in: ids }, conversationId: command.conversationId } })
+    const own = rows.filter(r => !r.purpose && r.actorKey === actorKey(actor) && !r.usedBy)
+    const handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy)
+    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
+      claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }
 
   /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already

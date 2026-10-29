@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
 import '../api/api_client.dart';
+import '../logging/app_log.dart';
 import 'controller.dart';
 
 /// What the backend allows one message to carry.
@@ -113,9 +115,15 @@ SuperTabUpload uploadWith(ApiClient Function() api) =>
     };
 
 /// What a refused upload says. The backend answers `{error: {code, message}}`;
-/// the local daemon, a bare code string such as `{error: 'FORBIDDEN'}`.
+/// the local daemon, a bare code string such as `{error: 'FORBIDDEN'}`. Either
+/// may reach here as a String Dio did not decode.
 SuperTabFailure superTabUploadRefusal(Response<dynamic> response) {
-  final body = response.data;
+  var body = response.data;
+  if (body is String) {
+    try {
+      body = jsonDecode(body);
+    } catch (_) {}
+  }
   final error = body is Map ? body['error'] : null;
   final code = error is Map
       ? error['code'] as String?
@@ -123,6 +131,11 @@ SuperTabFailure superTabUploadRefusal(Response<dynamic> response) {
       ? error
       : null;
   final message = error is Map ? error['message'] as String? : null;
+  // The code and status only, never the message: a refusal can quote what was sent.
+  appLog.warn(
+    'super-tabs',
+    'upload refused: ${code ?? 'no code'} (status ${response.statusCode})',
+  );
   return SuperTabFailure(
     code ?? 'UPLOAD_FAILED',
     message ??
@@ -131,7 +144,8 @@ SuperTabFailure superTabUploadRefusal(Response<dynamic> response) {
           'ATTACHMENT_TOO_LARGE' => 'That file is over 10 MB.',
           'AVATAR_TOO_LARGE' => 'That picture is over 1 MB.',
           'AVATAR_TYPE' => 'Use a PNG, JPEG or WebP picture.',
-          _ => 'Could not upload the file. Try again.',
+          null => 'Could not upload the file. Try again.',
+          _ => 'Could not upload the file ($code). Try again.',
         },
     statusCode: response.statusCode ?? 0,
   );
