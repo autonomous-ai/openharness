@@ -239,13 +239,16 @@ void main() {
         findsOneWidget,
         reason: 'the Naming System: a Swarm chat, not a conversation',
       );
+      final row = key('swarm-project-$tab-$project');
       expect(
-        find.descendant(
-          of: key('swarm-project-$tab-$project'),
-          matching: find.textContaining('1\u00A0waiting', findRichText: true),
-        ),
+        find.descendant(of: row, matching: find.text('@1')),
         findsOneWidget,
-        reason: 'the team line',
+        reason: "River's tag, waiting in it",
+      );
+      expect(
+        find.descendant(of: row, matching: find.textContaining('waiting')),
+        findsNothing,
+        reason: 'no team line (Team at a glance is gone, as on the desktop)',
       );
     });
 

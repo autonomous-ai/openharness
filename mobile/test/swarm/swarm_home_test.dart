@@ -19,7 +19,6 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
-import 'package:harness_mobile/swarm/swarm_team_line.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -480,7 +479,13 @@ void main() {
         AppFont.semibold,
       );
       expect(inside('swarm-drawer-chat-g1', find.text('@1')), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('1 mention')), findsNWidgets(2));
+      expect(
+        find.descendant(
+          of: find.byType(SwarmDrawer),
+          matching: find.bySemanticsLabel(RegExp('1 mention')),
+        ),
+        findsNWidgets(2),
+      );
       for (final (row, words) in [
         ('swarm-drawer-chat-$leadChat', 'Project chat'),
         ('swarm-drawer-chat-g-busy', 'Sync'),
@@ -715,12 +720,68 @@ void main() {
         );
       }
       expect(find.text('Chat with PM'), findsNothing);
-      expect(
-        find.descendant(
-          of: key('swarm-project-$tab-$project'),
-          matching: find.byType(SwarmTeamLine),
+    });
+
+    testWidgets('a project the Lead tagged the person in is bold with @N; '
+        'the rest are not, and no project has a team line (Team at a glance '
+        'is gone, as on the desktop)', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await pump(tester, backend());
+
+      const mobileRow = 'swarm-project-$tab-$project';
+      const webRow = 'swarm-project-$tab-$web';
+      expect(weightOf(tester, mobileRow, 'Mobile'), AppFont.semibold);
+      expect(inside(mobileRow, find.text('@1')), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp('1 mention')), findsOneWidget);
+      expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
+      expect(inside(webRow, find.textContaining('@')), findsNothing);
+      for (final row in [mobileRow, webRow]) {
+        for (final words in ['working', 'waiting', 'down', 'idle']) {
+          expect(
+            inside(row, find.textContaining(words)),
+            findsNothing,
+            reason: 'no team line',
+          );
+        }
+      }
+      semantics.dispose();
+    });
+
+    testWidgets('a project with a chat read since is bold with no count, and '
+        'so is a Buddy whose chat has new lines', (tester) async {
+      final fake = backend(buddy: true);
+      final host = await pump(tester, fake);
+      moveOn(fake, {
+        webLead: {
+          ...groupData(
+            webLead,
+            title: 'Web',
+            agentIds: ['agent-cleo'],
+            leadId: 'agent-cleo',
+            lastMessageSequence: 1,
+          ),
+          'projectId': web,
+        },
+        'buddy-me': buddyChatData(
+          'buddy-me',
+          agentIds: ['agent-wren'],
+          lastMessageSequence: 1,
         ),
-        findsOneWidget,
+      });
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      const webRow = 'swarm-project-$tab-$web';
+      expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
+      expect(inside(webRow, find.textContaining('@')), findsNothing);
+      expect(
+        weightOf(tester, 'swarm-home-buddy-$tab-$project', 'Wren'),
+        AppFont.semibold,
+      );
+      expect(
+        weightOf(tester, 'swarm-home-buddy-$tab-$web', 'Buddy'),
+        isNot(AppFont.semibold),
+        reason: 'not started: no chat to read',
       );
     });
 
@@ -1559,49 +1620,6 @@ void main() {
     });
   });
 
-  group('the team line', () {
-    testWidgets("the prototype's small dots, its parts a space apart", (
-      tester,
-    ) async {
-      await pump(tester, backend());
-
-      TextSpan spans(Finder line) =>
-          tester
-                  .widget<RichText>(
-                    find.descendant(of: line, matching: find.byType(RichText)),
-                  )
-                  .text
-              as TextSpan;
-      final row = find.descendant(
-        of: key('swarm-project-$tab-$project'),
-        matching: find.byType(SwarmTeamLine),
-      );
-      final dots = <double?>[];
-      spans(row).visitChildren((span) {
-        if (span is TextSpan && span.text == '●') {
-          dots.add(span.style?.fontSize);
-        }
-        return true;
-      });
-      expect(dots, isNotEmpty);
-      expect(
-        (spans(row).children!.first as TextSpan).style?.fontSize,
-        13,
-        reason: "the caption role, as the row's own line under its title",
-      );
-      expect(
-        dots,
-        everyElement(closeTo(13 * .8, .01)),
-        reason: 'about 8 points across, smaller than the words',
-      );
-      expect(
-        spans(row).toPlainText(),
-        contains('waiting ●'),
-        reason: 'one space between parts',
-      );
-    });
-  });
-
   group('while Home reads', () {
     /// [path] answers only once the returned gate is opened.
     Completer<void> hold(FakeSwarm fake, String path) {
@@ -1696,7 +1714,7 @@ void main() {
         expect(
           height(tester, 'swarm-project-$tab-$web'),
           closeTo(row, .01),
-          reason: 'a team line on one line, as the skeleton draws it',
+          reason: 'its title alone, as the skeleton draws it',
         );
       });
     }

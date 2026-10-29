@@ -191,12 +191,20 @@ class SwarmGroup extends StatelessWidget {
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
 /// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
-/// title; the drawer draws its own.
+/// title, or its title alone ([titleOnly]); the drawer draws its own.
 class SwarmSkeletonRow extends StatelessWidget {
-  const SwarmSkeletonRow({super.key, this.round = false, this.width = .45});
+  const SwarmSkeletonRow({
+    super.key,
+    this.round = false,
+    this.titleOnly = false,
+    this.width = .45,
+  });
 
   /// An avatar's round mark rather than a project's tile.
   final bool round;
+
+  /// The row it stands for has no line under its title: a project's.
+  final bool titleOnly;
 
   /// The title bar's share of the row's words.
   final double width;
@@ -228,11 +236,13 @@ class SwarmSkeletonRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SkeletonText(style: title, widthFactor: width),
-                  const SizedBox(height: 3),
-                  SkeletonText(
-                    style: line,
-                    widthFactor: (width + .25).clamp(0, 1),
-                  ),
+                  if (!titleOnly) ...[
+                    const SizedBox(height: 3),
+                    SkeletonText(
+                      style: line,
+                      widthFactor: (width + .25).clamp(0, 1),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -247,14 +257,21 @@ class SwarmSkeletonRow extends StatelessWidget {
 /// fading towards the last; one "Loading" to a screen reader. Keyed [id]; its
 /// row `i`, `$id-$i`.
 class SwarmSkeletonRows extends StatelessWidget {
-  SwarmSkeletonRows({required this.id, this.rows = 2, this.round = false})
-    : super(key: ValueKey(id));
+  SwarmSkeletonRows({
+    required this.id,
+    this.rows = 2,
+    this.round = false,
+    this.titleOnly = false,
+  }) : super(key: ValueKey(id));
 
   final String id;
   final int rows;
 
   /// Avatars' round marks rather than projects' tiles.
   final bool round;
+
+  /// Rows with no line under their titles ([SwarmSkeletonRow.titleOnly]).
+  final bool titleOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -265,6 +282,7 @@ class SwarmSkeletonRows extends StatelessWidget {
           child: SwarmSkeletonRow(
             key: ValueKey('$id-$i'),
             round: round,
+            titleOnly: titleOnly,
             width: i.isEven ? .45 : .6,
           ),
         ),
