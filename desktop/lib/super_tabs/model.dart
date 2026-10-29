@@ -164,6 +164,7 @@ class SuperTabConversation {
             const <String>[],
       ),
       cards = SuperTabCards.fromJson(row['cards']),
+      reviewOf = row['reviewOf'] as String?,
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -213,6 +214,9 @@ class SuperTabConversation {
   /// Its messages drawn as live cards (live_card.dart); none from an older
   /// backend.
   final SuperTabCards cards;
+
+  /// A review group's reviewed group; null for any other conversation.
+  final String? reviewOf;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread

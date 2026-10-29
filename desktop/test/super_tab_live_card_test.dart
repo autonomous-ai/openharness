@@ -185,12 +185,9 @@ void main() {
     );
   });
 
-  testWidgets('the card updates in place as the PR changes, then stops', (
-    tester,
-  ) async {
+  testWidgets('the card updates in place as the PR changes', (tester) async {
     var answer = found(pr, passed: 3, pending: 9);
-    final reads = <List<String>>[];
-    final facts = reading(() => [answer], onRead: reads.add);
+    final facts = reading(() => [answer]);
     addTearDown(facts.dispose);
     await show(tester, cardServer(), facts, 'message-2');
     expect(find.text('3 of 12 checks done'), findsOneWidget);
@@ -199,9 +196,105 @@ void main() {
     await tester.pump();
     expect(find.text('Merged'), findsOneWidget);
     expect(find.text('3 of 12 checks done'), findsNothing);
-    await tester.pump(SuperTabPullRequestFacts.every * 3);
-    expect(reads, hasLength(2));
   });
+
+  testWidgets(
+    'a sign-out or another GitHub account clears a card, even one whose PRs are all merged',
+    (tester) async {
+      Map<String, dynamic> answer = {
+        'rows': [found(pr, state: 'Merged')],
+      };
+      final facts = SuperTabPullRequestFacts((_) async => answer);
+      addTearDown(facts.dispose);
+      await show(tester, cardServer(), facts, 'message-2');
+      expect(find.text('Round avatars'), findsOneWidget);
+      answer = {'error': 'GH_SIGNED_OUT'};
+      await tester.pump(SuperTabPullRequestFacts.every);
+      await tester.pump();
+      expect(find.text('Round avatars'), findsNothing);
+      answer = {
+        'rows': [found(pr, state: 'Merged')],
+      };
+      await tester.pump(SuperTabPullRequestFacts.every);
+      await tester.pump();
+      expect(find.text('Round avatars'), findsOneWidget);
+      // Another account, which cannot read that repository.
+      answer = {
+        'rows': [
+          {'url': pr, 'status': 'no_access'},
+        ],
+      };
+      await tester.pump(SuperTabPullRequestFacts.every);
+      await tester.pump();
+      expect(find.text('Round avatars'), findsNothing);
+      expect(find.text('app · PR #7'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'a merge the Swarm recorded wins over an open read, even while GitHub fails',
+    (tester) async {
+      Map<String, dynamic> answer = {
+        'rows': [found(pr, passed: 3, pending: 9)],
+      };
+      final facts = SuperTabPullRequestFacts((_) async => answer);
+      addTearDown(facts.dispose);
+      await show(tester, cardServer(), facts, 'message-2');
+      expect(find.text('Open'), findsOneWidget);
+      answer = {'error': 'RATE_LIMITED'};
+      final c = cardServer(mergedAt: 5).controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final group = c.snapshot!.conversation('work')!;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabLiveCard(
+              group: group,
+              card: group.cards.of('message-2')!,
+              controller: c,
+              facts: facts,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(SuperTabPullRequestFacts.every);
+      await tester.pump();
+      expect(find.text('Merged'), findsOneWidget);
+      expect(find.text('Open'), findsNothing);
+      expect(find.text('3 of 12 checks done'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'the verdict comes from the review chat, for the revision it reviewed',
+    (tester) async {
+      final server = cardServer();
+      server.messages.removeWhere((m) => '${m['text']}'.startsWith('Ready:'));
+      final groups = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>();
+      groups.firstWhere((g) => g['id'] == 'work')['agentIds'] = ['kai'];
+      groups.add({
+        ...conversationFixture('review', 'Review: Avatars'),
+        'number': 13,
+        'reviewOf': 'work',
+        'agentIds': ['ivy'],
+        'assignment': {
+          'id': 'r',
+          'agentId': 'ivy',
+          'status': 'done',
+          'result': 'Ready: no — revision 050bab807. Two findings.',
+        },
+      });
+      final facts = SuperTabPullRequestFacts(null);
+      addTearDown(facts.dispose);
+      await show(tester, server, facts, 'message-1');
+      expect(
+        find.text('Reviewer: Ivy · Ready: no on 050bab807'),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('rebuilding a card often never stops its refresh', (
     tester,

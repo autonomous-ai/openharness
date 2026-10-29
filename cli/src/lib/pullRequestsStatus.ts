@@ -1,4 +1,5 @@
 /** Read linked PRs as this computer's own GitHub account, independent of running agents or checked-out branches. */
+import { createHash } from 'node:crypto'
 import { ciCounts, ciOf, ghError, ghRun, MERGE_STATES, pooled, type CiCounts, type Run } from './github.js'
 import { validPullRequestUrl } from './sessionWorkWire.js'
 import { cleanText } from './cleanText.js'
@@ -20,8 +21,22 @@ const FIELDS = 'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deleti
 const text = (value: unknown, max = 40): string => cleanText(value, max)
 const lines = (value: unknown): number => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0
 
-export function createPullRequestsStatusReader(run: Run = ghRun, now: () => number = Date.now) {
+/** Who `gh` reads as: a hash of the token it holds (the token itself is never kept), or null when it holds none. Read from
+ *  gh's own store, without the network. */
+export const ghAccount = (run: Run = ghRun) => async (): Promise<string | null> => {
+  try {
+    const token = (await run(['auth', 'token'])).stdout.trim()
+    return token ? createHash('sha256').update(token).digest('hex') : null
+  } catch {
+    return null
+  }
+}
+
+export function createPullRequestsStatusReader(run: Run = ghRun, now: () => number = Date.now, account: () => Promise<string | null> = ghAccount()) {
   const cache = new Map<string, { until: number; value: Promise<PullRequestRow> }>()
+  // The account the cache was read as. Its answers, final ones too, are that account's: a private title must not outlive a
+  // sign-out or a switch to another account.
+  let readAs: string | null | undefined
   // Several panes can ask together. Their distinct URLs still share four subprocess slots.
   let active = 0
   const waiting: (() => void)[] = []
@@ -71,6 +86,9 @@ export function createPullRequestsStatusReader(run: Run = ghRun, now: () => numb
     if (!Array.isArray(urls) || urls.length > PULL_REQUESTS_MAX || !urls.every(validPullRequestUrl)) {
       return { rows: [], checkedAt: new Date(now()).toISOString(), error: 'INVALID_URLS', detail: `Supply at most ${PULL_REQUESTS_MAX} GitHub pull request URLs.` }
     }
+    const current = await account()
+    if (readAs !== undefined && current !== readAs) cache.clear()
+    readAs = current
     const unique = [...new Set(urls)] as string[], rows = new Map<string, PullRequestRow>()
     await pooled(unique, 4, async url => { rows.set(url, await read(url)) })
     const ordered = unique.map(url => rows.get(url)!)

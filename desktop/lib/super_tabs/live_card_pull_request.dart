@@ -19,12 +19,14 @@ class SuperTabCardPullRequest {
 
   Uri get url => Uri.parse(card.url);
   String get name => '${url.pathSegments[1]} · PR #${url.pathSegments[3]}';
-  String get state => entry?.state ?? (card.merged ? 'Merged' : '');
+
+  /// A merge the Swarm recorded wins over what this computer last read.
+  String get state => card.merged ? 'Merged' : entry?.state ?? '';
 
   /// Words beside the state: checks while it is open, and what blocks it.
   List<String> get details {
     final entry = this.entry;
-    if (entry == null || entry.finalState) return const [];
+    if (card.merged || entry == null || entry.finalState) return const [];
     return [
       if (entry.kind
           case PullRequestKind.conflicts ||

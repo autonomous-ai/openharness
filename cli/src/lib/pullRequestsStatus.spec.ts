@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ciCounts, type Run } from './github.js'
-import { createPullRequestsStatusReader, PULL_REQUESTS_FRESH_MS, PULL_REQUESTS_MAX } from './pullRequestsStatus.js'
+import { createPullRequestsStatusReader, ghAccount, PULL_REQUESTS_FRESH_MS, PULL_REQUESTS_MAX } from './pullRequestsStatus.js'
 
 const url = (n = 1) => `https://github.com/o/r/pull/${n}`
 const view = (over = {}) => ({ title: 'Fix reconnect', state: 'OPEN', isDraft: false, mergedAt: null, closedAt: null,
@@ -107,9 +107,11 @@ describe('linked pull requests read directly from GitHub', () => {
     const run = vi.fn<Run>(() => new Promise(resolve => { release = resolve }))
     const read = createPullRequestsStatusReader(run)
     const a = read([url()]), b = read([url()])
-    expect(run).toHaveBeenCalledTimes(1)
+    // Each read first asks which account gh reads as, so the flight starts a moment later; it is still one.
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
     release({ stdout: JSON.stringify(view()) })
     expect(await a).toEqual(await b)
+    expect(run).toHaveBeenCalledTimes(1)
   })
   it('caches final states permanently, open/no-access briefly, and failures for five seconds', async () => {
     let now = 0
@@ -128,6 +130,31 @@ describe('linked pull requests read directly from GitHub', () => {
     expect(run).toHaveBeenCalledTimes(9)
     now += 365 * 86400_000; await read(urls)
     expect(run).toHaveBeenCalledTimes(12)
+  })
+  it('forgets every answer, final ones too, when the GitHub account changes or signs out', async () => {
+    let account: string | null = 'ada', answer: 'merged' | 'hidden' | 'signed-out' = 'merged'
+    const run = vi.fn<Run>(async () => {
+      if (answer === 'hidden') throw { stderr: 'HTTP 404: Not Found' }
+      if (answer === 'signed-out') throw { stderr: 'To get started run gh auth login' }
+      return { stdout: JSON.stringify(view({ state: 'MERGED', title: 'Private fix' })) }
+    })
+    const read = createPullRequestsStatusReader(run, () => 0, async () => account)
+    expect((await read([url()])).rows[0]).toMatchObject({ status: 'found', title: 'Private fix', state: 'Merged' })
+    expect((await read([url()])).rows[0]).toMatchObject({ title: 'Private fix' })
+    expect(run).toHaveBeenCalledTimes(1)
+    account = 'grace'; answer = 'hidden'
+    expect((await read([url()])).rows[0]).toEqual({ url: url(), status: 'no_access' })
+    account = null; answer = 'signed-out'
+    expect(await read([url()])).toMatchObject({ error: 'GH_SIGNED_OUT', rows: [{ status: 'unavailable' }] })
+  })
+  it('reads the account as a hash of the token gh holds, and none without one', async () => {
+    const tokens = vi.fn<Run>(async () => ({ stdout: 'gho_secret\n' }))
+    const id = await ghAccount(tokens)()
+    expect(tokens).toHaveBeenCalledWith(['auth', 'token'])
+    expect(id).toMatch(/^[0-9a-f]{64}$/)
+    expect(id).not.toContain('gho_secret')
+    expect(await ghAccount(async () => { throw { stderr: 'no oauth token found' } })()).toBeNull()
+    expect(await ghAccount(async () => ({ stdout: '  ' }))()).toBeNull()
   })
   it('caps simultaneous subprocesses across overlapping lists', async () => {
     let active = 0, peak = 0

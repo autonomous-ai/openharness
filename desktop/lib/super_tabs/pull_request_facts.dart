@@ -14,7 +14,10 @@ typedef SuperTabPullRequestRead = Future<Map<String, dynamic>> Function(
 /// title, state and checks. Read with the viewer's own sign-in, so a card shows
 /// only what the viewer could read on GitHub. Nothing to read (no reader, no
 /// sign-in, no access) leaves a card with the Swarm's facts alone, quietly.
-/// Watched pull requests not yet merged or closed are read again [every].
+/// Every watched pull request is read again [every], merged and closed ones
+/// too: a sign-out or another GitHub account must not leave their private
+/// titles behind. This computer's reader answers a final state from its own
+/// cache, kept per GitHub account (cli lib/pullRequestsStatus.ts).
 class SuperTabPullRequestFacts extends ChangeNotifier {
   SuperTabPullRequestFacts(this._read);
 
@@ -55,18 +58,15 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
     _schedule();
   }
 
-  Iterable<String> get _open =>
-      _watchers.keys.where((url) => _entries[url]?.finalState != true);
-
   void _schedule() {
-    if (_read == null || _open.isEmpty) {
+    if (_read == null || _watchers.isEmpty) {
       _timer?.cancel();
       _timer = null;
       return;
     }
     _timer ??= Timer.periodic(
       every,
-      (_) => unawaited(_refresh(_open.toList())),
+      (_) => unawaited(_refresh(_watchers.keys.toList())),
     );
   }
 
@@ -103,9 +103,11 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
       );
       final url = entry?.url.toString();
       if (entry == null || !asked.contains(url)) continue;
+      // An account that cannot read it forgets it; a failed read keeps the
+      // last answer.
       if (entry.status == 'found') {
         _entries[url!] = entry;
-      } else {
+      } else if (entry.status == 'no_access') {
         _entries.remove(url);
       }
     }

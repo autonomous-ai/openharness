@@ -1277,9 +1277,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
-      // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread.
+      // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
+      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card.
       const card = pullRequestCard(group, command.pullRequestUrl)
-      if (!linked || group.ledger!.shippedAt !== shippedAt) {
+      if (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt) {
         message(group.id, `Merged ${command.pullRequestUrl}`, [], card?.messageId ?? null, SYSTEM_ROW)
         if (card) effects.messages.at(-1)!.thread = card.messageId
         else bindPullRequestCards(group, effects.messages.at(-1)!)

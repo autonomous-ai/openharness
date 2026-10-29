@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { agentOnly, appendPullRequestUrls, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -13,6 +13,10 @@ function fixture() {
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(state, actor, command, { now: 1000, operationId: `op-${++sequence}`, ...context })
     state = effects.state
+    // As the store does after every command: a shown message's links are the group's linked pull requests.
+    for (const group of state.conversations) {
+      appendPullRequestUrls(group, effects.messages.filter(m => m.conversationId === group.id && !agentOnly(m.source)).map(m => m.text))
+    }
     return effects
   }
   const add = (name: string, group: string, lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId: name,
@@ -75,6 +79,18 @@ describe('live cards', () => {
     const again = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 2000 })
     expect(again.messages).toEqual([])
     expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: card.id, mergedAt: 900 }])
+  })
+
+  it('posts each pull request\'s merge in its own card\'s thread, a later second merge too', () => {
+    const f = fixture()
+    const id = f.create().result.conversationId as string
+    const builder = f.add('Kai', id)
+    const first = f.post(id, `Opened ${PR}`, f.as(builder))
+    const second = f.post(id, `Opened ${OTHER}`, f.as(builder))
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 900 })
+    const [line] = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: OTHER }, f.as(f.lead), { now: 2000 }).messages
+    expect(line).toMatchObject({ text: `Merged ${OTHER}`, thread: second.id, replyTo: second.id })
+    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: first.id, mergedAt: 900 }, { url: OTHER, messageId: second.id, mergedAt: 2000 }])
   })
 
   it('makes the merged line the card of a pull request no message linked yet', () => {
