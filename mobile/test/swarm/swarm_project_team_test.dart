@@ -218,6 +218,27 @@ void main() {
       );
     });
 
+    test('names none of the work an agent still holds in another project, '
+        'and keeps its state', () {
+      final team = swarmProjectAgents(
+        swarm(
+          agents: [agent('a-ash', displayName: 'Ash')],
+          groups: [
+            {
+              ...work('a-ash', 'working', number: 3001),
+              'projectId': 'project-2',
+            },
+          ],
+        ),
+        project,
+        now: now,
+      );
+
+      expect(of(team, 'a-ash').state, SwarmMemberState.working);
+      expect(of(team, 'a-ash').task, isNull);
+      expect(of(team, 'a-ash').line, 'Working');
+    });
+
     test('counts what needs attention, in the order it is listed', () {
       final team = swarmProjectAgents(
         swarm(

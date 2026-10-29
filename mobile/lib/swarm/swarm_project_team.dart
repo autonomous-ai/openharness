@@ -80,7 +80,8 @@ class SwarmTeamAgent {
 /// ([SwarmMemberState]), the most urgent first, then by name, letter case
 /// aside. Read from the Swarm alone, as the team glance is: an agent is of
 /// the project it records or whose work it is in, matched by id, never by
-/// name; a Buddy is no one's team.
+/// name; a Buddy is no one's team. Work it still holds in another project is
+/// not named here, nor opened: its state stays, as the glance counts it.
 List<SwarmTeamAgent> swarmProjectAgents(
   SuperTabSnapshot snapshot,
   String projectId, {
@@ -90,7 +91,7 @@ List<SwarmTeamAgent> swarmProjectAgents(
   final team = [
     // The read names its Buddies; one it has not named yet says so itself.
     for (final a in glance.agents)
-      if (!a.agent.isBuddy) _member(a),
+      if (!a.agent.isBuddy) _member(a, projectId),
   ];
   String sortName(SwarmTeamAgent a) => a.name.toLowerCase();
   return team..sort((a, b) {
@@ -101,7 +102,7 @@ List<SwarmTeamAgent> swarmProjectAgents(
   });
 }
 
-SwarmTeamAgent _member(SwarmAgentGlance glance) {
+SwarmTeamAgent _member(SwarmAgentGlance glance, String projectId) {
   final agent = glance.agent;
   final work = glance.task?.assignment?['status'];
   // Offline outranks a stop, which outranks the work it still holds.
@@ -125,7 +126,14 @@ SwarmTeamAgent _member(SwarmAgentGlance glance) {
     ),
     SwarmAgentState.idle => (SwarmMemberState.idle, 'Idle'),
   };
-  return SwarmTeamAgent(agent, glance.name, state, label, glance.task);
+  final task = glance.task;
+  return SwarmTeamAgent(
+    agent,
+    glance.name,
+    state,
+    label,
+    task?.projectId == projectId ? task : null,
+  );
 }
 
 /// What on [team] needs a look, counted in the order it is listed: "1 needs

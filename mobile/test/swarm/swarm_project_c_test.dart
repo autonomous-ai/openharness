@@ -6,6 +6,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_code_block.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
@@ -120,8 +121,9 @@ void main() {
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake,
-    Widget home,
-  ) async {
+    Widget home, {
+    bool settle = true,
+  }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -140,7 +142,14 @@ void main() {
         home: home,
       ),
     );
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      // A read held on its way: skeletons pulse until it answers.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
     return host;
   }
 
@@ -1243,6 +1252,357 @@ void main() {
       );
       expect(tester.getSize(line).height, greaterThanOrEqualTo(minTouchTarget));
       expect(key('swarm-thread-line-m4'), findsNothing, reason: 'no replies');
+    });
+  });
+
+  group('its privacy edges', () {
+    const desktop = 'project-2';
+    const messages = '/api/super-tabs/$tab/conversations/$leadChat/messages';
+
+    /// [backend] whose Swarm has a second project, Desktop, the person reads
+    /// too: Ash, Mobile's agent, still holds work there; another agent named
+    /// Nova waits on the person there; and Mobile has the person's Buddy chat
+    /// with Pip.
+    FakeSwarm twoProjects() {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        final head = (read['head'] as Map)['data'] as Map;
+        head['projects'] = [
+          ...head['projects'] as List,
+          {
+            'id': desktop,
+            'name': 'Desktop',
+            'ownerId': me,
+            'leadConversationId': 'group-lead-2',
+            'visibility': 'public',
+            'members': <Object>[],
+            'updateMinutes': 5,
+          },
+        ];
+        Map<String, dynamic> there(Map<String, dynamic> g) => {
+          ...g,
+          'projectId': desktop,
+        };
+        read['agents'] = [
+          ...read['agents'] as List,
+          part('agent-nova-2', 1, {
+            ...agent('agent-nova-2', displayName: 'Nova'),
+            'projectId': desktop,
+          }),
+          part('buddy-pip', 1, buddyData('buddy-pip', displayName: 'Pip')),
+        ];
+        final groups = read['groups'] as List;
+        read['groups'] = [
+          groups.first,
+          part(
+            'group-lead-2',
+            7,
+            there(groupData('group-lead-2', title: 'Desktop')),
+          ),
+          part(
+            'g3',
+            8,
+            there(
+              groupData(
+                'g3',
+                title: 'Desktop sign-in',
+                number: 3001,
+                agentIds: ['agent-ash'],
+                status: 'working',
+                workerId: 'agent-ash',
+                lastMessageSequence: 2,
+              ),
+            ),
+          ),
+          part(
+            'g4',
+            9,
+            there(
+              groupData(
+                'g4',
+                title: 'Desktop keychain',
+                number: 3002,
+                agentIds: ['agent-nova-2'],
+                status: 'needs_human',
+                workerId: 'agent-nova-2',
+                lastMessageSequence: 2,
+              ),
+            ),
+          ),
+          part(
+            'buddy-chat',
+            10,
+            buddyChatData(
+              'buddy-chat',
+              agentIds: ['buddy-pip'],
+              lastMessageSequence: 1,
+            ),
+          ),
+          ...groups.skip(1),
+        ];
+        return read;
+      };
+      return fake;
+    }
+
+    /// Whether [words] are drawn anywhere on the screen.
+    Finder shown(String words) =>
+        find.textContaining(words, findRichText: true);
+
+    testWidgets("Team lists this project's alone: not another project's "
+        'task, nor its agent of the same name, nor a Buddy', (tester) async {
+      await team(tester, twoProjects());
+
+      expect(find.byType(SwarmWaitingRow), findsOneWidget, reason: 'Juno');
+      expect(find.byType(SwarmWorkRow), findsOneWidget, reason: 'Nova');
+      expect(shown('Desktop keychain'), findsNothing);
+      expect(shown('#3002'), findsNothing);
+      expect(key('swarm-member-agent-nova-2'), findsNothing);
+      expect(key('swarm-member-buddy-pip'), findsNothing);
+      expect(
+        tester
+            .widgetList<SwarmMemberRow>(find.byType(SwarmMemberRow))
+            .where((row) => row.name == 'Nova')
+            .length,
+        1,
+      );
+      expect(
+        said(tester, 'swarm-team-tasks-caption'),
+        'Tasks | 1 waiting on you · 1 working',
+      );
+    });
+
+    testWidgets('an agent of this project still holding work in another '
+        'names none of it on the Team, and opens none of it', (tester) async {
+      final fake = twoProjects();
+      await team(tester, fake);
+
+      await tester.ensureVisible(key('swarm-member-agent-ash'));
+      await tester.pumpAndSettle();
+      expect(heard(tester, 'swarm-member-agent-ash'), 'Ash, Working');
+      expect(shown('Desktop sign-in'), findsNothing);
+      expect(shown('#3001'), findsNothing);
+
+      await tester.tap(key('swarm-member-agent-ash'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-project-team-list'), findsOneWidget);
+      expect(fake.paths.where((p) => p.contains('/conversations/g3/')), []);
+    });
+
+    testWidgets("another Swarm's project, a work chat, a Buddy chat and the "
+        "project's own chat are refused alike, with nothing of them shown "
+        'or read', (tester) async {
+      for (final id in ['project-elsewhere', 'g1', 'buddy-chat', leadChat]) {
+        final fake = twoProjects();
+        await pump(
+          tester,
+          fake,
+          SwarmProjectPage(
+            swarmId: tab,
+            projectId: id,
+            tabs: SwarmProjectTab.homeC,
+          ),
+        );
+
+        expect(
+          find.text('This project is no longer in the Swarm.'),
+          findsOneWidget,
+          reason: id,
+        );
+        expect(key('swarm-project-tab-team'), findsNothing, reason: id);
+        for (final words in [
+          'Mobile',
+          'Desktop',
+          'Buddy chat header',
+          "$me's Buddy",
+          'Pip',
+        ]) {
+          expect(shown(words), findsNothing, reason: '$id: $words');
+        }
+        expect(
+          fake.paths.where(
+            (p) => p.contains('/messages') || p.contains('/leaderboard'),
+          ),
+          [],
+          reason: id,
+        );
+      }
+    });
+
+    testWidgets('a board that lists someone who does not read the project '
+        'shows nothing of them', (tester) async {
+      final fake = backend();
+      final answer = fake.routes[board]!;
+      fake.routes[board] = (body) {
+        final read = answer(body)! as Map<String, dynamic>;
+        return {
+          ...read,
+          'people': [
+            {
+              ...scoreData('stranger', points: 9999, rank: 1, shipped: 40),
+              'displayName': 'Mallory',
+            },
+            ...read['people'] as List,
+          ],
+        };
+      };
+      await team(tester, fake);
+
+      expect(shown('Mallory'), findsNothing);
+      expect(shown('9999'), findsNothing);
+      expect(shown('40 shipped'), findsNothing);
+      expect(
+        rowsAfter(
+          tester,
+          'swarm-team-humans-caption',
+          'swarm-team-agents-caption',
+        ),
+        [
+          'swarm-member-person-person-me',
+          'swarm-member-person-diego',
+          'swarm-member-person-ken',
+        ],
+      );
+    });
+
+    testWidgets('access taken away with the Team open: its tasks and agents '
+        'go, and the Swarm read on its way brings none back', (tester) async {
+      final fake = backend();
+      await team(tester, fake);
+      expect(find.byType(SwarmWaitingRow), findsOneWidget);
+
+      final gate = hold(fake, '/api/super-tabs/$tab/changes');
+      final reader = host(tester).session!.inbox.reader(tab)!;
+      unawaited(reader.refresh());
+      await tester.pump();
+      reader.revoke();
+      await tester.pump();
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmWaitingRow), findsNothing);
+      expect(find.byType(SwarmWorkRow), findsNothing);
+      expect(find.byType(SwarmMemberRow), findsNothing);
+      for (final words in [
+        'Juno',
+        'Nova',
+        'Saved views cache',
+        'Buddy chat header',
+        '#Mobile',
+      ]) {
+        expect(shown(words), findsNothing, reason: words);
+      }
+      expect(
+        find.text('This project is no longer in the Swarm.'),
+        findsOneWidget,
+      );
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('access taken away with the chat open: its messages go, and '
+        'nothing is marked read after', (tester) async {
+      final fake = backend();
+      await pump(tester, fake, page);
+      expect(find.text('CI on #2154 is green.'), findsOneWidget);
+      final posts = fake.calls.where((c) => c.method == 'POST').length;
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(find.text('CI on #2154 is green.'), findsNothing);
+      expect(key('swarm-new-messages-line'), findsNothing);
+      expect(find.byType(TextField), findsNothing, reason: 'no composer');
+      expect(
+        find.text('This project is no longer in the Swarm.'),
+        findsOneWidget,
+      );
+      expect(fake.calls.where((c) => c.method == 'POST').length, posts);
+    });
+
+    testWidgets("access taken away while the chat's first read is on its way: "
+        'the answer is dropped, and no Loading stays', (tester) async {
+      final fake = backend();
+      final gate = hold(fake, messages);
+      await pump(tester, fake, page, settle: false);
+      expect(find.byType(SwarmChatSkeleton), findsOneWidget);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pump();
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.text('CI on #2154 is green.'), findsNothing);
+      expect(find.byType(SwarmChatSkeleton), findsNothing);
+      expect(
+        find.text('This project is no longer in the Swarm.'),
+        findsOneWidget,
+      );
+      expect(
+        fake.calls.where((c) => c.method == 'POST' && c.path.endsWith('/read')),
+        isEmpty,
+      );
+    });
+
+    testWidgets("a chat's first read that fails says so with no Loading left, "
+        "and is read again once, at the Swarm's next read", (tester) async {
+      final fake = backend();
+      final answer = fake.routes[messages]!;
+      fake.routes[messages] = (_) =>
+          throw const SuperTabFailure('INTERNAL', 'Messages are down.');
+      await pump(tester, fake, page);
+      int reads() => fake.paths.where((p) => p.startsWith(messages)).length;
+
+      expect(find.text('Messages are down.'), findsOneWidget);
+      expect(find.byType(SwarmChatSkeleton), findsNothing);
+      final opened = reads();
+      expect(
+        opened,
+        lessThanOrEqualTo(2),
+        reason: 'its open, and the Swarm read that came with it',
+      );
+      await tester.pump(const Duration(minutes: 1));
+      expect(reads(), opened, reason: 'not again on its own, in a loop');
+
+      fake.routes[messages] = answer;
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(reads(), opened + 1);
+      expect(find.text('CI on #2154 is green.'), findsOneWidget);
+      expect(find.text('Messages are down.'), findsNothing);
+    });
+
+    testWidgets("a page carrying another chat's message shows none of it, "
+        'says the read failed, and leaves no Loading', (tester) async {
+      final fake = backend();
+      fake.routes[messages] = (_) => {
+        'messages': [
+          {
+            'id': 'msg-lead-1',
+            'conversationId': leadChat,
+            'text': 'CI on #2154 is green.',
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+          },
+          {
+            'id': 'msg-buddy-1',
+            'conversationId': 'buddy-chat',
+            'text': 'A word to my Buddy.',
+            'sequence': 2,
+            'author': {'kind': 'person', 'id': me, 'name': me},
+          },
+        ],
+        'next': null,
+      };
+      await pump(tester, fake, page);
+
+      expect(find.text('A word to my Buddy.'), findsNothing);
+      expect(find.text('CI on #2154 is green.'), findsNothing);
+      expect(find.text('Could not load messages. Try again.'), findsOneWidget);
+      expect(find.byType(SwarmChatSkeleton), findsNothing);
     });
   });
 }
