@@ -173,6 +173,48 @@ void main() {
     });
   });
 
+  group('a fresh check of one tag', () {
+    Future<(ConversationServer, SuperTabController)> swarm() async {
+      final server = ConversationServer()..tag('message-1');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      return (server, c);
+    }
+
+    test('says yes from a read that lists it, and shows that read', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      expect(tags.waiting, isEmpty);
+      expect(await tags.waitingNow('mention-1'), isTrue);
+      expect(tags.waiting.map((m) => m.id), ['mention-1']);
+      expect(await tags.waitingNow('gone'), isFalse);
+    });
+
+    test('says no when the read fails, whatever was read before', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      await tags.load();
+      expect(tags.waiting.map((m) => m.id), ['mention-1']);
+      server.failMentions = true;
+      expect(await tags.waitingNow('mention-1'), isFalse);
+    });
+
+    test('says no when who may read what changed while it was read', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      await tags.load();
+      server.holdMentions = Completer<void>();
+      final answer = tags.waitingNow('mention-1');
+      await pumpEventQueue();
+      server.parts.epoch++;
+      await c.refresh();
+      server.holdMentions!.complete();
+      server.holdMentions = null;
+      expect(await answer, isFalse);
+    });
+  });
+
   group('notification list', () {
     /// [swarm] with a workgroup the reader is tagged in.
     ConversationServer taggedInPlans() {

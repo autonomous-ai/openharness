@@ -159,13 +159,26 @@ class SuperTabMentions extends ChangeNotifier {
 
   /// Whether the server lists [mentionId] among the reader's waiting tags
   /// now. A read that fails or is refused answers false: what was read before
-  /// never stands in for it.
+  /// never stands in for it. A yes shows that same read as [waiting], so what
+  /// opens the tag reads it from the answer that confirmed it, with no second
+  /// read to decide otherwise.
   Future<bool> waitingNow(String mentionId) async {
+    final epoch = _epoch;
+    final List<SuperTabMention> fresh;
     try {
-      return (await _list('waiting')).any((m) => m.id == mentionId);
+      fresh = await _list('waiting');
     } catch (_) {
       return false;
     }
+    // Who may read what changed while it was on its way: it says nothing now.
+    // A Swarm just loaded learns its first epoch meanwhile; that is no change.
+    final moved = epoch != null && epoch != _epoch;
+    if (moved || !fresh.any((m) => m.id == mentionId)) return false;
+    if (!_sameMentions(waiting, fresh)) {
+      waiting = fresh;
+      notifyListeners();
+    }
+    return true;
   }
 
   Future<List<SuperTabMention>> _list(String state) async {

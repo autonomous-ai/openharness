@@ -7222,12 +7222,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     } catch (_) {
       return;
     }
-    final tags = SuperTabMentions.of(controller);
-    final waiting = await tags.waitingNow(mentionId);
+    // One read decides and supplies the tag the view opens at.
+    final waiting = await SuperTabMentions.of(controller).waitingNow(mentionId);
     if (!mounted || !waiting || controller.accessRevoked) return letGo();
-    // The view opens the tag from this list, so it has to hold it first.
-    await tags.load();
-    if (!mounted) return letGo();
     if (_newHarness?.requestDismiss() == false) return letGo();
     _closeNewHarness(restoreFocus: false);
     _closeSearch(restoreFocus: false);

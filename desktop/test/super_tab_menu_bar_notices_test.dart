@@ -58,18 +58,41 @@ class RefusingTags extends SuperTabFixtureConnection {
   RefusingTags(super.store) : super(local: true);
   SuperTabFailure? refusal;
 
+  /// Refuse every tag read after the next successful waiting list (review of
+  /// #2088: permission lost between two reads).
+  bool refuseAfterNextWaiting = false;
+
+  /// The waiting lists the server answered.
+  var waitingReads = 0;
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    final path = payload['path'] as String? ?? '';
     if (refusal case final failure?
-        when type == 'super_tabs' &&
-            (payload['path'] as String? ?? '').contains('/mentions?')) {
+        when type == 'super_tabs' && path.contains('/mentions?')) {
       throw failure;
     }
-    return super.request(type, payload: payload, timeout: timeout);
+    final answer = await super.request(
+      type,
+      payload: payload,
+      timeout: timeout,
+    );
+    if (type == 'super_tabs' && path.contains('/mentions?state=waiting')) {
+      waitingReads++;
+      if (refuseAfterNextWaiting) {
+        refuseAfterNextWaiting = false;
+        refusal = const SuperTabFailure(
+          'FORBIDDEN',
+          'No longer permitted',
+          statusCode: 403,
+        );
+      }
+    }
+    return answer;
   }
 }
 
@@ -588,6 +611,35 @@ void main() {
         await click('$otherId/gone');
         expect(f.app.activeSwarmId, before);
         expect(f.app.superTabs.peek(otherId), isNull);
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a click opens from the one read that confirmed the tag: a refusal '
+      'after it changes nothing, as no second read decides',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: RefusingTags.new);
+        await tester.runAsync(() => openWithNotices(f));
+        tagInOffline(f.connection.server);
+        final swarmTab = f.app.activeSwarmId;
+        f.app.newSwarm(name: 'Desktop');
+        final click = await clicker(tester, f);
+        final connection = f.connection as RefusingTags;
+        final c = f.app.superTabs.peek(tabId)!;
+        // What was read before does not hold the new tag: only the click's
+        // own read can supply it.
+        expect(SuperTabMentions.of(c).waiting.map((m) => m.id), ['mention-1']);
+        final reads = connection.waitingReads;
+        connection.refuseAfterNextWaiting = true;
+        await click('$tabId/mention-2');
+        expect(connection.waitingReads, reads + 1);
+        expect(f.app.activeSwarmId, swarmTab);
+        expect(c.noticeRequest, isNull);
+        expect(c.selectedId, 'offline');
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
         f.dispose();
