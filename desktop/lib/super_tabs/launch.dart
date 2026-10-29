@@ -477,6 +477,9 @@ class SuperTabLaunch {
         tabId,
         saved['visibility'] == 'private' ? 'Swarm' : saved['title'] as String,
       );
+      // A Swarm just created, by the person here: ask whether to share their
+      // computers with it (super_tabs/share_computers.dart).
+      app.askToShareComputers(tabId);
     }
     controller.select(saved['conversationId'] as String);
     await app.superTabs.storage.delete(key);

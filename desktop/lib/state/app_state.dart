@@ -2080,6 +2080,11 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Whether this computer can make a Harness Team account: a Mac, the only
+  /// place it exists.
+  bool get teamAccountsHere =>
+      macOSForTest ?? (Platform.isMacOS && !kUnderTest);
+
   /// This Mac's own machine, when the Harness Team account can be made here.
   String? _teamAccountHere() {
     if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return null;
@@ -2103,6 +2108,18 @@ class AppNotifier extends ChangeNotifier {
   /// reason: the screen explains it, then [setUpTeamAccount] or
   /// [declineTeamAccount].
   Stream<String> get teamSetupAsks => _teamSetupAsks.stream;
+
+  final StreamController<String> _swarmShareAsks =
+      StreamController<String>.broadcast();
+
+  /// A Swarm this person just created or joined, by id: the screen then asks
+  /// whether to share their computers with it (super_tabs/share_computers.dart),
+  /// while they are here to answer (Dee, 2026-10-29).
+  Stream<String> get swarmShareAsks => _swarmShareAsks.stream;
+
+  void askToShareComputers(String tabId) {
+    if (!_swarmShareAsks.isClosed) _swarmShareAsks.add(tabId);
+  }
 
   /// Starts the Harness Team account's setup on this Mac, the person having
   /// asked: macOS's administrator prompt follows. Answers the daemon's state
@@ -21880,6 +21897,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
     unawaited(_teamSetupAsks.close());
+    unawaited(_swarmShareAsks.close());
     super.dispose();
   }
 }

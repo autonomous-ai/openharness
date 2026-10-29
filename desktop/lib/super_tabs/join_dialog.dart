@@ -69,9 +69,10 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
                   onJoined: (id, name) {
                     if (!current()) return;
                     app.openSuperTab(id, name);
-                    // Joined by the person at this Mac: macOS asks once for
-                    // the Harness Team account (cli/src/team/autoSetup.ts).
-                    unawaited(app.offerTeamAccount('join', tabId: id));
+                    // Joined by the person at this computer: ask whether to
+                    // share their computers, which sets up this Mac's Harness
+                    // Team account (super_tabs/share_computers.dart).
+                    app.askToShareComputers(id);
                   },
                 )
               : AlertDialog(

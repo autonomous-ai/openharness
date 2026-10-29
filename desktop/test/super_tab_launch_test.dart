@@ -55,6 +55,9 @@ class SuperTabFixtureConnection extends WsConn {
   /// The most agents preparation says this machine may run; null for a Harness
   /// from before setup reported it.
   int? maxAvailableAgents = 16;
+
+  /// What this Mac's daemon answers when its Harness Team account is set up.
+  String teamSetupState = 'started';
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
@@ -164,6 +167,10 @@ class SuperTabFixtureConnection extends WsConn {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
+      // This Mac's Harness Team account: macOS's password prompt follows.
+      if (payload['action'] == 'teamSetup') {
+        return {'ok': true, 'state': teamSetupState};
+      }
       if (payload['action'] == 'prepareContribution') {
         if (prepared.add(payload['operationId'])) {
           return {'ok': true, 'state': 'preparing'};
