@@ -202,8 +202,9 @@ class SwarmAttachmentStore {
   }
 }
 
-/// The app's one store of Swarm's files.
-final swarmAttachments = SwarmAttachmentStore();
+/// The app's one store of Swarm's files; review screenshots put in one
+/// that serves made-up pictures.
+SwarmAttachmentStore swarmAttachments = SwarmAttachmentStore();
 
 /// Keeps [store] to the account whose Swarm [host] reads: the files go on
 /// sign-out, Swarm turned off and another account ([SwarmAttachmentStore.keepOnly]),
