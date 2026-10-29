@@ -750,6 +750,19 @@ describe('route.record and route.override', () => {
       expect(() => run(sized('small', patch))).toThrow()
     }
   })
+  it('writes the job kind from the group\'s owned paths, then the route word, and never takes one sent with the route', () => {
+    const f = routed(), group = f.group()
+    const route = (conversationId: string, patch: Record<string, unknown> = {}, kind?: string) => f.run({ type: 'route.record', conversationId,
+      decision: record({ ...patch, assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', ...(kind ? { kind } : {}) } }) } as Command, f.leadActor, {}).routeDecisions[0]
+    f.run({ type: 'work.define', conversationId: group, task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['backend/src/superTabs', 'backend/src/superTabs/store.test.ts'] },
+      checks: [{ description: 'Tests pass.', independent: false }] })
+    expect(route(group, {}, 'ui')).toMatchObject({ record: { jobKind: 'backend', assessment: { kind: 'ui' } } })
+    expect(route(group, {}, 'security')).toMatchObject({ record: { jobKind: 'security' } })
+    expect(route(group, { jobKind: 'docs' })).toMatchObject({ record: { jobKind: 'backend' } })
+    // The Lead conversation owns nothing: the route word decides, and a word outside the list is general.
+    expect(route('lead', {}, 'mobile')).toMatchObject({ record: { jobKind: 'mobile' } })
+    expect(route('lead', {}, 'parser')).toMatchObject({ record: { jobKind: 'general' } })
+  })
   it('refuses a pick outside the candidates, a non-lead agent and a busy hour', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>
@@ -1417,6 +1430,63 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, builderActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: false, lead: false })
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
+  })
+
+  describe('work waiting for its review (liveness.ts: its quiet time does not count)', () => {
+    const HOUR = 3_600_000, QUIET = 30 * 60_000
+    function handedOver(status: 'review' | 'working') {
+      const setup = reviewed()
+      const { f, group, builder, reviewer } = setup
+      const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+      const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status, result: 'Ready for review: PR #42 at abc1234' }, builderActor, { now: 2000 })
+      const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
+      const verdict = (passed: boolean, now: number) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed,
+        evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
+      const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
+      /** The task's status after the time checks ran at `now`, on a copy. */
+      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      return { ...setup, built, builderActor, verdict, task, swept }
+    }
+
+    it('moves work in review back to working when a review finds problems, tells its Engineer, and counts its quiet time from then', () => {
+      const { verdict, task, swept, builder } = handedOver('review')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('review')
+      const found = verdict(false, foundAt)
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
+      expect(found.messages.find(m => m.recipients.includes(builder))?.text).toBe('Working\n\nThe review found problems. Fix them, then hand it over for review again.')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+    })
+
+    it('keeps work in review when the review passes', () => {
+      const { verdict, task, swept } = handedOver('review')
+      expect(verdict(true, 2000 + HOUR).messages).toEqual([])
+      expect(task().status).toBe('review')
+      expect(swept(2000 + 2 * HOUR)).toBe('review')
+    })
+
+    it('counts a working hand-off\'s quiet time once a review finds problems, and pauses it again at the Engineer\'s next hand-off', () => {
+      const { f, group, built, builderActor, verdict, task, swept } = handedOver('working')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('working')
+      verdict(false, foundAt)
+      expect(task().status).toBe('working')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Ready for review: PR #42 at def5678' }, builderActor, { now: foundAt + HOUR })
+      expect(swept(foundAt + 3 * HOUR)).toBe('working')
+    })
+
+    it('counts quiet time from when the Lead moves the work out of review', () => {
+      const { f, group, built, leadActor, swept } = handedOver('review')
+      const movedAt = 2000 + 2 * HOUR
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Rebase on main' }, leadActor, { now: movedAt })
+      expect(swept(movedAt + QUIET)).toBe('working')
+      expect(swept(movedAt + QUIET + 1)).toBe('lost')
+    })
   })
 
   describe('a review the Swarm opens by itself', () => {
@@ -3392,7 +3462,8 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp!.carry).toContain(pr)
     expect(g().stepUp!.carry).toContain('Ready: no. Two links are broken.')
     expect(g().stepUp!.carry).toContain('Ready: yes. Branch fix/docs.')
-    expect(effects.messages.find(m => m.recipients.includes(kimi))!.text).toContain('Stop working on it.')
+    // Told only to stop: a stepped-up attempt is not handed back to fix its findings.
+    expect(effects.messages.filter(m => m.recipients.includes(kimi)).map(m => m.text)).toEqual([expect.stringContaining('Stop working on it.')])
     // Each row its own: one write stores them all.
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.find(m => m.recipients.includes(f.lead))!.text)
@@ -3413,7 +3484,8 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp).toMatchObject({ attempt: 3, floor: 3 })
     const opus = builder('opus', 'claude-opus-4-7'), third = assign(opus)
     expect(fail(third.assignmentId, opus).messages.some(m => m.text.includes('stepped up'))).toBe(false)
-    expect(g().assignment).toMatchObject({ id: third.assignmentId, status: 'review' })
+    // Not stepped up: a review that found problems hands it back to its Builder (liveness.ts reviewFoundProblems).
+    expect(g().assignment).toMatchObject({ id: third.assignmentId, status: 'working' })
   })
 
   it('stops after two steps, and never steps up work that did not start on the grid', () => {
@@ -3422,14 +3494,14 @@ describe('stepping up from a cheap model', () => {
     const first = assign(opus)
     fail(first.assignmentId, opus)
     expect(g().stepUp).toBeUndefined()
-    expect(g().assignment!.status).toBe('review')
+    expect(g().assignment!.status).toBe('working')
     // At the cap a failed Sonnet attempt stays with its Builder.
     const { builder: other, assign: give, fail: failIt, g: group } = cheap()
     group().stepUp = { attempt: 3, floor: 3, reason: 'Earlier.', at: 1, carry: '' }
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     failIt(give(sonnet).assignmentId, sonnet)
     expect(group().stepUp!.attempt).toBe(3)
-    expect(group().assignment!.status).toBe('review')
+    expect(group().assignment!.status).toBe('working')
   })
 
   it('steps up a group whose grid start failed, and not one whose subscription start failed', () => {
@@ -3455,7 +3527,7 @@ describe('stepping up from a cheap model', () => {
     const attempt = assign(codex)
     fail(attempt.assignmentId, codex)
     expect(g().stepUp!.attempt).toBe(2)
-    expect(g().assignment).toMatchObject({ id: attempt.assignmentId, status: 'review' })
+    expect(g().assignment).toMatchObject({ id: attempt.assignmentId, status: 'working' })
   })
 
   it('steps up once for one failed grid start, however often its failure is reported', () => {
