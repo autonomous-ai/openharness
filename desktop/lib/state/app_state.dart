@@ -1733,16 +1733,21 @@ class AppNotifier extends ChangeNotifier {
   late final tabActivity = TabActivityReader(request: sharedTabs.request);
 
   /// The machine [sharedTabs] asks: this computer natively; on the web one of
-  /// the account's own online machines, never a shared one.
+  /// the account's own online machines, never a shared one, and never a Harness
+  /// Team account's: its daemon relays under a team sign-in, which the server
+  /// refuses to let speak as the person ("A team sign-in can only run Swarm
+  /// agents on its own machine", every Buddy-chat post from a phone, 10-29).
   MachineState? get sharedTabsTarget {
     if (viewer == null) return localMachineState;
+    bool asks(MachineState machine) =>
+        !machine.belongsToOtherAccount &&
+        !machine.machine.isTeamAccount &&
+        !machine.isOffline;
     final owned = ownedActionMachine;
-    if (owned != null && !owned.belongsToOtherAccount && !owned.isOffline) {
-      return owned;
-    }
+    if (owned != null && asks(owned)) return owned;
     MachineState? best;
     for (final machine in machineStates.values) {
-      if (machine.belongsToOtherAccount || machine.isOffline) continue;
+      if (!asks(machine)) continue;
       if (machine.connectionStatus != ConnectionStatus.connected) continue;
       if (best == null ||
           machine.machine.machineId.compareTo(best.machine.machineId) < 0) {
