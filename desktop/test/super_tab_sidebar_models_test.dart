@@ -158,6 +158,62 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets(
+    'adds the models behind the heading as one Other row, so the shown rows add up to 100%',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final controller = await show(tester, modelsSwarm());
+      final other = find.byKey(const ValueKey('super-models-other'));
+      expect(other, findsOneWidget);
+      // Haiku's 3 of 32 tasks, 9%: 44 + 28 + 19 + 9 = 100.
+      expect(
+        find.descendant(of: other, matching: find.text('Other')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: other, matching: find.text('9%')),
+        findsOneWidget,
+      );
+      final shown = [
+        for (final name in ['Opus 5.5', 'GPT-6.1 Sol', 'Sonnet 5.5'])
+          inRow(name, find.textContaining('%')),
+        find.descendant(of: other, matching: find.textContaining('%')),
+      ];
+      expect(
+        shown
+            .map(
+              (f) =>
+                  int.parse(tester.widget<Text>(f).data!.replaceAll('%', '')),
+            )
+            .fold<int>(0, (sum, percent) => sum + percent),
+        100,
+      );
+      const words = 'Other: 3 of 32 tasks this week · no first review yet';
+      expect(find.byTooltip(words), findsOneWidget);
+      expect(find.bySemanticsLabel(words), findsOneWidget);
+      // The whole list names them instead.
+      await tester.tap(headingText);
+      await tester.pumpAndSettle();
+      expect(other, findsNothing);
+      expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
+      semantics.dispose();
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('has no Other row when every model is shown', (tester) async {
+    final server = modelsSwarm();
+    server.leaderboard!['byModel'] = [
+      modelScore('claude', 'claude-opus-5-5', 'high', attempts: 3),
+      modelScore('codex', 'gpt-6.1-sol', null, attempts: 1),
+    ];
+    final controller = await show(tester, server);
+    expect(find.byKey(const ValueKey('super-models-other')), findsNothing);
+    expect(inRow('Opus 5.5', find.text('75%')), findsOneWidget);
+    expect(inRow('GPT-6.1 Sol', find.text('25%')), findsOneWidget);
+    await close(tester, controller);
+  });
+
   testWidgets('rounds the shares so all rows add up to 100%', (tester) async {
     final server = modelsSwarm();
     // A third each: plain rounding says 33% three times, 99%.

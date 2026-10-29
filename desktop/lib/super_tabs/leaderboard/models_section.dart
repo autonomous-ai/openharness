@@ -35,8 +35,9 @@ class LeaderboardModelShare {
   /// "Opus 5.5", "GPT-6.1 Sol"; the engine's name when it reported no model.
   final String name;
 
-  /// The engine that ran most of its tasks: its icon leads the row.
-  final String engine;
+  /// The engine that ran most of its tasks: its icon leads the row. Null for
+  /// [LeaderboardModelShare.other], which no one engine ran.
+  final String? engine;
 
   /// Its tasks, of the [total] every model ran.
   final int attempts, total;
@@ -44,6 +45,19 @@ class LeaderboardModelShare {
   /// Its share of [total], rounded so the week's rows add up to 100.
   final int percent;
   final int reviewed, passed;
+
+  /// The models behind the heading as one row, so the rows shown add up to
+  /// 100 too: its percent is the sum of theirs, never a rounding of its own.
+  factory LeaderboardModelShare.other(List<LeaderboardModelShare> rest) =>
+      LeaderboardModelShare(
+        name: 'Other',
+        engine: null,
+        attempts: rest.fold(0, (sum, share) => sum + share.attempts),
+        total: rest.first.total,
+        percent: rest.fold(0, (sum, share) => sum + share.percent),
+        reviewed: rest.fold(0, (sum, share) => sum + share.reviewed),
+        passed: rest.fold(0, (sum, share) => sum + share.passed),
+      );
 }
 
 /// The week's models that ran tasks, the largest share first, then by name.
@@ -113,8 +127,10 @@ List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
 /// The left sidebar's Models, after Machines (Dee, 2026-10-29): each model's
 /// share of the tasks of the week the right pane shows, behind its engine's
 /// icon, the counts and its first-review pass rate in words on hover and to a
-/// screen reader. The heading shows them all. Nothing shows without a board
-/// of [projectId], or when no model ran a task that week.
+/// screen reader. Behind the first [leaderboardModelsShown] the rest are one
+/// Other row, so the rows shown add up to 100%; the heading names them all.
+/// Nothing shows without a board of [projectId], or when no model ran a task
+/// that week.
 class LeaderboardModelsSection extends StatefulWidget {
   const LeaderboardModelsSection({
     super.key,
@@ -164,6 +180,16 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
           for (final share
               in _all ? shares : shares.take(leaderboardModelsShown))
             _row(share, week, style, column),
+          if (more && !_all)
+            _row(
+              LeaderboardModelShare.other(
+                shares.sublist(leaderboardModelsShown),
+              ),
+              week,
+              style,
+              column,
+              key: const ValueKey('super-models-other'),
+            ),
         ],
       );
     },
@@ -173,15 +199,16 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
     LeaderboardModelShare share,
     String week,
     TextStyle style,
-    double column,
-  ) {
+    double column, {
+    Key? key,
+  }) {
     final reviews = share.reviewed == 0
         ? 'no first review yet'
         : '${(share.passed * 100 / share.reviewed).round()}% passed first review';
     final words =
         '${share.name}: ${share.attempts} of ${share.total} tasks $week · $reviews';
     return Tooltip(
-      key: ValueKey('super-model-${share.name}'),
+      key: key ?? ValueKey('super-model-${share.name}'),
       message: words,
       excludeFromSemantics: true,
       child: Semantics(
@@ -205,12 +232,15 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
                 children: [
                   SizedBox(
                     width: SuperTabSectionHeading.actionWidth,
-                    child: Center(
-                      child: EngineMark(
-                        engine: share.engine,
-                        size: AppIcons.inlineSize,
-                      ),
-                    ),
+                    // Other has no engine: its icon column stays empty.
+                    child: share.engine == null
+                        ? null
+                        : Center(
+                            child: EngineMark(
+                              engine: share.engine,
+                              size: AppIcons.inlineSize,
+                            ),
+                          ),
                   ),
                   Expanded(
                     child: Text(
