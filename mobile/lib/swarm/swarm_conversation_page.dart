@@ -29,8 +29,10 @@ import 'swarm_inbox.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
+import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
 import 'swarm_session.dart';
+import 'swarm_style.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
@@ -74,10 +76,15 @@ class SwarmConversationPage extends StatefulWidget {
     this.below,
     this.messageId,
     this.decisionId,
+    this.mention,
   });
 
   final String swarmId, conversationId;
   final String? messageId, decisionId;
+
+  /// An agent to @mention in the draft as the chat opens: the PM, as its
+  /// private line is answered in the project chat.
+  final String? mention;
 
   /// The header's lines in place of the chat's name and its project: a
   /// project's chat is its project's screen, under the project's name and
@@ -201,6 +208,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     session.inbox.removeListener(_attach);
     final c = _conversation = SwarmConversation(reader, widget.conversationId);
     c.composer.addListener(_drafted);
+    if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
     session.inbox.addListener(_see);
     _see();
@@ -766,6 +774,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     ],
   );
 
+  /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
+  /// private line answered where the PM reads, and everyone with it.
+  void _answerIn(String projectId, String pmId) => unawaited(
+    Navigator.of(context).push(
+      phoneRoute(
+        (_) => SwarmProjectPage(
+          swarmId: widget.swarmId,
+          projectId: projectId,
+          mention: pmId,
+        ),
+        listensForItself: true,
+      ),
+    ),
+  );
+
   /// [m]'s author as a quote names them: the person's own messages are
   /// "You".
   String _quoted(SwarmConversation c, SuperTabMessage m) =>
@@ -887,10 +910,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           final reply = m.replyTo == null ? null : byId[m.replyTo];
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
+          final pm = swarmIsPmLine(c.reader, m);
           // "River (PM) → you" says the role already.
-          final role = m.fromAgent && !swarmIsPmLine(c.reader, m)
-              ? view.roles[m.authorId]
-              : null;
+          final role = m.fromAgent && !pm ? view.roles[m.authorId] : null;
+          // The PM cannot read this chat: its line is answered in the
+          // project chat, where everyone reads it (Tony, mockup A, 10-29).
+          final answerIn = pm && view.canPost ? view.buddyProject : null;
           final quoted = reply == null ? null : _quoted(c, reply);
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
@@ -911,6 +936,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               view.canPost,
               view.mentions,
               reactions,
+              answerIn,
+              view.project,
             ),
             () => SwarmMessageRow(
               key: followed ? _targetKey : null,
@@ -955,6 +982,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               onLongPress: view.canPost
                   ? () => unawaited(_pickReaction(c, m.id))
                   : null,
+              below: answerIn == null
+                  ? null
+                  : _AnswerIn(
+                      key: ValueKey('swarm-answer-in-${m.id}'),
+                      project: view.project ?? 'the project chat',
+                      onTap: () => _answerIn(answerIn, m.authorId),
+                    ),
             ),
           );
         case _AskEntry(:final need, :final grouped):
@@ -2127,6 +2161,33 @@ Color _stateColor(Tty tty, SwarmAgentState state) => switch (state) {
   SwarmAgentState.down || SwarmAgentState.limited => tty.red,
   _ => AppPalette.textFaint,
 };
+
+/// Under the PM's private line in the person's Buddy chat: Answer in #project,
+/// and that everyone there reads the answer.
+class _AnswerIn extends StatelessWidget {
+  const _AnswerIn({super.key, required this.project, required this.onTap});
+
+  /// "#Mobile".
+  final String project;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    crossAxisAlignment: WrapCrossAlignment.center,
+    spacing: AppSpace.s,
+    children: [
+      SwarmButton(
+        label: 'Answer in $project',
+        style: SwarmButtonStyle.link,
+        onPressed: onTap,
+      ),
+      Text(
+        'Everyone there reads it',
+        style: AppType.caption(color: AppPalette.textSecondary),
+      ),
+    ],
+  );
+}
 
 /// The composer's field: one rounded line that grows with what is typed, up
 /// to five, in the app's own face.

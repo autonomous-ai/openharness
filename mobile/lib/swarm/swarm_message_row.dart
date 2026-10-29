@@ -187,6 +187,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.onReply,
     this.onAuthor,
     this.reactions,
+    this.below,
     this.onLongPress,
   });
 
@@ -214,6 +215,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Drawn under its text and files: its reaction counts.
   final Widget? reactions;
+
+  /// Under its reactions: what the person may do with it besides Reply — the
+  /// PM's private line answered in the project chat.
+  final Widget? below;
 
   /// Null where the person cannot post: picks a reaction.
   final VoidCallback? onLongPress;
@@ -293,6 +298,7 @@ class SwarmMessageRow extends StatelessWidget {
             ),
           ),
         ?reactions,
+        ?below,
         if (actions)
           Padding(
             padding: const EdgeInsets.only(top: 8),

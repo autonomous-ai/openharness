@@ -236,6 +236,51 @@ void main() {
       );
     });
 
+    testWidgets("the PM's line is answered in the project chat, with the PM "
+        'mentioned, where everyone reads it', (tester) async {
+      final fake = backend(
+        buddy: wren(),
+        page: [
+          message('m1', 1, author: 'agent-lead', text: 'Which flag name?'),
+          message('m2', 2, author: 'agent-wren', minute: 1),
+        ],
+      );
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (
+        _,
+      ) => {'messages': <Object>[], 'next': null};
+      await pump(tester, fake);
+
+      expect(key('swarm-answer-in-m2'), findsNothing, reason: 'the Buddy');
+      expect(
+        find.descendant(
+          of: key('swarm-answer-in-m1'),
+          matching: find.text('Answer in #Mobile'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Everyone there reads it'), findsOneWidget);
+
+      await tester.tap(find.text('Answer in #Mobile'));
+      await tester.pumpAndSettle();
+
+      expect(
+        key('swarm-project-chat-$leadChat'),
+        findsOneWidget,
+        reason: 'the project chat',
+      );
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        '@River ',
+      );
+      await tester.enterText(find.byType(TextField), '@River Use swarm_buddy');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+      final post = fake.commands.single;
+      expect(post['conversationId'], leadChat);
+      expect(post['recipientIds'], ['agent-lead']);
+    });
+
     testWidgets('every open question the PM asked the person in the project '
         'shows here and is answered in place', (tester) async {
       final fake = backend(
@@ -500,5 +545,16 @@ void main() {
     expect(find.text('Wren is offline. Your chat stays.'), findsOneWidget);
     expect(key('swarm-buddy-start-again'), findsNothing);
     expect(key('swarm-buddy-menu'), findsNothing);
+
+    await pump(
+      tester,
+      backend(
+        role: 'viewer',
+        buddy: wren(),
+        page: [message('m1', 1, author: 'agent-lead')],
+      ),
+    );
+    expect(find.text('River (PM) → you'), findsOneWidget);
+    expect(key('swarm-answer-in-m1'), findsNothing, reason: 'posts nothing');
   });
 }

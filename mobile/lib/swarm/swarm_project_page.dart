@@ -84,9 +84,14 @@ class SwarmProjectPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.projectId,
+    this.mention,
   });
 
   final String swarmId, projectId;
+
+  /// An agent to @mention in the chat's draft as it opens
+  /// ([SwarmConversationPage.mention]).
+  final String? mention;
 
   @override
   State<SwarmProjectPage> createState() => _SwarmProjectPageState();
@@ -244,6 +249,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       conversationId: project.leadConversationId,
       title: inputs.$2,
       subtitle: inputs.$3,
+      mention: widget.mention,
       action: ValueListenableBuilder(
         valueListenable: _buddy,
         builder: (context, buddy, _) => _MenuButton(
