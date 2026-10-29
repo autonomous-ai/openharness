@@ -215,7 +215,9 @@ class _AgentSlots extends StatelessWidget {
 /// The number is a stepper rather than a field, so no keystroke can leave the
 /// dialog holding a count the backend would refuse; both buttons go dead at
 /// the bounds rather than staying lit and doing nothing. Changing it chooses
-/// At most, the only choice it belongs to.
+/// At most, the only choice it belongs to. It sits beside the At most choice
+/// rather than inside it, so a screen reader reaches the number and its two
+/// buttons instead of one merged choice (review of #2084).
 class _AgentsLimit extends StatelessWidget {
   const _AgentsLimit({
     required this.memory,
@@ -233,10 +235,36 @@ class _AgentsLimit extends StatelessWidget {
   final VoidCallback onMemory;
   final ValueChanged<int> onAtMost;
 
+  /// One choice: its radio and its words are one target and one label.
+  Widget _choice(String value, String label, VoidCallback onSelect) =>
+      MergeSemantics(
+        key: ValueKey(
+          value == 'memory'
+              ? 'machine-agents-memory'
+              : 'machine-agents-at-most',
+        ),
+        child: InkWell(
+          onTap: busy ? null : onSelect,
+          borderRadius: BorderRadius.circular(grid.AppControl.radius),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Radio<String>(value: value, enabled: !busy),
+              Text(label, style: DesktopChrome.text()),
+              const SizedBox(width: grid.AppDesktop.controlGap),
+            ],
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final value = this.value;
+    final canFewer = !busy && value > _agentSlotsMin;
+    final canMore = !busy && value < maximum;
+    void fewer() => onAtMost(value > maximum ? maximum : value - 1);
+    void more() => onAtMost(value + 1);
     return Row(
       // "Agents" on the line of its first choice.
       crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -254,26 +282,26 @@ class _AgentsLimit extends StatelessWidget {
             },
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                RadioListTile<String>(
-                  key: const ValueKey('machine-agents-memory'),
-                  value: 'memory',
-                  enabled: !busy,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('As memory allows'),
-                ),
-                RadioListTile<String>(
-                  key: const ValueKey('machine-agents-at-most'),
-                  value: 'atMost',
-                  enabled: !busy,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Row(
-                    children: [
-                      const Text('At most'),
-                      const SizedBox(width: grid.AppDesktop.controlGap),
-                      Container(
+                _choice('memory', 'As memory allows', onMemory),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _choice('atMost', 'At most', () => onAtMost(value)),
+                    // The number on its own: adjustable by a screen reader's
+                    // increase and decrease, with its two buttons beside it.
+                    Semantics(
+                      container: true,
+                      label: 'Most agents',
+                      value: '$value',
+                      increasedValue: canMore ? '${value + 1}' : null,
+                      decreasedValue: canFewer
+                          ? '${value > maximum ? maximum : value - 1}'
+                          : null,
+                      onIncrease: canMore ? more : null,
+                      onDecrease: canFewer ? fewer : null,
+                      child: Container(
                         constraints: const BoxConstraints(
                           minHeight: grid.AppControl.height,
                         ),
@@ -292,19 +320,17 @@ class _AgentsLimit extends StatelessWidget {
                               icon: AppIcons.minus,
                               size: grid.AppControl.iconSize,
                               tooltip: 'Fewer agents',
-                              onPressed: busy || value <= _agentSlotsMin
-                                  ? null
-                                  : () => onAtMost(
-                                      value > maximum ? maximum : value - 1,
-                                    ),
+                              onPressed: canFewer ? fewer : null,
                             ),
-                            Text(
-                              value.toString(),
-                              key: const ValueKey('agent-limit-value'),
-                              style: DesktopChrome.control().copyWith(
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
+                            ExcludeSemantics(
+                              child: Text(
+                                value.toString(),
+                                key: const ValueKey('agent-limit-value'),
+                                style: DesktopChrome.control().copyWith(
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
                               ),
                             ),
                             AppIconButton(
@@ -312,15 +338,13 @@ class _AgentsLimit extends StatelessWidget {
                               icon: AppIcons.plus,
                               size: grid.AppControl.iconSize,
                               tooltip: 'More agents',
-                              onPressed: busy || value >= maximum
-                                  ? null
-                                  : () => onAtMost(value + 1),
+                              onPressed: canMore ? more : null,
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -724,20 +748,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
     // Until the owner touches either, both follow what is known: a stored
     // limit at or above the maximum is as memory allows, and one below it is
-    // the owner's own. With the maximum unknown a stored number is kept.
+    // the owner's own. With the maximum unknown a stored number is kept, and
+    // a machine with no number of its own starts at At most its suggestion,
+    // as Add machine does (review of #2084).
     bool? memoryEdited;
     int? atMostEdited;
     bool memoryChoice() {
       if (memoryEdited != null) return memoryEdited!;
       final stored = storedSlots(existingId);
-      if (stored == null) return true;
       final maximum = memoryMaximum();
-      return maximum != null && stored >= maximum;
+      return stored != null && maximum != null && stored >= maximum;
     }
 
+    // With nothing known, every machine may offer four.
     int atMostMaximum() =>
         memoryMaximum() ??
-        _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsMin);
+        _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsFloor);
     int atMostValue() {
       if (atMostEdited != null) return atMostEdited!;
       final stored = storedSlots(existingId);
@@ -747,10 +773,28 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       final suggested =
           suggestions[existingId] ?? _suggestedAgentSlots(settingsResources());
-      return (suggested ?? maximum ?? stored ?? _agentSlotsMin).clamp(
+      return (suggested ?? maximum ?? stored ?? _agentSlotsFloor).clamp(
         _agentSlotsMin,
         atMostMaximum(),
       );
+    }
+
+    /// Why this machine's settings cannot be saved from here, in settings'
+    /// own words; null when they can.
+    String? settingsUnavailable() {
+      final m = app.stateOf(existingId!);
+      if (m == null) {
+        return 'This computer can’t reach that machine. Sign in to Harness '
+            'there with this account to change its settings.';
+      }
+      if (m.belongsToOtherAccount) {
+        return 'This computer is signed in to another account.';
+      }
+      if (m.needsLink) return 'Not linked. Link this computer from Machines.';
+      if (m.isOffline) {
+        return 'Offline. Open Harness on this computer to change its settings.';
+      }
+      return null;
     }
 
     // As memory allows saves the machine's maximum: its own figure from
@@ -826,6 +870,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   return;
                 }
                 final selected = machineId!;
+                // Settings save what is on screen now: preparation below may
+                // learn a different maximum, and that must not turn the
+                // owner's At most into As memory allows (review of #2084).
+                final atMost = isConfigure && !memoryChoice()
+                    ? atMostValue()
+                    : null;
                 update(() {
                   busy = true;
                   error = null;
@@ -920,9 +970,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     'engines': engines,
                     'maxAgents': !isConfigure
                         ? slots
-                        : memoryChoice()
-                        ? memoryLimit(prepared)
-                        : atMostValue(),
+                        : atMost ?? memoryLimit(prepared),
                   });
                   if (result == null) {
                     throw SuperTabFailure(
@@ -958,7 +1006,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   machineId != null && canSelect(app.stateOf(machineId!));
               if (isConfigure) {
                 final current = app.stateOf(existingId!);
-                final why = current == null ? null : unavailable(current);
+                final why = settingsUnavailable();
                 return SuperTabDetailDialog(
                   title: superTabMachineName(
                     current?.machine.displayName ??
@@ -988,7 +1036,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         ],
                       if (!canSave && why != null) ...[
                         const SizedBox(height: grid.AppDesktop.controlGap),
-                        Text(why.message, style: DesktopChrome.metadata()),
+                        Text(why, style: DesktopChrome.metadata()),
                       ],
                       if (error != null) ...[
                         const SizedBox(height: grid.AppDesktop.controlGap),
