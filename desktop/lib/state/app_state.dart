@@ -99,6 +99,7 @@ import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/join_machine.dart';
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
@@ -2166,6 +2167,79 @@ class AppNotifier extends ChangeNotifier {
       await superTabMachineRequest(here, {'action': 'teamSetupDecline'});
     } catch (error) {
       appLog.debug('super-tabs', 'team account decline not saved: $error');
+    }
+  }
+
+  /// Why this Mac has no Harness Team account, as its own daemon remembers
+  /// it (cli/src/team/autoSetup.ts `status`): `{state: declined}` after a
+  /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null
+  /// when it cannot say: not this Mac's to set up, or a daemon too old.
+  Future<({String state, String? detail})?> teamSetupStatus() async {
+    final here = _teamAccountHere();
+    if (here == null) return null;
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetupStatus',
+      });
+      final state = answer['state'];
+      if (state is! String) return null;
+      final detail = answer['detail'];
+      return (state: state, detail: detail is String ? detail : null);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final StreamController<SwarmJoinedMachine> _joinedMachines =
+      StreamController<SwarmJoinedMachine>.broadcast();
+
+  /// This computer, added to a Swarm as its person joined it
+  /// ([addMachineOnJoin]): the screen shows a note, with Pause and Remove.
+  Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
+  final _joinAdding = <String>{};
+
+  /// A Swarm [tabId] just joined at this computer, as [role]: adds this
+  /// computer to it with Add machine's defaults (super_tabs/join_machine.dart),
+  /// then offers the Harness Team account, the one step macOS asks a password
+  /// for. A viewer, someone who was already a member, and a computer that
+  /// cannot make a Team account here are left as they are.
+  Future<void> addMachineOnJoin(
+    String tabId, {
+    required String role,
+    bool alreadyMember = false,
+  }) async {
+    if (alreadyMember || role != 'collaborator') return;
+    final here = _teamAccountHere();
+    final accountId = currentUser?.id;
+    if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
+    bool current() =>
+        !_disposed &&
+        status == AppStatus.authenticated &&
+        currentUser?.id == accountId;
+    try {
+      final c = await superTabs.open(tabId);
+      if (!current()) return;
+      await c.refresh();
+      final note =
+          await SwarmJoinMachine(
+            machineRequest: superTabMachineRequest,
+            readResources: readMachineResources,
+            wake: wakeSuperTabHost,
+          ).add(
+            c,
+            machineId: here,
+            machineName: stateOf(here)?.machine.displayName ?? 'This computer',
+            current: current,
+          );
+      if (note == null || !current()) return;
+      _joinedMachines.add(note);
+      // Joined by the person at this computer: the system asks once for the
+      // Harness Team account (cli/src/team/autoSetup.ts).
+      if (note.added) await offerTeamAccount('join', tabId: tabId);
+    } catch (error) {
+      appLog.info('super-tabs', 'machine not added on join: $error');
+    } finally {
+      _joinAdding.remove(tabId);
     }
   }
 
@@ -21974,6 +22048,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
     unawaited(_teamSetupAsks.close());
+    unawaited(_joinedMachines.close());
     super.dispose();
   }
 }
