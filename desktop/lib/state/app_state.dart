@@ -14201,6 +14201,11 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 4),
       );
+    } on WsRequestFailure catch (failure) {
+      // The connection throws a refusal; it is still an answer. Swallowed, a
+      // NOT_INDEXED row read as no answer and was re-read every 5 seconds:
+      // 2,139 failed reads in 3 hours from one computer (2026-10-29).
+      return {...failure.payload, 'error': failure.code};
     } catch (_) {
       return null;
     }
