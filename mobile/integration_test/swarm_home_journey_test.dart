@@ -65,7 +65,7 @@ void main() {
     }
 
     // ① The app opens on Swarm Home: Needs you, one thing open; Buddies;
-    // the projects with their team line. No terminal yet.
+    // the projects, bold with something new. No terminal yet.
     await walk.waitFor(walk.key('swarm-need-decision:d1'));
     await walk.waitFor(walk.key('swarm-project-$tab-$project'));
     expect(find.byType(TerminalPage), findsNothing);
