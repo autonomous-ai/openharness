@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/machine_resources.dart';
-import '../models/model_search_catalog.dart' show thisComputerName;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -21,52 +20,64 @@ import 'machines.dart' show contributeComputer;
 enum AddComputerStatus { ready, offline, unlinked, added }
 
 /// One row of Add your computers: a computer signed in to the reader's own
-/// account. [note] is a second line in plain words, such as why teammates'
-/// work does not run there yet.
+/// account, with its name and a word or two on where it stands. [tag] is why
+/// teammates' work does not run there yet, in a word or two; [reason] says it
+/// in full, for its tooltip (Dee, 10-29: less is better).
 class AddComputerRow {
   const AddComputerRow({
     required this.id,
     required this.name,
     required this.status,
     required this.here,
-    this.note,
+    this.tag,
+    this.reason,
   });
   final String id, name;
   final AddComputerStatus status;
 
   /// The computer running this app.
   final bool here;
-  final String? note;
+  final String? tag, reason;
 }
 
-/// The privacy line under the title. It has to be true for every computer the
-/// box adds: in a Swarm that uses Harness Team accounts each one is added as
-/// Team account only, so teammates' work runs only in that separate account;
-/// elsewhere it runs signed in as the reader.
-String addComputersPrivacyLine({required bool teamAccounts}) => teamAccounts
-    ? "Teammates' agents use them when they're free, in a separate account "
-          "that can't see your files."
-    : "Teammates' agents use them when they're free, signed in as you.";
-
-/// Why teammates' work does not run on an added computer yet, from the
-/// Swarm's refusal code (backend superTabs/machines.ts `teamWorkRefusal`) and,
-/// for this computer, what its daemon remembers of the Team account setup.
-/// Null when it does run there, or for a code this build does not know.
-String? _teamNote(Object? code, ({String state, String? detail})? setup) {
+/// Why teammates' work does not run on a computer yet, from the Swarm's
+/// refusal code (backend superTabs/machines.ts `teamWorkRefusal`) and, for
+/// this computer, what its daemon remembers of the Team account setup: a word
+/// or two for the row, and the whole of it for its tooltip. Null when it does
+/// run there, or for a code this build does not know.
+({String tag, String reason})? _teamWhy(
+  Object? code,
+  ({String state, String? detail})? setup,
+) {
   const only = 'so only your projects run here.';
   return switch (code) {
     'TEAM_ACCOUNT_REQUIRED' => switch (setup?.state) {
-      'failed' => 'Team account setup failed, $only',
-      'running' => 'Setting up its Team account, $only',
-      _ => 'No Team account yet, $only',
+      'failed' => (
+        tag: 'setup failed',
+        reason: 'Team account setup failed, $only',
+      ),
+      'running' => (
+        tag: 'setting up',
+        reason: 'Its Team account is being set up, $only',
+      ),
+      _ => (tag: 'not set up', reason: 'No Team account yet, $only'),
     },
-    'PRIVACY_UNCHECKED' =>
-      'Its Team account hasn’t passed the privacy check yet, $only',
-    'PRIVACY_CHECK_FAILED' =>
-      'Its Team account failed the privacy check, $only',
-    'PRIVACY_CHECK_STALE' =>
-      'Its Team account’s privacy check is out of date, $only',
-    'MACHINE_OFFLINE' => 'Its Team account is offline, $only',
+    'PRIVACY_UNCHECKED' => (
+      tag: 'not checked',
+      reason: 'Its Team account hasn’t passed the privacy check yet, $only',
+    ),
+    'PRIVACY_CHECK_FAILED' => (
+      tag: 'check failed',
+      reason: 'Its Team account failed the privacy check, $only',
+    ),
+    'PRIVACY_CHECK_STALE' => (
+      tag: 'check outdated',
+      reason: 'Its Team account’s privacy check is out of date, $only',
+    ),
+    'MACHINE_OFFLINE' => (
+      tag: 'account offline',
+      reason: 'Its Team account is offline, $only',
+    ),
     _ => null,
   };
 }
@@ -100,28 +111,30 @@ List<AddComputerRow> addComputerRows(
         : m.isOffline
         ? AddComputerStatus.offline
         : AddComputerStatus.ready;
-    String? note;
+    ({String tag, String reason})? why;
     if (teamAccounts && inSwarm) {
       final pool = pools.where((p) => p['machineId'] == id).firstOrNull;
       final team = pools.where((p) => p['hostMachineId'] == id).firstOrNull;
       final work = (team ?? pool)?['teamWork'];
       if (work is Map && work['allowed'] == false) {
-        note = _teamNote(work['code'], here ? teamSetup : null);
+        why = _teamWhy(work['code'], here ? teamSetup : null);
       }
     } else if (teamAccounts && here && teamSetup?.state == 'failed') {
-      note = 'Team account setup failed, so only your projects will run here.';
+      why = (
+        tag: 'setup failed',
+        reason:
+            'Team account setup failed, so only your projects will run here.',
+      );
     }
-    final name = superTabMachineName(m.machine.displayName);
-    final label = thisComputerName();
     rows.add(
       AddComputerRow(
         id: id,
-        name: here
-            ? '${label[0].toUpperCase()}${label.substring(1)} · $name'
-            : name,
+        // Only the name its person gave it (Dee, 10-29).
+        name: superTabMachineName(m.machine.displayName),
         status: status,
         here: here,
-        note: note,
+        tag: why?.tag,
+        reason: why?.reason,
       ),
     );
   }
@@ -307,13 +320,27 @@ class _AddComputersState extends State<_AddComputers> {
     );
   }
 
-  String _statusOf(AddComputerRow row) {
-    if (row.id == _adding) return 'adding…';
+  /// A word or two on where [row] stands, and the whole of it for its
+  /// tooltip.
+  ({String words, String? reason}) _statusOf(
+    AddComputerRow row,
+    String? error,
+  ) {
+    if (row.id == _adding) return (words: 'adding…', reason: null);
+    if (error != null) return (words: 'couldn’t add', reason: error);
+    String also(String word) => row.tag == null ? word : '$word · ${row.tag}';
     return switch (row.status) {
-      AddComputerStatus.ready => 'online',
-      AddComputerStatus.offline => 'offline · turn it on to add',
-      AddComputerStatus.unlinked => 'not linked · link it in Machines',
-      AddComputerStatus.added => 'added',
+      // Ready needs no word of its own: a status only when needed (Dee).
+      AddComputerStatus.ready => (words: row.tag ?? '', reason: row.reason),
+      AddComputerStatus.offline => (
+        words: 'offline',
+        reason: 'Turn it on to add it.',
+      ),
+      AddComputerStatus.unlinked => (
+        words: 'not linked',
+        reason: 'Link it in Machines to add it.',
+      ),
+      AddComputerStatus.added => (words: also('added'), reason: row.reason),
     };
   }
 
@@ -325,7 +352,13 @@ class _AddComputersState extends State<_AddComputers> {
     final error = row.status == AddComputerStatus.added
         ? null
         : _errors[row.id];
-    final note = error != null ? 'Couldn’t add: $error' : row.note;
+    final status = _statusOf(row, error);
+    final words = Text(
+      status.words,
+      style: DesktopChrome.metadata(
+        color: error != null ? grid.AppPalette.warn : null,
+      ),
+    );
     return KeyedSubtree(
       key: ValueKey('add-computer-${row.id}'),
       child: InkWell(
@@ -354,36 +387,27 @@ class _AddComputersState extends State<_AddComputers> {
               const SizedBox(width: grid.AppDesktop.controlGap),
               Expanded(
                 flex: 3,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      row.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(
-                        color: ready || row.status == AddComputerStatus.added
-                            ? null
-                            : DesktopChrome.muted,
-                      ),
-                    ),
-                    if (note != null)
-                      Text(
-                        note,
-                        style: DesktopChrome.metadata(
-                          color: error != null ? grid.AppPalette.warn : null,
-                        ),
-                      ),
-                  ],
+                child: Text(
+                  row.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.control(
+                    color: ready || row.status == AddComputerStatus.added
+                        ? null
+                        : DesktopChrome.muted,
+                  ),
                 ),
               ),
               const SizedBox(width: grid.AppDesktop.controlGap),
-              Flexible(
+              // One column of states, as in the mockup; the whole reason on
+              // hover, and for a screen reader.
+              Expanded(
                 flex: 2,
-                child: Text(
-                  _statusOf(row),
-                  textAlign: TextAlign.end,
-                  style: DesktopChrome.metadata(),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: status.reason == null
+                      ? words
+                      : Tooltip(message: status.reason, child: words),
                 ),
               ),
             ],
@@ -417,22 +441,17 @@ class _AddComputersState extends State<_AddComputers> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              addComputersPrivacyLine(
-                teamAccounts: c.snapshot?.teamAccounts ?? false,
-              ),
-              style: DesktopChrome.text(),
-            ),
-            const SizedBox(height: grid.AppDesktop.groupGap),
             for (final row in rows) _row(row),
-            if (listError != null) ...[
-              const SizedBox(height: grid.AppDesktop.controlGap),
+            if (listError != null)
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      'Couldn’t check your computers just now.',
-                      style: DesktopChrome.metadata(),
+                    child: Tooltip(
+                      message: listError,
+                      child: Text(
+                        'Couldn’t refresh',
+                        style: DesktopChrome.metadata(),
+                      ),
                     ),
                   ),
                   TextButton(
@@ -441,26 +460,17 @@ class _AddComputersState extends State<_AddComputers> {
                   ),
                 ],
               ),
-            ],
-            const SizedBox(height: grid.AppDesktop.groupGap),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Not listed? Install Harness on it and sign in as you. '
-                    'It shows up here.',
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-                const SizedBox(width: grid.AppDesktop.controlGap),
-                TextButton(
-                  onPressed: _download,
-                  child: const Text('Get Harness'),
-                ),
-              ],
-            ),
           ],
         ),
+        // A computer that is not listed shows up here once Harness on it is
+        // signed in as the reader.
+        leadingActions: [
+          TextButton(
+            style: superTabQuietAction,
+            onPressed: _download,
+            child: const Text('Get Harness on another computer'),
+          ),
+        ],
         actions: [
           TextButton(onPressed: _close, child: const Text('Cancel')),
           FilledButton(

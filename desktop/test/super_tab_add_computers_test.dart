@@ -1,9 +1,11 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
-import 'package:harness/models/model_search_catalog.dart' show thisComputerName;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/add_computers.dart';
@@ -13,15 +15,15 @@ import 'package:harness/widgets/link_another_machine_dialog.dart'
     show kHarnessDownloadUrl;
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/capture.dart';
+
+/// Set to a folder to write the PR's pictures there.
+final shots = Platform.environment['SUPER_TAB_ADD_COMPUTERS_SHOTS'];
 
 /// Add your computers (Dee, 10-29): the box that adds the reader's other
 /// computers to a Swarm in one step.
 void main() {
-  const separate =
-      "Teammates' agents use them when they're free, in a separate account "
-      "that can't see your files.";
-  const signedInAsYou =
-      "Teammates' agents use them when they're free, signed in as you.";
+  setUpAll(() => loadCaptureFonts(shots));
 
   /// One of the reader's own computers, as the app lists it.
   void computer(
@@ -49,12 +51,9 @@ void main() {
           : ConnectionStatus.disconnected;
   }
 
-  /// This computer's row, named as on its system: This Mac on a Mac.
-  String thisMac(SuperTabLaunchFixture f) {
-    final label = thisComputerName();
-    return '${label[0].toUpperCase()}${label.substring(1)} · '
-        '${f.app.stateOf('m')!.machine.displayName}';
-  }
+  /// This computer's row: only the name its person gave it (Dee, 10-29).
+  String thisMac(SuperTabLaunchFixture f) =>
+      f.app.stateOf('m')!.machine.displayName;
 
   Future<({SuperTabLaunchFixture f, SuperTabController c})> swarm(
     void Function(SuperTabLaunchFixture f) arrange,
@@ -88,6 +87,7 @@ void main() {
     addTearDown(() => grid.AppTheme.brightness.value = Brightness.dark);
     await tester.pumpWidget(
       MaterialApp(
+        debugShowCheckedModeBanner: false,
         theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: Builder(
@@ -148,9 +148,9 @@ void main() {
     'rows are only the reader\'s own computers, this Mac first while it is not added',
     (tester) async {
       final s = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
-        computer(f, 'air', 'MacBook Air · dee', online: false);
-        computer(f, 'twin', 'Studio · dee');
+        computer(f, 'studio', 'Studio');
+        computer(f, 'air', 'MacBook Air', online: false);
+        computer(f, 'twin', 'Studio');
         computer(f, 'rig', '2x 4090 Rig');
         computer(f, 'old', 'Old iMac', needsLink: true);
         // Another account's harness and whole computer, and a Mac's Harness
@@ -171,7 +171,9 @@ void main() {
       await openBox(tester, c, f.app);
 
       expect(find.text('Add your computers'), findsOneWidget);
-      expect(find.text(separate), findsOneWidget);
+      // Less is better (Dee, 10-29): the title, the rows and the buttons.
+      expect(find.textContaining('Teammates'), findsNothing);
+      expect(find.textContaining('Not listed'), findsNothing);
       final rows = tester
           .widgetList<KeyedSubtree>(
             find.byWidgetPredicate(
@@ -189,7 +191,7 @@ void main() {
       // yet, and those already added. Two computers of one name are two rows.
       expect(rows, ['m', 'studio', 'twin', 'air', 'old', 'rig']);
       expect(inRow('m', thisMac(f)), findsOneWidget);
-      expect(find.text('Studio · dee'), findsNWidgets(2));
+      expect(find.text('Studio'), findsNWidgets(2));
       expect(find.textContaining('Diego'), findsNothing);
       expect(find.text('Studio · Team'), findsNothing);
       expect(row('team'), findsNothing);
@@ -203,8 +205,8 @@ void main() {
     'online computers come ticked; offline, unlinked and added ones cannot be ticked',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
-        computer(f, 'air', 'MacBook Air · dee', online: false);
+        computer(f, 'studio', 'Studio');
+        computer(f, 'air', 'MacBook Air', online: false);
         computer(f, 'old', 'Old iMac', needsLink: true);
         computer(f, 'rig', '2x 4090 Rig');
         f.connection.server.state['machines'] = [
@@ -215,12 +217,16 @@ void main() {
 
       expect(box(tester, 'm').value, isTrue);
       expect(box(tester, 'studio').value, isTrue);
-      expect(inRow('studio', 'online'), findsOneWidget);
+      // A status word only when needed: none for one that can be added.
+      expect(inRow('studio', 'online'), findsNothing);
+      expect(find.textContaining('This Mac'), findsNothing);
       expect(box(tester, 'air').value, isFalse);
       expect(box(tester, 'air').onChanged, isNull);
-      expect(inRow('air', 'offline · turn it on to add'), findsOneWidget);
+      expect(inRow('air', 'offline'), findsOneWidget);
+      expect(find.byTooltip('Turn it on to add it.'), findsOneWidget);
       expect(box(tester, 'old').onChanged, isNull);
-      expect(inRow('old', 'not linked · link it in Machines'), findsOneWidget);
+      expect(inRow('old', 'not linked'), findsOneWidget);
+      expect(find.byTooltip('Link it in Machines to add it.'), findsOneWidget);
       expect(
         find.descendant(of: row('rig'), matching: find.byType(Checkbox)),
         findsNothing,
@@ -244,8 +250,8 @@ void main() {
     'Add N adds exactly the ticked computers, one at a time, with today\'s defaults and the Team account rule',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
-        computer(f, 'laptop', 'Laptop · dee');
+        computer(f, 'studio', 'Studio');
+        computer(f, 'laptop', 'Laptop');
       });
       await openBox(tester, c, f.app);
       await tester.tap(row('laptop'));
@@ -267,7 +273,7 @@ void main() {
         'maxAgents': 8,
         'teamAccountOnly': true,
       });
-      expect(commands.last['name'], 'Studio · dee');
+      expect(commands.last['name'], 'Studio');
       expect(commands.last['teamAccountOnly'], isTrue);
       // One at a time: the second computer's setup starts only after the first
       // one was added.
@@ -294,7 +300,7 @@ void main() {
     'a computer that fails keeps its reason and its tick, and the others are still added',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
+        computer(f, 'studio', 'Studio');
       });
       await openBox(tester, c, f.app);
       // This Mac is first; the server refuses it, and only it.
@@ -304,11 +310,9 @@ void main() {
       await settle(tester);
 
       expect(find.text('Add your computers'), findsOneWidget);
+      expect(inRow('m', 'couldn’t add'), findsOneWidget);
       expect(
-        inRow(
-          'm',
-          'Couldn’t add: This machine is no longer linked to this Swarm.',
-        ),
+        find.byTooltip('This machine is no longer linked to this Swarm.'),
         findsOneWidget,
       );
       expect(inRow('studio', 'added'), findsOneWidget);
@@ -344,24 +348,17 @@ void main() {
   });
 
   testWidgets(
-    'Not listed? Get Harness opens the download page, and a computer that signs in meanwhile shows up ticked',
+    'Get Harness on another computer opens the download page, and a computer that signs in meanwhile shows up ticked',
     (tester) async {
       final (:f, :c) = await swarm((_) {});
       final opened = <Uri>[];
       await openBox(tester, c, f.app, openDownload: opened.add);
-      expect(
-        find.text(
-          'Not listed? Install Harness on it and sign in as you. '
-          'It shows up here.',
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Get Harness'));
+      await tester.tap(find.text('Get Harness on another computer'));
       await tester.pumpAndSettle();
       expect(opened, [kHarnessDownloadUrl]);
       expect(find.text('Add 1'), findsOneWidget);
 
-      computer(f, 'studio', 'Studio · dee');
+      computer(f, 'studio', 'Studio');
       // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
       f.app.notifyListeners();
       await tester.pumpAndSettle();
@@ -372,14 +369,12 @@ void main() {
   );
 
   testWidgets(
-    'where the Swarm has no Team accounts the line says so, and nothing is marked Team account only',
+    'where the Swarm has no Team accounts nothing is marked Team account only',
     (tester) async {
       final (:f, :c) = await swarm((f) {
         f.connection.server.state['teamAccounts'] = false;
       });
       await openBox(tester, c, f.app);
-      expect(find.text(signedInAsYou), findsOneWidget);
-      expect(find.text(separate), findsNothing);
       await tester.tap(find.text('Add 1'));
       await settle(tester);
       final command = f.connection.server.posts.single['command'] as Map;
@@ -392,31 +387,33 @@ void main() {
     'an added computer without a working Team account says only your projects run there',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
-        computer(f, 'air', 'MacBook Air · dee');
+        computer(f, 'studio', 'Studio');
+        computer(f, 'air', 'MacBook Air');
         f.connection.server.state['machines'] = [
           {
             'machineId': 'studio',
-            'name': 'Studio · dee',
+            'name': 'Studio',
             'contributorId': 'owner',
             'teamWork': {'allowed': false, 'code': 'TEAM_ACCOUNT_REQUIRED'},
           },
           {
             'machineId': 'air',
-            'name': 'MacBook Air · dee',
+            'name': 'MacBook Air',
             'contributorId': 'owner',
             'teamWork': {'allowed': false, 'code': 'PRIVACY_CHECK_FAILED'},
           },
         ];
       });
       await openBox(tester, c, f.app);
+      // A word or two on the row, the whole reason on hover.
+      expect(inRow('studio', 'added · not set up'), findsOneWidget);
       expect(
-        inRow('studio', 'No Team account yet, so only your projects run here.'),
+        find.byTooltip('No Team account yet, so only your projects run here.'),
         findsOneWidget,
       );
+      expect(inRow('air', 'added · check failed'), findsOneWidget);
       expect(
-        inRow(
-          'air',
+        find.byTooltip(
           'Its Team account failed the privacy check, so only your projects run here.',
         ),
         findsOneWidget,
@@ -444,9 +441,9 @@ void main() {
         ];
       });
       await openBox(tester, c, f.app);
+      expect(inRow('m', 'added · setup failed'), findsOneWidget);
       expect(
-        inRow(
-          'm',
+        find.byTooltip(
           'Team account setup failed, so only your projects run here.',
         ),
         findsOneWidget,
@@ -460,7 +457,7 @@ void main() {
     'losing write access while the box is open takes its rows away and says why',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
+        computer(f, 'studio', 'Studio');
       });
       await openBox(tester, c, f.app);
       final people = f.connection.server.state['people'] as List;
@@ -468,7 +465,7 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text('Add your computers'), findsNothing);
-      expect(find.text('Studio · dee'), findsNothing);
+      expect(find.text('Studio'), findsNothing);
       expect(find.text('This action is no longer available.'), findsOneWidget);
       expect(f.connection.server.posts, isEmpty);
       await close(tester, f, c);
@@ -480,7 +477,7 @@ void main() {
     (tester) async {
       for (final change in ['revoked', 'account']) {
         final (:f, :c) = await swarm((f) {
-          computer(f, 'studio', 'Studio · dee');
+          computer(f, 'studio', 'Studio');
         });
         await openBox(tester, c, f.app);
         // The first computer's setup is still running when access changes.
@@ -509,7 +506,7 @@ void main() {
     'closing the box while a computer is being set up adds nothing more',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
+        computer(f, 'studio', 'Studio');
       });
       await openBox(tester, c, f.app);
       f.connection.keepPreparing = true;
@@ -590,7 +587,7 @@ void main() {
       });
       await openBox(tester, c, f.app);
       expect(box(tester, 'm').value, isTrue);
-      expect(inRow('m', 'online'), findsOneWidget);
+      expect(inRow('m', 'added'), findsNothing);
       await close(tester, f, c);
     },
   );
@@ -599,7 +596,7 @@ void main() {
     'a computer that goes offline while the box is open is unticked and not added',
     (tester) async {
       final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio · dee');
+        computer(f, 'studio', 'Studio');
       });
       await openBox(tester, c, f.app);
       expect(find.text('Add 2'), findsOneWidget);
@@ -648,7 +645,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.text('Add 1'));
       await settle(tester);
-      expect(find.textContaining('Couldn’t add'), findsNothing);
+      expect(find.text('couldn’t add'), findsNothing);
       expect(find.text('Add your computers'), findsNothing);
       expect(f.connection.server.posts, hasLength(1));
       expect(
@@ -665,7 +662,7 @@ void main() {
     tester,
   ) async {
     final (:f, :c) = await swarm((f) {
-      computer(f, 'studio', 'Studio · dee');
+      computer(f, 'studio', 'Studio');
     });
     await openBox(tester, c, f.app);
     final handle = tester.ensureSemantics();
@@ -674,7 +671,7 @@ void main() {
         find.descendant(of: row('studio'), matching: find.byType(Checkbox)),
       ),
       matchesSemantics(
-        label: 'Studio · dee',
+        label: 'Studio',
         isChecked: true,
         hasCheckedState: true,
         isEnabled: true,
@@ -747,5 +744,139 @@ void main() {
       expect(tester.takeException(), isNull);
       await close(tester, f, c);
     });
+  }
+
+  // The PR's pictures, light and dark, over in-memory Swarms only: the first
+  // box with this Mac not added, several computers, all added, offline rows,
+  // Team account setup failed, Dee's Swarm with six computers, and a row
+  // that could not be added.
+  Map<String, dynamic> pool(String id, String name, [String? teamCode]) => {
+    'machineId': id,
+    'name': name,
+    'contributorId': 'owner',
+    if (teamCode != null) 'teamWork': {'allowed': false, 'code': teamCode},
+  };
+  final scenes = <(String, void Function(SuperTabLaunchFixture f))>[
+    (
+      '1-first-this-mac-not-added',
+      (f) {
+        computer(f, 'studio', 'Studio');
+      },
+    ),
+    (
+      '2-several-computers',
+      (f) {
+        computer(f, 'studio', 'Studio');
+        computer(f, 'mini', 'Mac mini');
+        computer(f, 'air', 'MacBook Air', online: false);
+        computer(f, 'rig', '2x 4090 Rig');
+        f.connection.server.state['machines'] = [
+          pool('m', 'tropic'),
+          pool('rig', '2x 4090 Rig'),
+        ];
+      },
+    ),
+    (
+      '3-all-added',
+      (f) {
+        computer(f, 'studio', 'Studio');
+        computer(f, 'rig', '2x 4090 Rig');
+        f.connection.server.state['machines'] = [
+          pool('m', 'tropic'),
+          pool('studio', 'Studio'),
+          pool('rig', '2x 4090 Rig'),
+        ];
+      },
+    ),
+    (
+      '4-offline-rows',
+      (f) {
+        computer(f, 'air', 'MacBook Air', online: false);
+        computer(f, 'old', 'Old iMac', needsLink: true);
+        f.connection.server.state['machines'] = [pool('m', 'tropic')];
+      },
+    ),
+    (
+      '5-team-account-setup-failed',
+      (f) {
+        f.app.teamAccountHereForTest = true;
+        f.connection.teamSetup = {
+          'state': 'failed',
+          'detail': 'dscl exited 64',
+        };
+        computer(f, 'studio', 'Studio');
+        computer(f, 'mini', 'Mac mini');
+        f.connection.server.state['machines'] = [
+          pool('m', 'tropic', 'TEAM_ACCOUNT_REQUIRED'),
+          pool('studio', 'Studio', 'PRIVACY_CHECK_FAILED'),
+        ];
+      },
+    ),
+    (
+      '6-dee-swarm-six-computers',
+      (f) {
+        computer(f, 'studio', 'Studio');
+        computer(f, 'air', 'MacBook Air', online: false);
+        computer(f, 'rig', '2x 4090 Rig');
+        computer(f, 'mini', 'Mac mini');
+        computer(f, 'ubuntu', 'ubuntu-desk');
+        f.connection.server.state['machines'] = [
+          pool('m', 'tropic'),
+          pool('rig', '2x 4090 Rig'),
+          pool('mini', 'Mac mini', 'TEAM_ACCOUNT_REQUIRED'),
+        ];
+      },
+    ),
+  ];
+  for (final brightness in Brightness.values) {
+    for (final (name, arrange) in scenes) {
+      testWidgets('picture $name (${brightness.name})', (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        final (:f, :c) = await swarm((f) {
+          f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+              .copyWith(name: 'tropic');
+          arrange(f);
+        });
+        await openBox(
+          tester,
+          c,
+          f.app,
+          brightness: brightness,
+          size: const Size(720, 760),
+        );
+        await captureWindow(tester, shots, '$name-${brightness.name}');
+        await close(tester, f, c);
+        debugDefaultTargetPlatformOverride = null;
+      }, skip: shots == null);
+    }
+    testWidgets('picture 7-a-row-could-not-be-added (${brightness.name})', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final (:f, :c) = await swarm((f) {
+        f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+            .copyWith(name: 'tropic');
+        computer(f, 'studio', 'Studio');
+        computer(f, 'rig', '2x 4090 Rig');
+        f.connection.server.refuseContributions['studio'] =
+            'Install Claude Code or Codex on this machine, then try again.';
+      });
+      await openBox(
+        tester,
+        c,
+        f.app,
+        brightness: brightness,
+        size: const Size(720, 760),
+      );
+      await tester.tap(find.text('Add 3'));
+      await settle(tester);
+      await captureWindow(
+        tester,
+        shots,
+        '7-a-row-could-not-be-added-${brightness.name}',
+      );
+      await close(tester, f, c);
+      debugDefaultTargetPlatformOverride = null;
+    }, skip: shots == null);
   }
 }
