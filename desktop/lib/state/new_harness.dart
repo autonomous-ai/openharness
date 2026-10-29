@@ -1662,7 +1662,7 @@ class NewHarnessController extends ChangeNotifier {
       return '$kLeadSwarmPaused. New Project can start once it resumes.';
     }
     if (leadNone) return 'No machine can run the Product Manager now.';
-    if (!_leadPicked) return 'Choose the machine the Product Manager runs on.';
+    if (!_leadPicked) return kLeadChooseMachine;
     if (leadMachine?.startable != true) {
       final name = leadMachine?.name ?? machineLabel;
       return '$name cannot start the Product Manager. Choose another machine.';

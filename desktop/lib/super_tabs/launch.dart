@@ -485,6 +485,11 @@ class SuperTabLaunch {
             superTabMachineSymbol(device is String ? device : null) ==
             'laptopcomputer',
         own: own,
+        owner: own
+            ? null
+            : snapshot.people
+                  .where((person) => person.id == pool['contributorId'])
+                  .firstOrNull,
         native: own && connected,
         team: server ? shownHost != null && shownHost != id : team,
         teamEngines: server
