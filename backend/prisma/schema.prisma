@@ -1127,6 +1127,22 @@ model SuperTabReaction {
   @@index([tabId, messageId])
 }
 
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
+model SuperTabReadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  sequence       Int
+  updatedAt      DateTime
+
+  @@index([tabId, personId, updatedAt])
+  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  @@index([updatedAt], map: "read_mark_expiry")
+}
+
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
 model SuperTabDecision {

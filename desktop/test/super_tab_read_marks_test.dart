@@ -1,0 +1,149 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/parts.dart';
+
+import 'support/super_tab_fixture.dart';
+
+/// A message from the Lead agent, so it is never the reader's own.
+void fromLead(ConversationServer server, String text) {
+  server.append(text);
+  server.messages.last['author'] = {
+    'kind': 'agent',
+    'id': 'lead-agent',
+    'name': 'Lead',
+  };
+}
+
+void main() {
+  Future<SuperTabController> open(ConversationServer server) async {
+    final c = server.controller();
+    addTearDown(() async {
+      await c.flush();
+      c.dispose();
+    });
+    await c.refresh();
+    return c;
+  }
+
+  test('a conversation read on another device is read here too', () async {
+    final server = ConversationServer();
+    fromLead(server, 'First update');
+    fromLead(server, 'Second update');
+    final c = await open(server);
+    c.select('offline');
+    expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
+    server.markReadElsewhere('lead', 2);
+    await c.refresh();
+    expect(c.unread(c.snapshot!.conversation('lead')!), isFalse);
+    expect(c.readMark('lead'), 2);
+    // A later message is unread again, past the other device's mark.
+    fromLead(server, 'Third update');
+    await c.refresh();
+    expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
+  });
+
+  test(
+    'another person\'s marks never mark the reader\'s conversations read',
+    () async {
+      final server = ConversationServer();
+      fromLead(server, 'Update');
+      final c = await open(server);
+      c.select('offline');
+      server.markReadElsewhere('lead', 1, reader: 'peer');
+      await c.refresh();
+      expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
+    },
+  );
+
+  test('reading sends the mark forward once, never a lower one', () async {
+    final server = ConversationServer();
+    fromLead(server, 'One');
+    fromLead(server, 'Two');
+    final c = await open(server);
+    await c.loadMessages('lead');
+    c.markRead('lead', through: 1);
+    await pumpEventQueue();
+    c.markRead('lead', through: 1);
+    await pumpEventQueue();
+    c.markRead('lead', through: 2);
+    await pumpEventQueue();
+    c.markRead('lead', through: 1);
+    await pumpEventQueue();
+    expect(server.readMarkPosts, [
+      {'conversationId': 'lead', 'sequence': 1},
+      {'conversationId': 'lead', 'sequence': 2},
+    ]);
+  });
+
+  test('offline, this device\'s mark still reads the conversation, and the '
+      'mark is sent again on the next read', () async {
+    final server = ConversationServer();
+    fromLead(server, 'One');
+    final c = await open(server);
+    await c.loadMessages('lead');
+    server.failReadMarks = true;
+    c.markRead('lead', through: 1);
+    await pumpEventQueue();
+    expect(c.unread(c.selected!), isFalse);
+    server.failReadMarks = false;
+    c.markRead('lead', through: 1);
+    await pumpEventQueue();
+    expect(server.readMarkPosts, [
+      {'conversationId': 'lead', 'sequence': 1},
+      {'conversationId': 'lead', 'sequence': 1},
+    ]);
+    await c.refresh();
+    expect(c.unread(c.selected!), isFalse);
+  });
+
+  group('the parts held on this device', () {
+    Map<String, dynamic> group(
+      String id,
+      int version, {
+      bool deleted = false,
+    }) => {
+      'key': id,
+      'version': version,
+      if (deleted) 'deleted': true else 'data': {'id': id},
+    };
+    Map<String, dynamic> load(Map<String, int> marks) => {
+      'format': superTabReadFormat,
+      'cursor': 'c1',
+      'epoch': 1,
+      'head': {'key': 'head', 'version': 1, 'data': <String, dynamic>{}},
+      'groups': [group('lead', 1), group('web', 1)],
+      'derived': {'readMarks': marks},
+    };
+    Map<String, dynamic> changes(
+      Map<String, int> marks, {
+      List<Map<String, dynamic>> groups = const [],
+    }) => {
+      'format': superTabReadFormat,
+      'reload': false,
+      'cursor': 'c2',
+      'epoch': 1,
+      'head': null,
+      'groups': groups,
+      'derived': {'readMarks': marks},
+    };
+
+    test('keep the highest mark each read sent, across a restart', () {
+      final parts = SuperTabParts.firstLoad(load({'lead': 4, 'web': 2}));
+      // A change read sends only the marks that moved; an older copy the
+      // cursor's overlap sends again never lowers one.
+      expect(parts.apply(changes({'web': 9})).changed, isTrue);
+      expect(parts.apply(changes({'lead': 3})).changed, isFalse);
+      expect(parts.state['readMarks'], {'lead': 4, 'web': 9});
+      final restored = SuperTabParts.fromJson(
+        SuperTabParts.drawnOnly(parts.toJson()),
+      );
+      expect(restored.state['readMarks'], {'lead': 4, 'web': 9});
+    });
+
+    test('drop the mark of a conversation that is gone', () {
+      final parts = SuperTabParts.firstLoad(load({'lead': 4, 'web': 2}));
+      parts.apply(changes({}, groups: [group('web', 2, deleted: true)]));
+      expect(parts.state['readMarks'], {'lead': 4});
+    });
+  });
+}

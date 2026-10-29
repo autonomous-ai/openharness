@@ -15,6 +15,7 @@ import 'model.dart';
 import 'pm_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
+import 'read_marks.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
 
@@ -787,9 +788,24 @@ class SuperTabController extends ChangeNotifier {
           .firstOrNull
           ?.sequence ??
       0;
+
+  /// How far the reader has read [id]: the higher of the mark kept on the
+  /// server, from any of their devices, and this device's own, which stands
+  /// in while the server is out of reach.
+  int readMark(String id) =>
+      max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
+
+  late final _serverMarks = SuperTabReadMarkSender(
+    (id, sequence) => request(
+      'POST',
+      '$_path/conversations/${Uri.encodeComponent(id)}/read',
+      body: {'sequence': sequence},
+    ),
+  );
+
   bool unread(SuperTabConversation group) =>
       max(group.lastMessageSequence, _loadedMessageSequence(group.id)) >
-      (_readAt[group.id] ?? 0);
+      readMark(group.id);
 
   void start() {
     if (_disposed) return;
@@ -1331,7 +1347,7 @@ class SuperTabController extends ChangeNotifier {
   /// ([_readUnreadPmChats]).
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
-    final readAt = _readAt[group.id] ?? 0;
+    final readAt = readMark(group.id);
     final count = messages(group.id)
         .where((m) => m.sequence > readAt && !_ownMessage(m))
         .length;
@@ -1347,8 +1363,7 @@ class SuperTabController extends ChangeNotifier {
     final held = _messages[group.id];
     if (held == null || held.isEmpty) return false;
     return held.last.sequence >= group.lastMessageSequence &&
-        (held.first.sequence <= (_readAt[group.id] ?? 0) ||
-            !hasOlder(group.id));
+        (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
   }
 
   /// The unread messages in the reader's own PM chats, for the Swarm badge.
@@ -1520,6 +1535,7 @@ class SuperTabController extends ChangeNotifier {
     }
     final loaded = _loadedMessageSequence(id);
     final last = min(through ?? loaded, loaded);
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
     _saveSoon();
@@ -2584,6 +2600,7 @@ class SuperTabController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _serverMarks.dispose();
     _poll?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();

@@ -53,9 +53,12 @@ class SuperTabParts {
     if (answer['format'] != superTabReadFormat) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
+    // Read marks are held apart from the other derived values (_readMarks).
+    final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
+    final marks = derived.remove('readMarks');
     final parts = SuperTabParts._(
       _envelope(answer['head'], live: true),
-      superTabMap(answer['derived'] ?? const {}),
+      derived,
       cursor: _cursor(answer),
       epoch: _int(answer['epoch']),
       // Null for a Swarm with no part changed yet (contract.ts `ReadMeta`).
@@ -71,6 +74,7 @@ class SuperTabParts {
         parts._seen['$kind:${part['key']}'] = _int(part['version']);
       }
     }
+    parts._takeReadMarks(marks);
     return parts;
   }
 
@@ -92,6 +96,7 @@ class SuperTabParts {
         }
       }
     }
+    parts._takeReadMarks(json['readMarks']);
     return parts;
   }
 
@@ -118,6 +123,23 @@ class SuperTabParts {
   /// The newest version seen of every part, deleted and dormant ones included: an older copy the overlap sends
   /// again never replaces it or brings it back (section 4.4).
   final _seen = <String, int>{};
+
+  /// The reader's own read marks by conversation (backend readMarks.ts), the highest each read sent: a first load
+  /// sends them all, a change read only those moved since its cursor.
+  final _readMarks = <String, int>{};
+
+  /// Keeps the higher of each mark in [marks] and the one held; whether any moved.
+  bool _takeReadMarks(Object? marks) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(:key, :value) in marks.entries) {
+      if (key is! String || value is! num) continue;
+      if ((_readMarks[key] ?? 0) >= value) continue;
+      _readMarks[key] = value.toInt();
+      moved = true;
+    }
+    return moved;
+  }
 
   /// Dormant groups held with their data from before a stub closed them: a read by id at the stub's version is
   /// their current data.
@@ -164,6 +186,7 @@ class SuperTabParts {
           if (kind == 'groups') {
             _dormant.remove(key);
             _stale.remove(key);
+            _readMarks.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
@@ -190,7 +213,8 @@ class SuperTabParts {
         }
       }
     }
-    final derived = superTabMap(changes['derived'] ?? const {});
+    final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
+    if (_takeReadMarks(derived.remove('readMarks'))) changed = true;
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
       _derived = derived;
       changed = true;
@@ -279,6 +303,7 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     return state;
   }
 
@@ -298,6 +323,7 @@ class SuperTabParts {
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
+    'readMarks': Map<String, int>.of(_readMarks),
   };
 
   /// [json] (from [toJson]) without what the screens never draw: agent starts carry their tasks, and project
