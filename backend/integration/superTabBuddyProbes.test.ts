@@ -256,6 +256,10 @@ describe('a Buddy and threads', () => {
     await f.execute({ type: 'route.record', conversationId: group, decision }, owner, f.lead)
     const route = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages.find(m => (m.source as { kind?: string } | null)?.kind === 'route')!
     const reply = await send(f, group, 'Agreed, go ahead.', route.id)
+    // A reply from before threads names what it answered and nothing else.
+    const legacy = `legacy-${randomUUID()}`
+    await db.superTabMessage.create({ data: { id: legacy, tabId: f.tab, conversationId: group, sequence: 900,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: 'Old reply to the route.', replyTo: route.id, recipientIds: [] } })
     // The PM sees the route row as a thread root with its reply.
     const pm = await f.store.messages(owner, f.tab, group, {}, f.lead)
     expect(pm.threads.map(t => t.id)).toContain(route.id)
@@ -269,6 +273,30 @@ describe('a Buddy and threads', () => {
     const thread = await f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)
     expect(thread.messages.map(m => m.id)).toEqual([reply])
     expect(thread.threads.map(t => t.id)).not.toContain(route.id)
+    expect(seen.messages.find(m => m.id === legacy)!.replyTo).toBeNull()
+    // Nothing names the route row: not a reply's thread or reply-to, not a reply line (review 1 of #2168).
+    expect(JSON.stringify([seen, thread])).not.toContain(route.id)
     expect(JSON.stringify([seen, thread])).not.toContain('OWNER-PRIVATE-HOST')
   })
+})
+
+// Every reader (review 1 of #2168): a reply to a row the reader may not see, an agent-only note here, names nothing of it.
+it('gives no reader a pointer to, or reply line for, an agent-only note it may not see; its recipient keeps them', async () => {
+  const f = await swarm(), { agentId } = await buddy(f)
+  // The Lead's note to itself in the project chat, then its own reply in that note's thread.
+  const note = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'AGENT ONLY NOTE', replyTo: null,
+    recipientIds: [f.lead], agentOnly: true }, owner, f.lead)).result.messageId)
+  const reply = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Following up on my note.', replyTo: note,
+    recipientIds: [] }, owner, f.lead)).result.messageId)
+
+  const lead = await f.store.messages(owner, f.tab, 'lead', {}, f.lead)
+  expect(lead.messages.find(m => m.id === reply)).toMatchObject({ thread: note, replyTo: note })
+  expect(lead.threads.map(t => t.id)).toContain(note)
+  for (const [user, as] of [[owner, undefined], [peer, agentId]] as const) {
+    for (const cursor of [{}, { thread: note }]) {
+      const read = await f.store.messages(user, f.tab, 'lead', cursor, as)
+      if (!('thread' in cursor)) expect(read.messages.find(m => m.id === reply)).toMatchObject({ thread: null, replyTo: null })
+      expect(JSON.stringify(read)).not.toContain(note)
+    }
+  }
 })

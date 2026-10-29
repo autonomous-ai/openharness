@@ -1885,6 +1885,8 @@ export class SuperTabStore {
     // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
     // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
     const buddy = isBuddyReader(state, actor)
+    const readable = (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>) => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+      && !(buddy && routingRow(m.source))
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1901,8 +1903,7 @@ export class SuperTabStore {
     for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
       const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
         orderBy: [{ sequence: order }, { id: order }], take: 101 })
-      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
-        && !(buddy && routingRow(m.source))))
+      rows.push(...batch.filter(readable))
       if (batch.length < 101) break
       edge = batch.at(-1)
     }
@@ -1911,15 +1912,20 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
-    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
+    // What the page's rows point at that this reader may not see (an agent-only note to someone else; for a Buddy, a routing
+    // row): such a reply reads as a message of its own, with no thread or reply-to naming it and no reply line for it
+    // (review 1 of #2168). Rows on the page are readable already; the rest are read by id, at most two per row.
+    const onPage = new Set(page.map(m => m.id))
+    const pointed = [...new Set(page.flatMap(m => [m.thread, m.replyTo]).filter((id): id is string => !!id && !onPage.has(id)))]
+    const hidden = new Set(pointed.length ? (await tx.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: pointed } },
+      select: { id: true, source: true, recipientIds: true } })).filter(m => !readable(m)).map(m => m.id) : [])
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
-    const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
+    const roots = [...new Set(page.flatMap(m => m.thread && !hidden.has(m.thread) ? [m.thread] : []))]
     const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
-    // A Buddy reads no routing row, nor any trace of one: a thread rooted at a route row gets no reply line, and its
-    // replies read as messages of their own, without the root's id (reviewer's thread probes on #2115).
-    const hiddenRoots = new Set(buddy ? threadRows.filter(r => r.routing && r.id === r.thread).map(r => r.id) : [])
-    const threads = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing && !hiddenRoots.has(r.thread)) : threadRows) : []
-    const shown = buddy ? page.map(withoutMachineNames).map(m => m.thread && hiddenRoots.has(m.thread) ? { ...m, thread: null } : m) : page
+    const threads = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing) : threadRows) : []
+    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
+    const shown = (buddy ? page.map(withoutMachineNames) : page).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
+      ? { ...m, ...(m.thread && hidden.has(m.thread) ? { thread: null } : {}), ...(m.replyTo && hidden.has(m.replyTo) ? { replyTo: null } : {}) } : m)
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
