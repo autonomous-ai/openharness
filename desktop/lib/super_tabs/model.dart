@@ -130,6 +130,7 @@ class SuperTabConversation {
           row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
+      buddyName = row['buddyName'] as String?,
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -172,6 +173,10 @@ class SuperTabConversation {
 
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
+
+  /// The name a Buddy chat's person chose for their Buddy, kept while no
+  /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
+  final String? buddyName;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';

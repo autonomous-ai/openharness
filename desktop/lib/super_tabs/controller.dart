@@ -1281,6 +1281,21 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> removeBuddy(String projectId) async =>
       await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
 
+  /// Names the reader's Buddy in [projectId] from its chat, or clears the
+  /// name for the default when [name] is empty. Everyone in the Swarm sees it.
+  /// False when refused: [operationError] says why.
+  Future<bool> renameBuddy(String projectId, String name) async {
+    final chat = buddyChat(projectId);
+    if (chat == null) return false;
+    final trimmed = name.trim();
+    return await command({
+          'type': 'buddy.rename',
+          'conversationId': chat.id,
+          'name': trimmed.isEmpty ? null : trimmed,
+        }) !=
+        null;
+  }
+
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.

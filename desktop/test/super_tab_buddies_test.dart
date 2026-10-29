@@ -131,6 +131,61 @@ void main() {
       expect(c.buddyChat('lead'), isNotNull);
     });
 
+    test(
+      'renaming the Buddy sends its chat and the name, and the Swarm shows it',
+      () async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+
+        expect(await c.renameBuddy('lead', '  Sparky '), isTrue);
+
+        expect(commands(server, 'buddy.rename'), [
+          {
+            'type': 'buddy.rename',
+            'conversationId': 'buddy-peer-lead',
+            'name': 'Sparky',
+          },
+        ]);
+        expect(c.snapshot!.agentName('wren'), 'Sparky');
+        expect(c.buddyChat('lead')?.buddyName, 'Sparky');
+      },
+    );
+
+    test('clearing the name sends none, for the default', () async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.renameBuddy('lead', 'Sparky');
+
+      expect(await c.renameBuddy('lead', '   '), isTrue);
+
+      expect(commands(server, 'buddy.rename').last['name'], isNull);
+      expect(c.snapshot!.agentName('wren'), "ken.tran's Buddy");
+      expect(c.buddyChat('lead')?.buddyName, isNull);
+    });
+
+    test('a refused rename says why and keeps the name', () async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      server.refuse = {
+        'code': 'BUDDY_NAME_TAKEN',
+        'message': 'Lead is taken in this Swarm. Choose another.',
+      };
+
+      expect(await c.renameBuddy('lead', 'Lead'), isFalse);
+
+      expect(c.operationError, 'Lead is taken in this Swarm. Choose another.');
+      expect(c.snapshot!.agentName('wren'), 'Wren');
+    });
+
     test('the shortcut opens the Buddy chat and never creates a private conversation', () async {
       final server = buddySwarm();
       giveBuddy(server);
@@ -378,6 +433,30 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Your Buddy'), findsOneWidget);
         expect(find.textContaining("peer's Buddy"), findsNothing);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a removed Buddy with a chosen name keeps it in its chat\'s header',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        (server.state['agents'] as List).removeWhere(
+          (a) => (a as Map)['id'] == 'wren',
+        );
+        final chat = (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'buddy-peer-lead');
+        chat
+          ..['buddyName'] = 'Sparky'
+          ..['title'] = 'Sparky';
+        final c = await show(tester, server);
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Sparky · Your Buddy'), findsOneWidget);
+        expect(find.text('Message Sparky'), findsOneWidget);
         await close(tester, c);
       },
     );
