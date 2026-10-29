@@ -142,7 +142,10 @@ says which.
 - **`--send`** types the words into the harness picked exactly as `harness reply` does: idle only, through its
   machine's mailbox. The answer adds `"sent": {"state": "queued"}`, or `{"error": "NOT_IDLE" | "NOT_RUNNING" |
   "FAILED", "detail"}` with nothing sent: `FAILED` is the machine's mailbox refusing the words (its `detail` says
-  why). Exit 0 once decided, sent or not: read `sent`.
+  why), and any other code is that machine's own refusal. A send that ended unconfirmed (`UNCONFIRMED`,
+  `DISCONNECTED`, `INVALID_RESPONSE`, `CANCELLED`) adds `"uncertain": true`: the words may be in its mailbox, so read
+  it (`harness show`) before sending them again, and never start new work for them. Once decided, every outcome is
+  said under `sent`, never as a bare error. Exit 0 once decided, sent or not: read `sent`.
 - **`NOT_IDLE`** means it is still on the last words, or waits for the person. Wait for it (`harness wait`, the
   answer's `next`) and send them with `harness reply`, or say so. Never start new work for them: a follow-up ("how is
   it going?") would become a second harness.
