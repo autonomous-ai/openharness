@@ -229,6 +229,98 @@ void main() {
       expect(swarmTrend(score(5, null)), isNull);
     });
 
+    // The desktop's words for the same data
+    // (desktop/test/super_tab_leaderboard_tabs_test.dart).
+    test("a model's numbers in words, a share as a whole percent, zeros "
+        'left out', () {
+      SwarmModelScore score(Map<String, dynamic> extra) =>
+          SwarmModelScore.fromJson({
+            'engine': 'claude',
+            'model': 'opus',
+            ...extra,
+          });
+      final opus = score({
+        'shipped': {
+          'count': 31,
+          'medianAttemptMs': 47 * 60000,
+          'medianRequestMs': 3 * 3600000,
+        },
+        'firstReview': {'reviewed': 34, 'passed': 28},
+      });
+      expect(swarmModelNumbers(opus), [
+        '31 shipped',
+        '82% passed first review',
+        '47 min to ship',
+      ]);
+      expect(swarmModelNumbers(opus, full: true), [
+        '31 shipped',
+        '28 of 34 passed first review',
+        '47 min from the shipping attempt, 3 h from the first',
+      ]);
+      // Only the shipping attempt's time known: said alone in full too.
+      expect(
+        swarmModelNumbers(
+          score({
+            'shipped': {'count': 1, 'medianAttemptMs': 6 * 60000},
+          }),
+          full: true,
+        ),
+        ['1 shipped', '6 min from the shipping attempt'],
+      );
+      expect(swarmModelNumbers(score({'reviews': 1})), ['1 review']);
+      expect(swarmModelNumbers(score({'reviews': 5})), ['5 reviews']);
+      expect(swarmModelNumbers(score({})), isEmpty);
+    });
+
+    test('a model by the name people know it, then its effort', () {
+      String name(String engine, String? model, [String? effort]) =>
+          swarmModelName(
+            SwarmModelScore.fromJson({
+              'engine': engine,
+              'model': model,
+              'effort': effort,
+            }),
+          );
+      expect(name('claude', 'opus', 'high'), 'Opus · high');
+      expect(name('claude', 'claude-opus-5-5', 'high'), 'Opus 5.5 · high');
+      expect(name('claude', 'claude-sonnet-5-5[1m]'), 'Sonnet 5.5[1m]');
+      expect(name('codex', 'gpt-5.5'), 'GPT-5.5');
+      expect(name('codex', 'gpt-5.5', 'medium'), 'GPT-5.5 · medium');
+      expect(name('codex', 'gpt-5.6-sol', 'xhigh'), 'GPT-5.6 Sol · xhigh');
+      // Unknown and provider-qualified names stay exact.
+      expect(name('opencode', 'qwen/qwen3-coder'), 'qwen/qwen3-coder');
+      // No model reported: the engine's name.
+      expect(name('codex', null), 'Codex');
+      expect(name('claude', null, 'low'), 'Claude · low');
+    });
+
+    test("an agent's numbers: what it shipped, a Buddy's as proposals", () {
+      List<String> numbers(String kind, int shipped) => swarmAgentNumbers(
+        SwarmAgentScore.fromJson(
+          agentScoreData(
+            'a',
+            displayName: 'A',
+            kind: kind,
+            points: shipped * 3,
+            rank: 1,
+            shipped: shipped,
+          ),
+        ),
+      );
+      expect(numbers('pm', 12), ['12 shipped']);
+      expect(numbers('buddy', 4), ['4 proposals shipped']);
+      expect(numbers('buddy', 1), ['1 proposal shipped']);
+      expect(numbers('pm', 0), isEmpty);
+      expect(numbers('buddy', 0), isEmpty);
+    });
+
+    test('the crown: first place, and only with points', () {
+      expect(swarmCrowned(rank: 1, points: 28), isTrue);
+      expect(swarmCrowned(rank: 2, points: 21), isFalse);
+      // At the start of a week everyone ties at 0: no one has taken #1 yet.
+      expect(swarmCrowned(rank: 1, points: 0), isFalse);
+    });
+
     test('a duration in minutes under an hour, then in hours', () {
       expect(swarmDuration(6 * 60000), '6 min');
       expect(swarmDuration(3 * 3600000), '3 h');

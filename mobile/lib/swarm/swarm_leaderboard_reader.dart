@@ -8,6 +8,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/widgets/engine_identity.dart'
+    show engineIdentity;
+
 import 'swarm_request.dart';
 
 /// A place among the top three with points.
@@ -206,8 +209,86 @@ String? swarmTrend(SwarmScore score) {
   return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
 }
 
-String _plural(int count, String one) =>
-    '$count ${count == 1 ? one : '${one}s'}';
+/// Whether a row wears the crown: first on the board, with points. At the
+/// start of a week everyone ties at 0, and no one has taken #1 yet. People
+/// and agents wear it; models never do (the desktop's, after #2128).
+bool swarmCrowned({required int rank, required int points}) =>
+    rank == 1 && points > 0;
+
+/// "12 shipped" for the PM, "4 proposals shipped" for a Buddy; empty at
+/// zero (the desktop's `LeaderboardAgentRow`).
+List<String> swarmAgentNumbers(SwarmAgentScore score) => [
+  if (score.shipped > 0)
+    score.buddy
+        ? _plural(score.shipped, 'proposal shipped', 'proposals shipped')
+        : '${score.shipped} shipped',
+];
+
+/// A model's numbers in words, each left out at zero: "31 shipped", "82%
+/// passed first review", "47 min to ship", "5 reviews". [full] is what a
+/// screen reader hears: the counts behind the share, and the time from the
+/// request's first attempt beside the shipping attempt's (the desktop's
+/// `leaderboardModelNumbers`, whose [full] is its hover).
+List<String> swarmModelNumbers(SwarmModelScore score, {bool full = false}) {
+  final attempt = score.medianAttemptMs, request = score.medianRequestMs;
+  return [
+    if (score.shipped > 0) '${score.shipped} shipped',
+    if (score.reviewed > 0)
+      full
+          ? '${score.passed} of ${score.reviewed} passed first review'
+          : '${(score.passed * 100 / score.reviewed).round()}% passed first '
+                'review',
+    if (attempt != null)
+      full
+          ? [
+              '${swarmDuration(attempt)} from the shipping attempt',
+              if (request != null) '${swarmDuration(request)} from the first',
+            ].join(', ')
+          : '${swarmDuration(attempt)} to ship',
+    if (score.reviews > 0) _plural(score.reviews, 'review'),
+  ];
+}
+
+/// "Opus 5.5 · high": the model as people know it, else its engine's name,
+/// then its effort (the desktop's `LeaderboardModelRow`).
+String swarmModelName(SwarmModelScore score) => [
+  switch (score.model) {
+    final String model => _modelDisplayName(model),
+    null => engineIdentity(score.engine).label,
+  },
+  ?score.effort,
+].join(' · ');
+
+/// A model as people know it: "Opus 5.5" for `claude-opus-5-5`, "Opus" for
+/// the `opus` alias, "GPT-5.6 Sol" for `gpt-5.6-sol`. Other names stay
+/// exact. The desktop's `modelDisplayName`
+/// (`desktop/lib/core/runtime_model_name.dart`), copied as it stands.
+String _modelDisplayName(String model) {
+  // Claude may report only a family alias. Never invent a version for it.
+  final claude = RegExp(
+    r'^(?:claude-)?(fable|opus|sonnet|haiku)(?:-(\d+(?:[-.]\d{1,2})*))?(\[1m\])?$',
+    caseSensitive: false,
+  ).firstMatch(model);
+  if (claude != null) {
+    final family = claude[1]!.toLowerCase();
+    final version = claude[2]?.replaceAll('-', '.');
+    return '${family[0].toUpperCase()}${family.substring(1)}'
+        '${version == null ? '' : ' $version'}${claude[3] ?? ''}';
+  }
+  final gpt = RegExp(
+    r'^gpt-(\d+(?:\.\d+)*)(?:-(astra|sol|terra|luna|codex))?$',
+    caseSensitive: false,
+  ).firstMatch(model);
+  if (gpt != null) {
+    final family = gpt[2]?.toLowerCase();
+    return 'GPT-${gpt[1]}${family == null ? '' : ' ${family[0].toUpperCase()}${family.substring(1)}'}';
+  }
+  // Unknown names, dated IDs and local/provider-qualified IDs stay exact.
+  return model;
+}
+
+String _plural(int count, String one, [String? many]) =>
+    '$count ${count == 1 ? one : many ?? '${one}s'}';
 
 /// The Monday 00:00 UTC of the week [now] is in.
 int swarmWeekOf(DateTime now) {
