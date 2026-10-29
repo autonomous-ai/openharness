@@ -54,7 +54,8 @@ import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, T
 import { costRows, summarizeCosts } from './costs/read.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -362,6 +363,12 @@ export class GrantReads {
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
+
+/** Whether `actor` reads a row of a conversation they read: an agent-only notice is listed for its own recipient alone, and a
+ *  Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it and why
+ *  others could not (security review 2 of #2115). */
+const readsRow = (actor: Actor, buddy: boolean) => (m: SuperTabMessage): boolean =>
+  (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))) && !(buddy && routingRow(m.source))
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
  *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
@@ -1912,9 +1919,8 @@ export class SuperTabStore {
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
-    // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
-    // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
-    const buddy = isBuddyReader(state, actor)
+    // A Buddy's route rows are left out like an agent-only notice (readsRow), so no page is shorter.
+    const buddy = isBuddyReader(state, actor), reads = readsRow(actor, buddy)
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1923,16 +1929,14 @@ export class SuperTabStore {
       // One thread: its root (its own thread) and its replies.
       ...(cursor.thread ? { thread: cursor.thread } : {}),
       ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
-    // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
-    // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
+    // Hidden rows never shorten a page: Desktop reads on from the last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
     // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
     const rows: SuperTabMessage[] = []
     const order = forward ? 'asc' as const : 'desc' as const
     for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
       const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
         orderBy: [{ sequence: order }, { id: order }], take: 101 })
-      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
-        && !(buddy && routingRow(m.source))))
+      rows.push(...batch.filter(reads))
       if (batch.length < 101) break
       edge = batch.at(-1)
     }
@@ -1950,6 +1954,24 @@ export class SuperTabStore {
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
+  }
+
+  /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
+   *  shows them: the same read check and row filter as messages(). People only, reading as themselves: agents read every
+   *  message as it comes. At most CATCH_UP_SCAN rows are read; `more` says there were more. */
+  async catchUp(user: AuthUser, tabId: string, conversationId: string, after: number): Promise<CatchUp> {
+    this.personOnly(user)
+    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
+    const actor = await this.actor(this.db, user, state)
+    readConversation(state, actor, conversationId)
+    const buddy = isBuddyReader(state, actor)
+    const [rows, decisions] = await Promise.all([
+      this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
+        take: CATCH_UP_SCAN + 1 }),
+      waitingFor(this.db, tabId, conversationId, user.sub),
+    ])
+    const shown = rows.slice(0, CATCH_UP_SCAN).filter(readsRow(actor, buddy))
+    return catchUpSummary(buddy ? shown.map(withoutMachineNames) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
   }
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
