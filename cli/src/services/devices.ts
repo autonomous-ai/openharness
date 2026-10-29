@@ -192,7 +192,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let cardInclude: string[] = []
   // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
   // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
-  let cardFocus: { tabId: string; conversationId: string } | null = null
+  let cardFocus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
   const tellCards = (): void => {
     const on = cardDevices > 0
     void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
@@ -264,7 +264,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
     swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat, chatId) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat), ...(chatId ? { chatId } : {}) })),
+    swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
+      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
@@ -573,7 +574,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
       const open = cableHost.activeSwarmProject()
-      const focus = open?.conversationId ? { tabId: open.superTabId, conversationId: open.conversationId } : null
+      // `fromDevice`: the window followed a device's own pick, which the cards keep a dial's side through.
+      const focus = open?.conversationId
+        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
       const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
       if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
