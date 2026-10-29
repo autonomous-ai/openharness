@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type Conversation, type MessageDraft } from './model.js'
 import { buddyChatId } from './buddies.js'
-import { buddiesTold } from './buddyNews.js'
+import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -126,6 +126,14 @@ describe('the assignment notice a Buddy gets for work its person requested', () 
     const { group, assign, number } = requested()
     expect(notices(assign())).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' },
       text: `News for your owner: #${number} "Offline edits", which they requested, is assigned and working.` })])
+  })
+
+  it('is not sent for a private task in a public project, though its person requested it (security review 2 of #2178)', () => {
+    const { f, group, assign } = requested()
+    assign()
+    const task = f.state.conversations.find(c => c.id === group)!
+    task.audience = { people: [{ id: 'peer', generation: 'first' }] }
+    expect(assignedNotice(f.state, task, { kind: 'agent', id: f.pm, name: 'pm', membershipGeneration: 'first' }, 'op')).toBeNull()
   })
 
   it('is not sent when its person cannot read the task, when nobody requested it, or when another person did', () => {

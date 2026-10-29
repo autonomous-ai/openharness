@@ -11,7 +11,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions, pageThreads, type PageDelivery } from './pageReads.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -128,8 +128,13 @@ function replyOf(prior: { revision: number; result: unknown; parts: unknown }) {
  * Touching the receiving agent made every claim of a Lead's deliveries conflict with the others and with the Lead's own
  * posts (benchmark, mixed lane: the Lead's calls ran out of retries).
  */
-function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
-  return delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
+function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touch[] {
+  const touches: Touch[] = delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
+  // A Buddy receives only while its person reads there (buddyNews.ts): their part guards the delivery, so taking the
+  // project from them while a claim is in flight makes it check again (security review 1 of #2178).
+  const person = state.agents.find(a => a.id === delivery.agentId)?.buddyOf?.personId
+  if (person) touches.push({ kind: 'member', key: person })
+  return touches
 }
 
 /** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
@@ -362,6 +367,11 @@ export class GrantReads {
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
+
+/** Buddy news (buddyNews.ts) is the one delivery to an agent its row does not list among its recipients: a mark that holds
+ *  after the Buddy is removed or replaced (security review 1 of #2178). */
+const buddyNews = (message: Pick<SuperTabMessage, 'recipientIds'>, delivery: Pick<SuperTabDelivery, 'agentId'>): boolean =>
+  !message.recipientIds.includes(delivery.agentId)
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
  *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
@@ -1065,6 +1075,9 @@ export class SuperTabStore {
         if (!delivery || delivery.status !== 'uncertain') fail('DELIVERY_RESOLVED', 'This delivery no longer needs checking.')
         const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
         if (!message) fail('NOT_FOUND', 'The original instruction is unavailable.', 404)
+        // Anyone can work out a news delivery's id: it answers as one that needs no checking, so nobody learns whose Buddy
+        // heard (security review 2 of #2178). Its host settles it like any other.
+        if (buddyNews(message, delivery)) fail('DELIVERY_RESOLVED', 'This delivery no longer needs checking.')
         if (command.resolution === 'resend') {
           if (!this.deliveryAllowed(original, delivery) || !await this.senderAllowed(tx, original, delivery)) {
             fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
@@ -1919,11 +1932,10 @@ export class SuperTabStore {
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
     const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
-    // Whose Buddy hears a row is its person's own: a Buddy's deliveries outside its chat show to that Buddy alone.
-    const hidden = new Set(state.agents.filter(a => isBuddy(a) && !group.agentIds.includes(a.id)
-      && !(actor.kind === 'agent' && actor.agentId === a.id)).map(a => a.id))
+    // Whose Buddy hears a row is its person's own: its news shows to that Buddy alone.
+    const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: deliveries.filter(d => d.messageId === m.id && !hidden.has(d.agentId)) })), next, threads,
+      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }
@@ -2482,16 +2494,18 @@ export class SuperTabStore {
       // No Swarm-wide write: revocation and group changes write this delivery row, and the claim relies on its receiver and
       // its sender, whose parts it touches (spec ruling 9, design section 3.5).
       const stamp = clock.next()
-      for (const touch of deliveryTouches(delivery)) {
+      for (const touch of deliveryTouches(delivery, state)) {
         const part = parts.members.find(p => p.key === touch.key)
         if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
       }
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
         ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
-      const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
-      // News for a Buddy from outside its chat (buddyNews.ts): its host words it as news to note, never a message to answer there.
+      const row = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
+      // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
+      // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
+      const message = row && isBuddy(target) ? withoutMachineNames(row) : row
       return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {} }
     })
   }

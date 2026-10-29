@@ -1188,12 +1188,13 @@ export class SuperTabHost {
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo, buddy)}\n\n`
       : '')
     const source = object(message.source)
-    // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
-    if (source.kind === 'agent-only') return String(message.text)
     const said = `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
       + (files ? `${message.text ? '\n\n' : ''}${files}` : '')
-    // News for a Buddy's owner from outside its chat (backend buddyNews.ts): the Buddy cannot post there, and others wrote it.
+    // News for a Buddy's owner from outside its chat (backend buddyNews.ts), its agent-only line about a task too: the
+    // Buddy cannot post there, and others wrote it (security review 2 of #2178).
     if (buddyNews) return BUDDY_NEWS(group) + `Read this conversation: ${command} messages ${shellQuote(group)}\n\n` + reply + said
+    // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
+    if (source.kind === 'agent-only') return String(message.text)
     const native = source.kind === 'native'
       ? `This is an observed native ${String(source.phase)} in ${String(object(message.author).name ?? 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
       : ''

@@ -489,4 +489,74 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId, conversationId: group } })).toBe(0)
   })
+
+  it('refuses news its person loses after the claim read it but before the claim wrote (security review 1 of #2178)', async () => {
+    const { f, agentId, proposal, pm } = await proposed()
+    const answer = String((await pm('Private progress: taking it.', { replyTo: proposal })).result.messageId)
+    const waiting = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === answer)!
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    }), () => Date.now())
+    const result = await racing.delivery(peer, f.tab, agentId, waiting.id, { type: 'claim', claimId: randomUUID() })
+      .then(value => ({ accepted: true, text: value.message?.text }), error => ({ accepted: false, code: error.code }))
+    expect(raced).toBe(true)
+    expect(await f.store.deliveries(peer, f.tab, agentId)).toEqual([])
+    expect(result).toMatchObject({ accepted: false, code: 'DELIVERY_REVOKED' })
+  })
+
+  it('keeps whose Buddy heard a line hidden after that Buddy is removed or replaced (security review 1 of #2178)', async () => {
+    const { f, proposal, pm } = await proposed()
+    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const read = async () => (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === answer)!
+    expect((await read()).deliveries).toEqual([])
+    // Nor when an agent reads: the PM sees no Buddy among the line's deliveries.
+    const asPm = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === answer)!
+    expect(asPm.deliveries).toEqual([])
+    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    expect((await read()).deliveries).toEqual([])
+    await buddy(f)
+    expect((await read()).deliveries).toEqual([])
+    // Ordinary deliveries still show: the proposal's to the PM, its listed recipient.
+    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === proposal)!
+    expect(sent.deliveries.map(d => d.agentId)).toEqual([f.lead])
+  })
+
+  it('never lets a person resolve a Buddy\'s news delivery: it reads as one that needs no checking (security review 2 of #2178)', async () => {
+    const { f, agentId, proposal, pm } = await proposed()
+    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const news = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: answer, agentId } })
+    await db.superTabDelivery.update({ where: { id: news.id }, data: { status: 'uncertain' } })
+    for (const resolution of ['received', 'resend', 'cancel'] as const) {
+      for (const user of [owner, peer]) {
+        await expect(f.execute({ type: 'delivery.resolve', deliveryId: news.id, resolution }, user)).rejects.toThrow('This delivery no longer needs checking.')
+      }
+    }
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: news.id } })).status).toBe('uncertain')
+  })
+
+  it('is refused at pickup in the Leads conversation, even with a delivery row there (security review 2 of #2178)', async () => {
+    const { f, agentId } = await proposed()
+    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId!
+    const said = String((await f.execute({ type: 'message.send', conversationId: leads, text: 'Leads only.', replyTo: null, recipientIds: [] }, owner, f.lead)).result.messageId)
+    const template = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, agentId } })
+    const { id: _id, createdAt: _created, updatedAt: _updated, ...fields } = template
+    const planted = await db.superTabDelivery.create({ data: { ...fields, id: randomUUID().replaceAll('-', '').slice(0, 24), conversationId: leads, messageId: said,
+      status: 'queued', claimId: null, authorKind: 'agent', authorId: f.lead, authorGeneration: (await f.store.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.membershipGeneration } })
+    expect((await f.store.deliveries(peer, f.tab, agentId)).map(d => d.id)).not.toContain(planted.id)
+    await expect(f.store.delivery(peer, f.tab, agentId, planted.id, { type: 'claim', claimId: randomUUID() })).rejects.toThrow('no longer authorized')
+  })
+
+  it('hands a Buddy a claimed row without the machine it names (security review 2 of #2178)', async () => {
+    const { f, agentId, proposal, pm } = await proposed()
+    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    // A machine-leaving row's shape (machines.ts removalEnded), as if it were news: what reaches the Buddy names no machine.
+    await db.superTabMessage.update({ where: { id: answer }, data: { text: 'Studio Mac left the Swarm.', source: { kind: 'machine-left', machine: 'Studio Mac' } } })
+    const news = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === answer)!
+    const claimed = await f.store.delivery(peer, f.tab, agentId, news.id, { type: 'claim', claimId: randomUUID() })
+    expect(JSON.stringify(claimed.message)).not.toContain('Studio Mac')
+    expect(claimed.message).toMatchObject({ text: 'A machine left the Swarm.' })
+  })
 })
