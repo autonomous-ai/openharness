@@ -5,7 +5,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, groupWithoutMachines, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { author, fail, groupWithoutMachines, isLeads, seenMachineIds, stableId, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, writeReadMark } from '../readMarks.js'
@@ -32,7 +32,7 @@ import { envelope, groupView, readerView, seenIn, type ReaderView } from './view
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 import { memberSwarms } from '../swarmRows.js'
 
-type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups'>
+type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups' | 'recentStartGroups'>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
@@ -47,6 +47,13 @@ function readableMarks(read: Read, marks: Map<string, number>): Pick<Derived, 'r
   const readable = (id: string) => shown.has(id)
     || read.parts.groups.some(g => g.key === id && g.dormant && canReadGroup(read.view.state, read.actor, g.data!))
   return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable(id))) }
+}
+
+/** `loaded` with these starts too: a change poll's own (SwarmReads.pollStarts), never one it holds already. */
+const withStarts = (loaded: SwarmParts, extra: Part<AgentStart>[]): SwarmParts => {
+  if (!extra.length) return loaded
+  const held = new Set(loaded.starts.map(s => s.key))
+  return { ...loaded, starts: [...loaded.starts, ...extra.filter(s => !held.has(s.key))] }
 }
 
 export class SwarmReads {
@@ -73,6 +80,29 @@ export class SwarmReads {
     })
   }
 
+  /**
+   * The finished starts a change poll needs besides the unfinished ones it loaded: those changed since its cursor, as the
+   * change feed read them (it sends them as a first load shows them), and those whose harness a machine record still lists
+   * (model.ts visibleState shows a reader a listed harness only beside an agent or start it may read). Every other finished
+   * start leaves the reply as it was: a poll sends only changed parts. The second read is by the (tabId, agentId) index and
+   * held at the Swarm's main stamp, under the harnesses it names.
+   */
+  private async pollStarts(tx: PrismaClient, cached: CacheView, tabId: string, base: SwarmParts, changed: Part[]): Promise<Part<AgentStart>[]> {
+    const held = new Set(base.starts.map(s => s.key))
+    const fresh = (changed.filter(p => p.kind === 'start' && !p.deleted && !held.has(p.key)) as Part<AgentStart>[])
+    const agentOf = (s: Part<AgentStart>) => s.data!.harnessId ? stableId(s.data!.request.machineId, s.data!.harnessId) : null
+    const covered = new Set([...base.starts, ...fresh].map(agentOf))
+    const listed = [...new Set(base.machines.flatMap(m => {
+      const pool = m.data?.contribution, seen = pool?.observation
+      if (!pool || !seen) return []
+      return [...seen.runningHarnessIds, ...seen.stoppedHarnessIds, ...Object.keys(seen.harnessProgress ?? {}), ...(seen.stoppedReservations ?? []).map(r => r.harnessId)]
+        .map(harnessId => stableId(pool.machineId, harnessId))
+    }))].filter(id => !covered.has(id)).sort()
+    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed)) : []
+    const taken = new Set([...held, ...fresh.map(s => s.key)])
+    return [...fresh, ...named.filter(s => !taken.has(s.key))]
+  }
+
   /** The reader's avatar links (avatarLinks.ts), only ever in a member's read: issued afresh each time, never stored. */
   private async withAvatars(view: ReaderView, now: number): Promise<Derived> {
     if (!this.avatarLinks) return view.derived
@@ -89,12 +119,17 @@ export class SwarmReads {
       // Open decisions count their conversations themselves (decisions.ts).
       const mentioned = asAgentId ? [] : (await tx.superTabMention.findMany({ where: { tabId, personId: user.sub }, select: { conversationId: true },
         distinct: ['conversationId'] })).map(m => m.conversationId)
-      const light = { includeRecentStarts: true, groups: 'working' as const, groupIds: mentioned }
-      const lightly: Loader = (view, id, opts) => readLight(tx, view, id, opts)
-      let read = await this.load(tx, cached, user, tabId, asAgentId, t0, light, lightly)
-      const from = readCursor(cursor, read.parts.visibilityEpoch, t0)
-      if ('reload' in from) return from
+      // Starts: only unfinished ones whole, then the poll's own (below). Every live start's conversation is still held, so
+      // what each reader may see is decided as before (parts/light.ts recentStartGroups).
+      const light = { recentStartGroups: true, groups: 'working' as const, groupIds: mentioned }
+      const base = await readLight(tx, cached, tabId, light)
+      const from = readCursor(cursor, base.visibilityEpoch, t0)
+      // Reloading readers still pass the access check first, as every read does.
+      if ('reload' in from) { await this.load(tx, cached, user, tabId, asAgentId, t0, light, async () => base); return from }
       const changed = await readChanged(tx, cached, tabId, from.since)
+      const extra = await this.pollStarts(tx, cached, tabId, base, changed)
+      const lightly: Loader = async (view, id, opts) => withStarts(opts === light ? base : await readLight(tx, view, id, opts), extra)
+      let read = await this.load(tx, cached, user, tabId, asAgentId, t0, light, lightly)
       // A changed start whose group went dormant is read against that group, so its readers alone learn of it.
       const held = new Set(read.parts.groups.map(g => g.key))
       // So is a conversation whose read mark moved, so the mark goes only to a reader who can still read it.
