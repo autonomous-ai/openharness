@@ -330,6 +330,10 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
+  /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
+  thread?: string
+  /** A thread reply also shown in the conversation's main stream. */
+  alsoInChat?: true
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
