@@ -19,6 +19,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
+import 'swarm_code_block.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -2156,22 +2157,25 @@ class _Pending extends StatelessWidget {
         ),
         body: [
           ?quote,
-          if (text.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
-              child: Text.rich(
-                mentions.span(
-                  text,
-                  swarmChatText(
-                    16,
-                    height: 1.42,
-                    color: sending
-                        ? AppPalette.textSecondary
-                        : AppPalette.textPrimary,
+          for (final part in swarmTextParts(text))
+            if (part.code)
+              SwarmCodeBlock(code: part.text, name: part.name)
+            else
+              Padding(
+                padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+                child: Text.rich(
+                  mentions.span(
+                    part.text,
+                    swarmChatText(
+                      16,
+                      height: 1.42,
+                      color: sending
+                          ? AppPalette.textSecondary
+                          : AppPalette.textPrimary,
+                    ),
                   ),
                 ),
               ),
-            ),
           for (final file in files)
             SwarmFileChip(
               file: SuperTabAttachment.fromJson({

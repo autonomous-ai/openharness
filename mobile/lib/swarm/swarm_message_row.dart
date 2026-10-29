@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_attachment.dart';
+import 'swarm_code_block.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
 
@@ -290,27 +291,29 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
-        if (message.text.isNotEmpty)
-          Semantics(
-            button: true,
-            hint: 'Reply to this message',
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onTap,
-              child: Padding(
-                padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Text.rich(
-                    mentions.span(
-                      message.text,
-                      swarmChatText(16, height: 1.42),
+        for (final part in swarmTextParts(message.text))
+          if (part.code)
+            SwarmCodeBlock(code: part.text, name: part.name)
+          else
+            Semantics(
+              button: true,
+              hint: 'Reply to this message',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.only(
+                    top: SwarmMessageFrame.bodyGap,
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text.rich(
+                      mentions.span(part.text, swarmChatText(16, height: 1.42)),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
         for (final file in message.attachments)
           SwarmAttachment(
             file: file,
