@@ -111,7 +111,7 @@ function cardIn(value: unknown): SwarmCard | null {
     if (!lead) return null
     leads.push(lead)
   }
-  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads }
+  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(card.side === 'buddy' ? { side: 'buddy' as const } : {}) }
 }
 
 /** A recap the service sent, checked and cut; null when it is not one. */
@@ -129,7 +129,7 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
   let last: SwarmCard[] | null = null
   /** Whether any capable device wants cards, the Swarms to read first, and the conversation the window has open in a Swarm tab. */
   let wanted = false, include: string[] = []
-  let focus: { tabId: string; conversationId: string } | null = null
+  let focus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
   const route = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try {
       const answer = await request?.(payload)
@@ -143,8 +143,10 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
     want(on: boolean, swarms: unknown, open?: unknown): void {
       const next = on && Array.isArray(swarms) ? [...new Set(swarms.filter(id))].slice(0, MAX_CARDS) : []
       const asked = object(open)
-      const nextFocus = on && id(asked.tabId) && id(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
-      if (on === wanted && next.join(',') === include.join(',') && `${nextFocus?.tabId}/${nextFocus?.conversationId}` === `${focus?.tabId}/${focus?.conversationId}`) return
+      const nextFocus = on && id(asked.tabId) && id(asked.conversationId)
+        ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+      const key = (f: typeof focus) => `${f?.tabId}/${f?.conversationId}/${f?.fromDevice === true}`
+      if (on === wanted && next.join(',') === include.join(',') && key(nextFocus) === key(focus)) return
       wanted = on
       include = next
       focus = nextFocus
@@ -198,7 +200,9 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       }
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
       // The chat on the dial's face when the words were spoken, which they may be posted in and no other.
-      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat, ...(id(payload.chatId) ? { chatId: payload.chatId } : {}) })
+      // `reviewed`: the person saw that chat named on the dial and pressed Send.
+      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat,
+        ...(id(payload.chatId) ? { chatId: payload.chatId, ...(payload.reviewed === true ? { reviewed: true } : {}) } : {}) })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
       // A card's failure from another computer: whether its agent is a Swarm's worker (services/devices.ts asks; it decides).
       if (payload.action === 'cardWorker') return route({ action: 'cardWorker', machineId: payload.machineId, harnessId: payload.harnessId })

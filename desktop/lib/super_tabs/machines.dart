@@ -1541,8 +1541,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           );
     String available(double used) =>
         resourcePercent((100 - used).clamp(0, 100));
-    // Each engine with a known, unexpired allowance, Claude first. Offline or out of reach, an allowance is an
-    // old reading and no chip shows it as now.
+    // Engines the server suspended here after failed starts, with why (backend superTabs/engineHealth.ts), on the Mac
+    // or its Harness Team account.
+    final suspended = <String, String>{
+      for (final pool in [shared, team])
+        if (pool?['suspendedEngines'] case final Map raw)
+          for (final entry in raw.entries)
+            if (entry.key is String && entry.value is String)
+              entry.key as String: entry.value as String,
+    };
+    // Each engine with a known, unexpired allowance, Claude first; a suspended one also with its allowance unknown.
+    // Offline or out of reach, an allowance is an old reading and no chip shows it as now.
     final allowances = dim
         ? const <_Allowance>[]
         : [
@@ -1566,6 +1575,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       0,
                       100,
                     ),
+                    struck:
+                        suspended[engine] ??
+                        ((row['remainingPercent'] as num) <= 0
+                            ? _noQuotaLeft
+                            : null),
                     note: superMachineAllowanceNote(switch (row['details']) {
                       final List lines => lines.whereType<String>(),
                       _ => const <String>[],
@@ -1578,6 +1592,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         _ => ['${account.figure} remaining'],
                       },
                     ].join('\n'),
+                  )
+              else if (suspended[engine] case final reason?)
+                // Named and figured as a card with a reading is ("Claude Code", "—" when unknown).
+                for (final account in WorkspaceSubscriptionUsage.fromRows([
+                  {'engine': engine, 'accountKey': 'machine:$id:$engine'},
+                ]).accounts.take(1))
+                  _Allowance(
+                    engine: engine,
+                    name: account.name,
+                    figure: account.figure,
+                    left: null,
+                    detail: '',
+                    struck: reason,
                   ),
           ];
     // The models this machine offers the Swarm, from the same reading: an API's by its model, without the
@@ -2654,6 +2681,7 @@ class _Allowance {
     required this.left,
     required this.detail,
     this.note,
+    this.struck,
   });
 
   final String engine, name, figure, detail;
@@ -2661,19 +2689,29 @@ class _Allowance {
   /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure.
   final String? note;
 
-  /// The share left, 0–100.
-  final double left;
+  /// The share left, 0–100; null when unknown (a suspended engine whose allowance could not be read).
+  final double? left;
+
+  /// Why new work does not go to this engine here (out of quota, or suspended after failed starts), shown on hover
+  /// with its name struck through; null when it takes work.
+  final String? struck;
 
   /// Amber below 20%, red below 10%, otherwise the reading's own ink.
   Color get ink => statusLineInkOnSurface(
-    left < 10
+    left == null
+        ? DesktopChrome.foreground
+        : left! < 10
         ? grid.AppPalette.usageCritical
-        : left < 20
+        : left! < 20
         ? grid.AppPalette.usageLow
         : DesktopChrome.foreground,
     DesktopChrome.surface,
   );
 }
+
+/// What hovering an engine with no quota left on a machine says (the route leaves it out the same way).
+const _noQuotaLeft =
+    'Not used for new work here: no quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
@@ -3054,15 +3092,23 @@ class _MachineReadings extends StatelessWidget {
   }
 
   Widget _allowance(_Allowance allowance) {
-    final tone = allowance.left < 10
+    final left = allowance.left;
+    final tone = left == null
+        ? null
+        : left < 10
         ? grid.AppPalette.usageCritical
-        : allowance.left < 20
+        : left < 20
         ? grid.AppPalette.usageLow
         : null;
+    final struck = allowance.struck;
     return Tooltip(
-      message: allowance.detail,
+      message: [
+        ?struck,
+        if (allowance.detail.isNotEmpty) allowance.detail,
+      ].join('\n\n'),
       child: Semantics(
-        label: '${allowance.name} ${allowance.figure} remaining',
+        label:
+            '${allowance.name} ${allowance.figure} remaining${struck == null ? '' : '. $struck'}',
         excludeSemantics: true,
         child: Container(
           key: ValueKey(
@@ -3085,7 +3131,11 @@ class _MachineReadings extends StatelessWidget {
                       allowance.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(size: 12, height: 1.3),
+                      style: DesktopChrome.text(size: 12, height: 1.3).copyWith(
+                        decoration: struck == null
+                            ? null
+                            : TextDecoration.lineThrough,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -3109,7 +3159,7 @@ class _MachineReadings extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               // The bar is what is left, as the figure is.
-              _Meter(share: allowance.left / 100, tone: tone),
+              _Meter(share: (left ?? 0) / 100, tone: tone),
               if (allowance.note case final note?) ...[
                 const SizedBox(height: 5),
                 Text(

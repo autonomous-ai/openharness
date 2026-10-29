@@ -3,7 +3,8 @@ name: CI
 # Fast PR checks: each changed component runs its own Linux unit tests. Native,
 # macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
 # docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
-# only the plan and process checks; the PR run covered the code.
+# only the plan and process checks; the PR run covered the code. After Update branch,
+# a suite whose inputs main's new commits left untouched reuses the earlier head's result.
 # Contributor code runs with a read-only token and no release credentials.
 on:
   pull_request:
@@ -49,6 +50,12 @@ jobs:
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Read-only lookups of an earlier head's ci/required run, whose results an update merge may
+    # reuse (docs/validation-and-release.md#reuse-after-update-branch). No write scope.
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     outputs:
       plan: ${{ steps.select.outputs.plan }}
       ready: ${{ steps.select.outputs.ready }}
@@ -95,6 +102,7 @@ jobs:
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --output "$RUNNER_TEMP/ci-plan.json"
       - uses: actions/upload-artifact@v4
         with:

@@ -63,6 +63,14 @@ class SuperTabClient {
   /// menu bar lists.
   final void Function()? onNotices;
   final _tagCounts = <String, int>{};
+
+  /// The digest of each Swarm's tags as the list last told it, for the tags
+  /// last counted: the list says they moved when it changes.
+  final _tagDigests = <String, String>{};
+
+  /// Whether the list is asked for each Swarm's tags (`?mentions=1`). Off for
+  /// the session once a backend refuses the query.
+  bool _listMentions = true;
   final _tagsSeen = <String, Set<String>>{};
 
   /// The tags waiting for this account in a Swarm: its own state once open,
@@ -203,7 +211,10 @@ class SuperTabClient {
       if (away && _viewSaves.containsKey(entry.key)) _saveView(entry.key);
       // Back on screen, the Swarm reads its own tags: the count discovery
       // kept while it was away is stale from now on.
-      if (!away && entry.value.away) _tagCounts.remove(entry.key);
+      if (!away && entry.value.away) {
+        _tagCounts.remove(entry.key);
+        _tagDigests.remove(entry.key);
+      }
       entry.value.away = away;
     }
   }
@@ -365,7 +376,9 @@ class SuperTabClient {
     _creating.clear();
     _visibility.clear();
     _tagCounts.clear();
+    _tagDigests.clear();
     _tagsSeen.clear();
+    _listMentions = true;
     discoveryError = null;
     for (final controller in _loaded.values) {
       controller.revokeAccess('The account changed. Open this Swarm again.');
@@ -451,13 +464,11 @@ class SuperTabClient {
         await _readHidden(account, generation);
         if (generation != _generation) return;
         final tabs = <String, SuperTabListing>{};
+        final tags = <String, ({int count, String digest})>{};
         final cursors = <String>{};
         String? after;
         do {
-          final page = await map(
-            'GET',
-            '/api/super-tabs/list${after == null ? '' : '?after=${Uri.encodeComponent(after)}'}',
-          );
+          final page = await _readListPage(after);
           if (generation != _generation) return;
           if (page['tabs'] is! List) {
             throw const FormatException('Missing tabs');
@@ -469,6 +480,14 @@ class SuperTabClient {
             }
             final id = row['id'] as String;
             tabs[id] = (id: id, name: row['name'] as String);
+            // Told only by a backend that counts them (and only when asked).
+            if (row['mentionsWaiting'] case final int count
+                when row['mentionsDigest'] is String) {
+              tags[id] = (
+                count: count,
+                digest: row['mentionsDigest'] as String,
+              );
+            }
           }
           after = page['next'] as String?;
           if (after != null && !cursors.add(after)) {
@@ -487,12 +506,16 @@ class SuperTabClient {
                 .catchError((Object _) {}),
           );
         }
-        await _readTags([
-          for (final id in tabs.keys)
-            if (!hidden.contains(id) &&
-                (!_loaded.containsKey(id) || _paused(id)))
-              id,
-        ], generation);
+        await _readTags(
+          [
+            for (final id in tabs.keys)
+              if (!hidden.contains(id) &&
+                  (!_loaded.containsKey(id) || _paused(id)))
+                id,
+          ],
+          generation,
+          tags,
+        );
       } catch (error) {
         if (generation == _generation) {
           discoveryError = error;
@@ -504,6 +527,30 @@ class SuperTabClient {
     return read.whenComplete(() {
       if (identical(_discovering, read)) _discovering = null;
     });
+  }
+
+  /// One page of the Swarm list, with each Swarm's waiting tags while the
+  /// backend counts them. A backend from before that refuses the query: the
+  /// page is read without it, and every page after it for the session.
+  Future<Map<String, dynamic>> _readListPage(String? after) async {
+    String path() {
+      final query = [
+        if (_listMentions) 'mentions=1',
+        if (after != null) 'after=${Uri.encodeComponent(after)}',
+      ];
+      return '/api/super-tabs/list${query.isEmpty ? '' : '?${query.join('&')}'}';
+    }
+
+    try {
+      return await map('GET', path());
+    } on SuperTabFailure catch (failure) {
+      if (!_listMentions ||
+          (failure.statusCode != 400 && failure.code != 'VALIDATION_ERROR')) {
+        rethrow;
+      }
+      _listMentions = false;
+      return map('GET', path());
+    }
   }
 
   Future<Object?> request(
@@ -660,6 +707,7 @@ class SuperTabClient {
       SuperTabDecisions.of(controller).addListener(changed);
     }
     _tagCounts.remove(id);
+    _tagDigests.remove(id);
     _loaded[id] = controller;
     void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {
@@ -691,9 +739,34 @@ class SuperTabClient {
   /// One light read per Swarm tab that is not open: its waiting tags. A
   /// failed read, a backend before tags included, changes nothing and is
   /// tried again on the next round.
-  Future<void> _readTags(List<String> ids, int generation) async {
+  Future<void> _readTags(
+    List<String> ids,
+    int generation,
+    Map<String, ({int count, String digest})> listed,
+  ) async {
     var changed = false;
     for (final id in ids) {
+      if (generation != _generation) break;
+      if (_loaded.containsKey(id) && !_paused(id)) continue;
+      // The list told this Swarm's tags: unchanged, there is nothing to ask;
+      // none, there is nothing to list. Otherwise their text is read.
+      final counted = listed[id];
+      if (counted != null) {
+        if (_tagCounts[id] == counted.count &&
+            _tagDigests[id] == counted.digest) {
+          continue;
+        }
+        if (counted.count == 0) {
+          // The baseline a later tag is new against.
+          _tagsSeen[id] ??= {};
+          _tagDigests[id] = counted.digest;
+          if (_tagCounts[id] != 0) {
+            _tagCounts[id] = 0;
+            changed = true;
+          }
+          continue;
+        }
+      }
       try {
         final answer = await map(
           'GET',
@@ -726,6 +799,7 @@ class SuperTabClient {
         // Not news again when the Swarm is shown and reads its own.
         mentions?.seen(told);
         _tagsSeen[id] = {...?seen, for (final m in waiting) m.id};
+        if (counted != null) _tagDigests[id] = counted.digest;
         if (_tagCounts[id] != waiting.length) {
           _tagCounts[id] = waiting.length;
           changed = true;

@@ -102,3 +102,6 @@ CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+# A hang the panic handler never sees ends in a hardware watchdog reset. The CPUs' PC recorder (assist_debug) is
+# what bootloader_components/wdt_pc saves for that case; off, the app gates its clock and the record goes stale.
+CONFIG_ESP_SYSTEM_HW_PC_RECORD=y
