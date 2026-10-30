@@ -31,7 +31,7 @@ import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, 
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
-import { clock, insertParts, loadActive, loadGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadLightGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
@@ -2104,7 +2104,7 @@ export class SuperTabStore {
     const check = async (ids: string[]) => {
       const unchecked = [...new Set(ids)].filter(id => !reads.has(id))
       const missing = unchecked.filter(id => !groups.has(id))
-      if (missing.length) adopt(await loadGroups(tx, tabId, 'key', { key: { $in: missing } }))
+      if (missing.length) adopt(await loadLightGroups(tx, tabId, 'key', { key: { $in: missing } }))
       for (const id of unchecked) reads.set(id, groups.has(id) && canReadGroup(state, actor, groups.get(id)!))
     }
     // An agent stored with no project (a Swarm from before projects) takes its project from its first conversation, quiet ones
@@ -2123,11 +2123,11 @@ export class SuperTabStore {
       // conversations, by key); a person's can be any.
       if (target) {
         const project = target.projectId!
-        adopt(await loadGroups(tx, tabId, 'project', { projectId: { $in: project === 'lead' ? ['lead', null] : [project] }, dormant: true }))
+        adopt(await loadLightGroups(tx, tabId, 'project', { projectId: { $in: project === 'lead' ? ['lead', null] : [project] }, dormant: true }))
         const leads = [state.leadsConversationId, ...projectsOf(state).map(p => p.leadConversationId)].filter((id): id is string => !!id && !groups.has(id))
-        if (leads.length) adopt(await loadGroups(tx, tabId, 'key', { key: { $in: leads } }))
+        if (leads.length) adopt(await loadLightGroups(tx, tabId, 'key', { key: { $in: leads } }))
       } else {
-        adopt(await loadGroups(tx, tabId, 'dormancy', { dormant: true }))
+        adopt(await loadLightGroups(tx, tabId, 'dormancy', { dormant: true }))
       }
       return recentDecisions(tx, tabId, [...groups.values()].filter(c => canReadGroup(state, actor, c)).map(c => c.id))
     }
