@@ -522,10 +522,8 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               child: Text(
                 heading,
                 key: const Key('super-project-github-heading'),
-                style: DesktopChrome.heading().copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
+                // The design's dialog heading: the title role, semibold.
+                style: grid.AppType.title(color: DesktopChrome.foreground),
               ),
             ),
           ],
