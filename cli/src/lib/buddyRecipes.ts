@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 /**
  * Harness's read-only recipes for a Buddy (docs/specs/2026-10-30-buddy-read-access.md): `harness buddy-read NAME`, which
@@ -9,17 +10,20 @@ import { dirname, join } from 'node:path'
  * sees one.
  *
  * db-size is Juno's database read (Lead, 10-30): the row count of each collection by estimatedDocumentCount, and the
- * attachments' bytes as a $sum of size on SuperTabAttachment, nothing wider. The login is the read-only one Ken's clone
- * keeps as MONGODB_PROD_RO_URL in .secrets/mongodb-prod-readonly.env; mongosh gets it by environment only, never on its
+ * attachments' bytes as a $sum of size on SuperTabAttachment, nothing wider. The login is the read-only one its person
+ * keeps as MONGODB_PROD_RO_URL in ~/.secrets/mongodb-prod-readonly.env; mongosh gets it by environment only, never on its
  * command line, where any process could read it, and refuses any login with a role beyond reading.
  */
 
 /** The roles of a read-only login. clusterMonitor is not one: its actions include setting changes. */
 const READ_ROLES = ['read', 'readAnyDatabase']
-/** What a read-only login may do, as the server lists its privileges (connectionStatus with showPrivileges): MongoDB's
- *  read and readAnyDatabase roles' actions. A role is only a name; a custom one named "read" could insert (review of #2310). */
+/** What a read-only login may do, as the server lists its privileges (connectionStatus with showPrivileges): every action
+ *  MongoDB 8.0 gives its read and readAnyDatabase roles (src/mongo/db/auth/builtin_roles.yml on branch v8.0, read 10-30),
+ *  each a read. A role is only a name; a custom one named "read" could insert (review of #2310). planCacheRead reads the
+ *  query planner's cache ($planCacheStats, planCacheListFilters); production's readAnyDatabase has it, and leaving it out
+ *  refused Ken's login (10-30). 8.2's read adds performRawDataOperations, left out until production runs 8.2. */
 const READ_ACTIONS = ['changeStream', 'collStats', 'dbHash', 'dbStats', 'find', 'killCursors', 'listCollections', 'listIndexes',
-  'listSearchIndexes', 'listDatabases']
+  'listSearchIndexes', 'planCacheRead', 'listDatabases']
 
 /** What mongosh runs for db-size, with no rc file of the person's: its login from the environment, its roles checked first. */
 export const DB_SIZE_SCRIPT = [
@@ -35,7 +39,10 @@ export const DB_SIZE_SCRIPT = [
   'print(JSON.stringify({ database: db.getName(), collections, attachmentBytes: total ? total.bytes : 0 }));',
 ].join('\n')
 
-/** Where the read-only login is kept, in the main clone (a worktree has no .secrets folder), and its variable. */
+/** Where the read-only login is kept, in the person's home, and its variable. One fixed place, wherever the command runs:
+ *  looking in the clone the command ran from found nothing from a Swarm worktree on Ken's Mac (10-30), and a login in the
+ *  working folder is one a pull request could add. The Buddy's guard keeps any .secrets folder closed to the Buddy itself,
+ *  and its sandbox denies ~/.secrets by path. */
 const LOGIN_FILE = join('.secrets', 'mongodb-prod-readonly.env')
 const LOGIN_VARIABLE = 'MONGODB_PROD_RO_URL'
 
@@ -58,20 +65,20 @@ function scrub(text: string, url: string): string {
   return clean
 }
 
-export interface BuddyReadDeps { cwd: string; path: string; write: (text: string) => void }
+export interface BuddyReadDeps { home: string; path: string; write: (text: string) => void }
 
-export async function buddyReadCommand(args: readonly string[], deps: BuddyReadDeps = { cwd: process.cwd(), path: process.env.PATH ?? '',
+export async function buddyReadCommand(args: readonly string[], deps: BuddyReadDeps = { home: homedir(), path: process.env.PATH ?? '',
   write: (text) => { process.stdout.write(text) } }): Promise<number> {
   if (args.length !== 1 || args[0] !== 'db-size') {
     deps.write('Usage: harness buddy-read db-size\n  db-size: each collection\'s row count and the attachments\' bytes, through the read-only login.\n')
     return 2
   }
-  const common = spawnSync('git', ['-C', deps.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', timeout: 10_000 })
-  const file = common.status === 0 ? join(dirname(common.stdout.trim()), LOGIN_FILE) : null
+  const file = join(deps.home, LOGIN_FILE)
   let url: string | null = null
-  try { url = file ? envValue(readFileSync(file, 'utf8'), LOGIN_VARIABLE) : null } catch { /* none here */ }
+  try { url = envValue(readFileSync(file, 'utf8'), LOGIN_VARIABLE) } catch { /* none on this machine */ }
   if (!url) {
-    deps.write(`No read-only database login here: it is ${LOGIN_VARIABLE} in ${file ?? LOGIN_FILE} of this project's clone.\n`)
+    deps.write(`No read-only database login on this machine. Put ${LOGIN_VARIABLE}=<the read-only connection string> in ${file}, `
+      + 'in the home of the person this machine belongs to, readable by them alone (chmod 600). It is read from there wherever this runs.\n')
     return 1
   }
   const run = spawnSync('mongosh', ['--nodb', '--quiet', '--norc', '--eval', DB_SIZE_SCRIPT], { encoding: 'utf8', timeout: 120_000,

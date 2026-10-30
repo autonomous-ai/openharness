@@ -82,8 +82,8 @@ Within those folders, these stay closed:
 - Shell and database histories, which keep typed secrets.
 - Secrets by name, anywhere:
   - `.env*` and `*.env` files
-  - `.secrets`/`secrets` folders and files (Ken's clone keeps the read-only prod login in
-    `.secrets/mongodb-prod-readonly.env`)
+  - `.secrets`/`secrets` folders and files (the read-only prod login is kept in
+    `~/.secrets/mongodb-prod-readonly.env`; the sandbox also denies `~/.secrets` by path)
   - keys and certificates (`*.pem`, `*.key`, `*.p12`, `id_*`, and so on)
   - `credentials*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`
   - `.harness*`, and names like `ro-prod` or `prod-db`
@@ -122,11 +122,14 @@ The measurements use Juno's read-only methods (Lead, 10-30), nothing wider:
   --group apps --since-seconds 3600`. The backend logs a `cpu by kind` line every minute per pod, with `processCpuMs`
   (`backend/src/lib/selfProfile.ts`).
 - **Pods, restarts and HPA**: `argocd app get-resource … --kind Pod -o json` and `--kind HorizontalPodAutoscaler`.
-- **DB**: `harness buddy-read db-size` (`cli/src/lib/buddyRecipes.ts`). It reads `MONGODB_PROD_RO_URL` from the main
-  clone's `.secrets/mongodb-prod-readonly.env` itself and gives it to `mongosh` (`--nodb --quiet --norc`) only through
+- **DB**: `harness buddy-read db-size` (`cli/src/lib/buddyRecipes.ts`). It reads `MONGODB_PROD_RO_URL` from
+  `~/.secrets/mongodb-prod-readonly.env` in the person's home itself, one fixed place wherever it runs (run from a Swarm
+  worktree, the clone's file was not found on Ken's Mac, 10-30), and gives it to `mongosh` (`--nodb --quiet --norc`) only through
   the environment, never on its command line, with mongosh's telemetry off for the run. Before reading anything it asks
   the server for the login's privileges (`connectionStatus` with `showPrivileges`). It refuses any role other than
-  `read` or `readAnyDatabase`, and any action beyond theirs; `clusterMonitor` is refused, as its actions include setting
+  `read` or `readAnyDatabase`, and any action beyond what MongoDB 8.0 grants them (`builtin_roles.yml` on branch v8.0:
+  `changeStream`, `collStats`, `dbHash`, `dbStats`, `find`, `killCursors`, `listCollections`, `listIndexes`,
+  `listSearchIndexes`, `planCacheRead`, and `listDatabases` on the cluster; 8.2's `performRawDataOperations` is left out); `clusterMonitor` is refused, as its actions include setting
   changes. It reads `estimatedDocumentCount` per collection and a `$sum` of `size` on
   `SuperTabAttachment`, and prints no connection string, its errors included.
 
