@@ -564,7 +564,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     const lastEffort = switching && last?.ran.model === model ? effort : launchedEffort
     const settledConfiguration = last && last.ran.model.length <= 200 ? { engine, model: last.ran.model,
       effort: last.ran.effort === 'auto' && lastEffort ? lastEffort : last.ran.effort,
-      contextWindow: number(last.frame.contextWindow), engineVersion: text(last.frame.engineVersion) } : null
+      contextWindow: Number.isSafeInteger(last.frame.contextWindow) && Number(last.frame.contextWindow) > 0 ? Number(last.frame.contextWindow) : null,
+      engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
       ...(permissionWarning ? { permissionWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }

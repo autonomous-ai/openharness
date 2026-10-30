@@ -407,6 +407,13 @@ never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
 
+Each attempt counts under the model its agent ran on. An agent left on its
+engine's own model (Codex) names it at its first turn; its start waits up to 30
+seconds for that before the agent joins, and settles with what the agent runs,
+so work assigned to it names the model. An agent that names one later, even
+after its work ended, fills in its own attempts that have none. A model already
+recorded is never changed.
+
 ## Routing
 
 The Lead routes each task before starting or assigning an agent. The route
