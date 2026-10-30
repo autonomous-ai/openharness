@@ -130,8 +130,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
       // main repository), which made the source look trusted before the worktree started.
       // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
-      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
-        && input.permissionMode === 'full'
+      //
+      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent in full mode:
+      // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
+      // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
+      // withheld. Only from a local frame: a relayed request could name any repository on this machine.
+      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && input.permissionMode === 'full'
+      const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)

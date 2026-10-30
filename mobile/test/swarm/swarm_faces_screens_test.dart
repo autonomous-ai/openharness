@@ -185,6 +185,7 @@ void main() {
         swarmId: tab,
         projectId: project,
         tab: SwarmProjectTab.buddy,
+        tabs: SwarmProjectTab.homeB,
       ),
       buddy: true,
     );
@@ -206,6 +207,7 @@ void main() {
         swarmId: tab,
         projectId: project,
         tab: SwarmProjectTab.tasks,
+        tabs: SwarmProjectTab.homeB,
       ),
     );
     expect(within('swarm-task-g1', find.text('🦉')), findsOneWidget);

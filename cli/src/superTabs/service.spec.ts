@@ -1158,6 +1158,8 @@ describe('mentions on a post', () => {
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
+    // The server reads tags from the text too (backend mentions.ts).
+    expect(lead.post).toContain('An @username or @email in TEXT tags that person as well, outside code and links.')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // A former Lead still named on an older work group is not one, as in status.
     swarm(t, 'new-lead')

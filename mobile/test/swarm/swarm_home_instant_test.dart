@@ -427,7 +427,7 @@ void main() {
 
     // Read again: nobody holds work.
     expect(inLine(find.text('Updating…')), findsNothing);
-    expect(inLine(find.text('All idle')), findsOneWidget);
+    expect(inLine(find.textContaining('All idle')), findsOneWidget);
     stopReads(host);
   });
 
