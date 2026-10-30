@@ -25,6 +25,7 @@ import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
+import { launchContract } from '../../engines/launches.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -282,8 +283,13 @@ export function createAgentRetargeter({
       const retargetPermission = await downgradedPermission(session, bypassPermission, 'retarget', native)
       if (retargetPermission.nativeHold || native?.current() === false) return failed('NATIVE_LAUNCH_HELD', retargetPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.')
       if (!current()) return changed()
+      // A Codex conversation is bound to its provider (`providerBoundConversations`): moved between a grid and the
+      // own login it goes on in a fork, its whole history with it; grid to grid is one provider and resumes.
+      const movesProvider = !!launchContract(session.engine)?.providerBoundConversations
+        && !!session.sessionId && !!(session.gridLaunch || session.grid) !== !!grid
       const outcome = await restartAgent(
-        { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
+        { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}),
+          ...(movesProvider ? { continueInFork: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
           retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
@@ -313,7 +319,7 @@ export function createAgentRetargeter({
       // The app decides whether to still offer a move from what it is told here, so a silent success
       // would leave the banner up over an agent that had already been moved.
       if (refreshed) { announceSession(refreshed); refreshGridAssignment(refreshed) }
-      const how = outcome.resumed ? 'resumed' : 'fresh session'
+      const how = outcome.resumed ? (movesProvider ? 'continued in a fork' : 'resumed') : 'fresh session'
       const record = built.overrides.gridLaunchRecord
       const where = record
         ? describeGridLaunch(session.engine, record.override, record.webSearch)
