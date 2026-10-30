@@ -13,7 +13,7 @@
  * reviewed purge drops the session from the stopped catalog, so a retry after a failed sweep had nothing left to scrub from.
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, type Dirent } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -179,8 +179,13 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
  * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
  */
 async function removeTranscripts(dir: string, folder: string, onShared?: () => void): Promise<void> {
+  // Only a folder that is not there is empty. One that cannot be listed stays whole, for the sweep to hold the account by its
+  // kind: read as empty it went whole, its error's path into the log, or another folder's transcripts unread on a passing
+  // error such as too many open files (security review 1 of 58b035e).
+  const names = await readdir(dir).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null)
+  if (!names) return
   const transcripts = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
-  for (const name of (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.jsonl'))) {
+  for (const name of names.filter(name => name.endsWith('.jsonl'))) {
     transcripts.set(name, await foldersOf(join(dir, name), folder))
   }
   // One that could not be read may be another folder's: it and the folder stay, for the sweep to hold the account by its kind.
@@ -198,7 +203,11 @@ async function removeTranscripts(dir: string, folder: string, onShared?: () => v
  *  folders and never [folder], their own folders, and an empty memory folder or none; anything else, a memory file above all,
  *  or the folder itself once no other folder's transcript is left, fails it, closed. */
 async function leftInSharedFolder(dir: string, folder: string): Promise<string | null> {
-  const entries = (await readdir(dir, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))
+  // One that cannot be listed holds it by its kind; one gone since its parent was listed holds nothing.
+  let entries: Dirent[]
+  try { entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name)) } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : SHARED_LEFT.unreadFolder
+  }
   const transcripts = new Set<string>()
   for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) {
     const { own, other, unread } = await foldersOf(join(dir, entry.name), folder)
@@ -212,19 +221,23 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
     if (entry.isDirectory() && entry.name === 'memory') {
       // One that cannot be read fails it too, by its kind: the read's own error named its path (security review of #2385). One
       // gone since the listing is none.
-      const memory = await readdir(join(dir, entry.name)).catch((error: NodeJS.ErrnoException) => error?.code === 'ENOENT' ? [] : null)
+      const memory = await readdir(join(dir, entry.name)).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null)
       if (!memory) return SHARED_LEFT.unreadMemory
       if (memory.length) return SHARED_LEFT.memory
     } else if (!entry.isDirectory() || !transcripts.has(entry.name)) return SHARED_LEFT.other
   }
   return null
 }
+/** What a held account's owner does about what could not be read: nothing names its path, and the host tries the purge again
+ *  by itself (host.ts endSession), so fixing it is the whole of it (security review 1 of 58b035e). */
+const MAKE_READABLE = 'could not be read: its owner makes it readable for the Team account, and the purge finishes on its next try'
 /** What a failed sweep says of its shared transcript folder, in place of a path. */
 export const SHARED_LEFT = {
   transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
   memory: 'a memory file in its transcript folder, which another folder shares: its owner checks it and removes what is not the other folder\'s',
-  unreadMemory: 'a memory folder in its transcript folder, which another folder shares, that could not be read',
-  unreadTranscript: 'a transcript in its transcript folder, which another folder shares, that could not be read',
+  unreadFolder: `its transcript folder, which another folder shares, which ${MAKE_READABLE}`,
+  unreadMemory: `a memory folder in its transcript folder, which another folder shares, that ${MAKE_READABLE}`,
+  unreadTranscript: `a transcript in its transcript folder, which another folder shares, that ${MAKE_READABLE}`,
   other: 'something in its transcript folder, which another folder shares, that is not another folder\'s transcript',
   folder: 'its transcript folder',
 }

@@ -7,10 +7,17 @@ import { SHARED_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, r
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
+/** A folder whose next listing fails with [code], as the system says it, path and all. */
+const fail = vi.hoisted(() => ({ path: '', code: '' }))
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs/promises')>()
   const readdir = (async (path: Parameters<typeof fs.readdir>[0], ...rest: unknown[]) => {
     if (vanish.path && path === vanish.path) { vanish.path = ''; await fs.rm(path, { recursive: true, force: true }) }
+    if (fail.path && path === fail.path) {
+      const code = fail.code
+      fail.path = ''
+      throw Object.assign(new Error(`${code}: could not list, scandir '${String(path)}'`), { code })
+    }
     return (fs.readdir as (...args: unknown[]) => unknown)(path, ...rest)
   }) as typeof fs.readdir
   return { ...fs, readdir }
@@ -86,6 +93,43 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }), [], undefined, shares)
     expect(existsSync(shared)).toBe(false)
     expect(shares).toHaveBeenCalledTimes(1)
+  })
+
+  // Security review 1 of 58b035e: a transcript folder that could not be listed counted as empty and went whole. A permissions
+  // error carried its path into the daemon's log, and a passing one (too many open files) deleted other folders' transcripts
+  // unread. Only a folder that is not there is empty.
+  it('keeps a transcript folder it cannot list, whatever the error, and the sweep holds the account by its kind', async () => {
+    const { home, shared, folder } = sharedFolder()
+    const theirs = join(shared, 'theirs.jsonl')
+    writeFileSync(theirs, JSON.stringify({ cwd: '/Users/me/harnesses/worktrees-old/notes' }))
+    const ours = target({ sessionId: null, cwd: folder })
+    for (const code of ['EMFILE', 'EACCES', 'EIO']) {
+      Object.assign(fail, { path: shared, code })
+      await scrubClaudeSession(home, ours, [])
+      expect(existsSync(theirs), code).toBe(true)
+      Object.assign(fail, { path: shared, code })
+      const held = await sweepForSession(home, ours, [])
+      expect(held, code).toBe(left('unreadFolder'))
+      expect(held).not.toContain(home)
+    }
+    // The system's own refusal, as a Team account meets it.
+    chmodSync(shared, 0o000)
+    try {
+      await scrubClaudeSession(home, ours, [])
+      expect(await sweepForSession(home, ours, [])).toBe(left('unreadFolder'))
+    } finally { chmodSync(shared, 0o700) }
+    expect(existsSync(theirs)).toBe(true)
+    // One gone since its parent was listed is nothing of the session's.
+    vanish.path = shared
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+  })
+
+  // Security review 1 of 58b035e: an account held by what could not be read named no next step. Each says what to fix, with
+  // no path, and that the purge then finishes on its own next try (host.ts endSession retries it).
+  it('tells the owner what to fix for each unreadable kind, and that the purge then finishes', () => {
+    for (const kind of ['unreadFolder', 'unreadMemory', 'unreadTranscript'] as const) {
+      expect(left(kind), kind).toMatch(/could not be read: its owner makes it readable for the Team account, and the purge finishes on its next try$/)
+    }
   })
 
   // Security review 2 of #2385, P3: a transcript that records no working folder is no proof it is the session's; it stays,
@@ -270,8 +314,7 @@ describe('the sweep for what a scrub left', () => {
     rmSync(shared)
     expect(await sweepForSession(home, ours, [])).toBeNull()
     mkdirSync(shared, { mode: 0o000 })
-    expect(await sweepForSession(home, ours, [])).toBe(left('folder'))
-    chmodSync(shared, 0o700)
+    expect(await sweepForSession(home, ours, []).finally(() => chmodSync(shared, 0o700))).toBe(left('unreadFolder'))
   })
 })
 
