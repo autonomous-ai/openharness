@@ -52,6 +52,21 @@ function fleetOf(machines: FleetMachine[], byMachine: Record<string, Array<{ id:
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** The real fleet over a scripted lane that lists r1; `alive` is a reply of the machine's own under its session. */
+function laneOf() {
+  const rows = [{ ...REMOTE, local: false, agentCount: 1 }]
+  let heard: (machineId: string) => void = () => {}
+  const link = {
+    selectedMachine: '', onFrame: () => () => {}, onUndelivered: () => () => {},
+    onAlive: (cb: (machineId: string) => void) => { heard = cb; return () => {} },
+    rpc: vi.fn(async (): Promise<Record<string, unknown>> => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] })),
+    resetSession: vi.fn(() => true), sendSealed: vi.fn(async () => {}),
+  }
+  const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+    link: link as never, hasPeerLink: () => true, log: () => {} })
+  return { link, fleet, alive: (machineId: string) => heard(machineId) }
+}
+
 /** Two reads: the first starts the background refresh, the second reads what it wrote. */
 async function settled(router: FleetRouter) {
   await router.listAgentsFlat()
@@ -205,6 +220,130 @@ describe('which machine an agent is on', () => {
     expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (agents_list timed out)')
     expect(link.resetSession).toHaveBeenCalledWith('other')
     expect(fleet.reachable('other')).toMatchObject({ ok: false })
+  })
+
+  // #2381's second review: a machine that answers every list with an error answers under its own session too, so the
+  // rule above kept its last good tiles for ever (before #2381, 30 s). A refusal is an answer, not lateness: its tiles
+  // keep the same grace, counted from its first refusal after the last good list.
+  it('drops the tiles of a machine that answers every list with an error, 30 s after its first refusal, and takes them back when it lists again', async () => {
+    const { link, fleet, alive } = laneOf()
+    const log = vi.fn()
+    const router = new FleetRouter(localOf({ log }), fleet)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    const now = Date.now()
+    for (const later of [60_000, 70_000, 85_000]) {
+      vi.spyOn(Date, 'now').mockReturnValue(now + later)
+      expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    }
+    vi.spyOn(Date, 'now').mockReturnValue(now + 95_000)
+    await settled(router)
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (UNSUPPORTED)')
+    expect(await router.listAgentsFlat()).toEqual([])
+    // It answers, so it is up: its session stays, and nothing about it is called unreachable.
+    expect(link.resetSession).not.toHaveBeenCalled()
+    expect(fleet.reachable('other')).toMatchObject({ ok: true })
+    // A good list again: its tiles are back, and a later refusal has its whole grace once more.
+    link.rpc.mockImplementation(async () => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] }))
+    vi.spyOn(Date, 'now').mockReturnValue(now + 101_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    vi.spyOn(Date, 'now').mockReturnValue(now + 200_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+  })
+
+  it('shows a machine whose first list was refused once it lists, with no clock left over from the refusals', async () => {
+    const { link, fleet, alive } = laneOf()
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    const router = new FleetRouter(localOf(), fleet)
+    expect(await settled(router)).toEqual([])
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    expect(await settled(router)).toEqual([])
+    link.rpc.mockImplementation(async () => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] }))
+    vi.spyOn(Date, 'now').mockReturnValue(now + 66_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    vi.spyOn(Date, 'now').mockReturnValue(now + 72_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+  })
+
+  it('keeps a slow machine whose lists come back good, however late each one is', async () => {
+    let answer: (res: Record<string, unknown>) => void = () => {}
+    const { link, fleet } = laneOf()
+    const log = vi.fn()
+    const router = new FleetRouter(localOf({ log }), fleet)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    link.rpc.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    const now = Date.now()
+    for (let round = 1; round <= 4; round++) {
+      vi.spyOn(Date, 'now').mockReturnValue(now + round * 50_000)
+      expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])   // asked, and still out
+      vi.spyOn(Date, 'now').mockReturnValue(now + round * 50_000 + 40_000)
+      expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['r1'])
+      answer({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] })
+      await flush()
+    }
+    expect(link.rpc).toHaveBeenCalledTimes(5)
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('dropped off the carousel'))
+  })
+
+  it('restarts the refusal clock on each good list', async () => {
+    const { link, fleet, alive } = laneOf()
+    const log = vi.fn()
+    const router = new FleetRouter(localOf({ log }), fleet)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    const refuse = () => link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    const list = () => link.rpc.mockImplementation(async () => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] }))
+    const now = Date.now()
+    const at = async (later: number) => { vi.spyOn(Date, 'now').mockReturnValue(now + later); return (await settled(router)).map((a) => a.id) }
+    refuse()
+    expect(await at(10_000)).toEqual(['r1'])   // its first refusal: the clock starts
+    expect(await at(35_000)).toEqual(['r1'])
+    list()
+    expect(await at(41_000)).toEqual(['r1'])   // a good list: the clock stops
+    refuse()
+    expect(await at(50_000)).toEqual(['r1'])   // and starts again here, not at 10 s
+    expect(await at(75_000)).toEqual(['r1'])
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('dropped off the carousel'))
+    await at(85_000)
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (UNSUPPORTED)')
+    expect(await router.listAgentsFlat()).toEqual([])
+  })
+
+  it('never puts back the tiles of a machine that went offline, lost its link or left the list while its list was out', async () => {
+    const cases = [['offline', ['r1'], 'list'], ['needs-link', ['r1'], 'refusal'], ['removed', ['r1'], 'list'], ['removed', ['r1'], 'refusal'],
+      ['offline', [], 'refusal'], ['needs-link', [], 'list']] as const
+    for (const [gone, first, lands] of cases) {
+      const machines: FleetMachine[] = [{ ...REMOTE }]
+      const fleet = fleetOf(machines, { other: first.map((id) => ({ id, name: 'api' })) })
+      const router = new FleetRouter(localOf(), fleet)
+      expect((await settled(router)).map((a) => a.id)).toEqual(first)
+      const out: Array<{ resolve: (agents: never) => void; reject: (err: Error) => void }> = []
+      ;(fleet.listAgents as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise<never>((resolve, reject) => { out.push({ resolve, reject }) }))
+      const now = Date.now()
+      vi.spyOn(Date, 'now').mockReturnValue(now + 6_000)
+      await router.listAgentsFlat()
+      expect(out).toHaveLength(1)
+      if (gone === 'removed') machines.length = 0
+      else machines[0].state = gone
+      expect(await settled(router)).toEqual([])
+      // Its answer lands after, a list or a refusal, whether it had tiles or none: it changes nothing the dial now shows.
+      if (lands === 'list') out[0].resolve([{ id: 'r1', name: 'api' }] as never)
+      else out[0].reject(new Error('UNSUPPORTED'))
+      await flush()
+      expect(await router.listAgentsFlat()).toEqual([])
+      // Back, ready: its tiles come from a list asked now, never from the one asked before it went.
+      machines.length = 0
+      machines.push({ ...REMOTE })
+      vi.spyOn(Date, 'now').mockReturnValue(now + 12_000)
+      expect(await router.listAgentsFlat()).toEqual([])
+      expect(out).toHaveLength(2)
+      out[1].resolve([{ id: 'r2', name: 'web' }] as never)
+      await flush()
+      expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['r2'])
+      vi.restoreAllMocks()
+    }
   })
 
   it('keeps a machine’s agents while the backend cannot be asked, and drops them when the machine says offline', async () => {
