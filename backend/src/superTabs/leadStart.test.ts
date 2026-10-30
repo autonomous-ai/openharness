@@ -603,7 +603,8 @@ describe('a Team account hosting a Product Manager', () => {
     expect(refusal(() => web.start())?.code).toBe('TEAM_ACCOUNT_HELD')
     // Still not confirmed after a while: its project's conversation is gone with it, so the Swarm's Lead conversation hears.
     const later = sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + MINUTE)
-    expect(later.map(m => [m.conversationId, m.source])).toEqual([['lead', { kind: 'system' }]])
+    // Its source names the machine, so a Buddy reading this conversation reads it without (store.ts withoutMachineNames; review 2 of #2258).
+    expect(later.map(m => [m.conversationId, m.source])).toEqual([['lead', { kind: 'system', machine: 'MacBook Pro' }]])
     expect(later[0]!.text).toBe('The saved session of a removed agent that held people\'s private chats, on MacBook Pro, is not deleted yet, so its Harness Team account takes no other project\'s work until it is.')
     expect(sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + 2 * MINUTE)).toEqual([])
     f.run({ type: 'agent.sessionClosed', agentId: pm, harnessId: 'pm' }, mate)

@@ -17,6 +17,7 @@ import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_jump_page.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_needs_page.dart';
+import 'package:harness_mobile/swarm/swarm_new_message_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
@@ -351,8 +352,9 @@ void main() {
 
   group("Home's top", () {
     testWidgets('as C1 draws it: the Swarm shown is the title, a button with '
-        'its tile, and compose at its end; Jump to under it, then the '
-        'projects; no menu, no Needs you, no Buddies', (tester) async {
+        'its tile, and nothing at its end; Jump to under it, then the '
+        "projects, New message's + floating over them; no menu, no Needs "
+        'you, no Buddies', (tester) async {
       await pump(tester, backend(buddy: true));
 
       expect(
@@ -369,14 +371,19 @@ void main() {
       );
       expect(key('swarm-menu'), findsNothing);
       expect(key('tty-back'), findsNothing, reason: 'Home is the root');
-      for (final k in ['swarm-title-button', 'swarm-compose', 'swarm-jump']) {
+      for (final k in ['swarm-title-button', 'swarm-jump']) {
         final size = tester.getSize(key(k));
         expect(size.height, greaterThanOrEqualTo(44), reason: k);
         expect(size.width, greaterThanOrEqualTo(44), reason: k);
       }
       expect(
-        tester.getCenter(key('swarm-compose')).dx,
-        greaterThan(tester.getCenter(key('swarm-title-button')).dx),
+        key('swarm-compose'),
+        findsNothing,
+        reason: 'the + took its place',
+      );
+      expect(
+        y(tester, 'swarm-new-message'),
+        greaterThan(y(tester, 'swarm-project-$tab-$project')),
       );
       expect(
         y(tester, 'swarm-title-button'),
@@ -486,23 +493,25 @@ void main() {
       expect(key('swarm-title-button'), findsOneWidget);
     });
 
-    testWidgets('compose asks where the new message goes, over the same '
-        'projects; Cancel goes back to Home', (tester) async {
+    testWidgets("+ asks where the new message goes, over the same "
+        "projects' chats; ✕ goes back to Home", (tester) async {
       await pump(tester, backend());
-      await tester.tap(key('swarm-compose'));
+      await tester.tap(key('swarm-new-message'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(SwarmJumpPage), findsOneWidget);
-      expect(find.text('New message in…'), findsOneWidget);
-      expect(key('swarm-jump-$tab-$project'), findsOneWidget);
+      expect(find.byType(SwarmNewMessageSheet), findsOneWidget);
+      expect(find.byType(SwarmJumpPage), findsNothing);
+      expect(key('swarm-new-message-$tab-$leadChat'), findsOneWidget);
+      expect(key('swarm-new-message-$tab-$webLead'), findsOneWidget);
       expect(
-        tester.getSize(key('swarm-jump-cancel')).height,
-        greaterThanOrEqualTo(44),
+        key('swarm-new-message-$tab-g-private'),
+        findsNothing,
+        reason: "another person's chat",
       );
 
-      await tester.tap(key('swarm-jump-cancel'));
+      await tester.tap(key('swarm-new-message-close'));
       await tester.pumpAndSettle();
-      expect(find.byType(SwarmJumpPage), findsNothing);
+      expect(find.byType(SwarmNewMessageSheet), findsNothing);
       expect(key('swarm-title-button'), findsOneWidget);
     });
 
@@ -903,21 +912,16 @@ void main() {
       await pump(tester, backend());
 
       expect(
-        middle(tester, key('swarm-title')),
-        closeTo(middle(tester, key('swarm-compose')), 2),
-        reason: 'the title beside compose, in one bar',
-      );
-      expect(
         tester.getTopLeft(key('swarm-title-button')).dx,
         8,
         reason: "its ink 8 points in, the tile 4 in from it",
       );
       expect(
-        tester.getTopRight(key('swarm-compose')).dx,
-        390 - 4,
-        reason: "the prototype's 44-point compose, 4 points in",
+        tester.getBottomRight(key('swarm-new-message')),
+        const Offset(390 - 16, 844 - 16),
+        reason: 'New message floats 16 points in from the corner',
       );
-      expect(tester.getSize(key('swarm-compose')), const Size(44, 44));
+      expect(tester.getSize(key('swarm-new-message')), const Size(56, 56));
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
       expect(find.text('Projects'), findsOneWidget, reason: 'sentence case');
       expect(key('swarm-needs-count'), findsNothing);
@@ -1158,11 +1162,13 @@ void main() {
     });
 
     testWidgets('opened over another page, it has back instead of the '
-        'switcher and compose, and back goes to that page', (tester) async {
+        "switcher and New message's +, and back goes to that page", (
+      tester,
+    ) async {
       await pump(tester, backend(), overPage: true);
       expect(find.byType(SwarmPage), findsOneWidget);
       expect(key('swarm-title-button'), findsNothing);
-      expect(key('swarm-compose'), findsNothing);
+      expect(key('swarm-new-message'), findsNothing);
       expect(key('swarm-jump'), findsOneWidget, reason: 'Jump to stays');
 
       await tester.tap(key('tty-back'));
@@ -1194,15 +1200,26 @@ void main() {
       expectHomeCProject('Web');
     });
 
-    testWidgets('compose opens the picked project on Home C too', (
-      tester,
-    ) async {
-      await pump(tester, backend());
-      await tester.tap(key('swarm-compose'));
+    testWidgets("a new message to a project's chat opens that project on "
+        'Home C too', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-new-message'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-jump-$tab-$web'));
+      await tester.tap(key('swarm-new-message-$tab-$webLead'));
+      await tester.pump();
+      await tester.enterText(
+        find.descendant(
+          of: key('swarm-new-message-field'),
+          matching: find.byType(TextField),
+        ),
+        'Ship it',
+      );
+      await tester.pump();
+      await tester.tap(key('swarm-new-message-send'));
       await tester.pumpAndSettle();
 
+      expect(fake.commands.single, containsPair('conversationId', webLead));
       expectHomeCProject('Web');
     });
 

@@ -302,7 +302,7 @@ void main() {
       targets.value = [
         for (final key in [
           'swarm-title-button',
-          'swarm-compose',
+          'swarm-new-message',
           'swarm-jump',
           'swarm-away',
           'swarm-project-$tab-p-oh',
