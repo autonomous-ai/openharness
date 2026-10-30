@@ -130,15 +130,20 @@ interface Soft { engine: string | null; idle: boolean; grid: boolean }
  *  copy, tests, fixtures, fixes and refactors since 10-29, and any low-difficulty work before). A failed first review still
  *  steps it up (backend superTabs/stepUp.ts). */
 export const CHEAP_KINDS = ['docs', 'tests', 'fixtures']
-/** Why a model on the Swarm's grid may not build the task [a]: anything but low-risk docs, tests or fixtures. A person who asks
- *  for a local model, or names one, gets it. Reviews never run on one ([reviewRefusals]). Which subscription models build is the
- *  routing table's (backend superTabs/routingPolicy.ts: Sonnet is off by default since 2026-10-30). */
+/** Whether [kind] is one of [CHEAP_KINDS], singular or plural (review of #2314; backend superTabs/rules.ts cheapKind). */
+export const cheapKind = (kind: string | undefined) => ['doc', 'test', 'fixture'].includes((kind ?? '').replace(/s$/, ''))
+/** Why [p] may not build the task [a] (Ken and Dee, 2026-10-30: Builders run on Opus high or Astra xhigh): a model rated
+ *  below 3, Sonnet and Haiku among them, unless a person named it; a model on the Swarm's grid on anything but low-risk docs,
+ *  tests or fixtures, unless a person asked for a local model or named one. Reviews are judged apart ([reviewRefusals]). The
+ *  server judges the same (backend superTabs/rules.ts buildRefusal). */
 export function buildRefusals(p: Probe, a: Assessment): string[] {
-  return p.gridModel && a.kind !== 'review' && !gridBuilds(a) ? [GRID_BUILDS] : []
+  if (a.kind === 'review') return []
+  if (p.gridModel) return gridBuilds(a) ? [] : [GRID_BUILDS]
+  return a.model || p.quality >= 3 ? [] : [`A build needs a model rated 3, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}. Builders run at the top tier unless a person names the model.`]
 }
 /** Whether a model on the Swarm's grid may build [a] ([buildRefusals]). */
-export const gridBuilds = (a: Assessment) => !!a.local || !!a.model || (a.risk === 'low' && CHEAP_KINDS.includes(a.kind ?? ''))
-export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures.'
+export const gridBuilds = (a: Assessment) => !!a.local || !!a.model || (a.risk === 'low' && cheapKind(a.kind))
+export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures, unless a person asks for a local model or names one.'
 function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
   const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
@@ -146,7 +151,7 @@ function softOf(rules: SwarmRule[], a: Assessment): Soft {
   // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
   // rarely picked. Reviews never run on one, and the owner can opt out. It steps up when it fails (backend
   // superTabs/stepUp.ts); the floor still keeps a small model off medium work.
-  const simple = (a.difficulty === 'low' || a.difficulty === 'medium') && CHEAP_KINDS.includes(a.kind ?? '')
+  const simple = (a.difficulty === 'low' || a.difficulty === 'medium') && cheapKind(a.kind)
   const grid = simple && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
   return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
@@ -304,6 +309,8 @@ function runsNamed(p: Probe, named: string): boolean {
   return words(named).every(w => name.includes(w))
 }
 const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Your models), or check its name.`
+const NAMED_OFF = (row: { engine: string; model: string }) =>
+  `The routing table turns ${ENGINE[row.engine as keyof typeof ENGINE] ?? row.engine} ${row.model} off. Turn its row on to use it.`
 
 /** How many Builders may run on one API model a member shares: the share answers four requests at once
  * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
@@ -467,14 +474,18 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   if (named) probes = probes.filter(p => runsNamed(p, named))
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
-    .map(p => { const why = [...(breaks(rules, p) ? [breaks(rules, p)!] : []), ...buildRefusals(p, a)]; return why.length ? { ...p, refusals: [...p.refusals, ...why] } : p })
+    .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
   const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
   const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
   if (named && !probes.length) {
     if (heldNamed.length) excluded.push(...heldNamed.map(m => ({ title: 'Named model', reason: heldReason(m) })))
-    else excluded.push({ title: 'Named model', reason: NAMED_NONE(named) })
+    // A model the routing table turns off is not one to share (review of #2314: Sonnet, off since 2026-10-30).
+    else {
+      const off = policy.models.find(m => !m.enabled && runsNamed({ engine: m.engine, model: m.model } as Probe, named))
+      excluded.push({ title: 'Named model', reason: off ? NAMED_OFF(off) : NAMED_NONE(named) })
+    }
   } else if (a.local && !probes.length) {
     if (held.length) excluded.push(...held.map(m => ({ title: 'Local models', reason: heldReason(m) })))
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
@@ -515,7 +526,9 @@ export type RecordShape = 'current' | 'unkinded' | 'v1'
 export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, shape: RecordShape = 'current'): Record<string, unknown> {
   const v1 = shape === 'v1'
   return {
-    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}) },
+    // A person's local or named model goes with it, so the server lets that model build (backend superTabs/rules.ts buildRefusal).
+    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}),
+      ...(shape === 'current' && a.local ? { local: true } : {}), ...(shape === 'current' && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),

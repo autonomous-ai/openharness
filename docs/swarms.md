@@ -415,22 +415,34 @@ orders the rest by the owner's soft rules and the routing policy (strength,
 quota fit, effective cost).
 
 **Grid models.** A model served on the Swarm's grid counts as strong as the
-policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2; every other
 grid or local model takes the policy's local quality (1). An owner can change
 both, and add rows of their own, in the policy's local models (`models`: a name
 and a quality, first match first). A model whose host is offline is left out
 with that reason, so no Builder is sent to a machine that cannot start it.
 
+**Builds at the top tier.** A build needs a model the table rates 3 (Ken and
+Dee, 2026-10-30: Builders run on Opus high or Astra xhigh), on the server and
+in the route alike, so Sonnet (2), Haiku (1) and any model the table does not
+name build nothing. Two exceptions: a model a person named, and a grid model
+for low-risk docs, tests or fixtures (below). The server refuses an agent's
+start, assignment or pick otherwise, and lets a person through with a warning.
+An owner who wants Sonnet Builders rates Sonnet 3 in their table.
+
 **Cheap first.** A grid model builds only low-risk work of kind `docs`,
-`tests` or `fixtures` (Ken, 2026-10-30), and ranks first there. Any other
-build leaves it out with that reason, unless a person asks for a local model or
-names one. The floor still keeps a small model off medium work. An owner opts
-out of ranking it first with the `noGridFirst` rule.
+`tests` or `fixtures`, singular or plural (Ken, 2026-10-30), and ranks first
+there. Any other build leaves it out with that reason, unless a person asks for
+a local model or names one; the route decision records that, and the server
+refuses a grid start or assignment whose decision does not allow it. The floor
+still keeps a small model off medium work. An owner opts out of ranking it
+first with the `noGridFirst` rule.
 
 **No Sonnet by default.** The default routing table turns Claude Sonnet off
-(Ken, 2026-10-30: no Sonnet Builders), so builds go to Opus, Codex or a grid
-model as above. An owner's saved table keeps its own Sonnet row as it is; an
-owner who wants none there sets a `forbidModel` rule. Codex GPT-6-Astra at
+(Ken, 2026-10-30: no Sonnet Builders). With its row off, the route also starts
+no new Sonnet Reviewer, and a role whose default is Sonnet starts on its
+engine's own model instead, telling the group why. A person who names Sonnet
+is told the table turns it off. An owner's saved table keeps its own Sonnet row
+as it is; an owner who wants none there sets a `forbidModel` rule. Codex GPT-6-Astra at
 `xhigh` is a built-in row (quality 3, cost 5: its API rate is 2.5 times
 Opus's), added on read like GPT-6.1 Sol's, so Builders can run on Opus high or
 Astra xhigh as the owners decided; an owner's own Astra row wins over it.
@@ -438,8 +450,8 @@ Astra xhigh as the owners decided; an owner's own Astra row wins over it.
 **Stepping up.** When a grid attempt's first review says Ready no, or its grid
 host never starts the agent (the start fails or misses its window), the Swarm
 steps the task up: it closes the attempt, tells its Builder to stop, and wakes
-the Lead to route it again. The next attempt runs on no grid model and nothing
-below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+the Lead to route it again. The next attempt runs on no grid model and, as
+every build, at the top tier (quality 3). A
 task steps up at most twice; after that the Lead decides. The route and the
 server both keep to the new floor. The next attempt's brief carries the pull
 request, the last result and the review's findings, and the step (attempt

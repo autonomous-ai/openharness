@@ -130,6 +130,26 @@ export const targetQuality = (policy: RoutingPolicy, t: RunTarget) => policyQual
 export const agentQuality = (state: SuperTabState, policy: RoutingPolicy, worker: Agent): number =>
   worker.gridModel ? gridQuality(policy, worker.gridModel, state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridName ?? '')
     : targetQuality(policy, agentTarget(state, worker))
+/** What a route decision says of the work it routed (routeRecord.ts assessment): enough to tell a build a grid model may take. */
+export interface RoutedWork { risk: string; kind?: string; local?: true; model?: string }
+/** The kinds of build a model on the Swarm's grid takes at low risk (Ken, 2026-10-30), singular or plural (review of #2314):
+ *  docs, tests and fixtures. The CLI's route reads the same (cli superTabs/route.ts cheapKind). */
+export const cheapKind = (kind: string | undefined) => ['doc', 'test', 'fixture'].includes((kind ?? '').replace(/s$/, ''))
+/** Whether a grid model may build [work]: low-risk docs, tests or fixtures, or a person asked for a local model or named one. */
+export const gridBuilds = (work: RoutedWork | undefined) => !!work && (!!work.local || !!work.model || (work.risk === 'low' && cheapKind(work.kind)))
+/** Why [target] may not build: Builders run at the top tier (Ken and Dee, 2026-10-30: Opus high or Astra xhigh), so a model
+ *  the policy rates below 3, Sonnet and Haiku among them, builds only when a person named it; a grid model only what
+ *  [gridBuilds] allows (review of #2314: an older CLI still sent other work to the grid). [work] is the linked route
+ *  decision's; with none, a grid model is refused and a named model is not known. The CLI's route judges the same (cli
+ *  superTabs/route.ts buildRefusals). */
+export function buildRefusal(policy: RoutingPolicy, target: RunTarget, work: RoutedWork | undefined): string | null {
+  if (target.gridModel) return gridBuilds(work) ? null : GRID_BUILDS
+  if (work?.model) return null
+  const quality = targetQuality(policy, target)
+  return quality >= 3 ? null : `A build needs a model rated 3, and ${ENGINE[target.engine] ?? target.engine} ${target.model ?? 'default'} is ${quality}. `
+    + 'Builders run at the top tier unless a person names the model.'
+}
+export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures, unless a person asks for a local model or names one.'
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 

@@ -752,6 +752,7 @@ it('tells the Lead which builds a grid model takes and ranks first, and how the 
   expect(help.commands).toContainEqual(expect.objectContaining({ type: 'rule.set', rule: { kind: 'noGridFirst' } }))
   expect(help.command).toContain('builds only low-risk work of kind docs, tests or fixtures')
   expect(help.command).toContain('ranks first there unless the owner set noGridFirst')
+  expect(help.command).toContain('A build needs a model the policy rates 3 (Opus high, Astra xhigh, Codex) unless a person names the model.')
 })
 
 it('documents finished worker decisions and explains an older backend without release support', async () => {

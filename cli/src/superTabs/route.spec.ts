@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, buildRefusals, cheapKind, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -664,18 +664,33 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'high', kind: 'docs' }, NOW))).toBe('opus')
     })
     // Ken, 2026-10-30: cheaper shared models only for low-risk docs, tests and fixtures; they had also built copy, fixes,
-    // refactors and any low-difficulty work.
-    it('never offers a grid model for any other build, or one at more than low risk, and says why', () => {
+    // refactors and any low-difficulty work. Ken and Dee, the same day: a build needs a model rated 3.
+    it('builds only on the top tier, a grid model on low-risk docs, tests or fixtures, or what a person asked for', () => {
       const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      for (const kind of ['docs', 'doc', 'tests', 'test', 'fixtures', 'fixture']) expect(buildRefusals(kimi, { ...simple, kind })).toEqual([])
       for (const assessment of [{ ...simple, kind: undefined }, ...['copy', 'fix', 'refactor', 'ui'].map(kind => ({ ...simple, kind })),
         { ...simple, difficulty: 'medium' as const, kind: 'fix' }, { ...simple, risk: 'medium' as const }]) {
-        const r = ok(choose([haiku, kimi], policy, assessment, NOW))
-        expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
-        expect(r.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Kimi K3'), reason: GRID_BUILDS })]))
+        expect(buildRefusals(kimi, assessment)).toEqual([GRID_BUILDS])
       }
-      // A person who asks for a local model, or names one, still gets it.
-      expect(firstOf(choose([haiku, kimi], policy, { ...simple, kind: 'ui', local: true }, NOW))).toBe('moonshotai/kimi-k3')
-      expect(firstOf(choose([haiku, kimi], policy, { ...simple, kind: 'ui', model: 'kimi k3' }, NOW))).toBe('moonshotai/kimi-k3')
+      expect(buildRefusals(kimi, { ...simple, kind: 'ui', local: true })).toEqual([])
+      expect(buildRefusals(kimi, { ...simple, kind: 'ui', model: 'kimi k3' })).toEqual([])
+      // Sonnet, Haiku and an unnamed model build nothing unless a person named them; the top tier builds anything.
+      expect(buildRefusals(idle, { ...simple, kind: 'fix' })).toEqual(['A build needs a model rated 3, and Claude sonnet is 2. Builders run at the top tier unless a person names the model.'])
+      expect(buildRefusals(haiku, simple)).toEqual(['A build needs a model rated 3, and Claude haiku is 1. Builders run at the top tier unless a person names the model.'])
+      expect(buildRefusals(idle, { ...simple, model: 'sonnet' })).toEqual([])
+      expect(buildRefusals(expiring, { ...simple, kind: 'ui', risk: 'high' })).toEqual([])
+      // A review is judged apart (reviewRefusals).
+      expect(buildRefusals(kimi, { ...simple, kind: 'review' })).toEqual([])
+      expect(['documentation', 'testing', ''].some(cheapKind)).toBe(false)
+    })
+    it('ranks a grid model first for singular kinds too', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'test' }, NOW))).toBe('moonshotai/kimi-k3')
+    })
+    it('says a model a person names is off in the routing table, rather than to share it', () => {
+      const off = { ...policy, models: policy.models.map(m => m.model === 'sonnet' ? { ...m, enabled: false } : m) }
+      expect(choose([], off, { ...simple, model: 'sonnet' }, NOW)).toEqual({ error: 'NO_CANDIDATE',
+        excluded: [{ title: 'Named model', reason: 'The routing table turns Claude sonnet off. Turn its row on to use it.' }] })
     })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')

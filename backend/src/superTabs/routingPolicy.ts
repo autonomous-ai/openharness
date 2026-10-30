@@ -49,12 +49,12 @@ const fields = {
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
-/** What a save accepts: also one row at most per built-in model, so a second copy never rides free of the 40 (review of #2271).
- *  Only saves check it: a policy saved before it still reads as saved, never as unreadable. */
-const saved = { ...fields, models: models.superRefine((rows, ctx) => {
-  for (const added of ADDED_ROWS) if (rows.filter(row => same(row, added)).length > 1)
-    ctx.addIssue({ code: 'custom', message: `Only one row for ${added.engine} ${added.model}.` })
-}) }
+/** What a save accepts: the first row for each built-in model rides free, and every further copy counts against the 40, so a
+ *  second copy never rides free (review of #2271), yet an owner with two rows of a model that became built-in, such as
+ *  Astra at two efforts, still saves (review of #2314). Only saves count them: a policy saved before still reads as saved. */
+const extraCopies = (rows: ReadonlyArray<Named>) => ADDED_ROWS.reduce((n, added) => n + Math.max(0, rows.filter(row => same(row, added)).length - 1), 0)
+const saved = { ...fields, models: models.refine(rows => rows.filter(row => !builtIn(row)).length + extraCopies(rows) <= OWN_MODEL_ROWS,
+  `At most ${OWN_MODEL_ROWS} rows of your own.`) }
 export const routingPolicySaveSchema = z.object({ version: z.literal(1), ...saved }).strict()
 export const routingOverrideSaveSchema = z.object(saved).partial().strict()
 export type RoutingPolicy = z.infer<typeof routingPolicySchema>

@@ -66,7 +66,7 @@ describe('routing policy', () => {
     expect(parses([...own(40), sol, astra])).toBe(true)
     expect(parses([...own(40), sol, { ...astra, quality: 2 }])).toBe(true)
     expect(routingPolicySaveSchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models: [...own(40), sol, astra] }).success).toBe(true)
-    expect(routingPolicySaveSchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models: [...own(39), sol, astra, astra] }).success).toBe(false)
+    expect(routingPolicySaveSchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models: [...own(40), sol, astra, astra] }).success).toBe(false)
   })
 
   // Lead's ruling, 10-30: the owners' standing decision is that Builders run on Opus high or Astra xhigh; with no row Astra rated
@@ -122,17 +122,22 @@ describe('routing policy', () => {
     })
   })
 
-  it('refuses saving a second row for a built-in model, and still reads an old policy saved with one', () => {
-    const own = Array.from({ length: 39 }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
+  it('counts a second row for a built-in model against the 40 when saving, and still reads an old policy saved with one', () => {
+    // Review of #2271: a second copy never rides free. Review of #2314: an owner with two Astra rows (two efforts, from before
+    // Astra was built in) must still save.
+    const own = (n: number) => Array.from({ length: n }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
     const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
-    const twice = { ...DEFAULT_ROUTING_POLICY, models: [...own, sol, { ...sol, enabled: false }] }
+    const astra = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6-astra')!
+    const saves = (models: unknown[]) => routingPolicySaveSchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models }).success
+    expect(saves([...own(10), sol, astra, { ...astra, effort: 'high', quality: 2 }])).toBe(true)
+    expect(saves([...own(39), sol, astra, { ...astra, effort: 'high' }])).toBe(true)
+    const twice = { ...DEFAULT_ROUTING_POLICY, models: [...own(40), sol, { ...sol, enabled: false }] }
     const refused = routingPolicySaveSchema.safeParse(twice)
     expect(refused.success).toBe(false)
-    expect(refused.error?.issues.map(i => i.message)).toEqual(['Only one row for codex gpt-6.1-sol.'])
+    expect(refused.error?.issues.map(i => i.message)).toEqual(['At most 40 rows of your own.'])
     expect(routingOverrideSaveSchema.safeParse({ models: twice.models }).success).toBe(false)
-    expect(routingPolicySaveSchema.safeParse({ ...twice, models: [...own, sol] }).success).toBe(true)
-    // Saved before this check: still read as saved, never as unreadable; the Astra row joins it, off with Codex off.
-    const astra = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6-astra')!
+    expect(saves([...own(40), sol, astra])).toBe(true)
+    // Saved before this count: still read as saved, never as unreadable; the Astra row joins it, off with Codex off.
     expect(effectivePolicy(twice, null)).toEqual({ policy: { ...twice, models: [...twice.models, { ...astra, enabled: false }] }, warnings: [], overridden: [] })
   })
 
