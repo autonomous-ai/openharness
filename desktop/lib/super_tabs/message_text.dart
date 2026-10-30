@@ -23,7 +23,7 @@ class SuperTabMessageText extends StatelessWidget {
   final ValueChanged<String>? onOpenGroup;
 
   /// The names a Lead tagged in this message. Each reads highlighted where
-  /// the text says it; one the text does not say is shown before it.
+  /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
 
   static Uri? webLink(String? href) {
@@ -35,6 +35,21 @@ class SuperTabMessageText extends StatelessWidget {
         : null;
   }
 
+  /// [tags] on the first line of [text], as a person types them in chat.
+  /// Only text that opens with a block (a list, heading, quote, table or
+  /// code) keeps them on a line of their own, so that block still renders.
+  static String withTags(List<String> tags, String text) {
+    if (tags.isEmpty) return text;
+    final body = text.replaceFirst(RegExp(r'^(?:[ \t]*\n)+'), '');
+    return _opensBlock.hasMatch(body)
+        ? '${tags.join(' ')}\n\n$body'
+        : '${tags.join(' ')} $body';
+  }
+
+  static final _opensBlock = RegExp(
+    r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t]|$)|#{1,6}(?:[ \t]|$)|>|\d{1,9}[.)](?:[ \t]|$)|```|~~~|\|))',
+  );
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -44,7 +59,7 @@ class SuperTabMessageText extends StatelessWidget {
           '@$name',
     ];
     return MarkdownBody(
-      data: unsaid.isEmpty ? text : '${unsaid.join(' ')}\n\n$text',
+      data: withTags(unsaid, text),
       selectable: false,
       softLineBreak: true,
       inlineSyntaxes: [

@@ -916,15 +916,61 @@ void main() {
       );
     });
 
-    testWidgets('a tag the text does not say is shown before it', (
+    testWidgets('a tag the text does not say opens its first line', (
       tester,
     ) async {
       await showText(tester, 'Please confirm the release.', ['dee']);
       expect(runsOf(tester, '@dee').single?.backgroundColor, isNotNull);
+      // Same line as the text, as a person types it; never a line of its own.
       expect(
-        find.textContaining('Please confirm the release.'),
+        find.text('@dee Please confirm the release.', findRichText: true),
         findsOneWidget,
       );
+      expect(find.text('@dee', findRichText: true), findsNothing);
+    });
+
+    testWidgets('several unsaid tags open the first line of a longer text', (
+      tester,
+    ) async {
+      await showText(
+        tester,
+        '\nShipped this morning:\n- Desktop 1.3.41\n- web 1.3.82',
+        ['ken', 'dee'],
+      );
+      expect(
+        find.text('@ken @dee Shipped this morning:', findRichText: true),
+        findsOneWidget,
+      );
+      expect(find.text('Desktop 1.3.41', findRichText: true), findsOneWidget);
+    });
+
+    test('a tag joins the first line unless the text opens with a block', () {
+      String tagged(String text) =>
+          SuperTabMessageText.withTags(['@dee'], text);
+      expect(tagged('#2259 merged.'), '@dee #2259 merged.');
+      expect(tagged('-5 degrees'), '@dee -5 degrees');
+      expect(tagged('2026 plan'), '@dee 2026 plan');
+      expect(tagged('Hi'), '@dee Hi');
+      // A list, heading, quote, table or code keeps rendering as one.
+      for (final block in [
+        '- one\n- two',
+        '* one',
+        '1. one',
+        '# Title',
+        '> quoted',
+        '| a | b |\n|---|---|',
+        '```\ncode\n```',
+        '    indented code',
+      ]) {
+        expect(tagged(block), '@dee\n\n$block', reason: block);
+      }
+      expect(SuperTabMessageText.withTags(const [], 'Hi'), 'Hi');
+    });
+
+    testWidgets('a text that opens with a list keeps its list', (tester) async {
+      await showText(tester, '- one\n- two', ['dee']);
+      expect(find.text('one', findRichText: true), findsOneWidget);
+      expect(find.text('@dee', findRichText: true), findsOneWidget);
     });
 
     testWidgets('a tag in code stays code', (tester) async {
