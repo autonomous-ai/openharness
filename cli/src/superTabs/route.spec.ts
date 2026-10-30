@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, buildRefusals, cheapKind, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, buildRefusals, cheapKind, ELSEWHERE, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -120,23 +120,26 @@ describe('choose', () => {
     ], policy, a(), NOW)
     if ('error' in r) throw new Error('unexpected')
     expect(r.belowFloor).toBe(false)
-    // A member in another repository would work in that repository's worktree, so it ranks after a new agent.
+    // A member in another repository would build in that repository's worktree, so a build leaves it out.
     expect(r.shown.map(s => s.title)).toEqual([
       'New agent · Claude sonnet medium · mac',
       'Multiply · Claude sonnet medium · remote-1',
       'New agent · Claude sonnet medium · remote-1',
-      'Elsewhere · Claude sonnet medium · remote-1',
       'New agent · Claude opus high · remote-1',
     ])
-    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4'])
+    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3'])
+    expect(r.excluded).toContainEqual({ title: 'Elsewhere · Claude sonnet medium · remote-1', reason: ELSEWHERE, machine: 'remote-1' })
   })
   // Diego, 10-30: a member in another repository tied a new agent and the title decided, so Ada took the task in her own
-  // repository's worktree and Zed did not. Where it works now decides, and the name only breaks ties between equals.
-  it('ranks a member in another repository after a new agent whatever its name; one in the repository before; an unknown one as before', () => {
-    const order = (member: Partial<Probe>) => ok(choose([probe(), probe({ kind: 'member', agentId: 'a1', activity: 'idle', ...member })], policy, a(), NOW))
-      .shown.map(s => s.kind)
-    expect(order({ name: 'Ada', repo: 'different' })).toEqual(['new', 'member'])
-    expect(order({ name: 'Zed', repo: 'different' })).toEqual(['new', 'member'])
+  // repository's worktree and Zed did not. Review of #2377: ranking it after a new agent was not enough, since the owner's
+  // reuse rule and quota room both come before placement.
+  it('leaves a member in another repository out of a build whatever its name or rank; one in the repository wins; an unknown one ranks as before', () => {
+    const route = (member: Partial<Probe>, task: Partial<Assessment> = {}, rules: SwarmRule[] = [], others = [probe()]) =>
+      ok(choose([...others, probe({ kind: 'member', agentId: 'a1', activity: 'idle', ...member })], policy, a(task), NOW, [], rules))
+    const order = (member: Partial<Probe>, task: Partial<Assessment> = {}, rules: SwarmRule[] = []) => route(member, task, rules).shown.map(s => s.kind)
+    expect(order({ name: 'Ada', repo: 'different' })).toEqual(['new'])
+    expect(order({ name: 'Zed', repo: 'different' })).toEqual(['new'])
+    expect(route({ name: 'Ada', repo: 'different' }).excluded).toEqual([{ title: 'Ada · Claude sonnet medium · remote-1', reason: ELSEWHERE, machine: 'remote-1' }])
     expect(order({ name: 'Ada', repo: 'same' })).toEqual(['member', 'new'])
     expect(order({ name: 'Zed', repo: 'same' })).toEqual(['member', 'new'])
     // No folder named: nothing to be in or out of, so a member saves a start as before.
@@ -144,10 +147,22 @@ describe('choose', () => {
     // A repository that could not be told keeps its rank beside a new agent: the title still decides between them.
     expect(order({ name: 'Ada', repo: 'unknown' })).toEqual(['member', 'new'])
     expect(order({ name: 'Zed', repo: 'unknown' })).toEqual(['new', 'member'])
-    // Placement comes last: a cheaper member in another repository still goes first, and the owner's soft rules still lead.
-    expect(order({ name: 'Zed', repo: 'different', cost: 1 })).toEqual(['member', 'new'])
-    expect(ok(choose([probe(), probe({ kind: 'member', agentId: 'a1', name: 'Zed', activity: 'idle', repo: 'different' })], policy, a(), NOW,
-      [], [{ rule: { kind: 'preferIdle' }, text: 'Reuse idle agents first.' }])).shown.map(s => s.kind)).toEqual(['member', 'new'])
+    // Nothing that ranks before placement brings it back: cheaper, the owner's reuse-idle-agents rule, or more quota room
+    // than the machine that can start a new agent (its own machine at its agent limit).
+    expect(order({ name: 'Zed', repo: 'different', cost: 1 })).toEqual(['new'])
+    const reuse: SwarmRule[] = [{ rule: { kind: 'preferIdle' }, text: 'Reuse idle agents first.' }]
+    expect(order({ name: 'Zed', repo: 'different' }, {}, reuse)).toEqual(['new'])
+    expect(order({ name: 'Zed', repo: 'same' }, {}, reuse)).toEqual(['member', 'new'])
+    const roomy = windows([90, 3 * H], [90, 5 * D], 'A'), tight = windows([40, 3 * H], [60, 5 * D], 'B')
+    const full = [probe({ quota: roomy, refusals: ['This machine runs as many agents as its owner allows.'] }), probe({ machineId: 'm2', machineName: 'mac', quota: tight })]
+    expect(route({ name: 'Ada', repo: 'different', quota: roomy }, {}, [], full).shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · mac'])
+    expect(route({ name: 'Ada', repo: 'same', quota: roomy }, {}, [], full).shown[0]!.title).toBe('Ada · Claude sonnet medium · remote-1')
+    // Only members in another repository: none is offered, and the Lead is told why.
+    expect(choose([probe({ kind: 'member', agentId: 'a1', name: 'Ada', activity: 'idle', repo: 'different' })], policy, a(), NOW))
+      .toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Ada · Claude sonnet medium · remote-1', reason: ELSEWHERE, machine: 'remote-1' }] })
+    // A review reads the pull request and needs no worktree: its Reviewer in another repository is kept, after a new agent.
+    expect(order({ name: 'Ada', repo: 'different' }, { kind: 'review' })).toEqual(['new', 'member'])
+    expect(order({ name: 'Ada', repo: 'same' }, { kind: 'review' })).toEqual(['member', 'new'])
   })
   it('marks belowFloor when nobody meets it, and shows those that fit before the unknown and the short', () => {
     const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
@@ -429,7 +444,9 @@ describe('candidate labels', () => {
     expect(label).toContain('api, branch feat/auth')
     expect(label).toContain('last active 2h ago')
     expect(label).toContain('earlier here: API done')
-    expect(members({ repo: 'different' }).shown.find(s => s.kind === 'member')!.label).toContain('different repo')
+    // Only a review offers one in another repository: a build leaves it out (ELSEWHERE).
+    expect(ok(choose([probe({ kind: 'member', agentId: 'a1', name: 'Multiply', activity: 'idle', frame: frame(), repo: 'different' })], policy, a({ kind: 'review' }), now))
+      .shown[0]!.label).toContain('different repo')
     expect(members({ repo: 'unknown' }).shown.find(s => s.kind === 'member')!.label).toContain('repo unknown')
     expect(members({ repo: undefined }).shown.find(s => s.kind === 'member')!.label).not.toMatch(/repo/)
   })
