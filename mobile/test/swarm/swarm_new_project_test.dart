@@ -546,7 +546,9 @@ void main() {
       await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
       expect(steps.sent, isTrue, reason: 'its fields stay as sent');
       expect(steps.projectId, isNull);
+      expect(steps.createUnanswered, isTrue);
       await run(steps);
+      expect(steps.createUnanswered, isFalse);
 
       final creates = swarm.commands('project.create');
       expect(creates, hasLength(2));
@@ -556,6 +558,19 @@ void main() {
         swarm.projects.where((p) => p['name'] == 'openharness'),
         hasLength(1),
       );
+    });
+
+    test('a create the Swarm refused is not one left unanswered', () async {
+      swarm.answer = (command) => command['type'] == 'project.create'
+          ? throw const SuperTabFailure(
+              'FORBIDDEN',
+              'You may not create projects here.',
+              statusCode: 403,
+            )
+          : null;
+      final steps = SwarmNewProjectSteps.of(reader);
+      await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
+      expect(steps.createUnanswered, isFalse);
     });
 
     test(
@@ -1268,9 +1283,11 @@ void main() {
         reason: 'held as sent',
       );
 
+      expect(key('swarm-new-project-maybe-made'), findsNothing);
       await tap(tester, 'swarm-new-project-start-over');
       expect(key('swarm-new-project-error'), findsNothing);
       expect(key('swarm-new-project-start-over'), findsNothing);
+      expect(find.text(swarmNewProjectMaybeMade), findsOneWidget);
       final brief = tester.widget<TextField>(key('swarm-new-project-brief'));
       expect(brief.enabled, isTrue);
       expect(brief.controller!.text, 'Ship it');
@@ -1279,6 +1296,65 @@ void main() {
       expect(creates, hasLength(2));
       expect(creates[0]['operationId'], isNot(creates[1]['operationId']));
       expectHomeCProject('openharness');
+    });
+
+    testWidgets('Start over after a lost create says a project may be there, '
+        'until the next Create, which says its own', (tester) async {
+      final swarm = NewProjectSwarm();
+      swarm.answer = (command) => command['type'] == 'project.create'
+          ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
+          : null;
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      await tap(tester, 'swarm-new-project-close');
+      // Opened again on the steps: they still know, the sheet did not see it.
+      await tap(tester, 'swarm-new-project');
+      await tap(tester, 'swarm-new-project-start-over');
+      expect(key('swarm-new-project-maybe-made'), findsOneWidget);
+
+      await tap(tester, 'swarm-new-project-create');
+      expect(key('swarm-new-project-maybe-made'), findsNothing);
+      expect(key('swarm-new-project-error'), findsOneWidget);
+    });
+
+    testWidgets('Start over after the project was made says nothing of one '
+        'that may be there: it is in the list', (tester) async {
+      final swarm = NewProjectSwarm();
+      swarm.answer = (command) => command['type'] == 'message.send'
+          ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
+          : null;
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      expect(key('swarm-new-project-error'), findsOneWidget);
+      await tap(tester, 'swarm-new-project-start-over');
+      expect(key('swarm-new-project-error'), findsNothing);
+      expect(key('swarm-new-project-maybe-made'), findsNothing);
+    });
+
+    testWidgets('choosing another Swarm takes the note away: it was about the '
+        'Swarm left', (tester) async {
+      final swarm = NewProjectSwarm();
+      swarm.answer = (command) => command['type'] == 'project.create'
+          ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
+          : null;
+      await pump(tester, [
+        swarm,
+        NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm', role: 'collaborator'),
+      ]);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      await tap(tester, 'swarm-new-project-start-over');
+      expect(key('swarm-new-project-maybe-made'), findsOneWidget);
+
+      await tap(tester, 'swarm-new-project-swarm');
+      await tap(tester, 'swarm-new-project-pick-swarm-tab-2');
+      expect(key('swarm-new-project-maybe-made'), findsNothing);
     });
 
     testWidgets('torn down between steps, it opens on them still under way, '

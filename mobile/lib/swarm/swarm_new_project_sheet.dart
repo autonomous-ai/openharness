@@ -65,6 +65,12 @@ const swarmLeadNoMachine = 'No machine can run the Product Manager now.';
 const swarmLeadUnscoped =
     'Add this machine to the Swarm again to support other projects.';
 
+/// What the sheet says once Start over lets go of a create never answered:
+/// the Swarm may have made the project all the same.
+const swarmNewProjectMaybeMade =
+    'A project may already have been made. '
+    'Check Projects before you create it again.';
+
 /// A machine's reading counts while it is this fresh (backend
 /// `MACHINE_FRESH_MS`, as the start itself reads it).
 const _freshFor = Duration(seconds: 45);
@@ -593,6 +599,10 @@ class SwarmNewProjectSteps {
   /// Its creation was asked for: Swarm, brief and visibility stay as sent.
   bool get sent => _create != null || _projectId != null;
 
+  /// Its creation was asked for and never answered: the Swarm may have made
+  /// it all the same. A refusal made nothing, and drops the request.
+  bool get createUnanswered => _create != null && _projectId == null;
+
   /// The brief and visibility its creation was asked with, once [sent].
   String? get sentBrief =>
       superTabMap(_create?['command'] ?? const {})['brief'] as String?;
@@ -1009,6 +1019,10 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   bool _busy = false;
   String? _error;
   final _errorKey = GlobalKey();
+
+  /// Start over let go of a create never answered ([swarmNewProjectMaybeMade]),
+  /// until the next Create or another Swarm.
+  bool _maybeMade = false;
 
   /// The model list of the Swarm [_policySwarm], once read.
   Map<String, String> _modelList = const {};
@@ -1457,6 +1471,20 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
             ),
           ],
         ),
+        if (_maybeMade)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              swarmNewProjectMaybeMade,
+              key: const ValueKey('swarm-new-project-maybe-made'),
+              lines: 3,
+            ),
+          ),
         // Why it stopped, under what it is about; scrolled into sight when
         // it appears (_showError).
         if (_error case final error?)
@@ -1525,10 +1553,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   }
 
   /// Lets the Swarm's steps go: the fields open again, and the next Create
-  /// makes a new project. One already made stays in the list.
+  /// makes a new project. One already made stays in the list; one whose
+  /// create was never answered may be there too, and the sheet says so.
   void _startOver() {
     if (_busy) return;
     setState(() {
+      _maybeMade = _steps?.createUnanswered ?? false;
       _steps?.forget();
       _error = null;
     });
@@ -1574,6 +1604,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     setState(() {
       _busy = true;
       _error = null;
+      _maybeMade = false;
     });
     try {
       final projectId = await steps.run(
@@ -1673,6 +1704,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                       _dropUnsent();
                       _swarmId = id;
                       _error = null;
+                      _maybeMade = false;
                       _repository = null;
                       _repositoryPicked = false;
                       _machineId = null;

@@ -217,6 +217,14 @@ void main() {
         await capture('keyboard');
         await lowerKeyboard();
 
+        // A create never answered, let go: a project may be there.
+        swarm.answer = (command) => command['type'] == 'project.create'
+            ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
+            : null;
+        await tap('swarm-new-project-create');
+        await tap('swarm-new-project-start-over');
+        await capture('maybe-made');
+
         // A create refused with a long reason, then the brief written again.
         swarm.answer = (command) => command['type'] == 'project.create'
             ? throw const SuperTabFailure(
