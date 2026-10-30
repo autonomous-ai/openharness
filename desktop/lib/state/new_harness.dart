@@ -1734,9 +1734,26 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The model the Product Manager runs: the one chosen, else its engine's
-  /// default, which nothing knows before it starts.
-  String get leadModelLabel => _model != null ? modelLabel : 'Default model';
+  /// The model the Product Manager runs: the one chosen; else its role's
+  /// default, Claude Opus 5.5 at xhigh (Scholes's roadmap, piece 1); else its
+  /// engine's own, which nothing knows before it starts.
+  String get leadModelLabel => _model != null
+      ? modelLabel
+      : leadLaunchModel != null
+      ? '${kLeadModel.label} · ${kLeadModel.effort}'
+      : 'Default model';
+
+  /// The model and effort a Claude Product Manager is launched with when its
+  /// person chose no model: on this Mac as flags, through the Swarm on its
+  /// start. A machine that cannot take them starts it on the engine's own
+  /// (AppNotifier.createAgent; backend leadStart.ts).
+  ({String model, String effort})? get leadLaunchModel =>
+      integration?.swarmRole == 'lead' &&
+          _engine == 'claude' &&
+          _model == null &&
+          !asGuest
+      ? (model: kLeadModel.model, effort: kLeadModel.effort)
+      : null;
 
   /// Why the Swarm's model list rules out [model] (null for the engine's
   /// default) for a new project's Product Manager, or null.
@@ -4271,6 +4288,7 @@ class NewHarnessController extends ChangeNotifier {
       _attempt = AgentCreationAttempt(
         background: integration != null,
         beforeSubmit: integration?.beforeSubmit,
+        launchModel: leadLaunchModel,
       );
       _existing = null;
       _warnedAboutClosing = false;
@@ -4533,6 +4551,8 @@ class NewHarnessController extends ChangeNotifier {
           title: _leadRepositoryName,
           task: task.trim(),
           files: attachments?.files ?? const [],
+          model: leadLaunchModel?.model,
+          effort: leadLaunchModel?.effort,
         ),
       );
     } catch (failure) {
@@ -4621,3 +4641,7 @@ class NewHarnessController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// The Product Manager's default (backend projects.ts BUILT_IN_ROLE_DEFAULTS):
+/// `opus` is Claude Code's name for its newest Opus, Opus 5.5.
+const kLeadModel = (model: 'opus', label: 'Opus 5.5', effort: 'xhigh');

@@ -294,7 +294,15 @@ class AgentCreationAttempt {
     String? creationId,
     this.holdWait,
     this.beforeSubmit,
+    this.launchModel,
   }) : _id = creationId ?? _newCreationId();
+
+  /// A model and effort for this session alone, passed as the engine's own
+  /// flags (cli lib/launchModel.ts): a Product Manager's role default. A
+  /// machine that cannot take them refuses before anything launches, and the
+  /// same request then starts the agent on its engine's own model.
+  final ({String model, String effort})? launchModel;
+  bool _launchModelDropped = false;
 
   /// How long a request the machine holds is waited for before the create
   /// answers ([AppNotifier._createFollowingHold]). Null answers at once with
@@ -361,6 +369,15 @@ class AgentCreationAttempt {
   /// used until the person chooses it.
   String? _existingFolder;
   String? get existingFolder => _existingFolder;
+
+  /// After the machine refused a launch model before launching anything
+  /// (AppNotifier.createAgent): the request may be sent again without it.
+  void _retryWithoutLaunchModel() {
+    _launchModelDropped = true;
+    _finished = false;
+    _outcome = null;
+    _refusal = null;
+  }
 
   String? _complete(String? error) {
     _finished = true;
@@ -14780,7 +14797,9 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
-  }) {
+  }) async {
+    final creation = attempt ?? AgentCreationAttempt();
+    final launch = creation._launchModelDropped ? null : creation.launchModel;
     final choices = <String, dynamic>{
       'engine': engine,
       if (projectFolder == null && folder != null) 'cwd': folder,
@@ -14800,6 +14819,8 @@ class AppNotifier extends ChangeNotifier {
       },
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
+      'model': ?launch?.model,
+      'effort': ?launch?.effort,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -14814,7 +14835,6 @@ class AppNotifier extends ChangeNotifier {
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
     };
-    final creation = attempt ?? AgentCreationAttempt();
     Future<String?> ask() => _create(
       machineId,
       choices,
@@ -14825,8 +14845,26 @@ class AppNotifier extends ChangeNotifier {
       attempt: creation,
       placement: placement,
     );
+    final answer = await _createFollowingHold(creation, creation.holdWait, ask);
+    if (launch == null ||
+        !_launchModelRefusals.contains(creation._refusal) ||
+        _disposed) {
+      return answer;
+    }
+    // Refused before any receipt: the same request, without them, so the
+    // agent starts on its engine's own model rather than not at all.
+    choices
+      ..remove('model')
+      ..remove('effort');
+    creation._retryWithoutLaunchModel();
     return _createFollowingHold(creation, creation.holdWait, ask);
   }
+
+  /// A machine's refusals of a launch model, made before anything launched.
+  static const _launchModelRefusals = {
+    'LAUNCH_MODEL_UNSUPPORTED',
+    'INVALID_LAUNCH_MODEL',
+  };
 
   /// How often a harness the machine holds or is starting is asked after
   /// ([_createFollowingHold]): the pace `harness new` asks at.
@@ -15398,6 +15436,7 @@ class AppNotifier extends ChangeNotifier {
       // Refusals that happen before a launch are safe to correct. INTERNAL,
       // spawn timeouts and connection failures cannot prove nothing started.
       const refusedBeforeLaunch = {
+        ..._launchModelRefusals,
         'INVALID_PROJECT_SOURCE',
         'INVALID_REPOSITORY',
         'PROJECT_EXISTS',

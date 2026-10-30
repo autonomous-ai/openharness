@@ -681,6 +681,8 @@ class SuperTabLaunch {
         'projectId': saved['projectId'],
         'machineId': start.machineId,
         'engine': start.engine,
+        'model': ?start.model,
+        'effort': ?start.effort,
         'repositoryUrl': ?start.repositoryUrl,
       },
     };

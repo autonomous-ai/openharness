@@ -11,7 +11,13 @@ class LeadSwarmStart {
     required this.title,
     required this.task,
     this.files = const [],
+    this.model,
+    this.effort,
   });
+
+  /// What the Product Manager asks to run: its role's default, Claude Opus
+  /// 5.5 at xhigh, or null for its engine's own model.
+  final String? model, effort;
   final String? repositoryUrl, title;
   final String machineId, engine, task;
   final List<HarnessAttachment> files;
