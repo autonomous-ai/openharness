@@ -89,7 +89,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
 
-async function lane(over: { refuseToken?: string; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }; welcome?: boolean; now?: () => number } = {}) {
+async function lane(over: { refuseToken?: string; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }; welcome?: boolean; now?: () => number; linked?: Set<string> } = {}) {
   const server = await fakeDeviceWs({ refuseToken: over.refuseToken })
   servers.push(server)
   const seal = fakeSeal()
@@ -97,7 +97,7 @@ async function lane(over: { refuseToken?: string; auth?: { accessToken(options?:
   const auth = over.auth ?? { accessToken: vi.fn(async () => 'token-1') }
   const link = new DeviceLink({
     auth, backendWsBase: server.url, computerId: 'computer-1', autonomousEnv: 'test', seal,
-    peer: (machineId) => (machineId === LINKED || machineId === LINKED_2 ? { machineId, pub: 'LINKED-PUB', label: 'linked', linkedAt: 1 } as never : null),
+    peer: (machineId) => ((over.linked ?? new Set([LINKED, LINKED_2])).has(machineId) ? { machineId, pub: 'LINKED-PUB', label: 'linked', linkedAt: 1 } as never : null),
     localMachineId: () => 'this-machine',
     log: (line) => { lines.push(line) },
     ...(over.now ? { now: over.now } : {}),
@@ -199,11 +199,13 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     seal.open.mockResolvedValueOnce({ unreadable: true })
     server.send({ type: 'card', machineId: LINKED, payload: { __e2e: { n: 2 } } })
     await until('the drop to be said', () => lines.some((line) => line === 'device: could not decrypt card — dropped'))
-    // The gateway lost the session: nothing passed on, and the next call starts one again.
+    // The gateway lost the session: the frame is not passed on as it came, but held, a session started
+    // again for it, and read under that one.
     seal.open.mockResolvedValueOnce({ lost: true })
     server.send({ type: 'card', machineId: LINKED, payload: { __e2e: { n: 3 } } })
     await until('the loss to be said', () => lines.some((line) => line.includes('the E2EE session with linked-machine is gone')))
-    expect(heard).toHaveLength(2)
+    await until('the card, under the new session', () => heard.length === 3)
+    expect(heard[2]).toEqual({ type: 'card', machineId: LINKED, payload: { opened: { n: 3 } } })
     await link.establish(LINKED)
     expect(seal.hello).toHaveBeenCalledTimes(2)
   })
@@ -462,6 +464,20 @@ describe('a linked machine\'s daemon restarts', () => {
     now += 30_001
     server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 3, k: 'g', epoch: 'forged-4' } } })
     await until('one more renewal', () => seal.hello.mock.calls.length === 3)
+  })
+
+  it('never asks a linked machine in the clear: a request with no session up fails as session gone', async () => {
+    // A machine linked between the handshake and the send (`harness link connect` runs as its own process):
+    // establish() saw no pin and made no session, and the request must not go out unsealed.
+    const linked = new Set<string>()
+    const { server, seal, link } = await lane({ linked })
+    await link.online()
+    const peerAppears = vi.spyOn(link, 'establish').mockImplementationOnce(async () => { linked.add(LINKED) })
+    await expect(link.rpc('agents_list', { scope: 'all' }, LINKED)).rejects.toThrow('E2EE_SESSION_GONE')
+    peerAppears.mockRestore()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(server.forMachines()).toEqual([])
+    expect(seal.seal).not.toHaveBeenCalled()
   })
 
   it('holds a bounded number of frames, and none survive the lane stopping', async () => {

@@ -476,6 +476,10 @@ export class DeviceLink {
   async rpc(type: string, payload: Record<string, unknown> = {}, machineId = ''): Promise<Record<string, unknown>> {
     if (this.ws?.readyState !== WebSocket.OPEN) throw new Error('not connected')
     if (machineId) await this.establish(machineId)
+    // Never in the clear to a linked machine: `send()` seals only for a session that is up, and one can go
+    // between the handshake and here (a refusal, an offline notice, a pin made meanwhile). Decided in the
+    // same step as the send below, so nothing can change in between.
+    if (machineId && this.opts.peer(machineId) && !this.sessions.get(machineId)?.ready) throw new Error(SESSION_GONE)
     const requestId = randomUUID()
 
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -745,8 +749,10 @@ export class DeviceLink {
     if (session?.ready && wrapped) {
       const opened = await this.opts.seal.open(from, frame as Record<string, unknown>).catch((): { lost: true } => ({ lost: true }))
       if ('lost' in opened) {
+        // The gateway restarted under the lane and holds no session: kept, and read under the next one.
         this.forget(from, session)
-        this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — the E2EE session with ${from} is gone, dropped`)
+        this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — the E2EE session with ${from} is gone, holding it for a new one`)
+        this.hold(from, frame, false)
         return
       }
       if ('unknownEpoch' in opened) {
