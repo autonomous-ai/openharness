@@ -7,7 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { PrismaClient } from '@prisma/client'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { superTabRoutes } from '../src/routes/superTabs.js'
+import { NOT_AVAILABLE, superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -97,14 +97,16 @@ describe('the Workspace check on every Swarm read and command', () => {
     await db.swarmWorkspaceRemoval.create({ data: { id: `${removed.id}:${removed.generation}`, workspaceId: workspace!.id, userId: peer.sub, email: peer.email,
       generation: removed.generation, autonomousEnv: 'prod', removedAt: new Date(), removedBy: owner.sub, finishedAt: null } })
 
+    // The person routes answer as for a Swarm that does not exist; the routing reads agents make keep their own answer.
     for (const url of reads) {
       const reply = await call('GET', url, peer)
-      expect(reply.statusCode, url).toBe(403)
-      expect(JSON.stringify(reply.json()), url).toContain('WORKSPACE_ACCESS_REVOKED')
+      const agentRoute = /\/route-decisions$|\/attempts$/.test(url)
+      expect(reply.statusCode, url).toBe(agentRoute ? 403 : NOT_AVAILABLE.status)
+      expect(reply.json().error.code, url).toBe(agentRoute ? 'WORKSPACE_ACCESS_REVOKED' : NOT_AVAILABLE.code)
     }
     const send = await call('POST', `/api/super-tabs/${tab}/commands`, peer,
       { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'still here?', replyTo: null, recipientIds: [] } })
-    expect(send.statusCode).toBe(403)
+    expect(send.statusCode).toBe(NOT_AVAILABLE.status)
     expect((await listed(peer)).map(r => r.id)).not.toContain(tab)
     // The Swarm's own people are untouched.
     expect((await call('GET', `/api/super-tabs/${tab}/parts`, owner)).statusCode).toBe(200)
@@ -117,7 +119,7 @@ describe('the Workspace check on every Swarm read and command', () => {
   it('keeps a person of one Workspace out of another Workspace\'s Swarm', async () => {
     const theirs = await create(other, 'Elsewhere')
     const reply = await call('GET', `/api/super-tabs/${theirs}/parts`, owner)
-    expect(reply.statusCode).toBe(403)
+    expect(reply.json().error).toEqual({ code: NOT_AVAILABLE.code, message: NOT_AVAILABLE.message })
     expect(JSON.stringify(reply.json())).not.toContain('Elsewhere')
     expect((await workspacesOf(owner)).flatMap(o => o.swarms.map(s => s.id))).not.toContain(theirs)
   })
@@ -221,7 +223,7 @@ describe('removing someone from a Workspace', () => {
     expect(removed.statusCode).toBe(200)
     for (const tab of [a, b]) {
       expect(await swarmPeople(tab)).not.toContain(member.sub)
-      expect((await call('GET', `/api/super-tabs/${tab}/parts`, member)).statusCode).toBe(403)
+      expect((await call('GET', `/api/super-tabs/${tab}/parts`, member)).statusCode).toBe(NOT_AVAILABLE.status)
     }
     expect((await workspacesOf(member)).map(o => o.id)).not.toContain(workspaceId)
     expect((await call('GET', `/api/super-tabs/${elsewhere}/parts`, member)).statusCode).toBe(200)
@@ -244,7 +246,7 @@ describe('removing someone from a Workspace', () => {
     const token = new URL(saved.joinUrl!).searchParams.get('token')!
     expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/members/${peer.sub}/remove`, owner, {})).statusCode).toBe(200)
     const again = await call('POST', `/api/super-tabs/${tab}/join`, peer, { operationId: randomUUID(), token })
-    expect(again.statusCode).toBe(403)
+    expect(again.json().error).toEqual({ code: NOT_AVAILABLE.code, message: NOT_AVAILABLE.message })
     expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/invitations`, owner, { email: peer.email, role: 'guest' })).statusCode).toBe(200)
     expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, peer, {})).statusCode).toBe(200)
     expect((await call('POST', `/api/super-tabs/${tab}/join`, peer, { operationId: randomUUID(), token })).statusCode).toBe(200)
@@ -303,7 +305,7 @@ describe('the migration of today\'s Swarms into Workspaces, and its undo', () =>
     expect(peerWorkspaces.map(o => [o.id, o.role, o.swarms.map(s => s.id)])).toEqual([[ownerWorkspace!.id, 'guest', [first]]])
     // Nobody gains or loses access.
     expect((await call('GET', `/api/super-tabs/${first}/parts`, legacyPeer)).statusCode).toBe(200)
-    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyPeer)).statusCode).toBe(403)
+    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyPeer)).statusCode).toBe(NOT_AVAILABLE.status)
     expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)).json().data.members).toEqual(before.json().data.members)
     expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)).json().data.head.data.workspaceId).toBe(ownerWorkspace!.id)
 
@@ -323,8 +325,8 @@ describe('the migration of today\'s Swarms into Workspaces, and its undo', () =>
     process.env.SWARM_WORKSPACES_REQUIRED = '1'
     try {
       const reply = await call('GET', `/api/super-tabs/${tab}/parts`, legacyOwner)
-      expect(reply.statusCode).toBe(403)
-      expect(JSON.stringify(reply.json())).toContain('WORKSPACE_ACCESS_REVOKED')
+      expect(reply.statusCode).toBe(NOT_AVAILABLE.status)
+      expect(reply.json().error.code).toBe(NOT_AVAILABLE.code)
       expect((await listed(legacyOwner)).map(r => r.id)).not.toContain(tab)
     } finally { delete process.env.SWARM_WORKSPACES_REQUIRED }
     await migrateWorkspaces(db, { apply: true })
@@ -381,8 +383,8 @@ describe('a removal whose Swarm cleanup failed', () => {
     expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, member, {})).statusCode).toBe(200)
     expect((await workspacesOf(member)).map(o => o.id)).toContain(workspaceId)
     expect(await swarmPeople(privateTab)).not.toContain(member.sub)
-    expect((await call('GET', `/api/super-tabs/${privateTab}/parts`, member)).statusCode).toBe(403)
-    expect((await call('POST', `/api/super-tabs/${privateTab}/commands`, member, { operationId, command })).statusCode).toBe(403)
+    expect((await call('GET', `/api/super-tabs/${privateTab}/parts`, member)).statusCode).toBe(NOT_AVAILABLE.status)
+    expect((await call('POST', `/api/super-tabs/${privateTab}/commands`, member, { operationId, command })).statusCode).toBe(NOT_AVAILABLE.status)
   })
 
   it('keeps the person out while the earlier removal cannot finish', async () => {

@@ -1089,11 +1089,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Other work', brief: '', checks: [] })).result.conversationId as string
     expect((await store.messages(host, tab, group, { messageId: question }, lead)).messages).toEqual([])
     expect((await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages?messageId=${question}`,
-      headers: { authorization: `Bearer ${peer.sub}` } })).statusCode).toBe(403)
+      headers: { authorization: `Bearer ${peer.sub}` } })).statusCode).toBe(404)
     await run(tab, { type: 'project.delete', projectId: 'lead' })
+    // Its project gone, the host runs none of the Swarm's agents and is not in it: answered as for a Swarm that does not
+    // exist (routes/superTabs.ts NOT_AVAILABLE); the store still says the agent is unavailable.
     const removed = await app.inject({ url, headers })
-    expect(removed.statusCode).toBe(409)
-    expect(removed.json().error.code).toBe('AGENT_UNAVAILABLE')
+    expect(removed.statusCode).toBe(404)
+    expect(removed.json().error.code).toBe('NOT_FOUND')
   })
 
   it('records native turns once, in order, with verified source metadata and no input echo', async () => {

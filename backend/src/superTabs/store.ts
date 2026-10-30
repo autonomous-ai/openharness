@@ -716,10 +716,17 @@ export class SuperTabStore {
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     // Someone neither in the Swarm nor hosting any of its agents learns nothing of it from an agent id, real, made up or
-    // another Swarm's: they are refused as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
-    if (!state.people.some(p => p.id === user.sub) && !state.agents.some(a => a.machineOwnerId === user.sub)) person(state, user.sub)
-    const target = agent(state, agentId)
-    if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
+    // another Swarm's: the person routes answer them as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    // The refusal itself is unchanged, for the host routes.
+    const outsider = !state.people.some(p => p.id === user.sub) && !state.agents.some(a => a.machineOwnerId === user.sub)
+    let target: Agent
+    try {
+      target = agent(state, agentId)
+      if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
+    } catch (error) {
+      if (outsider && error instanceof SuperTabError) throw new SuperTabError(error.code, error.message, error.status, true)
+      throw error
+    }
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const reads = new GrantReads()

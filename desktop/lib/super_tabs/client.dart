@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'controller.dart';
@@ -28,7 +29,7 @@ typedef SuperTabListing = ({String id, String name});
 class SuperTabClient {
   SuperTabClient({
     required this.transport,
-    required this.storage,
+    required LocalKeyValueStore storage,
     LocalKeyValueStore? viewStorage,
     this.onSnapshot,
     this.onTabs,
@@ -39,9 +40,19 @@ class SuperTabClient {
     this.upload = refuseUpload,
     this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
-  }) : viewStorage = viewStorage ?? storage;
+  }) : _storage = storage,
+       viewStorage = viewStorage ?? storage;
   final SuperTabTransport transport;
-  final LocalKeyValueStore storage;
+  final LocalKeyValueStore _storage;
+
+  /// Where Swarm drafts, launches, hidden Swarms and the switcher's pick are
+  /// kept, per account. On the web a write for an account that is not signed
+  /// in on this page is dropped ([SwarmAccountStorage]): one landing after a
+  /// sign-out would put back what it cleared.
+  late final LocalKeyValueStore storage = SwarmAccountStorage(
+    _storage,
+    writes: (account) => !_forgetsWebOnly || account == _account,
+  );
 
   /// Where each Swarm's saved view is kept ([SuperTabSavedViews]): a few
   /// hundred KB each, so Desktop keeps them out of [storage]'s small file.
@@ -109,6 +120,9 @@ class SuperTabClient {
     // The account bound before the host said views are kept, at boot. With
     // none bound yet, the bind that follows claims.
     if (claims && _account != null) _claimViews();
+    // A page that starts signed out still sweeps what another page wrote of
+    // an account after it signed out.
+    if (claims && _account == null) _forgetSignedOut();
     for (final controller in _loaded.values) {
       controller.reading = value;
     }
@@ -150,7 +164,29 @@ class SuperTabClient {
     unawaited(
       _views.claim(_account, leaving: leaving).catchError((Object _) {}),
     );
+    _forgetSignedOut(leaving: leaving);
   }
+
+  /// The web's sign-out: the drafts, launches, hidden Swarms and switcher
+  /// pick of the account leaving go, and those of any account signed out on
+  /// this browser that another page wrote after ([forgetSwarmAccounts]).
+  /// The account signed in now, and any other, keep theirs. Desktop keeps
+  /// each account's, as before.
+  void _forgetSignedOut({String? leaving}) {
+    if (!_forgetsWebOnly) return;
+    final bound = _account;
+    _forgetting = _forgetting
+        .then(
+          (_) => forgetSwarmAccounts(_storage, bound: bound, leaving: leaving),
+        )
+        .catchError((Object _) {});
+  }
+
+  Future<void> _forgetting = Future.value();
+
+  /// The last sign-out's clearing, for tests and Settings.
+  @visibleForTesting
+  Future<void> get forgotten => _forgetting;
 
   /// Moves each time a Swarm's view is kept on this device: Settings' Clear
   /// now stops saying Cleared once one is kept again.
