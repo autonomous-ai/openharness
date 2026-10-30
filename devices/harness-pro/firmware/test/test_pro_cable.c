@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS, EV_STNOTICE, EV_STNOTICE_READ };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS, EV_STNOTICE, EV_STNOTICE_READ, EV_FEATURES };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -56,6 +56,7 @@ static ev_t *add(int kind, const char *id)
 }
 static void put(char *dst, const char *s) { snprintf(dst, 2400, "%s", s ? s : "<null>"); }
 
+void pro_app_features(uint32_t features) { ev_t *e = add(EV_FEATURES, NULL); e->n1 = (long)features; }
 void pro_app_link(bool up, const char *machine) { ev_t *e = add(EV_LINK, NULL); e->n1 = up; put(e->a, machine); }
 void pro_app_agents(const pro_agent_row_t *rows, int n)
 {
@@ -277,6 +278,27 @@ static void welcome(void)
 }
 
 // ---- cases ---------------------------------------------------------------------------------------------
+static void pro_cable_test_welcome_swarm_remote_feature(void)
+{
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"swarm.remote\"]}");
+    int seen = 0;
+    for (int i = 0; i < nev; i++) if (evs[i].kind == EV_FEATURES) { seen++; CHECK((evs[i].n1 & CABLE_FEATURE_SWARM_REMOTE) && !(evs[i].n1 & CABLE_FEATURE_PLAYER_LIBRARY)); }
+    CHECK(seen == 1);
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"player.library\"]}");
+    seen = 0;
+    for (int i = 0; i < nev; i++) if (evs[i].kind == EV_FEATURES) { seen++; CHECK(!(evs[i].n1 & CABLE_FEATURE_SWARM_REMOTE) && (evs[i].n1 & CABLE_FEATURE_PLAYER_LIBRARY)); }
+    CHECK(seen == 1);
+}
+static void pro_cable_test_voice_error_buddy(void)
+{
+    welcome();
+    reset();
+    CHECK(pro_cable_voice_begin("l2", NULL, 16000, "upb") && strstr(sent[nsent - 1], "\"agentId\":\"l2\""));
+    feed("{\"t\":\"voice.error\",\"uploadId\":\"upb\",\"message\":\"Could not reach your Buddy. Try again.\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_VOICE && evs[0].n1 == PRO_VOICE_ERROR && !strcmp(evs[0].a, "Could not reach your Buddy. Try again."));
+}
 static void pro_cable_test_turn_activity(void)
 {
     welcome();   // frames only count inside a session
@@ -548,7 +570,7 @@ static void pro_cable_test_no_session(void)
     CHECK(nev == 0 && nsent == 1 && strstr(sent[0], "pong"));   // the link's own keepalive still answers
     // After a session ends the same holds: the welcome opens the gate, the silence closes it.
     welcome();
-    CHECK(pro_cable_connected() && nev == 1 && evs[0].kind == EV_LINK);
+    CHECK(pro_cable_connected() && nev == 2 && evs[0].kind == EV_FEATURES && evs[1].kind == EV_LINK);
     reset();
     end_session();
     reset();
@@ -563,12 +585,12 @@ static void test_session_machines_library_voice(void)
     // welcome: link up, then machines.list + agents.list are asked for; a repeat greeting does nothing more.
     reset();
     welcome();
-    CHECK(nev == 1 && evs[0].kind == EV_LINK && evs[0].n1 == 1 && !strcmp(evs[0].a, "Mac"));
+    CHECK(nev == 2 && evs[0].kind == EV_FEATURES && evs[1].kind == EV_LINK && evs[1].n1 == 1 && !strcmp(evs[1].a, "Mac"));
     CHECK(nsent == 2 && strstr(sent[0], "machines.list") && strstr(sent[1], "agents.list"));
     CHECK(pro_cable_connected() && pro_cable_library_supported());
     reset();
     welcome();
-    CHECK(nev == 0 && nsent == 0);
+    CHECK(nev == 1 && evs[0].kind == EV_FEATURES && nsent == 0);   // the features are told again; nothing else
     feed("{\"t\":\"ping\"}");
     CHECK(nsent == 1 && strstr(sent[0], "pong"));
     reset();
@@ -1473,6 +1495,8 @@ int main(void)
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
     pro_cable_test_no_session();
     pro_cable_test_turn_activity();
+    pro_cable_test_welcome_swarm_remote_feature();
+    pro_cable_test_voice_error_buddy();
     pro_cable_test_old_daemon();
     pro_cable_test_oversize();
     pro_cable_test_ignores_round();

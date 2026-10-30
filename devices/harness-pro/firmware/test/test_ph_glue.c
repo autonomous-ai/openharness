@@ -2290,6 +2290,100 @@ static void pill_tap_never_talks(void) {
     o = tap_(MID_X, MID_Y, 6000);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
 }
+// ---- Talk to a remote Lead and to the Buddy (swarm.remote): voice.begin carries the Lead's id, the talk view signs the Buddy ----
+static int talk_bars(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == 4 && S.runs[i].w == 9 && S.runs[i].fg == ht_rgb(0x00FF2F); return n; }
+static bool talk_text(const char *t, unsigned rgb) {
+    for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == 1 && !strcmp(S.runs[i].text, t) && (!rgb || S.runs[i].fg == ht_rgb(rgb))) return true;
+    return false;
+}
+static void remote_lead_talks_with_swarm_remote(void) {
+    swarm_home(4);
+    pod_ui_set_swarm_remote(&U, true);
+    tap_lead(2, 3000);   // l2 has no local harness
+    take();
+    render(3300);
+    CHECK(!top()->agent[0]);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "l2") && top()->view == POD_V_TALK && pod_ui_talking(&U));
+    render(4500);
+    CHECK(talk_text("Lead", 0));   // no roster agent, but the voice view still draws: the Lead's name, as its who row
+    o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_END && top()->view == POD_V_TALK);
+    // swarm_talk_ends_on_transcript: words for a Swarm face go to its chat, not a terminal turn: the daemon's
+    // transcript ends the voice screen at once (pro_app_voice_result), as on the round, instead of 30 s of "sending"
+    CHECK(pod_ui_talking_to_swarm(&U));
+    pod_ui_talk_over(&U);
+    CHECK(top()->view == POD_V_LEAD && !pod_ui_talking_to_swarm(&U));
+    // the link going down takes the feature with it
+    pod_ui_link(&U, false);
+    CHECK(!U.swarm_remote);
+}
+static void remote_lead_no_talk_without_feature(void) {
+    swarm_home(4);
+    tap_lead(2, 3000);
+    take();
+    render(3300);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.talk_armed);
+    pod_ui_set_swarm_remote(&U, true);
+    pod_ui_set_swarm_remote(&U, false);
+    CHECK(tap_(MID_X, MID_Y, 5000).fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+}
+static void buddy_screen_talks_with_lead_id(void) {
+    buddy_lead_open();   // l1: local a1
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    buddy_swarm()->leads[2].chat = POD_CHAT_BUDDY;
+    render(3500);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));   // the same id as the PM side: the daemon picks the Buddy chat from the side it holds
+    CHECK(pod_ui_talking_to_swarm(&U));   // a local Lead's face too: the Buddy's chat, never a1's terminal turn
+    pod_ui_talk_over(&U);
+    buddy_swarm()->leads[1].chat = POD_CHAT_PM;
+    render(4500);
+    o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+    pod_ui_talk_over(&U);
+    // a remote Lead on its Buddy side: its own id
+    pod_ui_set_swarm_remote(&U, true);
+    pod_nav_act(&U.nav, &U.model, POD_A_NEXT, 0, 6000);
+    take();
+    CHECK(top()->lead == 2);
+    render(6500);
+    o = tap_(MID_X, MID_Y, 7000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "l2"));
+}
+static void buddy_talk_uses_buddy_engine_pet(void) {
+    buddy_lead_open();   // the Lead is claude (a pet); give the Buddy an engine without one
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    snprintf(l->engine, sizeof l->engine, "claude");
+    snprintf(l->buddy.engine, sizeof l->buddy.engine, "cursor");
+    l->chat = POD_CHAT_PM;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    render(4500);
+    CHECK(talk_bars() == 0);   // the Lead's own pet
+    pod_ui_talk_over(&U);
+    l->chat = POD_CHAT_BUDDY;
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+    render(6500);
+    CHECK(talk_bars() == 7);   // the Buddy's engine has no pet: the round's effect
+    CHECK(pod_view_next_ms(&U.nav, &U.model, 6500) == 80 - 6500 % 80);
+}
+static void buddy_talk_names_buddy(void) {
+    buddy_lead_open();
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    l->chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    render(4500);
+    CHECK(talk_text("Mira", 0xC49BFF) && !talk_text("Alpha", 0));
+    pod_ui_talk_over(&U);
+    l->chat = POD_CHAT_PM;
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+    render(6500);
+    CHECK(talk_text("Alpha", PH_ROOM_INK) && !talk_text("Mira", 0));   // the PM side: the agent, as today
+}
 static void pill_pressed_until_frame(void) {
     buddy_lead_open();
     tap_(435, 38, 4000);
@@ -2434,6 +2528,11 @@ int main(void) {
     side_frame_queued();
     pill_tap_sends_side();
     pill_tap_never_talks();
+    remote_lead_talks_with_swarm_remote();
+    remote_lead_no_talk_without_feature();
+    buddy_screen_talks_with_lead_id();
+    buddy_talk_uses_buddy_engine_pet();
+    buddy_talk_names_buddy();
     pill_pressed_until_frame();
     buddy_notice_sets_dot_only();
     opening_buddy_clears_dot();

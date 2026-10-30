@@ -17,6 +17,7 @@
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
+#include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
@@ -315,6 +316,13 @@ static void set_remove(char (*set)[ID_MAX], const char *id)
 static void show_updated(void);
 
 // ---- the link -------------------------------------------------------------------------------------------
+
+void pro_app_features(uint32_t features)
+{
+    pro_app_lock();
+    pod_ui_set_swarm_remote(&s_pod, (features & CABLE_FEATURE_SWARM_REMOTE) != 0);
+    pro_app_unlock();
+}
 
 void pro_app_link(bool up, const char *machine)
 {
@@ -711,8 +719,10 @@ void pro_app_voice_result(int kind, const char *text)
     if (!pro_voice_open()) return;   // a reply nobody waits for
     pro_voice_close();               // MUST end the state, or the next start is refused (P22)
     pro_app_lock();
-    if (kind != PRO_VOICE_OK) pod_ui_talk_over(&s_pod);   // an error leaves the voice screen; a sent clip stays on it, sending
-    if (kind == PRO_VOICE_OK && text && text[0] && held(text)) settle(pod_ui_sent(&s_pod, text, ms()));   // Working until its turn speaks
+    // An error leaves the voice screen; a sent clip stays on it, sending, until its turn speaks. Words for a Swarm face were posted in
+    // its chat (the round's rule): no turn of that harness follows, so the transcript is the end.
+    if (kind != PRO_VOICE_OK || pod_ui_talking_to_swarm(&s_pod)) pod_ui_talk_over(&s_pod);
+    else if (text && text[0] && held(text)) settle(pod_ui_sent(&s_pod, text, ms()));   // Working until its turn speaks
     if (kind == PRO_VOICE_ERROR)     // owner decision 2: the daemon's message, as Pod's notice
         pod_ui_notice(&s_pod, text && text[0] ? text : "Voice failed", ms());
     change();

@@ -1011,7 +1011,9 @@ static void handle_voice_error(const cJSON *p)
 
 static void session_up(const cJSON *p)
 {
-    atomic_store(&s_features, cable_features_parse(p));
+    const uint32_t features = cable_features_parse(p);
+    atomic_store(&s_features, features);
+    pro_app_features(features);   // pro_app keeps the ones the screens act on (swarm.remote: talk to a remote Lead)
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
     copy_cut(s_machine_name, sizeof s_machine_name, name ? name : "Machine");

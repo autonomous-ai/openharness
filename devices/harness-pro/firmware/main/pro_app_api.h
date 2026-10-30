@@ -24,6 +24,8 @@
 // (never NULL when up; NULL when down). Called on the transition, and again if a welcome names another computer.
 // A drop clears everything the daemon told us: pro_app must forget busy agents, abort a sweep and a recording.
 void pro_app_link(bool up, const char *machine);
+// The welcome's features (CABLE_FEATURE_* bits), once per welcome. A drop clears them with the link (pro_app_link(false)).
+void pro_app_features(uint32_t features);
 
 // ---- roster ----
 typedef struct { const char *id, *name, *engine, *machine_id, *machine; } pro_agent_row_t;
