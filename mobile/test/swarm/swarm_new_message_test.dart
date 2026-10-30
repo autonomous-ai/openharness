@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderSliverMultiBoxAdaptor;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppPalette;
@@ -29,12 +32,13 @@ import 'swarm_fixture.dart';
 /// chat. Over a scripted backend: one Swarm whose person reads Điện thoại,
 /// Mobile, Team (private, theirs) and Web, not Secret (private, another's);
 /// Mobile has their Buddy chat with Wren, another person's Buddy chat and a
-/// private chat; Web their archived Buddy chat.
+/// private chat; Web their archived Buddy chat; Old's chat is archived.
 void main() {
   const web = 'project-2', team = 'project-3', secret = 'project-4';
-  const phone = 'project-5';
+  const phone = 'project-5', old = 'project-6';
   const webLead = 'group-lead-web', teamLead = 'group-lead-team';
   const secretLead = 'group-lead-secret', phoneLead = 'group-lead-phone';
+  const oldLead = 'group-lead-old';
   const buddyChat = 'buddy-me';
   const other = 'person-other';
   const lab = 'tab-2';
@@ -83,6 +87,7 @@ void main() {
     ),
     projectRow(secret, 'Secret', secretLead, private: true, owner: other),
     projectRow(phone, 'Điện thoại', phoneLead),
+    projectRow(old, 'Old', oldLead),
   ];
 
   /// The messages posted, by chat, as the backend has them.
@@ -115,10 +120,21 @@ void main() {
           buddyData('agent-ivy', owner: other, displayName: 'Ivy'),
         ],
         groups: [
-          inProject(web, groupData(webLead, title: 'Web')),
+          inProject(
+            web,
+            groupData(
+              webLead,
+              title: 'Web',
+              lastMessageSequence: posted['$tabId/$webLead']?.length ?? 0,
+            ),
+          ),
           inProject(team, groupData(teamLead, title: 'Team')),
           inProject(secret, groupData(secretLead, title: 'Secret')),
           inProject(phone, groupData(phoneLead, title: 'Điện thoại')),
+          inProject(old, {
+            ...groupData(oldLead, title: 'Old'),
+            'archived': true,
+          }),
           groupData('g-private', title: 'Their chat', audience: [other]),
           buddyChatData(buddyChat, agentIds: ['agent-wren']),
           buddyChatData('buddy-other', owner: other, agentIds: ['agent-ivy']),
@@ -200,6 +216,7 @@ void main() {
     SwarmUpload upload = refuseSwarmUpload,
     VoiceInputController Function()? voice,
     SwarmDictation? dictation,
+    ValueListenable<bool>? out,
     bool settle = true,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
@@ -222,7 +239,16 @@ void main() {
     addTearDown(host.dispose);
     await tester.pumpWidget(
       MaterialApp(
-        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        builder: (context, child) => SwarmScope(
+          notifier: host,
+          child: out == null
+              ? child!
+              : ValueListenableBuilder(
+                  valueListenable: out,
+                  builder: (_, hidden, _) =>
+                      OutOfSight(hidden: hidden, child: child!),
+                ),
+        ),
         onGenerateRoute: (_) =>
             CupertinoPageRoute<void>(builder: (_) => const SwarmPage()),
       ),
@@ -295,13 +321,34 @@ void main() {
     testWidgets("the + clears Home's last row once scrolled to the end", (
       tester,
     ) async {
-      await pump(tester, backend());
+      final fake = backend();
+      // More projects than a screen holds.
+      serve(
+        fake,
+        projects: [
+          ...readable,
+          for (var i = 0; i < 16; i++)
+            projectRow('p-$i', 'Project $i', 'lead-p-$i'),
+        ],
+      );
+      await pump(tester, fake);
       await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
       await tester.pumpAndSettle();
 
-      final last = find.byKey(ValueKey('swarm-project-$tab-$web'));
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position;
+      expect(position.pixels, position.maxScrollExtent, reason: 'at its end');
+      // Home's last row, whatever it is: it ends above the +.
+      final list = tester.renderObject<RenderSliverMultiBoxAdaptor>(
+        find.descendant(
+          of: find.byType(ListView).first,
+          matching: find.byType(SliverList),
+        ),
+      );
+      final last = list.lastChild!;
       expect(
-        tester.getBottomLeft(last).dy,
+        last.localToGlobal(Offset(0, last.size.height)).dy,
         lessThan(tester.getTopLeft(key('swarm-new-message')).dy),
       );
     });
@@ -358,13 +405,14 @@ void main() {
       );
       for (final chat in [
         secretLead,
+        oldLead,
         'buddy-other',
         'g-private',
         'buddy-me-web',
       ]) {
         expect(row(chat), findsNothing, reason: chat);
       }
-      for (final text in ['#Secret', 'Ivy · Mobile', 'Their chat']) {
+      for (final text in ['#Secret', '#Old', 'Ivy · Mobile', 'Their chat']) {
         expect(
           inside(find.byType(SwarmNewMessageSheet), find.textContaining(text)),
           findsNothing,
@@ -498,8 +546,19 @@ void main() {
   group('Send', () {
     testWidgets('posts once to the project chat picked, however often it '
         'is tapped, then the sheet closes and the chat opens at its foot '
-        'with the message in it', (tester) async {
+        'with the message in it, read through it', (tester) async {
       final fake = backend();
+      // River wrote in Web before; the person has not read it.
+      posted['$tab/$webLead'] = [
+        {
+          'id': 'river-1',
+          'conversationId': webLead,
+          'text': 'Deploy is green.',
+          'sequence': 1,
+          'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+          'createdAt': DateTime.utc(2026, 10, 30).toIso8601String(),
+        },
+      ];
       final take = fake.routes['/api/super-tabs/$tab/commands']!;
       final answer = Completer<void>();
       fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
@@ -541,6 +600,7 @@ void main() {
       );
       expect((page.swarmId, page.projectId), (tab, web));
       expectHomeCProject('Web');
+      expect(find.text('Deploy is green.'), findsOneWidget);
       expect(find.text('Ship it tonight'), findsOneWidget);
       expect(
         key('swarm-new-messages-line'),
@@ -721,6 +781,61 @@ void main() {
       expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
       expect(sends(fake).single['command']['conversationId'], leadChat);
       expect(sheetOpen(), isFalse);
+    });
+
+    testWidgets('taken while Home is out of sight, it opens nothing, and the '
+        'chat is read through the post, as posting in it reads it: Home '
+        'shows no news of what the person wrote', (tester) async {
+      final fake = backend();
+      final take = fake.routes['/api/super-tabs/$tab/commands']!;
+      final answer = Completer<void>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
+        await answer.future;
+        return take(body);
+      };
+      // The read after the post brings Web's chat at the post.
+      var version = 1;
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c${++version}',
+        groups: [
+          part(
+            webLead,
+            version,
+            inProject(
+              web,
+              groupData(
+                webLead,
+                title: 'Web',
+                lastMessageSequence: posted['$tab/$webLead']?.length ?? 0,
+              ),
+            ),
+          ),
+        ],
+      );
+      final out = ValueNotifier(false);
+      addTearDown(out.dispose);
+      final host = await pump(tester, fake, out: out);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await write(tester, 'Posted on the way out');
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pump();
+
+      out.value = true;
+      await tester.pump();
+      answer.complete();
+      await tester.pumpAndSettle();
+
+      expect(sends(fake), hasLength(1));
+      expect(sheetOpen(), isFalse);
+      expect(find.byType(SwarmProjectPage), findsNothing, reason: 'unseen');
+      final reader = host.session!.inbox.reader(tab)!;
+      expect(reader.snapshot!.conversation(webLead)!.mainSequence, 1);
+      expect(reader.readMarks!.readThrough(webLead), 1);
+      expect(
+        reader.readMarks!.unread(reader.snapshot!.conversation(webLead)!),
+        isFalse,
+      );
     });
   });
 
