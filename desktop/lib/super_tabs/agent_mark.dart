@@ -119,8 +119,9 @@ HarnessActivity? superTabSwarmDown(
 /// another computer reads the same here as on its own.
 ///
 /// This Mac's reading wins only when it is live: a turn running, a question
-/// on screen, starting, failed. Its idle, stopped or offline never beats
-/// progress the Swarm still vouches for: a Mac that sees a shared machine
+/// on screen, starting, failed. Unseen here, the Swarm's word that it stopped
+/// comes next. This Mac's idle, stopped or offline never beats progress the
+/// Swarm still vouches for: a Mac that sees a shared machine
 /// reads every agent there idle, since no turn is reported to it.
 ///
 /// Lost work is down; needs_human or blocked needs you; in review, or done
@@ -143,6 +144,11 @@ HarnessActivity superTabAgentMark(
           HarnessActivity.working) {
     return local!;
   }
+  // The Swarm's word that it stopped (its computer silent, its session
+  // stopped, its start failed) comes after any progress it vouched for.
+  if (local == null) {
+    if (superTabSwarmDown(c, agent, now) case final down?) return down;
+  }
   final held = status == 'working' || status == 'planned';
   final lease = work?.leaseUntil;
   if (held && lease != null && lease.isAfter(now)) {
@@ -150,9 +156,6 @@ HarnessActivity superTabAgentMark(
   }
   if (local case HarnessActivity.paused || HarnessActivity.offline) {
     return local!;
-  }
-  if (local == null) {
-    if (superTabSwarmDown(c, agent, now) case final down?) return down;
   }
   if (superTabWorkWaits(status) ||
       (local == null && agent.alerting.contains('prompt'))) {
@@ -192,6 +195,9 @@ HarnessActivity? superTabAgentWordsActivity(
           HarnessActivity.starting) {
     return local;
   }
+  if (local == null) {
+    if (superTabSwarmDown(c, agent, now) case final down?) return down;
+  }
   final work = superTabAgentWork(c, agent);
   final status = work?.status;
   final lease = work?.leaseUntil;
@@ -202,9 +208,6 @@ HarnessActivity? superTabAgentWordsActivity(
   }
   if (local case HarnessActivity.paused || HarnessActivity.offline) {
     return local;
-  }
-  if (local == null) {
-    if (superTabSwarmDown(c, agent, now) case final down?) return down;
   }
   if (superTabWorkWaits(status)) return HarnessActivity.needsInput;
   return local;

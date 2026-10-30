@@ -2315,6 +2315,148 @@ void main() {
     );
 
     testWidgets(
+      'every mark, as a Mac that sees the agents\' machine only through sharing shows them (screenshots)',
+      (tester) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(const Size(340, 640));
+        final now = DateTime.now().millisecondsSinceEpoch;
+        // The agents run on the Mac Studio; this Mac reads it through sharing
+        // and has no turn reported for any of them (Dee's view, 2026-10-30).
+        f.server.state['machines'] = [
+          {
+            'machineId': 'm',
+            'name': 'Mac Studio',
+            'contributorId': 'owner',
+            'observation': {'receivedAt': now},
+          },
+        ];
+        final agents = f.server.state['agents'] as List;
+        final base = (agents[1] as Map).cast<String, Object>();
+        for (final (i, name) in [
+          (4, 'Juno'),
+          (5, 'Iris'),
+          (6, 'Orion'),
+          (7, 'Wren'),
+          (8, 'Reed'),
+          (9, 'Milo'),
+        ]) {
+          agents.add({
+            ...base,
+            'id': 'agent-$i',
+            'harnessId': 'a$i',
+            'name': name,
+            'displayName': name,
+          });
+        }
+        (agents[8] as Map)['downSince'] = '2026-10-30T01:00:00.000Z';
+        final merge =
+            task(
+                't5',
+                'Reviewer names in the Swarm',
+                'agent-5',
+                'done',
+                ago: const Duration(minutes: 26),
+              )
+              ..['cards'] = <String, Object>{
+                'pullRequests': [
+                  <String, Object>{
+                    'url': 'https://github.com/o/r/pull/7',
+                    'messageId': 'pr-card',
+                  },
+                ],
+              };
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 4),
+          ),
+          task(
+            't3',
+            'Pick a sign-in page',
+            'agent-3',
+            'needs_human',
+            ago: const Duration(minutes: 12),
+          ),
+          task(
+            't4',
+            'Agents list status marks',
+            'agent-4',
+            'review',
+            ago: const Duration(minutes: 7),
+          ),
+          merge,
+          task(
+            't6',
+            'Phone Home screen',
+            'agent-6',
+            'working',
+            ago: const Duration(minutes: 11),
+          ),
+          task(
+            't7',
+            'Night digest',
+            'agent-7',
+            'lost',
+            ago: const Duration(hours: 3),
+          ),
+          {
+            ...task(
+              't9',
+              'Firmware build',
+              'agent-9',
+              'working',
+              ago: const Duration(minutes: 2),
+            ),
+            'liveness': {
+              'state': 'orphaned',
+              'why': 'start-failed',
+              'since': now,
+            },
+          },
+        ]);
+        await f.controller.refresh();
+        f.app.stateOf('m')!.agents = [
+          for (final i in [0, 1, 3, 4, 5, 7])
+            Agent(id: 'a$i', name: 'n$i', engine: 'codex'),
+        ];
+        final expected = {
+          3: HarnessActivity.needsInput,
+          4: HarnessActivity.done,
+          5: HarnessActivity.done,
+          1: HarnessActivity.working,
+          0: HarnessActivity.idle,
+          7: HarnessActivity.offline,
+        };
+        final saved = grid.AppTheme.brightness.value;
+        addTearDown(() => grid.AppTheme.brightness.value = saved);
+        for (final brightness in Brightness.values) {
+          grid.AppTheme.brightness.value = brightness;
+          await f.show(tester, brightness: brightness);
+          for (final MapEntry(key: i, value: activity) in expected.entries) {
+            expect(f.activity(tester, i), activity, reason: 'agent-$i');
+          }
+          // Unseen here and past its lease: nobody can say; stopped; a failed
+          // start.
+          expect(f.activity(tester, 6), HarnessActivity.unknown);
+          expect(f.activity(tester, 8), HarnessActivity.paused);
+          expect(f.activity(tester, 9), HarnessActivity.failed);
+          expect(f.lineText(tester, 1), 'Sidebar rescan fix · 4m');
+          await captureBoundary(
+            tester,
+            f.boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary,
+            captureDir,
+            'agents-every-mark-from-another-mac-${brightness.name}',
+          );
+        }
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
       'access revoked while the list is open clears every row and task title',
       (tester) async {
         final f = await fixture(tester);
