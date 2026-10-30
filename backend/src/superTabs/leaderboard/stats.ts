@@ -10,7 +10,7 @@ import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
+import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
 /** A reviewer model's point for each review verdict it gave (Lead, 2026-10-29). */
@@ -100,7 +100,26 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
     agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
     byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
+    recentModels: recentModels(requests, now),
   }
+}
+
+/** Each model's attempts at requests in the 7 days up to [now], every effort as one, most attempts first. The groups the board
+ *  already holds cover them: dormant ones of the last LEDGER_WEEKS are read with it (read/service.ts). */
+function recentModels(requests: Conversation[], now: number): RecentModel[] {
+  const rows = new Map<string, RecentModel>()
+  for (const run of requests.flatMap(g => g.ledger?.runs ?? [])) {
+    if (run.at < now - WEEK_MS || run.at > now) continue
+    const key = JSON.stringify([run.engine, run.model])
+    let row = rows.get(key)
+    if (!row) rows.set(key, row = { engine: run.engine, model: run.model, attempts: 0, firstReview: { reviewed: 0, passed: 0 } })
+    row.attempts++
+    if (run.firstReview === undefined) continue
+    row.firstReview.reviewed++
+    if (run.firstReview) row.firstReview.passed++
+  }
+  return [...rows.values()].sort((a, b) => b.attempts - a.attempts || a.engine.localeCompare(b.engine)
+    || (a.model ?? '').localeCompare(b.model ?? ''))
 }
 
 /** The project's PM and Buddies with the requests each shipped this week: a PM by the groups it led when they shipped, a
