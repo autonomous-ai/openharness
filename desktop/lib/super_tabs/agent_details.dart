@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'agent_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -44,6 +45,8 @@ class SuperTabAgentInfo {
                (g) =>
                    !g.closed &&
                    g.assignment?['agentId'] == agent.id &&
+                   // Never a task the viewer may not read (review of #2281).
+                   superTabGroupReadable(controller, g) &&
                    !const {
                      'done',
                      'stopped',
@@ -147,6 +150,9 @@ class SuperTabAgentInfo {
         'planned' => 'Assigned to "${group.title}"',
         'blocked' => 'Stuck on "${group.title}"',
         'review' => 'Waiting for review on "${group.title}"',
+        // Handed over with its status still working, as the Swarm reads it.
+        'working' when SuperTabAgentWork(group).handedOver =>
+          'Waiting for review on "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
         // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
         'lost' => 'Lost "${group.title}"',
@@ -251,7 +257,18 @@ Future<void> showSuperTabAgentDetails(
       listenable: Listenable.merge([controller, ?app]),
       builder: (context, _) {
         final current = controller.snapshot?.agent(agent.id) ?? agent;
-        final info = SuperTabAgentInfo(controller, app, current);
+        // The same words the Agents list's hover says: the Swarm's state first.
+        final info = SuperTabAgentInfo(
+          controller,
+          app,
+          current,
+          activity: superTabAgentState(
+            controller,
+            app,
+            current,
+            now: superTabServerNow(controller, DateTime.now()),
+          ).words,
+        );
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;

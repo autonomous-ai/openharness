@@ -1028,6 +1028,8 @@ describe('Swarm cards', () => {
     expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
     expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1', false)
     expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
+    host.superTabSelected('st1', 'p1', 'buddy')
+    expect(w.superTabSelected).toHaveBeenLastCalledWith('st1', 'p1', 'buddy')
     expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
     // A dial that speaks swarmChat asks for the chat on the face: the flag goes on to the wiring.
     host.swarmCardOpen('c1', 'st1', 'l1', true)

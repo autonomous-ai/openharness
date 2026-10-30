@@ -9,6 +9,7 @@ import { resolve } from 'node:path'
 import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
@@ -27,9 +28,43 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
 const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+/** The actions that take an id and then one JSON argument, and what that id names. */
+const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID', route: 'GROUP' }
+const stdinHint = (action: string) => `or send the JSON on stdin with - in its place: ${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
+
+/** The JSON argument, or why it is not one.
+ *
+ *  Codex Builders on Mac Auto (Swarm groups #13 and #16, 2026-10-29/30) got only the usage line back for a work.status
+ *  done: one left out the operation id, one quoted its JSON in single quotes around a result that held `'%h %s'`, so
+ *  the shell split it into several arguments. Neither could tell what to fix, and the finished task stayed open. */
+function jsonArgument(action: string, text: string): unknown {
+  try { return JSON.parse(text) } catch (error) {
+    throw new Error(`The ${action} JSON is not valid (${(error as Error).message}). Pass it as one argument, ${stdinHint(action)}.`)
+  }
+}
+/** Why [positional] is not `ACTION ID JSON`, in words an agent can act on; null to leave it to the usage line. */
+function jsonShapeError(positional: readonly string[]): string | null {
+  const [action, first = ''] = positional
+  const id = JSON_ACTIONS[action]
+  if (!id) return null
+  const hint = stdinHint(action)
+  // Nothing after the action: the id and JSON went on the next lines, which the shell ran as commands of their own.
+  if (positional.length === 1) return `${action} needs ${id} and the JSON on the same command line: ${action} ${id} JSON. A line break without \\ before it ends the command; ${hint}.`
+  if (!identifier(first)) {
+    return (first as string).trim().startsWith('{')
+      ? `${action} needs ${id} before the JSON: ${action} ${id} JSON. ${id === 'OPERATION_ID' ? 'Use a new unique id of letters, digits, - or _ (reuse it only to repeat an interrupted request).' : ''}`.trim()
+      : `${action} needs ${id} first, as letters, digits, - or _ only: ${action} ${id} JSON.`
+  }
+  if (positional.length < 3 || !positional[2]) return `${action} needs its JSON after ${id}: ${action} ${first} JSON, ${hint}.`
+  if (action !== 'propose' && positional.length > 3) {
+    return `${action} takes ${id} and the JSON as one argument, but got ${positional.length - 2} arguments after ${id}: a quote inside the JSON ended the shell's quoting. Quote it so it stays one argument, ${hint}.`
+  }
+  return null
+}
+
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
 const MAX_PROPOSAL_FILES = 5
-export function parseSuperTabArgs(argv: readonly string[], where: Where) {
+export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8')) {
   const positional: string[] = []
   let tabId = '', agentId = ''
   const target = { ...where }
@@ -42,6 +77,8 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     else { positional.push(...argv.slice(i)); break }
   }
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !identifier(target.machineId)) throw new Error(USAGE)
+  // `-` in the JSON's place reads it from stdin, where no shell quoting can split it.
+  if (JSON_ACTIONS[positional[0]] && positional[2] === '-') positional[2] = stdin()
   const [action, first, second, third] = positional
   if (action !== 'help' && (!identifier(tabId) || (agentId && !identifier(agentId)))) throw new Error(USAGE)
   const payload: Record<string, unknown> = { action, tabId, agentId }
@@ -84,7 +121,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     Object.assign(payload, { action: 'command', operationId: positional[4],
       command: { type: 'message.react', conversationId: first, messageId: second, emoji: third, on: positional.length === 5 } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { operationId: first, command: JSON.parse(second) })
+    Object.assign(payload, { operationId: first, command: jsonArgument(action, second) })
   } else if (action === 'propose' && identifier(first) && second) {
     const attach: string[] = []
     for (let i = 3; i < positional.length; i += 2) {
@@ -95,12 +132,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     if (attach.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
     // A Buddy's proposal for its owner (backend buddies.ts): only ever that command, whatever the JSON says it is.
     Object.assign(payload, { action: 'command', operationId: first, ...(attach.length ? { attach } : {}),
-      command: { ...JSON.parse(second), type: 'buddy.propose' } })
+      command: { ...object(jsonArgument(action, second)), type: 'buddy.propose' } })
   } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { operationId: first, request: JSON.parse(second) })
+    Object.assign(payload, { operationId: first, request: jsonArgument(action, second) })
   } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
   else if (action === 'capacity' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { targetMachineId: first, request: JSON.parse(second) })
+    Object.assign(payload, { targetMachineId: first, request: jsonArgument(action, second) })
   } else if (action === 'remove-machine' && identifier(first) && (positional.length === 2 || positional.length === 3 && second === '--yes')) {
     // The machine's owner, as the person: without --yes, what removal would do (the agents it stops, a refusal); with it,
     // the removal. The daemon's owner-only backend request carries both.
@@ -112,7 +149,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
     Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })
   } else if (action === 'route' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { conversationId: first, assessment: JSON.parse(second) })
+    Object.assign(payload, { conversationId: first, assessment: jsonArgument(action, second) })
   } else if (action === 'plan' && positional.length <= 2) {
     if (first !== undefined) payload.request = JSON.parse(first)
   } else if (action === 'screen' && identifier(first) && (positional.length === 2
@@ -134,7 +171,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     if (!text && !keys.length) throw new Error(USAGE)
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
-  } else if (!['status', 'help'].includes(action) || positional.length !== 1) throw new Error(USAGE)
+  } else if (!['status', 'help'].includes(action) || positional.length !== 1) throw new Error(jsonShapeError(positional) ?? USAGE)
   return { where: target, payload }
 }
 

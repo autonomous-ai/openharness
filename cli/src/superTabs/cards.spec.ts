@@ -885,12 +885,21 @@ describe('leadsOf Buddies', () => {
     leadsOf(state, 'm1', idle, 'me', focus, side).leads.find(l => l.projectId === 'web')!
 
   it('gives each Lead a buddy block for the reader\'s own Buddy, with Desktop\'s avatar', () => {
-    expect(web(on()).buddy).toEqual({ chatId: 'pm-web', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true })
+    expect(web(on()).buddy).toEqual({ chatId: 'pm-web', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true, local: 'h-y1' })
     // The project with no Buddy chat has no block.
     expect(leadsOf(on(), 'm1', idle, 'me').leads.find(l => l.projectId === 'mobile')).not.toHaveProperty('buddy')
     // A Buddy that is down is still the Buddy; its display name is the one Desktop draws and shows.
     const down = on({ agents: [...chats().agents as object[], buddy({ downSince: '2026-10-29T00:00:00.000Z', displayName: "ken's Buddy" })] })
-    expect(web(down).buddy).toEqual({ chatId: 'pm-web', name: "ken's Buddy", engine: 'codex', cells: 30735, color: '#d69abb', live: false })
+    expect(web(down).buddy).toEqual({ chatId: 'pm-web', name: "ken's Buddy", engine: 'codex', cells: 30735, color: '#d69abb', live: false, local: 'h-y1' })
+  })
+
+  it('names the Buddy\'s session only when it runs on this computer, so a tap on it can be told from any other', () => {
+    // On another machine, or with no session the core holds here: no id, and a tap on the dial opens nothing new.
+    const elsewhere = on({ agents: [...chats().agents as object[], buddy({ machineId: 'm2' })] })
+    expect(web(elsewhere).buddy).not.toHaveProperty('local')
+    expect(leadsOf(on(), 'm1', h => h === 'h-y1' ? null : { inTurn: false }, 'me').leads.find(l => l.projectId === 'web')!.buddy).not.toHaveProperty('local')
+    const unnamed = on({ agents: [...chats().agents as object[], buddy({ harnessId: '' })] })
+    expect(web(unnamed).buddy).not.toHaveProperty('local')
   })
 
   it('marks buddies only while the Swarm has them on', () => {
