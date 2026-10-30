@@ -36,8 +36,9 @@ class SuperTabMessageText extends StatelessWidget {
   }
 
   /// [tags] on the first line of [text], as a person types them in chat.
-  /// Only text that opens with a block (a list, heading, quote, table or
-  /// code) keeps them on a line of their own, so that block still renders.
+  /// Only text that opens with a block (a list, heading, quote, table, code,
+  /// divider or link definition) keeps them on a line of their own, so that
+  /// block still renders.
   static String withTags(List<String> tags, String text) {
     if (tags.isEmpty) return text;
     final body = text.replaceFirst(RegExp(r'^(?:[ \t]*\n)+'), '');
@@ -47,7 +48,9 @@ class SuperTabMessageText extends StatelessWidget {
   }
 
   static final _opensBlock = RegExp(
-    r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t]|$)|#{1,6}(?:[ \t]|$)|>|\d{1,9}[.)](?:[ \t]|$)|```|~~~|\|))',
+    r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t\n]|$)|#{1,6}(?:[ \t\n]|$)|>'
+    r'|\d{1,9}[.)](?:[ \t\n]|$)|```|~~~|\||\[[^\]\n]+\]:'
+    r'|(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})(?:\n|$)))',
   );
 
   @override

@@ -951,6 +951,12 @@ void main() {
       expect(tagged('-5 degrees'), '@dee -5 degrees');
       expect(tagged('2026 plan'), '@dee 2026 plan');
       expect(tagged('Hi'), '@dee Hi');
+      expect(tagged('***Important*** now'), '@dee ***Important*** now');
+      expect(tagged('__init__ runs'), '@dee __init__ runs');
+      expect(
+        tagged('[link](https://example.com) here'),
+        '@dee [link](https://example.com) here',
+      );
       // A list, heading, quote, table or code keeps rendering as one.
       for (final block in [
         '- one\n- two',
@@ -961,6 +967,12 @@ void main() {
         '| a | b |\n|---|---|',
         '```\ncode\n```',
         '    indented code',
+        '---',
+        '***',
+        '- - -',
+        '-\nnext',
+        '1.\nnext',
+        '[1]: https://example.com',
       ]) {
         expect(tagged(block), '@dee\n\n$block', reason: block);
       }
@@ -971,6 +983,7 @@ void main() {
       await showText(tester, '- one\n- two', ['dee']);
       expect(find.text('one', findRichText: true), findsOneWidget);
       expect(find.text('@dee', findRichText: true), findsOneWidget);
+      expect(runsOf(tester, '@dee').single?.backgroundColor, isNotNull);
     });
 
     testWidgets('a tag in code stays code', (tester) async {
