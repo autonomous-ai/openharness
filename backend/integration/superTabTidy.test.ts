@@ -687,6 +687,21 @@ describe('a delivery that cannot move', () => {
     }
   })
 
+  it('never takes a late acknowledgement for a quiet claim the pass ended from another agent, or once its agent left the group', async () => {
+    const f = await swarm()
+    const id = await toWorker(f, 'Typed, then the worker was taken off the task.')
+    await f.timed.delivery(host, f.tab, f.worker, id, { type: 'claim', claimId: 'claim' })
+    await settleAfter(f, id, 10 * MINUTE + 1_000)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'claim_quiet' })
+    // The same claim id, sent as another agent of the same host: the delivery is looked up by its own agent, so it is not found.
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: false, lead: false })
+    await expect(f.timed.delivery(host, f.tab, f.worker, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', receipt: null })
+  })
+
   it('never types a hold the pass ended: claiming it again is refused', async () => {
     const f = await swarm()
     const id = await toLead(f, 'Held and ended, never typed.')

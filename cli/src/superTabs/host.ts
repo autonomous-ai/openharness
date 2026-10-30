@@ -760,6 +760,7 @@ export class SuperTabHost {
       } catch { /* Missing authority or a network failure is not a receipt. */ }
     }
   }
+  /** Only while it is still this entry: a late acknowledgement's answer must not retire one that replaced it meanwhile. */
   private retireEntry(entry: Entry): void {
     if (this.journal.entries[entry.deliveryId] !== entry) return
     delete this.journal.entries[entry.deliveryId]
@@ -979,7 +980,6 @@ export class SuperTabHost {
       else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
-    for (const deliveryId of this.lateAcks.keys()) if (!this.journal.entries[deliveryId]) this.lateAcks.delete(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -1367,6 +1367,7 @@ export class SuperTabHost {
     if (!entry) return
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
+    this.lateAcks.delete(deliveryId)
     this.withheld.clear(deliveryId)
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
