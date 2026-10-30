@@ -189,7 +189,8 @@ describe('what a Buddy reads', () => {
   it('shows no other agent\'s machine owner, contributor or Team account, nor a task\'s, only its own (security reviews of #2258)', () => {
     const f = setup()
     const pm = f.state.agents.find(a => a.id === f.pm)!
-    Object.assign(pm, { machineOwnerId: 'ken-user', teamAccount: true })
+    // A grant under an older share policy names the contributor's email (lib/machineSharePolicy.ts machineShareGrant).
+    Object.assign(pm, { machineOwnerId: 'ken-user', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
     expect(pm.contributorId).toBe('owner')
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
       execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'ken-user' } } as never
@@ -201,13 +202,15 @@ describe('what a Buddy reads', () => {
     // Nor at which membership another agent was added, which matches a person's and so names them (delta review 1 of #2258).
     const generations = new Set(seen.people.map(p => p.generation))
     expect(seen.agents.filter(a => a.id !== 'buddy' && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
-    expect(agent(f.pm).membershipGeneration).toBe('')
+    expect([agent(f.pm).membershipGeneration, agent(f.pm).hostGrant]).toEqual(['', null])
+    expect(JSON.stringify(seen)).not.toContain('ken@example.com')
     // Its own record keeps who added it, at which membership and on whose machine, as before.
     expect([agent('buddy').machineOwnerId, agent('buddy').contributorId, agent('buddy').membershipGeneration]).toEqual(['host', 'peer', 'first'])
     // People and the PM read them as before; the stored agent is unchanged.
     for (const reader of [owner, { kind: 'agent', agentId: f.pm, machineOwnerId: 'ken-user' } as Actor]) expect(visibleState(f.state, reader).agents
-      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration })
-    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true })
+      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration,
+        hostGrant: 'share-1:email:ken@example.com' })
+    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
   })
 
   it('is no other person\'s Buddy chat in the same project', () => {

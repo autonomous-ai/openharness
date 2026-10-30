@@ -446,13 +446,14 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
 }
 /** An agent as a Buddy [buddyId] reads it: no machine, and for any agent but itself not whose machine, membership or Team
  *  account runs it, which says whose Mac runs the PM (security reviews of #2258). Its membership's generation matches a
- *  person's, so it goes too (delta review 1 of #2258). */
-export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'teamAccount'
+ *  person's, so it goes too (delta review 1 of #2258), and so does its host grant, which under an older share policy names
+ *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
+export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant' | 'teamAccount'
   | 'replacement' | 'lostTask'>>(target: T, buddyId: string): T => {
   const bare = agentWithoutMachine(target)
   if (target.id === buddyId) return bare
   const { teamAccount: _team, ...rest } = bare
-  return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '' } as T
+  return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
 }
 /** A group as a Buddy reads it: its task names no machine, terminal or machine owner. */
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {

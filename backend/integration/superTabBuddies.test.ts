@@ -469,6 +469,9 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
       conversationId: 'lead', text, replyTo, recipientIds: [] }, user, asAgentId)).result.messageId)
     const pmRow = await send('The plan is up.', owner, f.lead), personRow = await send('Thanks.', peer)
     await send('Glad it helps.', owner, f.lead, personRow)
+    // The PM's grant as an older share policy wrote it, naming its contributor's email (lib/machineSharePolicy.ts).
+    const stored = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: f.lead } })
+    await db.swarmAgent.update({ where: { id: stored.id }, data: { data: { ...stored.data as object, hostGrant: `share-1:email:${owner.email}` } } })
     const people = (await f.store.read(owner, f.tab)).state.people
     const generations = new Set(people.map(p => p.generation))
     const peerGeneration = people.find(p => p.id === peer.sub)!.generation
@@ -478,6 +481,10 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
     const roster = first.agents.map(a => a.data)
     expect(roster.map(a => a.id)).toContain(f.lead)
     expect(roster.filter(a => a.id !== agentId && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
+    // Nor by the grant it runs under, which may name its contributor (final check of #2258).
+    expect(roster.filter(a => a.id !== agentId).map(a => a.hostGrant ?? null)).toEqual(roster.filter(a => a.id !== agentId).map(() => null))
+    expect(JSON.stringify(roster)).not.toContain(`email:${owner.email}`)
+    expect((await new SwarmReads(f.store).firstLoad(owner, f.tab)).agents.find(a => a.key === f.lead)!.data.hostGrant).toBe(`share-1:email:${owner.email}`)
     expect(roster.find(a => a.id === agentId)!.membershipGeneration).toBe(peerGeneration)
 
     // Rows: an agent's has no membership, in the page and read alone; a person's keeps theirs, which its host compares.
