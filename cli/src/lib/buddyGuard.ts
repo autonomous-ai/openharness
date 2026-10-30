@@ -13,7 +13,9 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 export interface BuddyReads { file: string; drops: string }
 /** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
  *  outside its folder that stay closed, and its person's approvals on this machine. */
-export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[] }
+export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[];
+  /** Where Claude Code keeps sessions' tool output: closed to the Buddy's reads, open to its sandbox, which writes its output there. */
+  sessionTemp: readonly string[] }
 
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
@@ -32,7 +34,7 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[] }): BuddyWide {
-  return { home: input.home, repos: input.repos, hosts: input.hosts ?? [], denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+  return { home: input.home, repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
     approvalsDir: join(input.dataDir, 'buddy-approvals') }
 }
 
@@ -94,7 +96,10 @@ const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
  * and host list hold for them too.
  */
 export function buddySandboxSettings(root: string, wide: BuddyWide): Record<string, unknown> {
-  const signIns = new Set(TOOL_SIGN_INS.map(path => join(wide.home, path)))
+  // Open to the sandbox: the tools' own sign-ins, and Claude Code's temporary folder, where every command's output goes
+  // (with it closed, even cat failed: "cat: stdout: Operation not permitted", Claude Code 2.1.314). The guard keeps both
+  // closed to the Buddy's own reads.
+  const signIns = new Set([...TOOL_SIGN_INS.map(path => join(wide.home, path)), ...wide.sessionTemp])
   return {
     enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
     excludedCommands: ['harness super-tab *', 'harness buddy-read *'],

@@ -482,6 +482,7 @@ describe('the launch\'s wide mode and sandbox', () => {
     const launched = buddyLaunchWide(repo, deps)!
     expect(launched).toEqual({ home: launchHome, approvalsDir: join(dataDir, 'buddy-approvals'),
       repos: ['autonomous-ai/openharness', 'someone/openharness'], hosts: ['deploy.autonomous.ai', 'k8s.example.net'],
+      sessionTemp: expect.arrayContaining(['/tmp/claude-501', '/private/tmp/claude-501']),
       denied: expect.arrayContaining([join(launchHome, '.ssh'), join(launchHome, '.claude'), dataDir, '/tmp/claude-501', '/private/tmp/claude-501']) })
   })
 
@@ -505,8 +506,15 @@ describe('the launch\'s wide mode and sandbox', () => {
       network: { allowedDomains: ['api.github.com', 'github.com', '*.actions.githubusercontent.com', '*.blob.core.windows.net', 'deploy.autonomous.ai',
         'k8s.example.net'], allowLocalBinding: true },
       filesystem: { allowWrite: [], denyWrite: [repo], denyRead: launched.denied.filter(path => ![join(launchHome, '.config', 'gh'),
-        join(launchHome, '.config', 'argocd'), join(launchHome, '.argocd'), join(launchHome, '.kube')].includes(path)) },
+        join(launchHome, '.config', 'argocd'), join(launchHome, '.argocd'), join(launchHome, '.kube'), ...launched.sessionTemp].includes(path)) },
     })
+  })
+
+  it('leaves Claude Code\'s temporary folder open to the sandbox, where each command\'s output goes, and closed to the Buddy', () => {
+    const launched = buddyLaunchWide(repo, deps)!
+    const denyRead = (buddySandboxSettings(repo, launched).filesystem as { denyRead: string[] }).denyRead
+    expect(denyRead).not.toContain('/private/tmp/claude-501')
+    expect(launched.denied).toContain('/private/tmp/claude-501')
   })
 
   it('leaves the tools\' own sign-ins readable to them in the sandbox, though the Buddy itself still may not read them', () => {
