@@ -429,6 +429,9 @@ describe('no secret leaves in a post or a proposal', () => {
     writeFileSync(join(root, 'plan.md'), 'The plan: measure CPU, then decide.\n')
     expect(bash('harness super-tab post chat \'See the notes\' op-1 --attach leak.md')).toBe('deny')
     expect(bash('harness super-tab post chat \'See the plan\' op-1 --attach plan.md')).toBe('allow')
+    // Through a link in the folder too, as Harness sends the file it points at.
+    symlinkSync(join(root, 'leak.md'), join(root, 'leak-link.md'))
+    expect(bash('harness super-tab post chat \'See the notes\' op-1 --attach leak-link.md')).toBe('deny')
   })
 
   it.each([

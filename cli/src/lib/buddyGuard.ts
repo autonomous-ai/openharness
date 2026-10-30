@@ -335,14 +335,15 @@ const SECRETS = [
 const secretIn = (text) => SECRETS.find(([, shape]) => shape.test(text))?.[0] ?? null
 const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
   'send again: never pass on secrets, tokens, keys or connection strings.'
-// A file to attach, in the folder: its first 10 MB, the most a chat file holds, read as text.
+// A file to attach, in the folder (outward refused any other): its first 10 MB, the most a chat file holds, read as text.
+// One that is not there holds nothing, as sending it fails anyway; one there that cannot be read is refused.
 function fileText(path) {
   let fd
   try {
-    fd = openSync(resolve(ROOT, path), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    fd = openSync(resolve(ROOT, path), constants.O_RDONLY)
     const buffer = Buffer.alloc(10 * 1024 * 1024), read = readSync(fd, buffer, 0, buffer.length, 0)
     return buffer.subarray(0, read).toString('utf8')
-  } catch { return null } finally { if (fd !== undefined) closeSync(fd) }
+  } catch (error) { return error?.code === 'ENOENT' ? '' : null } finally { if (fd !== undefined) closeSync(fd) }
 }
 // In wide mode a proposal carries a summary, never what a command printed: no code block and at most 10 lines.
 function pastedOutput(json) {
