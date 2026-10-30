@@ -580,7 +580,11 @@ function pastedOutput(json) {
   const text = [proposal?.goal, proposal?.scope].filter((part) => typeof part === 'string').join('\n')
   return text.includes('\x60\x60\x60') || text.split('\n').length > 10
 }
-const SUMMARIZE = 'A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
+const STDIN = (action) => (action === 'post' ? 'A Buddy passes its message as TEXT itself' : 'A Buddy passes its proposal\'s JSON itself') +
+  ': - in its place reads it from stdin, where Harness cannot check it for secrets. Nothing was sent, and nobody will be asked. ' +
+  'Send again with it in quotes where the - was: ' + (action === 'post' ? 'harness super-tab post GROUP \'your message\' OPERATION_ID'
+    + ', or in double quotes when it holds an apostrophe: "it\'s done"' : 'harness super-tab propose OPERATION_ID \'{"conversationId":"...","goal":"..."}\'') + '.'
+const SUMMARIZE ='A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
   'was sent, and nobody will be asked. Summarize the numbers and findings in a few lines and send again.'
 
 // harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, an --attach only from its folder, and nothing it sends
@@ -593,6 +597,11 @@ function superTabAllowed(rest) {
   if (after.some((word, at) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
     || ['--agent', '--port', '--machine'].includes(word))) return false
   if (rest[i] !== 'post' && rest[i] !== 'propose') return true
+  // A post's TEXT or a proposal's JSON that is exactly - is read from stdin (superTabs/command.ts, post since #2355), where
+  // this guard sees only the dash and cannot check what is sent for secrets. A Buddy cannot feed stdin today (no pipes,
+  // redirects or heredocs above), but the secret check must not rest on that. Any other text, -- or "- P1" among them, is
+  // the message itself and is checked as it is.
+  if (after[1] === '-') { reason = STDIN(rest[i]); return false }
   const attached = after.flatMap((word, at) => after[at - 1] === '--attach' ? [fileText(word)] : [])
   if (attached.includes(null)) return false
   // Its words one by one, and what it says run together: the post's text or the proposal's decoded fields, with its files.

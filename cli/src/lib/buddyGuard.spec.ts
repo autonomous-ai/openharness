@@ -308,6 +308,54 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     expect(reason).toContain('an Artifact link they sent, with the Artifact tool\'s read and that link')
   })
 
+  // Since #2355 a post's TEXT - reads the message from stdin, as a proposal's JSON - always has: the guard sees only the dash,
+  // so it could not check what is sent for secrets. A Buddy cannot feed stdin today (no pipes, redirects or heredocs), but
+  // its guard must not depend on that.
+  function refusal(command: string): { permissionDecision: string; permissionDecisionReason: string } {
+    const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command, description: 'x' }, cwd: root }))
+    expect(run.status).toBe(0)
+    return JSON.parse(run.stdout).hookSpecificOutput
+  }
+  it.each([
+    'harness super-tab --tab t post chat - op-1',
+    'harness super-tab post chat - op-1',
+    "harness super-tab --tab t post chat '-' op-1",
+    'harness super-tab --tab t post chat "-" op-1',
+    "harness super-tab --tab t post chat ''- op-1",
+    "harness super-tab --tab t post chat -'' op-1",
+    'harness super-tab --tab t --tab t post chat - op-1',
+    'harness super-tab --tab t post chat - op-1 --reply-to m1',
+    'harness super-tab --tab t post chat - op-1 --attach notes/plan.md',
+    'harness super-tab --tab t post chat - op-1 --mention ken',
+  ])('refuses a post whose message would come from stdin, naming the fix: %s', command => {
+    const { permissionDecision, permissionDecisionReason } = refusal(command)
+    expect(permissionDecision).toBe('deny')
+    expect(permissionDecisionReason).toContain('nobody will be asked')
+    expect(permissionDecisionReason).toContain('Harness cannot check it for secrets')
+    expect(permissionDecisionReason).toContain("harness super-tab post GROUP 'your message' OPERATION_ID")
+    expect(permissionDecisionReason).toContain('in double quotes when it holds an apostrophe')
+  })
+  // The fix it names goes through: a message with an apostrophe, the one a Buddy might have sent on stdin, in double quotes.
+  it('sends the message the refusal tells it to, in double quotes when it holds an apostrophe', () => {
+    expect(bash('harness super-tab --tab t post chat "it\'s done: the - case is refused" op-1 --reply-to m1')).toBe('allow')
+  })
+  it.each([
+    'harness super-tab --tab t propose op-1 -',
+    "harness super-tab --tab t propose op-1 '-'",
+    'harness super-tab --tab t propose op-1 - --attach notes/plan.md',
+  ])('refuses a proposal whose JSON would come from stdin, naming the fix: %s', command => {
+    const { permissionDecision, permissionDecisionReason } = refusal(command)
+    expect(permissionDecision).toBe('deny')
+    expect(permissionDecisionReason).toContain('nobody will be asked')
+    expect(permissionDecisionReason).toContain('Harness cannot check it for secrets')
+    expect(permissionDecisionReason).toContain("harness super-tab propose OPERATION_ID '{")
+  })
+  // Only a TEXT that is exactly - reads stdin (superTabs/command.ts): any other is the message, dashes and all.
+  it.each(['--', '---', '- ', ' -', '-x', '- P1: fixed in 3f2a', '-1 is the exit code', 'a - b', '- '])('still sends a post whose text is %j', text => {
+    expect(bash(`harness super-tab --tab t post chat '${text}' op-1`)).toBe('allow')
+    expect(bash(`harness super-tab --tab t post chat '${text}' op-1 --reply-to m1`)).toBe('allow')
+  })
+
   it('fails closed: a guard that cannot run blocks the call (exit 2) instead of falling back to other rules', () => {
     const missing = buddyGuardCommand(join(root, 'no-node'), script)
     expect(spawnSync('/bin/sh', ['-c', missing], { input: '{}', encoding: 'utf8' }).status).toBe(2)
