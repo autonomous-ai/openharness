@@ -513,6 +513,157 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(t.saved().entries).toEqual({})
   })
+  describe('an acknowledgement the backend could not take', () => {
+    /** Typed, then every POST answers busy until `up`; the list and the receipt read say what the backend holds. */
+    const outage = (t: ReturnType<typeof setup>) => {
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      const s = { down: true, ended: false, refusal: null as null | { status: number; code: string }, acks: 0 }
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        const command = body as Record<string, unknown> | undefined
+        if (command?.type === 'ack') s.acks++
+        if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
+          if (s.down) return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'The Swarm is busy.' } } }
+          if (s.refusal) return { status: s.refusal.status, body: { success: false, error: { code: s.refusal.code, message: 'Refused.' } } }
+        }
+        if (s.ended && method === 'GET' && path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
+        if (s.ended && method === 'GET' && path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+        return original(method, path, body)
+      })
+      return s
+    }
+    const typed = async (t: ReturnType<typeof setup>) => {
+      const host = t.open()
+      await host.tick(); t.event('delivered')
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      return host
+    }
+
+    it('is sent again with backoff: one that fails twice, then gets in, leaves the delivery delivered and the journal empty', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      const claimId = t.saved().entries.delivery.claimId
+      await host.tick().catch(() => {}); t.wait(1_000)
+      await host.tick().catch(() => {}); t.wait(2_000)
+      expect(s.acks).toBe(2)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      s.down = false
+      await host.tick()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', claimId, uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    // The 10-30 SWARM_BUSY outage: acknowledgements failed for longer than the backend's 10-minute claim quiet time, so its
+    // delivery pass ended claims the agents had in fact received, and their senders saw Not sent.
+    it('is still sent once the backend\'s delivery pass ended the quiet claim, so the message counts as delivered', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      const claimId = t.saved().entries.delivery.claimId
+      await host.tick().catch(() => {}); t.wait(11 * 60_000)
+      s.down = false; s.ended = true
+      await host.tick(); await host.reconcileReceipts()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', claimId, uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('is not sent again once the backend refuses it, as for a delivery an archive ended, and the entry goes', async () => {
+      for (const refusal of [{ status: 403, code: 'DELIVERY_REVOKED' }, { status: 403, code: 'FORBIDDEN' }, { status: 409, code: 'CLAIM_CONFLICT' }]) {
+        const t = setup(), host = await typed(t), s = outage(t)
+        s.down = false; s.ended = true; s.refusal = refusal
+        await host.reconcileReceipts()
+        expect(s.acks).toBe(1)
+        expect(t.saved().entries).toEqual({})
+        t.wait(10 * 60_000)
+        await host.tick(); await host.reconcileReceipts()
+        expect(s.acks).toBe(1)
+        expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      }
+    })
+
+    it('keeps the entry while the backend still cannot take it, trying again only after a growing wait, until it gets through', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      // The list says nothing waits, the receipt says ended, and the acknowledgement still answers busy.
+      s.ended = true
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      // 10 s, then 20 s: the receipts pass itself runs every 5 s.
+      t.wait(5_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      t.wait(6_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(2)
+      t.wait(6_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(2)
+      t.wait(15_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(3)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      t.wait(41_000); s.down = false
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(4)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Delivery delivery was acknowledged after the backend ended it, 4 tries'))
+    })
+
+    it.each([['answers busy', null], ['drops the connection', 'socket closed']])('gives up after a day while the backend %s, said once, so the journal never fills', async (_case, dropped) => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.ended = true
+      if (dropped) {
+        const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+        vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+          if (method === 'POST' && path.endsWith('/deliveries/delivery')) { s.acks++; throw dropped }
+          return original(method, path, body)
+        })
+      }
+      await host.reconcileReceipts()
+      for (let i = 0; i < 400; i++) { t.wait(5 * 60_000); await host.reconcileReceipts() }
+      expect(t.saved().entries).toEqual({})
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining(`Gave up acknowledging delivery delivery to agent agent in Swarm tab after a day: ${dropped ?? 'The Swarm is busy.'}`))
+      expect(vi.mocked(t.log).mock.calls.filter(([line]) => String(line).startsWith('Gave up'))).toHaveLength(1)
+      const tries = s.acks
+      t.wait(10 * 60_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(tries)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('writes nothing once the host stops during a late acknowledgement, and keeps the entry for the next host', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.down = false; s.ended = true
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        if ((body as Record<string, unknown> | undefined)?.type === 'ack') host.stop()
+        return original(method, path, body)
+      })
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+    })
+
+    it('never retires an entry that replaced the one it acknowledged late while the answer was on its way', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.down = false; s.ended = true
+      const journal = (host as unknown as { journal: { entries: Record<string, Record<string, unknown>> } }).journal
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        if ((body as Record<string, unknown> | undefined)?.type === 'ack') journal.entries.delivery = { ...journal.entries.delivery, claimId: 'newer' }
+        return original(method, path, body)
+      })
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      expect(journal.entries.delivery).toMatchObject({ claimId: 'newer' })
+    })
+
+    it('never acknowledges late a delivery it reported uncertain, nor one its host never typed', async () => {
+      for (const stage of ['unknown', 'held'] as const) {
+        const t = setup(), host = t.open()
+        await host.tick()
+        if (stage === 'held') t.event('rejected', 'team_waiting_busy'); else t.event('unknown', 'lost acknowledgement')
+        const s = outage(t)
+        s.down = false; s.ended = true
+        await host.reconcileReceipts()
+        expect(s.acks).toBe(0)
+        expect(t.saved().entries).toEqual({})
+      }
+    })
+  })
   it('drops the lease of a held delivery answered while its lease was being granted', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('rejected', 'team_waiting_busy')

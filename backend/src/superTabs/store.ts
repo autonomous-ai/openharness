@@ -54,7 +54,7 @@ import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, forRecipients, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
-import type { HoldReason } from './holdReason.js'
+import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
@@ -2943,9 +2943,10 @@ export class SuperTabStore {
       parkLaterConversations(state)
       syncLeads(state)
       author(state, await this.actor(tx, user, state, agentId), true)
-      // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it: the
-      // host's own confirmation counts, or the agent has it while its sender sees Not sent and sends it again (review of
-      // #1941). Nothing else brings an ended delivery back.
+      // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it, or a claim
+      // whose acknowledgement could not get through for 10 minutes (QUIET_CLAIM): the host's own confirmation counts, or the
+      // agent has it while its sender sees Not sent and sends it again (review of #1941, prod 10-30). Nothing else brings an
+      // ended delivery back: every other cancel clears the reason.
       const typedAsEnded = delivery?.status === 'cancelled' && !!delivery.holdReason && action.type === 'ack' && delivery.claimId === action.claimId
       if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' && !typedAsEnded ||
           !await this.senderAllowed(tx, state, delivery)) fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
@@ -3120,7 +3121,10 @@ export class SuperTabStore {
   /** Ends, as cancelled, those of this Swarm's open deliveries `rows` (as the delivery pass read them) that can no longer move
    *  (deliverySettle.ts). Each only as it was read: one its host acknowledged since, or a claim with no hold its host claimed
    *  again since, is kept. A held claim its host claims again still ends once its hold is over; it keeps its hold's reason,
-   *  so its sender learns why, and its host's confirmation that it typed it still counts (delivery). The number ended. */
+   *  so its sender learns why, and its host's confirmation that it typed it still counts (delivery). So does a quiet claim's,
+   *  which the pass marks claim_quiet: prod 10-30, two hours of SWARM_BUSY kept typed messages' acknowledgements out past
+   *  CLAIM_QUIET_MS, and their senders saw Not sent and sent them again. One its recipient could no longer read is not
+   *  marked: a group archived and reopened later must not take it back. The number ended. */
   async settleDeliveries(tabId: string, rows: SuperTabDelivery[], now: number): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -3128,13 +3132,15 @@ export class SuperTabStore {
       const state = row ? (await loadRow(tx, requireParts(row), { groupIds: [...new Set(rows.map(r => r.conversationId))] })).state : null
       let settled = 0
       for (const delivery of rows) {
-        if (!stuck(delivery, !!state && this.deliveryAllowed(state, delivery), now)) continue
+        const reachable = !!state && this.deliveryAllowed(state, delivery)
+        if (!stuck(delivery, reachable, now)) continue
         // A held claim is the same while its claim and hold are: its live host claims it again on every poll (cli
         // superTabs/host.ts), so its write time would let it outrun the pass for good. Any other is as last written.
         const unchanged = delivery.holdSince ? { claimId: delivery.claimId, holdReason: delivery.holdReason, holdSince: delivery.holdSince }
           : { updatedAt: delivery.updatedAt }
+        const quiet = reachable && delivery.status === 'claimed' && !delivery.holdSince
         settled += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, ...unchanged },
-          data: { status: 'cancelled' } })).count
+          data: { status: 'cancelled', ...quiet ? { holdReason: QUIET_CLAIM } : {} } })).count
       }
       return settled
     })
