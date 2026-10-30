@@ -3,9 +3,11 @@
  * in the last day and the last 7 days, the waste, and at most three routing changes for its owner to approve, each with its
  * expected saving. Pure: lib/routingReflection.ts reads the attempts (costs/read.ts costRows), failed starts and evidence, and
  * posts the text. Counts only: engines, models, efforts and kinds of work, never a task's title, a message or an id.
- * Nothing here changes routing; a proposal is a question for the owner.
+ * Nothing here changes routing: a proposal is advice asked of the owner, and an approved one is listed every night until
+ * routing applies it by itself (piece 3). No rule kind can express a change per kind of work (rules.ts).
  */
 import { stableId, type Conversation } from '../model.js'
+import { modelMatches, type SwarmRule } from '../rules.js'
 import type { ModelKindEvidence } from '../evidence/store.js'
 import { attemptCost } from './cost.js'
 import { MAX_ROWS, summarizeCosts, type CostRow, type CostSummaryRow } from './read.js'
@@ -15,13 +17,26 @@ const MINUTE = 60_000, DAY = 24 * 60 * MINUTE
 export const MAX_PROPOSALS = 3
 /** Rows of the per-model table the report lists; the rest are counted. */
 const MAX_LINES = 12
-/** A proposal needs this much evidence on each side: fewer first reviews or shipped changes say too little. */
-const MIN_FIRST_REVIEWS = 3
-const MIN_SHIPPED = 2
-/** A model under this first-review pass rate on a kind of work is proposed to stop taking it. */
+/** A cheaper model is proposed only with this much evidence on each side: fewer first reviews or shipped changes say too
+ *  little (review of #2276: 3 and 2 gave confident proposals from a handful of tasks). */
+const MIN_FIRST_REVIEWS = 5
+const MIN_SHIPPED = 3
+/** A model is proposed to stop taking a kind of work only when even the top of its pass rate's 95% range is under this. */
 const LOW_PASS_RATE = 0.5
 /** Tasks of a kind that must have stepped up from the grid before the grid is proposed to stop taking it. */
-const MIN_GRID_STEP_UPS = 2
+const MIN_GRID_STEP_UPS = 3
+/** Yes is recommended only on this many first reviews (grid tasks for the grid) on every side; on fewer, "Not yet". */
+export const STRONG_SAMPLE = 10
+/** 95%. */
+const Z = 1.96
+
+/** The Wilson score interval of `passed` of `n` at 95%: where the true rate likely is, honest about small samples. */
+export function wilson(passed: number, n: number): { low: number; high: number } {
+  if (!n) return { low: 0, high: 1 }
+  const p = passed / n, z2 = Z * Z
+  const centre = p + z2 / (2 * n), spread = Z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)), scale = 1 + z2 / n
+  return { low: Math.max(0, (centre - spread) / scale), high: Math.min(1, (centre + spread) / scale) }
+}
 
 /** A start that failed (routeDecisions.ts closeUnassignedStart), on what it was to run, and when it was routed. */
 export interface FailedStart { engine: string; model: string; effort: string; at: number }
@@ -38,18 +53,39 @@ export interface ReflectionInput {
   evidence: ModelKindEvidence[]
   /** More attempts than one read takes: only the newest were read. */
   truncated: boolean
+  /** Titles of proposals the owner answered in the last REASK_DAYS days: not proposed again until then. */
+  decided?: readonly string[]
+  /** Proposals the owner approved, with the local date: listed every night and never proposed again. */
+  approved?: ReadonlyArray<{ title: string; on: string }>
+  /** The project's routing rules: a change one already makes is not proposed. */
+  rules?: ReadonlyArray<SwarmRule['rule']>
 }
 
-/** A routing change for the owner: what, why, and what it would save a week in dollars (API-equivalent) and hours to ship. */
-export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number }
-export interface Reflection { text: string; proposals: Proposal[] }
+type RanOn = Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>
+/** What a proposal changes, for telling whether a rule already does. */
+export type Change = { kind: 'cheaper'; taskKind: string; from: RanOn; to: RanOn } | { kind: 'stop'; taskKind: string; from: RanOn }
+  | { kind: 'grid'; taskKind: string }
+/** A routing change for the owner: what, why, what it would save a week in dollars (API-equivalent) and hours to ship, and
+ *  whether its evidence is strong enough to recommend Yes. */
+export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number; strong: boolean; change: Change }
+export interface Reflection {
+  /** The report with no note on its proposals. */
+  text: string
+  proposals: Proposal[]
+  /** The report with a note after each proposal: whether it was asked, and if not, why (store.ts postReflection). */
+  render(note: (p: Proposal) => string | null): string
+}
+/** Days an answered proposal is not proposed again. */
+export const REASK_DAYS = 14
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const usd = (n: number) => `$${n.toFixed(2)}`
 const percent = (rate: number) => `${Math.round(rate * 100)}%`
 const cents = (n: number) => Math.round(n * 100) / 100
 const tenths = (n: number) => Math.round(n * 10) / 10
-const ranOn = (r: Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>) => `${r.engine} ${r.model} ${r.effort}`
+const ranOn = (r: RanOn) => `${r.engine} ${r.model} ${r.effort}`
+const passed = (r: CostSummaryRow) => `${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)})`
+const atApi = 'a week at API prices'
 
 function line(r: CostSummaryRow): string {
   return `- ${ranOn(r)}, ${r.kind}: ${plural(r.attempts, 'attempt')}, ${r.shipped} shipped`
@@ -103,31 +139,46 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
     }
     if (!best) continue
     const { dear, cheap, dollars } = best
+    const strong = Math.min(dear.firstReviews, cheap.firstReviews) >= STRONG_SAMPLE
     moved.add(dear)
     found.push({ title: `Route ${kind} work to ${ranOn(cheap)} instead of ${ranOn(dear)}`,
-      why: `Its first review passes ${cheap.firstReviewPassRate! > dear.firstReviewPassRate! ? 'more' : 'as'} often (${percent(cheap.firstReviewPassRate!)} against `
-        + `${percent(dear.firstReviewPassRate!)}) at ${usd(cheap.costPerShipped!)} instead of ${usd(dear.costPerShipped!)} per shipped change.`,
-      saving: `about ${usd(dollars)} a week`, dollars, hours: 0 })
+      why: `Its first review passed ${passed(cheap)} against ${passed(dear)}, at ${usd(cheap.costPerShipped!)} instead of `
+        + `${usd(dear.costPerShipped!)} per shipped change at API prices.`
+        + (strong ? '' : ` Small samples (${dear.firstReviews} and ${cheap.firstReviews} first reviews): the difference may be chance.`),
+      saving: `about ${usd(dollars)} ${atApi}`, dollars, hours: 0, strong,
+      change: { kind: 'cheaper', taskKind: kind, from: pick(dear), to: pick(cheap) } })
   }
-  // A model whose first review fails more often than it passes on a kind of work.
+  // A model whose first review clearly fails more often than it passes on a kind of work: even the top of its range is low.
   for (const r of known) {
-    if (moved.has(r) || r.firstReviews < MIN_FIRST_REVIEWS || r.firstReviewPassRate! >= LOW_PASS_RATE) continue
-    const failed = r.firstReviews - r.firstReviewPassed
+    if (moved.has(r) || r.firstReviews < MIN_FIRST_REVIEWS || wilson(r.firstReviewPassed, r.firstReviews).high >= LOW_PASS_RATE) continue
+    const failed = r.firstReviews - r.firstReviewPassed, strong = r.firstReviews >= STRONG_SAMPLE
     const dollars = r.apiCost !== null && r.costKnown ? cents(r.apiCost / r.costKnown * failed) : 0
     found.push({ title: `Stop routing ${r.kind} work to ${ranOn(r)}`,
-      why: `Its first review passed ${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)}).`,
-      saving: dollars ? `about ${usd(dollars)} a week of attempts that failed their first review`
-        : `${plural(failed, 'attempt')} a week that failed their first review`, dollars, hours: 0 })
+      why: `Its first review passed ${passed(r)}; even the top of its 95% range is ${percent(wilson(r.firstReviewPassed, r.firstReviews).high)}.`
+        + (strong ? '' : ` Only ${r.firstReviews} first reviews.`),
+      saving: dollars ? `about ${usd(dollars)} ${atApi} of attempts that failed their first review`
+        : `${plural(failed, 'attempt')} a week that failed their first review`, dollars, hours: 0, strong,
+      change: { kind: 'stop', taskKind: r.kind, from: pick(r) } })
   }
   // A kind whose tasks keep stepping up from the grid.
   for (const [kind, k] of grid) {
     if (kind === 'unspecified' || k.stepped < MIN_GRID_STEP_UPS || k.stepped * 2 < k.tasks) continue
-    const hours = tenths(k.hours), dollars = cents(k.dollars)
+    const hours = tenths(k.hours), dollars = cents(k.dollars), strong = k.tasks >= STRONG_SAMPLE
     found.push({ title: `Start ${kind} work on a subscription model instead of the grid`,
-      why: `${k.stepped} of ${k.tasks} ${kind} tasks started on the grid stepped up after their grid attempt failed.`,
-      saving: `about ${dollars ? `${usd(dollars)} and ` : ''}${hours} hours to ship a week`, dollars, hours })
+      why: `${k.stepped} of ${k.tasks} ${kind} tasks started on the grid stepped up after their grid attempt failed.`
+        + (strong ? '' : ` Only ${k.tasks} tasks.`),
+      saving: `about ${dollars ? `${usd(dollars)} at API prices and ` : ''}${hours} hours to ship a week`, dollars, hours, strong,
+      change: { kind: 'grid', taskKind: kind } })
   }
-  return found.sort((a, b) => b.dollars - a.dollars || b.hours - a.hours).slice(0, MAX_PROPOSALS)
+  return found.sort((a, b) => b.dollars - a.dollars || b.hours - a.hours)
+}
+
+const pick = (r: RanOn): RanOn => ({ engine: r.engine, model: r.model, effort: r.effort })
+
+/** Whether one of the project's rules already makes this change: a forbidden model it moves work away from, or no grid first. */
+function ruled(change: Change, rules: ReadonlyArray<SwarmRule['rule']>): boolean {
+  return rules.some(rule => change.kind === 'grid' ? rule.kind === 'noGridFirst'
+    : rule.kind === 'forbidModel' && (!rule.engine || rule.engine === change.from.engine) && modelMatches(rule.model, change.from.model))
 }
 
 function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, stepUps: number): string {
@@ -152,35 +203,47 @@ function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, ste
   return `Waste in the last 7 days: ${parts.length ? parts.join(', ') : 'none'}.`
 }
 
-/** The night's report, or null when the last day had no attempt and no failed start: then nothing is posted. */
+/** The night's report, or null when the last day had no attempt and no failed start: then nothing is posted. At most
+ *  MAX_PROPOSALS proposals, the largest saving first, leaving out those the owner answered lately, approved, or a rule makes. */
 export function routingReflection(input: ReflectionInput): Reflection | null {
   const since = input.now - DAY
   const dayRows = input.rows.filter(r => r.run.startedAt >= since)
   if (!dayRows.length && !input.failedStarts.some(f => f.at >= since)) return null
   const week = summarizeCosts(input.rows, input.groups), day = summarizeCosts(dayRows, input.groups)
   const grid = gridStepUps(input.rows, input.now)
-  const proposed = proposals(week.rows, grid)
+  const approved = input.approved ?? []
+  const settled = new Set([...input.decided ?? [], ...approved.map(a => a.title)])
+  const proposed = proposals(week.rows, grid).filter(p => !settled.has(p.title) && !ruled(p.change, input.rules ?? [])).slice(0, MAX_PROPOSALS)
   const table = [...week.rows].sort((a, b) => b.attempts - a.attempts)
-  const text = [
-    'Routing reflection: what routed work cost and how it went. Counts only; nothing changes until the project owner approves.',
+  const render = (note: (p: Proposal) => string | null) => [
+    'Routing reflection: what routed work cost and how it went. Counts only; routing changes only as the project owner approves.',
     `Last day: ${plural(day.totals.attempts, 'attempt')}, ${day.totals.shipped} shipped. Last 7 days: ${plural(week.totals.attempts, 'attempt')}, ${week.totals.shipped} shipped.`,
     'By engine, model and effort, per kind of work (last 7 days; cost is what the tokens would cost on the API):',
     ...table.slice(0, MAX_LINES).map(line),
     ...table.length > MAX_LINES ? [`- and ${table.length - MAX_LINES} more`] : [],
     waste(input, grid, week.totals.stepUps),
-    ...proposed.length ? ['Proposed changes, each asked of the project owner as a decision:',
-      ...proposed.map((p, i) => `${i + 1}. ${p.title}: ${p.saving}. ${p.why}`)] : ['No change proposed.'],
+    ...approved.length ? ['Approved by the project owner: the Lead routes this way, and this list repeats every night until routing does it by itself:',
+      ...approved.map(a => `- ${a.title} (approved ${a.on})`)] : [],
+    ...proposed.length ? ['Proposed changes (advice: no rule or setting changes by itself):',
+      ...proposed.map((p, i) => { const n = note(p); return `${i + 1}. ${p.title}: ${p.saving}. ${p.why}${n ? ` ${n}` : ''}` })]
+      : ['No change proposed.'],
     ...input.truncated ? [`Only the newest ${MAX_ROWS} attempts were read.`] : [],
   ].join('\n')
-  return { text, proposals: proposed }
+  return { text: render(() => null), proposals: proposed, render }
 }
 
 /** The id of a project's report for one local date: one a night, so a second pass or a second worker writes none. */
 export const reflectionMessageId = (tabId: string, projectId: string, on: string): string => stableId('routing-reflection', tabId, projectId, on)
 
-/** A proposal asked of the project owner as a decision. The question starts with the proposal's title, so a proposal still
- *  waiting for an answer is not asked again on a later night (reflectionAsked). */
+/** The answer that approves a proposal. */
+export const APPROVE = 0
+/** A proposal asked of the project owner as a decision. The question starts with the proposal's title, so a proposal waiting
+ *  for an answer, answered lately or approved is told by it (proposalTitle). It says plainly what Yes does: nothing changes
+ *  by itself; the Lead routes this way and every night's report lists it until routing applies it (review of #2276). */
 export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}? Expected saving: ${p.saving}. ${p.why}`,
-  options: ['Yes, change routing this way', 'No, keep routing as it is'], recommended: 0,
-  unblocks: 'The Lead changes the routing rule only once you approve it; nothing changes by itself.' })
-export const reflectionAsked = (p: Proposal, openQuestions: readonly string[]): boolean => openQuestions.some(q => q.startsWith(`${p.title}?`))
+  options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+  recommended: p.strong ? APPROVE : 2,
+  unblocks: `If you say yes, the Lead routes ${p.change.taskKind} work this way, and every nightly report lists it as approved until routing `
+    + 'applies it by itself. No rule or setting changes.' })
+/** The proposal a decision asked, by the title its question starts with. */
+export const proposalTitle = (question: string): string => question.slice(0, Math.max(0, question.indexOf('?')))

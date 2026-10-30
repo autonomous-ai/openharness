@@ -107,4 +107,22 @@ describe('the nightly routing reflection', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
   })
+
+  it('reads a project’s reflection decisions by the decisions’ project index, never another project’s (review of #2276)', async () => {
+    const { reflectionDecisions } = await import('../src/superTabs/decisions.js')
+    const decision = (projectId: string, kind?: string) => ({ id: randomUUID(), tabId: 'tab-d', batchId: 'b', projectId, conversationId: 'c', personId: 'p',
+      askerAgentId: 'a', question: `${kind ?? 'Plain'}? Saving.`, options: ['Yes', 'No'], recommended: 0, unblocks: 'x', createdAt: new Date(NOW), ...kind ? { kind } : {} })
+    await db.superTabDecision.createMany({ data: [
+      ...Array.from({ length: 20 }, () => decision('other', 'routing-reflection')),
+      decision('lead'), decision('lead', 'routing-reflection'), decision('lead', 'routing-reflection'),
+    ] })
+    let found: Awaited<ReturnType<typeof reflectionDecisions>> = []
+    const entries = await profiled(db, async () => { found = await reflectionDecisions(db, 'tab-d', 'lead') })
+    expect(found).toHaveLength(2)
+    const rows = reads(entries, 'SuperTabDecision', ['tabId', 'projectId'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    // The project's decisions, its plain ones too: no other project's.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, projectId: 1, createdAt: 1/)
+  })
 })

@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { TokensByModel } from '../src/superTabs/costs/tokens.js'
 import { reflectNightly } from '../src/lib/routingReflection.js'
+import { proposalTitle } from '../src/superTabs/costs/reflection.js'
 import { poolRows } from './hostRows.test-support.js'
 
 // The nightly routing reflection (Scholes's roadmap, piece 2, 10-30): at 23:00 in the project's zone the worker posts what its
@@ -113,8 +114,7 @@ describe('the nightly routing reflection', () => {
   it('posts a seeded day once in the project chat at 23:00, under the Lead, and asks the owner each proposal once', async () => {
     const f = await swarm()
     await f.ship()
-    await f.stepUpFromGrid()
-    await f.stepUpFromGrid()
+    for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
     f.clock.now = NIGHT - 3 * HOUR
     // Before 23:00 in Vietnam, nothing.
     await reflectNightly(db, f.store, f.clock.now)
@@ -128,26 +128,90 @@ describe('the nightly routing reflection', () => {
     expect(report!.author).toMatchObject({ kind: 'agent', id: f.lead })
     expect(report!.recipientIds).toEqual([])
     const lines = report!.text.split('\n')
-    expect(lines).toContain('Last day: 5 attempts, 1 shipped. Last 7 days: 5 attempts, 1 shipped.')
+    expect(lines).toContain('Last day: 7 attempts, 1 shipped. Last 7 days: 7 attempts, 1 shipped.')
     expect(lines).toContain('- claude opus high, parser: 1 attempt, 1 shipped, median 12 min to ship, $4.00 per shipped change, no first review')
-    expect(lines).toContain(`- claude ${GRID} low, parser: 2 attempts, 0 shipped, no first review`)
-    expect(lines).toContain('- claude sonnet medium, parser: 2 attempts, 0 shipped, no first review, 2 step-ups')
-    expect(lines).toContain('1. Start parser work on a subscription model instead of the grid: about 2 hours to ship a week. '
-      + '2 of 2 parser tasks started on the grid stepped up after their grid attempt failed.')
+    expect(lines).toContain(`- claude ${GRID} low, parser: 3 attempts, 0 shipped, no first review`)
+    expect(lines).toContain('- claude sonnet medium, parser: 3 attempts, 0 shipped, no first review, 3 step-ups')
+    expect(lines).toContain('1. Start parser work on a subscription model instead of the grid: about 3 hours to ship a week. '
+      + '3 of 3 parser tasks started on the grid stepped up after their grid attempt failed. Only 3 tasks. Asked of the project owner.')
     // Counts only: no task title, machine or person.
     for (const secret of ['Secret', 'Worker Mac', 'test-host', owner.email, host.email]) expect(report!.text).not.toContain(secret)
     const decisions = await db.superTabDecision.findMany({ where: { tabId: f.tab } })
     expect(decisions).toEqual([expect.objectContaining({ personId: owner.sub, askerAgentId: f.lead, conversationId: 'lead', assignmentId: null,
-      question: 'Start parser work on a subscription model instead of the grid? Expected saving: about 2 hours to ship a week. '
-        + '2 of 2 parser tasks started on the grid stepped up after their grid attempt failed.',
-      options: ['Yes, change routing this way', 'No, keep routing as it is'], recommended: 0 })])
+      question: 'Start parser work on a subscription model instead of the grid? Expected saving: about 3 hours to ship a week. '
+        + '3 of 3 parser tasks started on the grid stepped up after their grid attempt failed. Only 3 tasks.',
+      options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+      // Three tasks are too few to recommend Yes (review of #2276).
+      recommended: 2, kind: 'routing-reflection' })])
     expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('already')
     // The next night, the same proposal still waits: it is not asked again.
     expect(await f.store.postReflection(f.tab, 'lead', '2026-10-31')).toBe('posted')
     expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(1)
-    expect((await f.reports()).at(-1)!.text).toContain("Still waiting for the owner's answer: 1.")
+    expect((await f.reports()).at(-1)!.text).toContain("Only 3 tasks. Waiting for the owner's answer since 2026-10-30.")
     // People read it; it is a notice for people, not a wake for the Lead.
     expect((await f.store.messages(host, f.tab, 'lead', {})).messages.map(m => m.id)).toContain(report!.id)
+  })
+
+  it('asks an answered proposal again only after 14 days, and lists an approved one every night, kept past the ledger weeks (review of #2276)', async () => {
+    const f = await swarm()
+    await f.ship()
+    for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
+    const GRID_TITLE = 'Start parser work on a subscription model instead of the grid'
+    /** The report [days] after the first night, with an attempt in its last day. */
+    const night = async (on: string, days: number) => {
+      f.clock.now = NIGHT + days * DAY
+      await f.seed(f.group, { at: f.clock.now - HOUR })
+      expect(await f.store.postReflection(f.tab, 'lead', on)).toBe('posted')
+      return (await f.reports()).at(-1)!.text
+    }
+    expect(await night('2026-10-30', 0)).toContain('Asked of the project owner.')
+    const [first] = await db.superTabDecision.findMany({ where: { tabId: f.tab } })
+    await f.execute({ type: 'decision.answer', decisionId: first!.id, choice: 1 })
+    // The owner said No: the next night neither asks nor proposes it.
+    expect(await night('2026-10-31', 1)).toContain('No change proposed.')
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(1)
+    // Fifteen days after that answer it is asked again.
+    await db.superTabDecision.update({ where: { id: first!.id }, data: { answeredAt: new Date(NIGHT - 15 * DAY) } })
+    expect(await night('2026-11-01', 2)).toContain(`${GRID_TITLE}: about 3 hours`)
+    const again = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
+    expect(again.map(d => proposalTitle(d.question))).toEqual([GRID_TITLE])
+    // Approved: every later night lists it, and asks nothing.
+    await f.execute({ type: 'decision.answer', decisionId: again[0]!.id, choice: 0 })
+    const approved = await night('2026-11-02', 3)
+    expect(approved.split('\n')).toEqual(expect.arrayContaining([
+      'Approved by the project owner: the Lead routes this way, and this list repeats every night until routing does it by itself:',
+      `- ${GRID_TITLE} (approved 2026-11-01)`, 'No change proposed.']))
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(2)
+    // Six weeks on, writing a decision removes those answered before the ledger's weeks: never the approved proposal.
+    const old = new Date(NIGHT - 42 * DAY)
+    await db.superTabDecision.updateMany({ where: { tabId: f.tab }, data: { answeredAt: old } })
+    await db.superTabDecision.create({ data: { id: randomUUID(), tabId: f.tab, batchId: 'plain', projectId: 'lead', conversationId: 'lead', personId: owner.sub,
+      askerAgentId: f.lead, question: 'Which week?', options: ['This', 'Next'], recommended: 0, unblocks: 'The plan', createdAt: old, answeredAt: old, choice: 0 } })
+    await f.execute({ type: 'decision.ask', conversationId: 'lead', personId: owner.sub, questions: [{ question: 'Ship it?', options: ['Yes', 'No'],
+      recommended: 0, unblocks: 'The release' }] }, host, f.lead)
+    expect((await db.superTabDecision.findMany({ where: { tabId: f.tab } })).map(d => d.question.split('?')[0]).sort()).toEqual(['Ship it', GRID_TITLE])
+    expect(await night('2026-11-03', 4)).toContain(`- ${GRID_TITLE} (approved`)
+  })
+
+  it('keeps at most three proposals open, says when one was not asked, and lets one unanswered for 7 days expire (review of #2276)', async () => {
+    const f = await swarm()
+    await f.ship()
+    for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
+    const open = (title: string) => ({ id: randomUUID(), tabId: f.tab, batchId: 'earlier', projectId: 'lead', conversationId: 'lead', assignmentId: null,
+      personId: owner.sub, askerAgentId: f.lead, question: `${title}? Expected saving: about $1.00 a week at API prices.`, options: ['Yes', 'No', 'Not yet'],
+      recommended: 2, unblocks: 'If you say yes.', createdAt: new Date(NIGHT - 6 * DAY), kind: 'routing-reflection' })
+    await db.superTabDecision.createMany({ data: ['ui', 'docs', 'tests'].map(kind => open(`Stop routing ${kind} work to claude opus high`)) })
+    f.clock.now = NIGHT
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(3)
+    expect((await f.reports()).at(-1)!.text).toContain("Only 3 tasks. Not asked: at most 3 proposals wait for the owner's answer at once.")
+    // Two days on, the three are 8 days old: they expire, and the proposal is asked.
+    f.clock.now = NIGHT + 2 * DAY
+    await f.seed(f.group, { at: f.clock.now - HOUR })
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-11-01')).toBe('posted')
+    expect((await db.superTabDecision.findMany({ where: { tabId: f.tab } })).map(d => proposalTitle(d.question)))
+      .toEqual(['Start parser work on a subscription model instead of the grid'])
+    expect((await f.reports()).at(-1)!.text).toContain('Only 3 tasks. Asked of the project owner.')
   })
 
   it('posts nothing for a day with no attempt, and skips a project with no routed work', async () => {
