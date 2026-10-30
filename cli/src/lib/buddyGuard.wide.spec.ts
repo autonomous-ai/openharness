@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
@@ -338,6 +338,18 @@ describe('recording the person\'s approvals', () => {
     expect(kept).toHaveLength(200)
     expect(kept.some(entry => entry.argv.join(' ') === 'argocd app list')).toBe(false)
     expect(kept.at(-1)!.argv).toEqual(['gh', 'run', 'view', '204'])
+  })
+
+  it('removes other people\'s approval files untouched for 30 days, an earlier membership\'s among them, and keeps the rest', () => {
+    const day = 24 * 60 * 60 * 1000
+    const earlier = buddyApprovalsOf('person-1:generation-0', dataDir), recent = buddyApprovalsOf('person-2:generation-1', dataDir)
+    mkdirSync(dirname(approvals), { recursive: true })
+    for (const file of [earlier, recent]) writeFileSync(file, '{"version":1,"entries":[]}')
+    const old = (Date.now() - 31 * day) / 1000
+    utimesSync(earlier, old, old)
+    record('run: argocd app list')
+    expect([existsSync(earlier), existsSync(recent), existsSync(approvals)]).toEqual([false, true, true])
+    rmSync(recent)
   })
 
   it('keeps the file to its person: mode 600 in a folder of mode 700', () => {

@@ -603,12 +603,12 @@ function listedFile(path: string, at: number): ListedFile | null {
 }
 
 /** Best-effort, as the downloads' own prune is (lib/pasteDropFiles.ts): the lists of Buddy sessions nothing has written to
- *  for a day, ended or quiet, hold nothing the guard would still allow. */
-function sweep(dir: string, now: number): void {
+ *  for a day, ended or quiet, hold nothing the guard would still allow; approvals, after [kept] (30 days). */
+function sweep(dir: string, now: number, kept = KEPT_MS): void {
   try {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue
-      try { if (now - statSync(join(dir, name)).mtimeMs >= KEPT_MS) rmSync(join(dir, name), { force: true }) } catch { /* raced: ignore */ }
+      try { if (now - statSync(join(dir, name)).mtimeMs >= kept) rmSync(join(dir, name), { force: true }) } catch { /* raced: ignore */ }
     }
   } catch { /* unreadable: nothing to sweep */ }
 }
@@ -725,6 +725,8 @@ export function recordBuddyApprovals(input: { reads: BuddyReads; session: string
   const entries = [...held.filter(entry => now - entry.at < APPROVAL_MS && !renewed.has(key(entry.argv))), ...fresh].slice(-MAX_APPROVALS)
   mkdirSync(dirname(input.approvals), { recursive: true, mode: 0o700 })
   chmodSync(dirname(input.approvals), 0o700)
+  // Files nothing approved into for 30 days approve nothing any more: an earlier membership's, or a person who left.
+  sweep(dirname(input.approvals), now, APPROVAL_MS)
   writeWhole(input.approvals, { version: 1, entries })
   mkdirSync(dirname(input.reads.file), { recursive: true, mode: 0o700 })
   writeWhole(input.reads.file, { ...heldList(input.reads.file, input.session), approvals: input.approvals })
