@@ -21,6 +21,7 @@ import 'swarm_inbox.dart';
 import 'swarm_jump_page.dart';
 import 'swarm_needs_page.dart';
 import 'swarm_new_message_sheet.dart';
+import 'swarm_new_project_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
@@ -478,12 +479,22 @@ class _SwarmPageState extends State<SwarmPage> {
     );
     final quiet = lists.quiet;
     final empty = projects.isEmpty && reading.isEmpty && failed.isEmpty;
+    // Last, for someone who may write in a Swarm shown: never a viewer.
+    final create = shown.any((swarm) => swarmMayCreateProject(inbox, swarm.id))
+        ? SwarmNewProjectRow(
+            key: const ValueKey('swarm-new-project'),
+            onTap: () => unawaited(_newProject(session, shown)),
+          )
+        : null;
     return [
       if (lists.pinned.isNotEmpty) ...[
         const SwarmCaption('Pinned'),
         SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
       ],
-      if (lists.recent.isNotEmpty || quiet.isNotEmpty || empty) ...[
+      if (lists.recent.isNotEmpty ||
+          quiet.isNotEmpty ||
+          empty ||
+          create != null) ...[
         const SwarmCaption('Projects'),
         SwarmGroup(
           children: [
@@ -499,6 +510,7 @@ class _SwarmPageState extends State<SwarmPage> {
               if (_quietOpen)
                 for (final p in quiet) row(p),
             ],
+            ?create,
           ],
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
@@ -521,6 +533,24 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       ],
     ];
+  }
+
+  /// + New project: its sheet over Home, for the Swarms [shown]; the project
+  /// it made opens, unless Home or the account changed meanwhile, or the
+  /// project is no longer Home's to list.
+  Future<void> _newProject(
+    SwarmSession session,
+    List<SwarmListing> shown,
+  ) async {
+    final made = await showSwarmNewProjectSheet(
+      context,
+      session: session,
+      swarmIds: [for (final swarm in shown) swarm.id],
+      now: widget.now,
+    );
+    if (made == null || !mounted || _session != session) return;
+    if (!swarmHomeListed(session.inbox, made.swarmId, made.projectId)) return;
+    _openProject(context, made.swarmId, made.projectId);
   }
 
   /// A long press on a project: Pin to top, or Unpin. The project taken away
