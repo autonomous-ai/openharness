@@ -342,6 +342,8 @@ describe('routeTask', () => {
       expect((await routeWith(offline)).result).toMatchObject(sameEngine)
       const signedOut = pool('m2', ['codex']); Object.assign(signedOut.observation, { readiness: { engines: [{ engine: 'codex', installed: true, signedIn: false }] } })
       expect((await routeWith(signedOut)).result).toMatchObject(sameEngine)
+      // Paused by its owner, as the server reads it (backend superTabs/reviewSeats.ts; review of #2275).
+      expect((await routeWith(pool('m2', ['codex'], undefined, { paused: true }))).result).toMatchObject(sameEngine)
     })
   })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {

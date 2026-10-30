@@ -145,7 +145,8 @@ function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gri
   const places = [...state.agents.filter(a => !a.gridModel && !a.buddyOf && soon(a)).map(a => ({ machineId: a.machineId, contributorId: a.contributorId, engines: [a.configuration.engine] })),
     ...(state.machines ?? []).filter(m => !m.buddyOnly && !m.removal).map(m => ({ machineId: m.machineId, contributorId: m.contributorId, engines: m.engines }))]
   // A machine that reports its readings is judged by them; one that does not (an agent's host outside the contributions)
-  // by its agent alone.
+  // by its agent alone, whatever its quota, which nothing reports there. Stricter than the CLI's route on purpose: an
+  // unknown counts as a Reviewer that could start, so the same-engine fallback is never taken on a guess.
   const starts = (machineId: string, engine: string) => { const m = pool(machineId); return !m || canStart(standing(state, m, engine, now)) }
   return places.some(place => place.engines.some(engine => familyOf({ engine }) !== familyOf(builder) && starts(place.machineId, engine)
     && policy.models.some(row => row.enabled && row.engine === engine && row.quality >= 2

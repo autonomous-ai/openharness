@@ -19,7 +19,7 @@ export const REVIEW_START_MS = 15 * 60_000
 const LOW_LEFT = 20
 
 /** How a machine stands for a new Reviewer on an engine, best first. Words only: a person's own numbers stay theirs. */
-export const STANDING = ['usable', 'close to running out', 'out of quota', 'signed out', 'suspended', 'offline'] as const
+export const STANDING = ['usable', 'close to running out', 'out of quota', 'signed out', 'suspended', 'paused', 'offline'] as const
 export type Standing = typeof STANDING[number]
 /** A Reviewer could start there within REVIEW_START_MS. */
 export const canStart = (s: Standing) => s === 'usable' || s === 'close to running out'
@@ -43,6 +43,8 @@ function resetMs(value: string | number | null): number | null {
 export function standing(state: SuperTabState, pool: ContributedMachine, engine: string, now: number): Standing {
   const reading = pool.observation
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) return 'offline'
+  // Its owner paused new work there, as the CLI's route reads it (routeCommand.ts probeMachine) and starts refuse it.
+  if (pool.paused) return 'paused'
   if (reading.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return 'signed out'
   if (suspendedEngines(pool, now)[engine]) return 'suspended'
   const quota = quotaOf(state, pool, engine, now)

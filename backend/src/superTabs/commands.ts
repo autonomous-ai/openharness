@@ -2228,7 +2228,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (opened) effects.messages.push(...opened.messages)
         // No new Reviewer on another engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
         const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, policy, mayRun(group.id, false), context.now) : null
-        if (short) message(short.conversationId, short.text, [], null, short.source, undefined, short.mentions)
+        // A row of its own beside the command's, as the ship notice is: written as the Engineer who handed over.
+        if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
+          text: short.text, replyTo: null, recipients: [], source: short.source, ...(short.mentions.length ? { mentions: short.mentions } : {}) })
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
@@ -2348,6 +2350,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
   // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
   for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
+  // Each row is stored under its id: two alike roll the whole command back on a duplicate key, in the store alone (review of
+  // #2275: the review-capacity notice took the Ready for review row's id, so no Builder could hand over during a shortage).
+  const ids = new Set<string>()
+  for (const draft of effects.messages) {
+    if (ids.has(draft.id)) throw new Error(`Command ${command.type} wrote two messages with the id ${draft.id}.`)
+    ids.add(draft.id)
+  }
   return effects
 }
 

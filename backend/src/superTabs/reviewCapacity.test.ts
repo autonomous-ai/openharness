@@ -49,12 +49,26 @@ describe('the notice that new Reviewers cannot start', () => {
       machine('tony-mac', 'MacBook Pro 19', 'tony', { windows: [{ name: '5-hour', usedPercent: 100 }, { name: 'weekly', usedPercent: 40 }] })])
     const first = notice(state, built)
     expect(first).toMatchObject({ conversationId: project.leadConversationId, mentions: ['ken', 'huy', 'tony'], source: { kind: 'review-capacity', engine: 'codex', cause: 'out' } })
-    expect(first!.text).toBe('Reviews of Claude Code builds cannot start a new Reviewer: Codex is unavailable on every machine this project may use '
+    // Claude Opus can still start on these machines, so reviews fall back to it (rules.ts judgeReview).
+    expect(first!.text).toBe('Reviews of Claude Code builds fall back to Claude Code at its top tier: Codex is unavailable on every machine this project may use '
       + '(Mac Studio: out of quota; MacBookPro2021: signed out; MacBook Pro 19: out of quota). More Codex quota, Codex signed in on another machine, '
-      + 'or another machine in the Swarm would unblock them. @ken15 @huy @tony can fix it.')
+      + 'or another machine in the Swarm would bring back reviews on another engine. @ken15 @huy @tony can fix it.')
     // A person's own numbers are never shown to the others.
     expect(first!.text).not.toMatch(/\d+ ?%/)
     expect(notice(state, built, anyMachine, NOW + HOUR)).toBeNull()
+  })
+
+  it('says reviews cannot start when no top-tier Reviewer of the Builder\'s own engine can start either', () => {
+    const studio = machine('studio', 'Mac Studio', 'ken', { windows: out })
+    studio.observation!.readiness!.engines![0]!.signedIn = false
+    const { state, built } = swarm([studio])
+    expect(notice(state, built)!.text).toBe('Reviews of Claude Code builds cannot start a new Reviewer: Codex is unavailable on every machine this project may use '
+      + '(Mac Studio: out of quota). More Codex quota, Codex signed in on another machine, or another machine in the Swarm would unblock them. @ken15 can fix it.')
+  })
+
+  it('counts a paused machine as unable to start a Reviewer, as the route does', () => {
+    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { windows: plenty }, { paused: true })])
+    expect(notice(state, built)!.text).toContain('(Mac Studio: paused)')
   })
 
   it('warns once when every Codex machine is close to running out of weekly quota, and again when it runs out', () => {

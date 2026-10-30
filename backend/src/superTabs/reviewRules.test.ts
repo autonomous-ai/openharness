@@ -74,6 +74,8 @@ describe('a review on its Builder\'s own engine when no Reviewer of another engi
     const signedOut = codexBox(3 * DAY, 40); signedOut.observation.readiness.engines[0]!.signedIn = false
     expect(judge([signedOut]).refusal).toBeNull()
     expect(judge([codexBox(3 * DAY, 40, { engineSuspensions: { codex: { at: NOW - MIN, fine: true } } })]).refusal).toBeNull()
+    // Paused by its owner, as the CLI's route reads it (review of #2275: the route offered Claude, the server refused it).
+    expect(judge([codexBox(3 * DAY, 40, { paused: true })])).toEqual({ refusal: null, note: expect.stringMatching(new RegExp(`^${SAME_ENGINE}`)) })
   })
 
   it('counts a Codex agent on a machine outside the contributions while it is up, and not once a usage limit holds it past the window', () => {
