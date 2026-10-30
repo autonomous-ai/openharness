@@ -40,4 +40,6 @@ Hack extra glyphs (extraglyphs.sfd)
   License: MIT and inherited Bitstream Vera terms (both preserved in LICENSE)
   Source: https://github.com/ryanoasis/nerd-fonts/blob/v3.5.1/src/glyphs/extraglyphs.sfd
 
-Font Logos is unlicensed.
+Font Logos 1.3.0
+  License: The Unlicense (public domain dedication), https://unlicense.org
+  Source: https://github.com/lukas-w/font-logos
