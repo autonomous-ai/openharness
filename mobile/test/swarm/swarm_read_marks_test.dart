@@ -226,6 +226,25 @@ void main() {
     );
   });
 
+  test("the phone's marks still on their way are told apart from none: "
+      'loaded only once they are read back, with or without a mark', () async {
+    final back = Completer<void>();
+    final r = rig(store: _HeldStore(back.future));
+    await r.reader.refresh();
+    await settle();
+    expect(r.marks.loaded, isFalse, reason: 'still on their way');
+    expect(r.marks.readThrough(work), isNull);
+
+    back.complete();
+    await settle();
+    expect(r.marks.loaded, isTrue, reason: 'back, though the phone had none');
+    expect(
+      r.marks.readThrough(work),
+      4,
+      reason: 'the first read on this phone',
+    );
+  });
+
   test("the server's marks come with the Swarm's reads, as on Desktop "
       '(#2131): a read that moves only a mark still counts', () async {
     final r = rig();
@@ -412,5 +431,17 @@ class _SlowStore extends MemoryKeyValueStore {
       pending(value);
     }
     _pending.clear();
+  }
+}
+
+/// A phone store whose reads answer only once [back] completes.
+class _HeldStore extends MemoryKeyValueStore {
+  _HeldStore(this.back);
+  final Future<void> back;
+
+  @override
+  Future<String?> read(String key) async {
+    await back;
+    return super.read(key);
   }
 }

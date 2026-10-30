@@ -117,6 +117,11 @@ class SwarmReadMarks extends ChangeNotifier {
 
   String get _key => 'swarm_read_marks.${reader.accountId}.${reader.tabId}';
 
+  /// The phone's marks were read back. Until then [readThrough] has none to
+  /// give, which is not a chat with no mark: what waits on a mark waits on
+  /// this, and is told when it moves.
+  bool get loaded => _loaded;
+
   /// Whether [group] has messages in its main stream past what the person
   /// has read.
   bool unread(SuperTabConversation group) {

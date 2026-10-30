@@ -290,32 +290,39 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
 }
 
 /// [score]'s week in a sheet, as the desktop shows it when a name is clicked:
-/// from the leaderboard and from a project's Team.
+/// from the leaderboard and from a project's Team. [opened] is told the
+/// sheet's route, for a screen that must close it itself.
 Future<void> showSwarmPersonWeek(
   BuildContext context, {
   required SwarmScore score,
   required SuperTabPerson? person,
   required String name,
+  ValueChanged<ModalRoute<void>>? opened,
 }) => showModalBottomSheet<void>(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
   showDragHandle: true,
   shape: AppControl.sheetShape,
-  builder: (context) => _Sheet(
-    key: const ValueKey('swarm-leaderboard-sheet'),
-    title: name,
-    leading: SwarmAvatar(
-      id: score.personId,
-      name: name,
-      picture: person?.avatar,
-    ),
-    closeKey: 'swarm-leaderboard-sheet-close',
-    children: [
-      for (final (label, value) in swarmPersonWeek(score))
-        _WeekLine(label: label, value: value),
-    ],
-  ),
+  builder: (context) {
+    if (ModalRoute.of(context) case final ModalRoute<void> route?) {
+      opened?.call(route);
+    }
+    return _Sheet(
+      key: const ValueKey('swarm-leaderboard-sheet'),
+      title: name,
+      leading: SwarmAvatar(
+        id: score.personId,
+        name: name,
+        picture: person?.avatar,
+      ),
+      closeKey: 'swarm-leaderboard-sheet-close',
+      children: [
+        for (final (label, value) in swarmPersonWeek(score))
+          _WeekLine(label: label, value: value),
+      ],
+    );
+  },
 );
 
 /// Figures of one width, so a column of numbers holds row under row.
