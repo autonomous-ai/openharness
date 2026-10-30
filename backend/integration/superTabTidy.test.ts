@@ -253,9 +253,13 @@ describe('a worker left idle', () => {
       lastActivityAt: quiet.toISOString(), assignment: { ...data.assignment as object, agentId: 'another-reviewer', progressAt: f.clock.now - 10 * MINUTE } } } })
     await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
     await f.timed.deliveries(host, f.tab, f.lead)
-    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!.workDecision).toBe('stop')
+    const stopped = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
+    expect(stopped.workDecision).toBe('stop')
+    // A Reviewer stored as "Reviewer" is shown by a member name (agentNames.ts), which depends on its random id.
+    expect(stopped.displayName).toBeTruthy()
+    expect(stopped.displayName).not.toBe('Reviewer')
     expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer))
-      .toEqual([expect.objectContaining({ conversationId: 'lead', text: 'Reviewer stopped: no work for 15 minutes.' })])
+      .toEqual([expect.objectContaining({ conversationId: 'lead', text: `${stopped.displayName} stopped: no work for 15 minutes.` })])
   })
 
   it('is kept once the owner turned tidying off', async () => {
@@ -293,7 +297,11 @@ describe('a review the Swarm opens by itself', () => {
     const queued = await db.superTabDelivery.findMany({ where: { tabId: f.tab, agentId: reviewer, status: 'queued' } })
     expect(queued.map(d => d.conversationId)).toContain(review.id)
     const leadLine = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: review.id, text: { startsWith: 'Review opened by itself' } } })
-    expect(leadLine.text).toBe('Review opened by itself for #2: Reviewer reviews it. Cancel it here if it is not needed.')
+    // A Reviewer stored as "Reviewer" is shown by a member name (agentNames.ts), which depends on its random id.
+    const shown = state.agents.find(a => a.id === reviewer)!.displayName
+    expect(shown).toBeTruthy()
+    expect(shown).not.toBe('Reviewer')
+    expect(leadLine.text).toBe(`Review opened by itself for #2: ${shown} reviews it. Cancel it here if it is not needed.`)
     // The Lead's wake (review of #2225): delivered to the Lead and read by it alone; people and the Reviewer read the brief only.
     expect(leadLine.recipientIds).toEqual([f.lead])
     expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: leadLine.id } })).map(d => d.agentId)).toEqual([f.lead])
