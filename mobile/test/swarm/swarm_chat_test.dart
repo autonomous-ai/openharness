@@ -3514,4 +3514,96 @@ void main() {
       expect(key('swarm-attach'), findsNothing);
     });
   });
+  group('the delivery line under the newest own message', () {
+    final queued = {'id': 'd1', 'agentId': 'agent-lead', 'status': 'queued'};
+    final claimed = {...queued, 'status': 'claimed'};
+    const notDelivered = 'Not delivered yet';
+
+    Map<String, dynamic> mine(
+      String id,
+      int sequence, {
+      String? thread,
+      Object? delivery,
+    }) => {
+      ...message(id, sequence, author: me, thread: thread, minute: sequence),
+      'deliveries': [?delivery],
+    };
+
+    Future<SwarmHost> open(WidgetTester tester, FakeSwarm fake) async {
+      final host = await pump(tester, fake);
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      return host;
+    }
+
+    testWidgets('only the person\'s newest message carries it', (tester) async {
+      await open(
+        tester,
+        backend([
+          mine('m1', 1, delivery: queued),
+          {
+            ...message('m2', 2, text: 'On it', minute: 2),
+            'deliveries': [queued],
+          },
+          mine('m3', 3, delivery: queued),
+          message('m4', 4, text: 'Still here', minute: 4),
+        ]),
+      );
+
+      expect(key('swarm-message-receipt-m3'), findsOneWidget);
+      expect(key('swarm-message-receipt-m1'), findsNothing);
+      expect(key('swarm-message-receipt-m2'), findsNothing);
+      expect(find.text(notDelivered), findsOneWidget);
+      expect(find.textContaining("River's computer is online"), findsOneWidget);
+    });
+
+    testWidgets('a delivery claimed clears it, its own row alone', (
+      tester,
+    ) async {
+      final page = [mine('m1', 1), mine('m2', 2, delivery: queued)];
+      final fake = backend(page);
+      var answer = page.last;
+      fake.routes['$messages?messageId='] = (_) => {
+        'messages': [answer],
+      };
+      final host = await open(tester, fake);
+      expect(find.text(notDelivered), findsOneWidget);
+
+      answer = mine('m2', 2, delivery: claimed);
+      await tester.pump(const Duration(seconds: 30));
+      final built = await rowsBuilt(() async {
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+      });
+
+      expect(built, ['m2']);
+      expect(find.text(notDelivered), findsNothing);
+      expect(key('swarm-message-receipt-m2'), findsNothing);
+    });
+
+    testWidgets('sign-out while it shows: nothing of it stays', (tester) async {
+      await open(tester, backend([mine('m1', 1, delivery: queued)]));
+      expect(find.text(notDelivered), findsOneWidget);
+
+      account.value = null;
+      await frames(tester);
+
+      expect(find.text(notDelivered), findsNothing);
+      expect(find.textContaining('River'), findsNothing);
+    });
+
+    testWidgets('a newest own reply only in its thread leaves the chat quiet', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        backend([
+          mine('m1', 1, delivery: queued),
+          message('m2', 2, text: 'Root', minute: 2),
+          mine('m3', 3, thread: 'm2', delivery: queued),
+        ]),
+      );
+      expect(find.text(notDelivered), findsNothing);
+    });
+  });
 }

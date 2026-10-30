@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
+import 'package:harness/super_tabs/read_marks.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -163,6 +164,43 @@ void main() {
     expect(c.unread(c.selected!), isFalse);
   });
 
+  test('a refused thread mark waits before it is sent again; a higher one '
+      'goes at once', () async {
+    var now = DateTime(2026, 10, 30, 7);
+    final sent = <int>[];
+    var refuse = true;
+    final sender = SuperTabReadMarkSender<(String, String)>(
+      (thread, sequence) async {
+        sent.add(sequence);
+        if (refuse) throw StateError('no thread marks here');
+      },
+      retryAfter: const Duration(minutes: 1),
+      now: () => now,
+    );
+    addTearDown(sender.dispose);
+    const thread = ('lead', 'root');
+    // A thread open through several reads asks for the same mark each time.
+    for (var i = 0; i < 3; i++) {
+      sender.mark(thread, 3);
+      await pumpEventQueue();
+    }
+    expect(sent, [3]);
+    now = now.add(const Duration(seconds: 59));
+    sender.mark(thread, 3);
+    await pumpEventQueue();
+    expect(sent, [3]);
+    sender.mark(thread, 4);
+    await pumpEventQueue();
+    expect(sent, [3, 4]);
+    now = now.add(const Duration(minutes: 1));
+    refuse = false;
+    sender.mark(thread, 4);
+    await pumpEventQueue();
+    sender.mark(thread, 4);
+    await pumpEventQueue();
+    expect(sent, [3, 4, 4]);
+  });
+
   group('the parts held on this device', () {
     Map<String, dynamic> group(
       String id,
@@ -211,6 +249,55 @@ void main() {
       final parts = SuperTabParts.firstLoad(load({'lead': 4, 'web': 2}));
       parts.apply(changes({}, groups: [group('web', 2, deleted: true)]));
       expect(parts.state['readMarks'], {'lead': 4});
+    });
+
+    test('keep the highest thread mark each read sent, across a restart, '
+        'and drop those of a conversation that is gone', () {
+      final parts = SuperTabParts.firstLoad({
+        ...load({}),
+        'derived': {
+          'threadMarks': {
+            'lead': {'root-a': 4},
+            'web': {'root-b': 2},
+          },
+        },
+      });
+      Map<String, dynamic> moved(Map<String, dynamic> threadMarks) => {
+        ...changes({}),
+        'derived': {'threadMarks': threadMarks},
+      };
+      expect(
+        parts
+            .apply(
+              moved({
+                'web': {'root-b': 9},
+              }),
+            )
+            .readMarksOnly,
+        isTrue,
+      );
+      expect(
+        parts
+            .apply(
+              moved({
+                'lead': {'root-a': 3},
+              }),
+            )
+            .changed,
+        isFalse,
+      );
+      expect(parts.state['threadMarks'], {
+        'lead': {'root-a': 4},
+        'web': {'root-b': 9},
+      });
+      final restored = SuperTabParts.fromJson(
+        SuperTabParts.drawnOnly(parts.toJson()),
+      );
+      expect(restored.state['threadMarks'], parts.state['threadMarks']);
+      restored.apply(changes({}, groups: [group('web', 2, deleted: true)]));
+      expect(restored.state['threadMarks'], {
+        'lead': {'root-a': 4},
+      });
     });
   });
 }

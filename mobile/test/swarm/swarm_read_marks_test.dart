@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
@@ -413,6 +414,175 @@ void main() {
       expect(SuperTabSnapshot.fromJson(state).readMarks, isEmpty);
     },
   );
+
+  group('thread marks (backend readMarks.ts)', () {
+    List<({String path, Object? sequence})> threadWrites(FakeSwarm swarm) => [
+      for (final call in swarm.calls)
+        if (call.method == 'POST' && call.path.contains('/threads/'))
+          (path: call.path, sequence: call.body?['sequence']),
+    ];
+    const threadPath =
+        '/api/super-tabs/$tab/conversations/$work/threads/root-a/read';
+
+    test("the server's thread mark reads the thread; a lower one read later "
+        'never lowers it', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        derived: {
+          'threadMarks': {
+            work: {'root-a': 3},
+          },
+        },
+        groups: [groupData(work, title: 'Work', lastMessageSequence: 4)],
+      );
+      await r.reader.refresh();
+      await settle();
+      expect(r.marks.threadThrough(work, 'root-a'), 3);
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        derived: {
+          'threadMarks': {
+            work: {'root-a': 2},
+          },
+        },
+      );
+      await r.reader.refresh();
+      await settle();
+      expect(r.marks.threadThrough(work, 'root-a'), 3);
+      expect(r.marks.threadThrough(work, 'root-b'), 0);
+    });
+
+    test('a thread read here is sent once, and kept on the phone across a '
+        'restart', () async {
+      final r = rig();
+      await r.reader.refresh();
+      await settle();
+      r.marks.markThreadRead(work, 'root-a', 3);
+      r.marks.markThreadRead(work, 'root-a', 3);
+      r.marks.markThreadRead(work, 'root-a', 2);
+      await settle();
+      expect(threadWrites(r.swarm), [(path: threadPath, sequence: 3)]);
+      expect(r.marks.threadThrough(work, 'root-a'), 3);
+
+      final again = rig(store: r.store);
+      await again.reader.refresh();
+      await settle();
+      expect(again.marks.threadThrough(work, 'root-a'), 3);
+    });
+
+    test("another account's thread marks on this phone never count", () async {
+      final store = MemoryKeyValueStore()
+        ..values['swarm_read_marks.person-other.$tab'] = jsonEncode({
+          'marks': {work: 9},
+          'threads': {
+            work: {'root-a': 9},
+          },
+        });
+      final r = rig(store: store);
+      await r.reader.refresh();
+      await settle();
+      expect(r.marks.threadThrough(work, 'root-a'), 0);
+    });
+
+    test('a chat the Swarm does not read is never marked', () async {
+      final r = rig();
+      await r.reader.refresh();
+      await settle();
+      r.marks.markThreadRead('group-private', 'root-a', 3);
+      await settle();
+      expect(threadWrites(r.swarm), isEmpty);
+      expect(r.marks.threadThrough('group-private', 'root-a'), 0);
+    });
+
+    test(
+      'losing access forgets the thread marks and sends none after',
+      () async {
+        final r = rig();
+        await r.reader.refresh();
+        await settle();
+        r.marks.markThreadRead(work, 'root-a', 3);
+        await settle();
+        expect(r.store.values[key], contains('root-a'));
+        r.reader.revoke();
+        await settle();
+        expect(r.store.values[key], isNull);
+        expect(r.marks.threadThrough(work, 'root-a'), isNull);
+        r.marks.markThreadRead(work, 'root-a', 4);
+        await settle();
+        expect(threadWrites(r.swarm), hasLength(1));
+      },
+    );
+
+    test('a server without thread marks: the phone keeps the mark, and the '
+        'same one is not sent again at once', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/conversations/$work/threads/'] =
+          (_) => throw const SuperTabFailure(
+            'NOT_FOUND',
+            'No such route.',
+            statusCode: 404,
+          );
+      await r.reader.refresh();
+      await settle();
+      for (var i = 0; i < 3; i++) {
+        r.marks.markThreadRead(work, 'root-a', 3);
+        await settle();
+      }
+      expect(threadWrites(r.swarm), hasLength(1));
+      expect(r.marks.threadThrough(work, 'root-a'), 3);
+      // A later reply's mark goes at once.
+      r.marks.markThreadRead(work, 'root-a', 4);
+      await settle();
+      expect(threadWrites(r.swarm), hasLength(2));
+    });
+
+    test('thread marks are kept for at most a bound of threads, those of '
+        'chats the Swarm no longer reads going first', () async {
+      final store = MemoryKeyValueStore()
+        ..values[key] = jsonEncode({
+          'marks': <String, int>{},
+          'threads': {
+            'gone': {'old': 1},
+            work: {
+              for (var i = 0; i < SwarmReadMarks.keptThreads; i++) 't$i': 1,
+            },
+          },
+        });
+      final r = rig(store: store);
+      await r.reader.refresh();
+      await settle();
+      r.marks.markThreadRead(work, 'newest', 4);
+      await settle();
+      final kept = jsonDecode(store.values[key]!)['threads'] as Map;
+      expect(kept.keys, [work]);
+      expect(kept[work] as Map, hasLength(SwarmReadMarks.keptThreads));
+      expect((kept[work] as Map).keys, contains('newest'));
+      expect((kept[work] as Map).keys, isNot(contains('t0')));
+    });
+
+    test("a snapshot reads the server's thread marks, and none from an "
+        'older server', () {
+      final state = {
+        ...headData(),
+        'people': [person(me)],
+        'agents': <Object>[],
+        'conversations': [groupData(work, lastMessageSequence: 4)],
+      };
+      expect(
+        SuperTabSnapshot.fromJson({
+          ...state,
+          'threadMarks': {
+            work: {'root-a': 3, 'bad': 'x'},
+            'junk': 4,
+          },
+        }).threadMarks,
+        {
+          work: {'root-a': 3},
+        },
+      );
+      expect(SuperTabSnapshot.fromJson(state).threadMarks, isEmpty);
+    });
+  });
 }
 
 /// A store whose read answers only when told.

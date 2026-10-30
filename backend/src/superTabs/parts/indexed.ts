@@ -65,6 +65,12 @@ export const NAMED_INDEX = {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
   },
+  /** A person's thread marks (readMarks.ts): `person`, every one or those moved since a cursor, the cap's count and oldest,
+   *  and the sweep's people per Swarm; `age`, the sweep's marks untouched for 180 days. */
+  SuperTabThreadMark: {
+    person: { tabId: 1, personId: 1, updatedAt: 1 },
+    age: { updatedAt: 1 },
+  },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

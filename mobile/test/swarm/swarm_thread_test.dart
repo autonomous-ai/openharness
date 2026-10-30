@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
+import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_thread.dart';
@@ -117,6 +118,53 @@ void main() {
     addTearDown(t.dispose);
     return t;
   }
+
+  group('read on every device (backend readMarks.ts thread marks)', () {
+    List<Object?> threadWrites(FakeSwarm swarm) => [
+      for (final call in swarm.calls)
+        if (call.method == 'POST' && call.path.contains('/threads/'))
+          (call.path, call.body?['sequence']),
+    ];
+
+    Future<({FakeSwarm swarm, SwarmReader reader, SwarmThread thread})>
+    marked() async {
+      final r = await rig();
+      r.swarm.routes['/api/super-tabs/$tab/conversations/g1/threads/'] = (
+        body,
+      ) => {'sequence': body!['sequence']};
+      final marks = SwarmReadMarks(r.reader, store: null);
+      addTearDown(marks.dispose);
+      r.reader.readMarks = marks;
+      return (swarm: r.swarm, reader: r.reader, thread: open(r.chat));
+    }
+
+    test('a thread seen once its read is back marks it through its newest '
+        'row, once', () async {
+      final r = await marked();
+      // Nothing of it read yet: nothing to mark.
+      r.thread.markRead();
+      await settle();
+      expect(threadWrites(r.swarm), isEmpty);
+      await r.thread.load();
+      r.thread.markRead();
+      r.thread.markRead();
+      await settle();
+      expect(threadWrites(r.swarm), [
+        ('/api/super-tabs/$tab/conversations/g1/threads/m1/read', 2),
+      ]);
+      expect(r.reader.readMarks!.threadThrough('g1', 'm1'), 2);
+    });
+
+    test('once access is lost the thread marks nothing', () async {
+      final r = await marked();
+      await r.thread.load();
+      r.reader.revoke();
+      await settle();
+      r.thread.markRead();
+      await settle();
+      expect(threadWrites(r.swarm), isEmpty);
+    });
+  });
 
   test('opening reads the thread through the chat\'s own path: its root, '
       'then its replies', () async {

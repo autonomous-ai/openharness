@@ -8,6 +8,7 @@ import { swarmTransaction } from './cache.js'
 import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
+import { sweepThreadMarks } from './readMarks.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -143,10 +144,20 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
   return expired
 }
 
+/** The thread-mark sweep (readMarks.ts), its failure said and kept to itself: the other sweeps of the pass still run. */
+export async function threadMarks(db: PrismaClient, now: number) {
+  try {
+    return await sweepThreadMarks(db, now)
+  } catch (error) {
+    logger.warn('[swarm-sweeps] thread marks failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

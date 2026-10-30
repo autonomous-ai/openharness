@@ -32,6 +32,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_live_card.dart';
 import 'swarm_message_link.dart';
+import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
@@ -1331,6 +1332,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       });
     }
     final lead = pending == null ? 0 : 1;
+    final latestOwn = c.latestOwn;
 
     Widget entry(_Entry entry) {
       final key = _keyOf(entry);
@@ -1364,6 +1366,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
+          final receipt =
+              m.id == latestOwn?.id && m.receiptDelivery?.status == 'queued';
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;
@@ -1382,6 +1386,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               lit,
               followed,
               acting,
+              receipt,
               reply,
               quoted,
               view.canPost,
@@ -1472,6 +1477,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     : null,
               ),
               onLongPress: () => unawaited(_pickReaction(c, m.id)),
+              receipt: receipt
+                  ? SwarmMessageReceipt(
+                      key: ValueKey('swarm-message-receipt-${m.id}'),
+                      conversation: c,
+                      message: m,
+                    )
+                  : null,
               below: answerIn == null
                   ? null
                   : _AnswerIn(
