@@ -429,11 +429,41 @@ describe('thread marks (one per person and thread)', () => {
     // Someone no longer in the Swarm, and a Swarm that is gone.
     await write('left', now - 1_000, 'person-who-left')
     await write('deleted-swarm', now - 1_000, owner.sub, `${s.tabId}-deleted`)
-    const result = await sweepThreadMarks(db, now)
+    const result = await sweepThreadMarks(db, now, { after: '' }, 100_000)
     const kept = await db.superTabThreadMark.findMany({ where: { tabId: { startsWith: s.tabId } }, select: { threadId: true } })
     expect(kept.map(k => k.threadId).sort()).toEqual(['fresh', 'peers'])
     expect(result.expired).toBeGreaterThanOrEqual(1)
     expect(result.lost).toBeGreaterThanOrEqual(2)
+  })
+
+  /** Marks in Swarms named `${prefix}-${name}`, one person each, moved now. */
+  const marksIn = async (prefix: string, names: string[]) => {
+    for (const name of names) await writeThreadMark(db, { tabId: `${prefix}-${name}`, personId: owner.sub, conversationId: 'c', threadId: 't', sequence: 1, now: NOW })
+  }
+  const swarmsWithMarks = async (prefix: string) =>
+    [...new Set((await db.superTabThreadMark.findMany({ where: { tabId: { startsWith: prefix } }, select: { tabId: true } })).map(m => m.tabId.slice(prefix.length + 1)))].sort()
+
+  it('never reads a Swarm row without its member list as having no members: only a row that is gone loses its marks', async () => {
+    const prefix = `zz-sweep-${randomUUID()}`
+    await marksIn(prefix, ['gone', 'no-members'])
+    // A Swarm row stored without memberIds (an older or partial row), written as is.
+    await db.$runCommandRaw({ insert: 'SuperTab', documents: [{ _id: `${prefix}-no-members`, ownerId: owner.sub, autonomousEnv: 'prod', state: {} }] })
+    const result = await sweepThreadMarks(db, NOW, { after: prefix }, 10)
+    expect(await swarmsWithMarks(prefix)).toEqual(['no-members'])
+    expect(result.swarmsChecked).toBe(2)
+  })
+
+  it('checks a bounded number of Swarms a pass, going on from where the last pass stopped and starting over after the last', async () => {
+    const prefix = `zz-walk-${randomUUID()}`
+    await marksIn(prefix, ['a', 'b', 'c'])
+    const at = { after: prefix }
+    expect((await sweepThreadMarks(db, NOW, at, 2)).swarmsChecked).toBe(2)
+    expect(await swarmsWithMarks(prefix)).toEqual(['c'])
+    expect(at.after).toBe(`${prefix}-b`)
+    await sweepThreadMarks(db, NOW, at, 2)
+    expect(await swarmsWithMarks(prefix)).toEqual([])
+    // Past the last Swarm with marks, the next pass starts from the first.
+    expect(at.after).toBe('')
   })
 
   it('reads a person\'s thread marks through their named indexes, planned once', async () => {

@@ -10,6 +10,7 @@ import { mentionsDigest, swarmsWithTags, waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, readThreadMarks, writeReadMark, writeThreadMark } from '../readMarks.js'
 import { deliveredCopies } from '../pageReads.js'
+import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import type { CacheView } from '../cache.js'
@@ -224,7 +225,9 @@ export class SwarmReads {
       if (error instanceof SuperTabError && error.status === 404) unavailable()
       throw error
     }
-    const root = await this.db.superTabMessage.findFirst({ where: { tabId, conversationId, id: threadId }, select: { id: true, source: true, recipientIds: true, thread: true } })
+    const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
+      { $project: { source: 1, recipientIds: 1, thread: 1 } }])
+    const root = found && { id: found._id as string, source: found.source ?? null, recipientIds: (found.recipientIds as string[] | undefined) ?? [], thread: found.thread }
     if (!root || root.thread !== root.id || agentOnly(root.source, root.recipientIds) || (await deliveredCopies(this.db, tabId, [root])).size) unavailable()
     return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
       now: this.now() }) }

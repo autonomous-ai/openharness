@@ -117,13 +117,30 @@ async function deleteIds(db: PrismaClient, ids: string[]): Promise<number> {
   return Number(reply.n ?? 0)
 }
 
+/** How many Swarms one sweep checks for marks of people no longer there; the next pass goes on after the last one. */
+export const THREAD_MARK_SWARMS = 200
+
+/** Where the people check reads on from, kept between the worker's passes: after the last Swarm checked. */
+export interface ThreadMarkWalk { after: string }
+const walk: ThreadMarkWalk = { after: '' }
+
+/** The first mark's value of `field` past `after` within `match`, by one seek on the person index; null past the last. */
+async function nextOf(db: PrismaClient, match: Record<string, string>, field: 'tabId' | 'personId', after: string): Promise<string | null> {
+  const [row] = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { ...match, [field]: { $gt: after } } }, { $sort: { tabId: 1, personId: 1 } },
+    { $limit: 1 }, { $project: { _id: 0, [field]: 1 } }])
+  return (row?.[field] as string | undefined) ?? null
+}
+
 /**
  * The hourly sweep of thread marks (run by the singleton worker with the Swarm sweeps, sweeps.ts): deletes marks untouched for
- * READ_MARK_EXPIRY_MS, then the marks of Swarms that no longer exist and of people no longer in their Swarm. Each kind reads
- * by its index in batches of SWEEP_BATCH, at most THREAD_MARK_SWEEP a pass. A delete only makes a thread read as far as its
+ * READ_MARK_EXPIRY_MS, by the age index in batches of SWEEP_BATCH, at most THREAD_MARK_SWEEP a pass. Then it checks the next
+ * THREAD_MARK_SWARMS Swarms with marks, in id order from where the last pass stopped (`walk`), one Swarm and one person at a
+ * time by index seeks: a Swarm whose row is gone loses all its marks, a person no longer in its `memberIds` theirs. A Swarm
+ * row without `memberIds` is skipped, never read as having no members. A delete only makes a thread read as far as its
  * conversation's mark, so a mark swept a moment before its person moves it again costs nothing.
  */
-export async function sweepThreadMarks(db: PrismaClient, now: number): Promise<{ expired: number; lost: number }> {
+export async function sweepThreadMarks(db: PrismaClient, now: number, at: ThreadMarkWalk = walk, swarms = THREAD_MARK_SWARMS):
+  Promise<{ expired: number; lost: number; swarmsChecked: number }> {
   let expired = 0
   const before = { $date: new Date(now - READ_MARK_EXPIRY_MS).toISOString() }
   while (expired < THREAD_MARK_SWEEP) {
@@ -131,19 +148,24 @@ export async function sweepThreadMarks(db: PrismaClient, now: number): Promise<{
     expired += await deleteIds(db, rows.map(row => row._id as string))
     if (rows.length < SWEEP_BATCH) break
   }
-  // Each Swarm's people with marks, read off the person index in order, then whether each Swarm and person is still there.
-  const pairs = (await readBy(db, 'SuperTabThreadMark', 'person', [{ $sort: { tabId: 1, personId: 1 } },
-    { $group: { _id: { tabId: '$tabId', personId: '$personId' } } }, { $limit: THREAD_MARK_SWEEP }]))
-    .map(row => row._id as { tabId: string; personId: string })
-  const tabIds = [...new Set(pairs.map(pair => pair.tabId))]
-  const members = new Map((tabIds.length ? await readBy(db, 'SuperTab', 'id', [{ $match: { _id: { $in: tabIds } } }, { $project: { memberIds: 1 } }]) : [])
-    .map(row => [row._id as string, new Set((row.memberIds as string[] | undefined) ?? [])]))
-  const gone = pairs.filter(pair => !members.get(pair.tabId)?.has(pair.personId))
-  let lost = 0
-  for (let at = 0; at < gone.length && lost < THREAD_MARK_SWEEP; at += SWEEP_BATCH) {
-    const reply = await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: gone.slice(at, at + SWEEP_BATCH)
-      .map(pair => ({ q: { tabId: pair.tabId, personId: pair.personId }, limit: 0 })) }) as { n?: number }
+  let lost = 0, swarmsChecked = 0
+  const remove = async (q: Record<string, string>) => {
+    const reply = await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q, limit: 0 }] }) as { n?: number }
     lost += Number(reply.n ?? 0)
   }
-  return { expired, lost }
+  while (swarmsChecked < swarms) {
+    const tabId = await nextOf(db, {}, 'tabId', at.after)
+    // Past the last Swarm: the next pass starts again from the first.
+    if (tabId === null) { at.after = ''; break }
+    at.after = tabId
+    swarmsChecked++
+    const [row] = await readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { memberIds: 1 } }])
+    if (!row) { await remove({ tabId }); continue }
+    if (!Array.isArray(row.memberIds)) continue
+    const members = new Set(row.memberIds as string[])
+    for (let person = await nextOf(db, { tabId }, 'personId', ''); person !== null; person = await nextOf(db, { tabId }, 'personId', person)) {
+      if (!members.has(person)) await remove({ tabId, personId: person })
+    }
+  }
+  return { expired, lost, swarmsChecked }
 }
