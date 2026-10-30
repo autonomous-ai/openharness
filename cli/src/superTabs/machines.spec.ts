@@ -2084,6 +2084,32 @@ describe('removed machine cleanup', () => {
       { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }] })
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
   })
+
+  // Scholes, 2026-10-30: work is assigned only after the settle, so the settle carries the model the start saw.
+  it('settles with what the agent runs, and without it on a backend that refuses the field', async () => {
+    const reading = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto', contextWindow: null, engineVersion: '0.165.0' }
+    for (const [oldBackend, configuration] of [[false, reading], [true, reading], [false, undefined]] as const) {
+      const root = mkdtempSync(join(tmpdir(), 'swarm-settle-')); roots.push(root)
+      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(() => undefined) } })
+      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
+        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: false, cwd: '/repo' } }], paused: false }
+      const backend = vi.fn(async (_core: unknown, _method: string, path: string, body?: unknown): Promise<unknown> => {
+        if (path.includes('/hosts/host/changes')) return hostForm([], { pools: [pool] })
+        const command = (body as { command?: Record<string, unknown> } | undefined)?.command
+        if (oldBackend && command?.type === 'agent.startSettled' && 'configuration' in command) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+        return { revision: 1 }
+      })
+      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+      const start = vi.fn(async () => ({ ok: true, harnessId: 'h-new', ...(configuration ? { configuration } : {}) }))
+      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
+        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+      const settles = backend.mock.calls.map(c => c[3] as { operationId: string; command: Record<string, unknown> } | undefined)
+        .filter(b => b?.command?.type === 'agent.startSettled')
+      const plain = { operationId: 'settled-new', command: { type: 'agent.startSettled', startId: 'new', warning: null } }
+      const carried = { operationId: expect.stringMatching(/^settled-model-new-[0-9a-f]{16}$/), command: { ...plain.command, configuration: reading } }
+      expect(settles).toEqual(!configuration ? [plain] : oldBackend ? [carried, plain] : [carried])
+    }
+  })
 })
 
 // 2026-10-29: Anthropic answered 5 quick allowance reads, then refused them for 5 minutes (HTTP 429, retry-after 300). Each

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
@@ -614,8 +615,20 @@ export class ContributedMachines {
                 this.waiting.delete(start.id)
                 // Before the start settles: a settled start is no longer listed, so a missed record would never be made.
                 this.recordWorktree(String(row.tabId), start.id, result.harnessId, object(start.request))
-                await scoped({ action: 'command', operationId: `settled-${start.id}`,
-                  command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
+                // With what the agent runs as its start saw it, so work assigned after the settle records its model. A backend
+                // before that field refuses it, and settles without it under its own operation (the host reports the model later).
+                const settled = { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null }
+                const configuration = object(result.configuration)
+                if (typeof configuration.model === 'string') {
+                  try {
+                    // Keyed by the reading too: a later pass may read it again otherwise, and a settle already made ignores the second.
+                    const reading = createHash('sha256').update(JSON.stringify(configuration)).digest('hex').slice(0, 16)
+                    await scoped({ action: 'command', operationId: `settled-model-${start.id}-${reading}`, command: { ...settled, configuration } })
+                  } catch (error) {
+                    if (!(error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR')) throw error
+                    await scoped({ action: 'command', operationId: `settled-${start.id}`, command: settled })
+                  }
+                } else await scoped({ action: 'command', operationId: `settled-${start.id}`, command: settled })
               } else if (result.ok !== true) {
                 const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
                 this.noteWaiting(start.id, reason)
