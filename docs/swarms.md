@@ -655,7 +655,8 @@ Harness keeps trying, and the line goes once the message is in. An offline compu
 
 The phone shows the same two lines in the same words, while the delivery is queued. Its chat reads no delivery change on
 its own, so it reads your newest message again while the chat is on screen: at most every 30 seconds, until the delivery
-is claimed or for 10 minutes each time the chat comes back on screen, and it shows nothing until such a read has worked.
+is claimed or for 10 minutes each time the chat comes back on screen, and once more whenever a newer message arrives in
+the chat. It shows nothing until such a read has worked.
 
 Behind it, the backend writes each claim that ends busy on the delivery (`claimFailingSince`, `claimFailures`) and
 clears that record when a claim gets in. Every 5 minutes the delivery pass logs `[swarm-deliveries] claims failing`

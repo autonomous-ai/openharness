@@ -410,6 +410,143 @@ void main() {
       });
     });
 
+    test('past the 10 minutes a newer message reads it once more', () {
+      return withClock(moved, () async {
+        final queued = own('m1', 1, at: now, deliveries: [delivery()]);
+        final page = [queued];
+        var status = 'queued';
+        final r = rig(
+          page: page,
+          answer: (_) => {
+            'messages': [
+              {
+                ...queued,
+                'deliveries': [delivery(status: status)],
+              },
+            ],
+          },
+        );
+        final c = await open(r.reader);
+        await tick(r);
+        now = now.add(const Duration(minutes: 11));
+        await tick(r);
+        final asked = reads(r.swarm);
+        expect(asked, 1, reason: 'past the 10 minutes');
+
+        // Still queued: one read for it, and none again until another comes.
+        page.insert(0, {
+          ...own('m2', 2, at: now),
+          'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+        });
+        await c.load();
+        await tick(r);
+        expect(reads(r.swarm), asked + 1);
+        now = now.add(const Duration(minutes: 1));
+        await tick(r);
+        expect(reads(r.swarm), asked + 1, reason: 'that message is read once');
+
+        status = 'claimed';
+        page.insert(0, {
+          ...own('m3', 3, at: now),
+          'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+        });
+        await c.load();
+        await tick(r);
+        expect(reads(r.swarm), asked + 2);
+        expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+      });
+    });
+
+    test('a newer message waits for the 30 seconds too', () {
+      return withClock(moved, () async {
+        final page = [
+          own('m1', 1, at: now, deliveries: [delivery()]),
+        ];
+        final r = rig(page: page);
+        final c = await open(r.reader);
+        await tick(r);
+        expect(reads(r.swarm), 1);
+
+        page.insert(0, {
+          ...own('m2', 2, at: now),
+          'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+        });
+        await c.load();
+        await tick(r);
+        expect(reads(r.swarm), 1, reason: 'under 30 seconds');
+        now = now.add(const Duration(seconds: 30));
+        await tick(r);
+        expect(reads(r.swarm), 2);
+      });
+    });
+
+    test(
+      'a by-id answer asked before the chat\'s newer read keeps the newer',
+      () {
+        return withClock(moved, () async {
+          final late_ = Completer<Object?>();
+          final queued = own('m1', 1, at: now, deliveries: [delivery()]);
+          final claimed = {
+            ...queued,
+            'deliveries': [delivery(status: 'claimed')],
+          };
+          final r = rig(page: [queued], answer: (_) => late_.future);
+          final c = await open(r.reader);
+          await tick(r);
+          expect(reads(r.swarm), 1);
+
+          // The chat's read is asked after the by-id one, and lands first.
+          r.swarm.routes[messages] = (_) => {
+            'messages': [claimed],
+            'next': null,
+          };
+          await c.load();
+          expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+
+          late_.complete({
+            'messages': [queued],
+          });
+          await pumpEventQueue();
+          expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+        });
+      },
+    );
+
+    test(
+      'the chat\'s read asked before a by-id answer does not put it back',
+      () {
+        return withClock(moved, () async {
+          final late_ = Completer<Object?>();
+          final queued = own('m1', 1, at: now, deliveries: [delivery()]);
+          final r = rig(
+            page: [queued],
+            answer: (_) => {
+              'messages': [
+                {
+                  ...queued,
+                  'deliveries': [delivery(status: 'claimed')],
+                },
+              ],
+            },
+          );
+          final c = await open(r.reader);
+
+          r.swarm.routes[messages] = (_) => late_.future;
+          final page = c.load();
+          await tick(r);
+          expect(reads(r.swarm), 1);
+          expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+
+          late_.complete({
+            'messages': [queued],
+            'next': null,
+          });
+          await page;
+          expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+        });
+      },
+    );
+
     test(
       'an answer for the message before a newer own one is not the newer',
       () {
@@ -1011,6 +1148,50 @@ void main() {
       expect(find.text('Not delivered yet'), findsOneWidget);
       expect(find.textContaining("Lead's computer is online"), findsOneWidget);
       expect(find.textContaining('mac-1'), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('past the 10 minutes the agent\'s answer clears the line', (
+      tester,
+    ) async {
+      final now = clock.now();
+      final queued = own(
+        'm1',
+        1,
+        at: now.subtract(const Duration(minutes: 3)),
+        deliveries: [delivery()],
+      );
+      final page = [queued];
+      var status = 'queued';
+      final r = rig(
+        machines: const [],
+        page: page,
+        answer: (_) => {
+          'messages': [
+            {
+              ...queued,
+              'deliveries': [delivery(status: status)],
+            },
+          ],
+        },
+      );
+      final c = await show(tester, r);
+      expect(find.text('Not delivered yet'), findsOneWidget);
+
+      await tester.pump(const Duration(minutes: 11));
+      await r.reader.refresh();
+      await tester.pump();
+      expect(find.text('Not delivered yet'), findsOneWidget);
+
+      status = 'answered';
+      page.insert(0, {
+        ...own('m2', 2, at: clock.now()),
+        'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+      });
+      await c.load();
+      await r.reader.refresh();
+      await tester.pump();
+      expect(find.text('Not delivered yet'), findsNothing);
       await close(tester);
     });
 

@@ -559,7 +559,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     bool again = false,
     bool tell = true,
   }) async {
-    final epoch = _epoch;
+    final epoch = _epoch, asked = ++_readsAsked;
     var reacted = false;
     try {
       final tail = latest ? null : messages.lastOrNull?.sequence;
@@ -600,6 +600,15 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       var changed = !_read || error != null || _refused || latest;
       changed |= _keepThreads(answer['threads']);
       for (final m in incoming) {
+        if (m.id == _receiptOf) {
+          // A read of it asked after this one holds where its delivery is now.
+          final held = messages.where((m) => m.id == _receiptOf).firstOrNull;
+          if (held != null && asked < _receiptAskedAs) {
+            byId[m.id] = held;
+            continue;
+          }
+          _receiptAskedAs = asked;
+        }
         if (byId[m.id] case final shown? when _same(shown, m)) continue;
         byId[m.id] = m;
         changed = true;
@@ -920,6 +929,14 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
 
   String? _receiptOf;
   DateTime? _receiptSince, _receiptAsked;
+
+  /// The newest message when it was last asked: one that came after it may
+  /// have answered it, so it is read once more, even past [_receiptReadFor].
+  int? _receiptTail;
+
+  /// Reads are numbered as they are asked; [_receiptAskedAs] is the one the
+  /// row held came from, so an older answer landing later cannot put it back.
+  int _readsAsked = 0, _receiptAskedAs = -1;
   bool _receiptCurrent = false;
   Future<void>? _readingReceipt;
 
@@ -941,7 +958,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       _receiptCurrent && _receiptOf == message.id;
 
   void _dropReceipt() {
-    _receiptOf = _receiptSince = _receiptAsked = null;
+    _receiptOf = _receiptSince = _receiptAsked = _receiptTail = null;
+    _receiptAskedAs = -1;
     _receiptCurrent = false;
     _readingReceipt = null;
   }
@@ -959,10 +977,13 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       _receiptOf = own.id;
       _receiptSince = now;
     }
-    if (now.difference(_receiptSince!) >= _receiptReadFor) return;
     final asked = _receiptAsked;
     if (asked != null && now.difference(asked) < _receiptReadEvery) return;
+    final tail = messages.last.sequence;
+    final answered = tail > own.sequence && tail != _receiptTail;
+    if (!answered && now.difference(_receiptSince!) >= _receiptReadFor) return;
     _receiptAsked = now;
+    _receiptTail = tail;
     late final Future<void> reading;
     reading = _readReceipt(own.id).whenComplete(() {
       if (identical(_readingReceipt, reading)) _readingReceipt = null;
@@ -971,7 +992,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   }
 
   Future<void> _readReceipt(String messageId) async {
-    final epoch = _epoch, generation = reader.generation;
+    final epoch = _epoch, generation = reader.generation, asked = ++_readsAsked;
     bool stale() =>
         _disposed ||
         epoch != _epoch ||
@@ -1006,7 +1027,10 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         ? -1
         : messages.indexWhere((m) => m.id == fresh.id);
     final current = at >= 0;
-    final replaced = current && !_same(messages[at], fresh!);
+    // The chat's own read may have been asked after this one and landed first.
+    final newest = current && asked >= _receiptAskedAs;
+    if (newest) _receiptAskedAs = asked;
+    final replaced = newest && !_same(messages[at], fresh!);
     if (replaced) {
       messages = List.unmodifiable([...messages]..[at] = fresh);
     }
