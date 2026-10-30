@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
@@ -431,7 +432,8 @@ void main() {
       final parts = fake.routes['/api/super-tabs/$tab/parts']!;
       final gate = Completer<void>();
       fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
-        final before = await parts(body);
+        // As the Swarm answered then: nothing made since is in it.
+        final before = jsonDecode(jsonEncode(await parts(body)));
         await gate.future;
         return before;
       };
