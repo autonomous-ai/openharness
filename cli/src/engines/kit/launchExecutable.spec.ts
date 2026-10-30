@@ -75,6 +75,30 @@ it('holds dangling command aliases instead of authorizing an installation over t
   symlinkSync(join(root, 'unavailable-engine'), join(bin, 'opencode'))
   expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held' })
 })
+// Nix (Determinate installer) puts ~/.nix-profile/bin on every login PATH, and ~/.nix-profile names a profile that
+// is not there until `nix profile install` makes one. Holding at that link, every Claude Code start on such a Mac
+// waited for good, its own claude in ~/.local/bin, later on the PATH, never reached (desktop 1.3.42, 2026-10-30).
+it('looks past a dangling link on the search path, and still never installs with nothing found after it', async () => {
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  const { bin, captureLaunchExecutable } = await fixture()
+  vi.doUnmock('../../lib/engineLaunch.js')
+  const profile = join(root, '.nix-profile'); symlinkSync(join(root, 'state', 'nix', 'profiles', 'profile'), profile)
+  vi.stubEnv('PATH', [join(profile, 'bin'), bin].join(':'))
+  expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held', detail: expect.stringContaining('aliases') })
+  const file = join(bin, 'opencode'); writeFileSync(file, 'its own', { mode: 0o700 })
+  expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
+})
+it('looks past a dangling command link to the engine after it, as a shell does', async () => {
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  const { bin, captureLaunchExecutable } = await fixture()
+  vi.doUnmock('../../lib/engineLaunch.js')
+  const first = join(root, 'first'); mkdirSync(first)
+  symlinkSync(join(root, 'removed-engine'), join(first, 'opencode'))
+  vi.stubEnv('PATH', [first, bin].join(':'))
+  expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held' })
+  const file = join(bin, 'opencode'); writeFileSync(file, 'its own', { mode: 0o700 })
+  expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
+})
 it('permits complete absence through a valid search-directory alias', async () => {
   const { bin, captureLaunchExecutable } = await fixture()
   const alias = join(root, 'path-alias'); symlinkSync(bin, alias); vi.stubEnv('PATH', alias)

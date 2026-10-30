@@ -124,6 +124,11 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
   // than installing over what may be there.
   let unreachable = false
+  // A dangling link on the way to a candidate: a person's choice, so it never proves the engine absent. Looked past
+  // as a shell looks past it, for a later candidate it can run; with none, held rather than installing. Held at the
+  // link, every start on a Mac with Nix and no profile yet (~/.nix-profile) waited for good, its own Claude Code in
+  // ~/.local/bin never reached (2026-10-30).
+  let aliased = false
   for (const path of [...new Set(candidates.flatMap(windowsPrograms))]) {
     try {
       const info = statSync(path)
@@ -140,7 +145,8 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
           try { lstatSync(path) } catch (leaf) {
             if ((leaf as NodeJS.ErrnoException).code === 'ENOENT') continue
           }
-          return held('Waiting to confirm the engine search path and its aliases.')
+          aliased = true
+          continue
         }
         try {
           const paths = new NativePaths(new NativeEvidenceBudget())
@@ -150,7 +156,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
           // and missing descendants of valid aliases still prove absence.
           for (const fact of paths.snapshot()) if (fact.alias) statSync(fact.path)
           paths.verify()
-        } catch { return held('Waiting to confirm the engine search path and its aliases.') }
+        } catch { aliased = true }
         continue
       }
       // A folder on the search path that this account may not enter, or a file it may not run, hides nothing it could
@@ -165,6 +171,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
     if (!executable) return held('Waiting for the selected engine executable to stop changing.')
     return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
   }
+  if (aliased) return held('Waiting to confirm the engine search path and its aliases.')
   if (unreachable) return held('Waiting to confirm access to the selected engine executable.')
   return recipe ? { state: 'install', recipe, environment: environment as Record<string, string> } : held('Waiting for the configured engine executable to become available.')
 }
