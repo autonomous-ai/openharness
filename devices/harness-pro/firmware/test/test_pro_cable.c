@@ -1256,8 +1256,18 @@ static void test_swarm_cards(void)
     // supertab.focus
     reset();
     feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\",\"lead\":\"L2\"}");
-    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\"}");
     CHECK(nev == 1 && evs[0].kind == EV_STFOCUS && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L2"));
+    // an empty or missing lead: open that Swarm on the Lead last shown (the app decides); an empty tab is still nothing
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\",\"lead\":\"\"}");   // focus_empty_lead_reaches_app
+    CHECK(nev == 1 && evs[0].kind == EV_STFOCUS && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, ""));
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_STFOCUS && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, ""));
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"\",\"lead\":\"L2\"}");
+    feed("{\"t\":\"supertab.focus\",\"lead\":\"\"}");
+    CHECK(nev == 0);
 
     // the send helper
     reset();

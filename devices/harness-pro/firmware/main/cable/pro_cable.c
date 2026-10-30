@@ -656,11 +656,14 @@ static void handle_supertab_recap(const cJSON *p)
     pro_app_supertab_recap(tab, lead, chat_id, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
 }
 
+// `supertab.focus`: the desktop opened that Swarm's project. An empty or missing `lead` (a Swarm tab with no project open) is kept, meaning "the Lead
+// last shown there, else its first"; a `lead` that is present but too long is ignored, as is a missing `tab`.
 static void handle_supertab_focus(const cJSON *p)
 {
     char tab[ID_MAX], lead[ID_MAX];
     const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
-    if (!id_fits(t) || !id_fits(l)) return;
+    if (!id_fits(t) || (l && *l && !id_fits(l))) return;
+    if (!l) l = "";
     snprintf(tab, sizeof tab, "%s", t);
     snprintf(lead, sizeof lead, "%s", l);
     pro_app_supertab_focus(tab, lead);

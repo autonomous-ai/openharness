@@ -942,21 +942,47 @@ int pod_ui_take_reads(pod_ui_t *u, pod_read_out_t out[], int max) { return pod_m
 
 // ---- the Swarm cards: following the desktop, and what the daemon is told ---------------------------------------------
 
-// supertab.focus (the model's focus_pending): open that Lead's recap the way a host focus opens an agent. Dropped, not kept, while recording or updating or when the
-// person is driving (a touch within the quiet window, a finger down); a Lead the Swarm list does not hold yet waits POD_FOLLOW_PENDING_MS for it.
+// The Lead a focus names: itself, or for an empty one (the desktop opened the Swarm with no project) the Lead last on screen in that Swarm while it is still
+// there, else the Swarm's first. NULL when the Swarm or the Lead is not in the model (yet).
+static const char *focus_lead_of(const pod_ui_t *u)
+{
+    const pod_model_t *m = &u->model;
+    const pod_swarm_t *sw = pod_model_swarm(m, m->focus_tab);
+    if (m->focus_lead[0]) return pod_model_lead_index(sw, m->focus_lead) < 0 ? NULL : m->focus_lead;
+    if (!sw || sw->lead_n == 0) return NULL;
+    for (int i = 0; i < SWARMS_CARD_MAX; i++)
+        if (!strcmp(u->lead_seen[i].swarm, sw->id) && pod_model_lead_index(sw, u->lead_seen[i].lead) >= 0) return u->lead_seen[i].lead;
+    return sw->leads[0].id;
+}
+
+// Remember the Lead on screen in its Swarm: that Swarm's slot, else the first free one, else (all used) the oldest, slots being taken in turn.
+static void lead_seen_note(pod_ui_t *u, const char *swarm, const char *lead)
+{
+    int k = -1;
+    for (int i = 0; i < SWARMS_CARD_MAX && k < 0; i++) if (!strcmp(u->lead_seen[i].swarm, swarm)) k = i;
+    for (int i = 0; i < SWARMS_CARD_MAX && k < 0; i++) if (!u->lead_seen[i].swarm[0]) k = i;
+    if (k < 0) { k = u->lead_seen_next; u->lead_seen_next = (uint8_t)((k + 1) % SWARMS_CARD_MAX); }
+    pod_copy_str(u->lead_seen[k].swarm, ID_MAX, swarm);
+    pod_copy_str(u->lead_seen[k].lead, ID_MAX, lead);
+}
+
+// supertab.focus (the model's focus_pending): open that Lead's recap the way a host focus opens an agent; an empty Lead opens the Swarm on the Lead last shown
+// there, else its first. Dropped, not kept, while recording or updating or when the person is driving (a touch within the quiet window, a finger down); a Lead
+// (or Swarm) the Swarm list does not hold yet waits POD_FOLLOW_PENDING_MS for it.
 static void apply_lead_focus(pod_ui_t *u)
 {
     pod_model_t *m = &u->model;
     if (!m->focus_pending) return;
     const uint32_t now_ms = m->clock_ms;
     if (!u->lead_wait) { u->lead_wait = true; u->lead_wait_ms = now_ms; }
-    if (pod_model_lead_index(pod_model_swarm(m, m->focus_tab), m->focus_lead) < 0) {
+    const char *want = focus_lead_of(u);
+    if (!want) {
         if ((int32_t)(now_ms - u->lead_wait_ms) > (int32_t)POD_FOLLOW_PENDING_MS) { m->focus_pending = false; u->lead_wait = false; }
         return;
     }
     char tab[ID_MAX], lead[ID_MAX];
     memcpy(tab, m->focus_tab, ID_MAX);
-    memcpy(lead, m->focus_lead, ID_MAX);
+    memcpy(lead, want, ID_MAX);
     m->focus_pending = false;
     u->lead_wait = false;
     if (pod_ui_talking(u) || u->ota || u->down) return;
@@ -979,6 +1005,7 @@ static void sup_sync(pod_ui_t *u)
     const pod_swarm_t *sw = NULL;
     const pod_lead_t *l = on ? pod_nav_lead(&u->nav, m, &sw) : NULL;
     if (on && !l) return;   // its Lead is not in the model (yet): neither open nor closed, wait for it
+    if (l) lead_seen_note(u, sw->id, l->id);
     const char *lead = l ? l->id : "";
     if (!strcmp(u->sup_lead, lead) && (!l || !strcmp(u->sup_tab, sw->id))) {   // already what the daemon was told: a frame that may have been lost is re-sent
         if (!l) {   // nothing open: a close the link dropped goes again

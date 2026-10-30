@@ -1988,6 +1988,49 @@ static void lead_focus(void) {
     pod_ui_supertab_ids(&U, ids, 2);
     CHECK(!U.model.focus_pending && U.nav.depth == 1);
 }
+static void empty_focus_opens_last_lead(void) {
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw1", "l2", NOW);
+    take();   // the Lead view is on screen: the sync remembers it
+    U.nav.depth = 1; U.dirty = true;   // back at Home
+    take();
+    pod_ui_supertab_focus(&U, "sw1", "", NOW);   // the desktop opened the Swarm with no project: the Lead last shown here
+    CHECK(U.nav.depth == 2 && top()->view == POD_V_LEAD && top()->lead == 2 && !strcmp(top()->swarm, "sw1") && !U.model.focus_pending);
+}
+static void empty_focus_opens_first_without_history(void) {
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw1", "", NOW);
+    CHECK(U.nav.depth == 2 && top()->view == POD_V_LEAD && top()->lead == 0 && !strcmp(top()->swarm, "sw1") && !U.model.focus_pending);
+}
+static void empty_focus_last_lead_gone_opens_first(void) {
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw1", "l3", NOW);
+    take();
+    U.nav.depth = 1; U.dirty = true;
+    take();
+    static pod_swarm_t sw;   // l3 leaves the Swarm
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = 3; sw.lead_n = 3;
+    for (int i = 0; i < 3; i++) { snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj"); snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); }
+    pod_ui_supertab(&U, &sw, 3000);
+    pod_ui_supertab_focus(&U, "sw1", "", NOW);
+    CHECK(U.nav.depth == 2 && top()->view == POD_V_LEAD && top()->lead == 0 && !U.model.focus_pending);
+}
+static void empty_focus_unknown_swarm_waits_then_drops(void) {
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "swX", "", NOW);
+    CHECK(U.model.focus_pending && U.nav.depth == 1);
+    U.model.clock_ms += POD_FOLLOW_PENDING_MS + 100;
+    static const char ids[2][ID_MAX] = {"sw1", "sw2"};
+    pod_ui_supertab_ids(&U, ids, 2);
+    CHECK(!U.model.focus_pending && U.nav.depth == 1);
+}
+static void empty_focus_respects_quiet_window(void) {
+    swarm_home(4);
+    U.touched = true; U.last_touch_ms = 1400;   // a touch 100 ms ago
+    pod_ui_supertab_focus(&U, "sw1", "", 1500);
+    CHECK(U.nav.depth == 1 && !U.model.focus_pending);
+}
 static void lead_removed(void) {
     swarm_home(4);
     tap_lead(1, 3000);
@@ -2078,6 +2121,11 @@ int main(void) {
     lead_scrolls();
     lead_talk();
     lead_focus();
+    empty_focus_opens_last_lead();
+    empty_focus_opens_first_without_history();
+    empty_focus_last_lead_gone_opens_first();
+    empty_focus_unknown_swarm_waits_then_drops();
+    empty_focus_respects_quiet_window();
     lead_removed();
     lead_relink();
     swarm_card_shrinks();

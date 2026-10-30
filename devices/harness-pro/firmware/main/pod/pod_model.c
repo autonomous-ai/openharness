@@ -874,7 +874,7 @@ void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead)
 }
 
 void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
-    if (!tab || !*tab || !lead || !*lead) return;
+    if (!tab || !*tab || !lead) return;   // an empty lead is kept: the Swarm opens on the Lead last shown there
     pod_copy_str(m->focus_tab, sizeof m->focus_tab, tab);
     pod_copy_str(m->focus_lead, sizeof m->focus_lead, lead);
     m->focus_pending = true;

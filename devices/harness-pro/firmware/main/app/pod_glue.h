@@ -96,6 +96,8 @@ typedef struct {
     // The Swarm cards' Lead view (see pod_ui_take_supertab): the Lead the daemon was last told is open (empty: none), the frames waiting to go, and when a
     // supertab.focus began waiting for its Swarm list.
     char sup_tab[ID_MAX], sup_lead[ID_MAX];
+    struct { char swarm[ID_MAX], lead[ID_MAX]; } lead_seen[SWARMS_CARD_MAX];   // the Lead last on screen in each Swarm
+    uint8_t lead_seen_next;      // the slot a new Swarm takes once all are used: the oldest, as slots fill in order
     char sup_close[ID_MAX];      // a "closed" frame the link dropped, owed for this Swarm until sent (empty: none), unless a Lead opens first
     pod_supertab_out_t sup_q[POD_SUPERTAB_OUT_MAX];
     uint8_t sup_qn;
