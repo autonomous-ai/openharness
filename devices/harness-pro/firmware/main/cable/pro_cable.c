@@ -593,6 +593,12 @@ static void read_leads(const cJSON *it, pod_swarm_t *sw)
         ld->state = lead_state(str_of(l, "state"));
         const cJSON *since = cJSON_GetObjectItemCaseSensitive(l, "since");
         if (cJSON_IsNumber(since) && since->valuedouble > 0) ld->since_s = since->valuedouble > 2592000 ? 2592000u : (uint32_t)since->valuedouble;
+        const char *chat = str_of(l, "chat");
+        if (chat) ld->chat = !strcmp(chat, "lead") ? POD_CHAT_LEAD : !strcmp(chat, "pm") ? POD_CHAT_PM :
+                             !strcmp(chat, "group") ? POD_CHAT_GROUP : !strcmp(chat, "buddy") ? POD_CHAT_BUDDY : POD_CHAT_NONE;
+        const char *cid = str_of(l, "chatId");
+        if (cid && strlen(cid) < sizeof ld->chat_id) snprintf(ld->chat_id, sizeof ld->chat_id, "%s", cid);   // whole or none
+        cut_of(l, "chatName", ld->chat_name, sizeof ld->chat_name);
         ld->recap = POD_RECAP_NONE;
     }
 }
@@ -635,18 +641,19 @@ static void handle_supertab(const cJSON *p)
 // `supertab.recap`: one Lead's last message, cut to 1,500 bytes on a UTF-8 boundary. `none` (or no text) is "No message yet".
 static void handle_supertab_recap(const cJSON *p)
 {
-    char tab[ID_MAX], lead[ID_MAX];
-    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead"), *c = str_of(p, "chatId");
     if (!id_fits(t) || !id_fits(l)) return;
     snprintf(tab, sizeof tab, "%s", t);
     snprintf(lead, sizeof lead, "%s", l);
+    snprintf(chat_id, sizeof chat_id, "%s", c && strlen(c) < sizeof chat_id ? c : "");   // whole or none
     const cJSON *none = cJSON_GetObjectItemCaseSensitive(p, "none"), *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const char *text = cut_of(p, "text", s_card_text, sizeof s_card_text);
     if (!text) s_card_text[0] = 0;
     const bool empty = cJSON_IsTrue(none);
     if (empty) s_card_text[0] = 0;
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    pro_app_supertab_recap(tab, lead, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
+    pro_app_supertab_recap(tab, lead, chat_id, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
 }
 
 static void handle_supertab_focus(const cJSON *p)

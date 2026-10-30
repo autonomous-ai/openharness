@@ -350,7 +350,7 @@ static void lead_view_via_app(void) {
     CHECK(top() == POD_V_LEAD && U.nav.depth == 2);
     CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
     CHECK(!strcmp(SUP.tab[2], "sw1") && !strcmp(SUP.lead[2], "l1") && !strcmp(SUP.lead[0], "l1"));
-    pro_app_supertab_recap("sw1", "l1", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
+    pro_app_supertab_recap("sw1", "l1", "", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
     render();
     CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && SUP.n == 3);
     memset(&SUP, 0, sizeof SUP);
@@ -385,7 +385,7 @@ static void lead_view_scrolls_via_app(void) {
     swarm_home_page();
     tap(POD_A_LEAD, 1);
     CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].agent, "a1"));
-    pro_app_supertab_recap("sw1", "l1", LONG_LEAD, 1792560000u, false);
+    pro_app_supertab_recap("sw1", "l1", "", LONG_LEAD, 1792560000u, false);
     render();
     CHECK(pod_scroll_max(&U.nav, &U.model) >= 2 && first_text_y("one") >= 0);
     now += 2000;

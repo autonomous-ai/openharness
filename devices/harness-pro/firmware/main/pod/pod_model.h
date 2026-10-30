@@ -191,7 +191,7 @@ void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
 // keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
 void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
 // A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
-void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 // The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
 // close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
 void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);

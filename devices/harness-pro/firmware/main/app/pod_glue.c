@@ -201,9 +201,9 @@ pod_out_t pod_ui_supertab(pod_ui_t *u, const pod_swarm_t *s, uint32_t now_ms)
     return synced(u);
 }
 
-pod_out_t pod_ui_supertab_recap(pod_ui_t *u, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+pod_out_t pod_ui_supertab_recap(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
-    pod_model_supertab_recap(&u->model, tab, lead, text, at, none);
+    pod_model_supertab_recap(&u->model, tab, lead, chat_id, text, at, none);
     return synced(u);
 }
 

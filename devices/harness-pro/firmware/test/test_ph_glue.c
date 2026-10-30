@@ -12,7 +12,7 @@
 static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
 {
     pod_model_supertab_loading(m, tab, lead);
-    pod_model_supertab_recap(m, tab, lead, text, at, none);
+    pod_model_supertab_recap(m, tab, lead, "", text, at, none);
 }
 
 static int checks;
@@ -1773,7 +1773,7 @@ static void lead_tap_sends(void) {
     render(3500);
     CHECK(U.frame.hit_count == 0);
     // the text arrives: LOADED, nothing more is sent
-    pod_ui_supertab_recap(&U, "sw1", "l1", "Merged.", 1792560000u, false);
+    pod_ui_supertab_recap(&U, "sw1", "l1", "", "Merged.", 1792560000u, false);
     CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && take() == 0);
     pod_nav_act(&U.nav, &U.model, POD_A_BACK, 0, 4000);
     CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", ""));
@@ -1812,7 +1812,7 @@ static void lead_retry(void) {
     render(9000);
     CHECK(take() == 2 && U.sup_tries == 1);
     // a Lead that answered is told once more that it is open, then left alone
-    pod_ui_supertab_recap(&U, "sw1", "l1", "Merged.", 1792560000u, false);
+    pod_ui_supertab_recap(&U, "sw1", "l1", "", "Merged.", 1792560000u, false);
     render(12000);
     CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l1"));
     render(20000);
@@ -1839,7 +1839,7 @@ static void lead_swipe_steps(void) {
     swarm_home(4);
     tap_lead(1, 3000);
     CHECK(take() == 3);
-    pod_ui_supertab_recap(&U, "sw1", "l1", "One.", 1, false);
+    pod_ui_supertab_recap(&U, "sw1", "l1", "", "One.", 1, false);
     render(3500);
     swipe(600, 400, 200, 410, 4000);   // left: the next Lead, in card order
     CHECK(top()->view == POD_V_LEAD && top()->lead == 2 && !strcmp(top()->lead_id, "l2") && U.nav.depth == 2);
@@ -1892,7 +1892,7 @@ static void lead_scrolls(void) {
     swarm_home(4);
     tap_lead(0, 3000);
     take();
-    pod_ui_supertab_recap(&U, "sw1", "l0", "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+    pod_ui_supertab_recap(&U, "sw1", "l0", "", "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
                           "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two", 1, false);
     render(3500);
     CHECK(pod_scroll_max(&U.nav, &U.model) > 1 && top()->scroll == 0);

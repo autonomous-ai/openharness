@@ -388,10 +388,10 @@ void pro_app_supertab(const pod_swarm_t *sw)
     leave();
 }
 
-void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
     pro_app_lock();
-    settle(pod_ui_supertab_recap(&s_pod, tab, lead, text, at, none));
+    settle(pod_ui_supertab_recap(&s_pod, tab, lead, chat_id, text, at, none));
     leave();
 }
 

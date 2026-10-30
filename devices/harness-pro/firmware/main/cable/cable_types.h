@@ -75,11 +75,14 @@ typedef struct {
  */
 enum { SWARMS_CARD_MAX = 16, SWARM_LEADS_MAX = 12, SWARM_TEXT_MAX = 1501 };   // text: 1,500 bytes + NUL
 typedef enum { POD_LEAD_ASK, POD_LEAD_STUCK, POD_LEAD_WORK, POD_LEAD_DONE } pod_lead_state_t;   // needs you, stuck, working, done
+typedef enum { POD_CHAT_NONE, POD_CHAT_LEAD, POD_CHAT_PM, POD_CHAT_GROUP, POD_CHAT_BUDDY } pod_chat_t;   // the chat the Lead's face shows
 typedef enum { POD_RECAP_NONE, POD_RECAP_LOADING, POD_RECAP_LOADED, POD_RECAP_EMPTY } pod_recap_state_t;
 typedef struct {
     char id[ID_MAX], projectId[ID_MAX], project[49], engine[16], owner[49], local[ID_MAX];   // owner: another person's machine; local: the harness to talk to
     pod_lead_state_t state;
     uint32_t since_s, since_at_ms;       // seconds into the turn when the frame arrived (local Lead in a turn), and the device clock then
+    pod_chat_t chat;                     // NONE: the frame named no chat (an older daemon): today's Lead view
+    char chat_id[ID_MAX], chat_name[49]; // chat_name as project: 48 bytes + NUL, cut on a codepoint
     pod_recap_state_t recap;
     char *text;                          // the Lead's last message, PSRAM, owned by the model (NULL unless LOADED); the cable side leaves it NULL
     uint32_t text_at;                    // when it was written (epoch seconds)

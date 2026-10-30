@@ -19,7 +19,7 @@
 static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
 {
     pod_model_supertab_loading(m, tab, lead);
-    pod_model_supertab_recap(m, tab, lead, text, at, none);
+    pod_model_supertab_recap(m, tab, lead, "", text, at, none);
 }
 
 #define T0 100000u

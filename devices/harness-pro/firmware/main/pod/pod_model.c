@@ -815,6 +815,11 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
         carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
         ol->text = NULL;
+        if (strcmp(ol->chat_id, s->leads[j].chat_id)) {   // another chat: the old message is not its message
+            free(carry[j].text);
+            carry[j].text = NULL; carry[j].text_at = 0;
+            if (carry[j].recap != POD_RECAP_NONE) carry[j].recap = POD_RECAP_LOADING;   // asked for (open): "…" until the daemon pushes the new chat's
+        }
     }
     for (int j = 0; j < d->lead_n; j++) lead_free_text(&d->leads[j]);   // the ones that left
     *d = *s;
@@ -830,11 +835,12 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
     m->revision++;
 }
 
-void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none) {
+void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none) {
     const pod_swarm_t *s = pod_model_swarm(m, tab);
     const int j = pod_model_lead_index(s, lead);
     if (j < 0) return;
     pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    if (chat_id && chat_id[0] && strcmp(chat_id, l->chat_id)) return;   // a reply for a chat the face has left
     if (l->recap == POD_RECAP_NONE) return;   // a Lead nobody asked for or has left: a late reply would only sit there stale
     lead_free_text(l);
     l->text_at = at;

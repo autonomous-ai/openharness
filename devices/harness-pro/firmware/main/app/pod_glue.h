@@ -129,7 +129,7 @@ pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t 
 // The Swarm cards: the model's lists (pod_model_supertab_ids / _supertab / _recap / _focus) behind the same sync as every feed.
 pod_out_t pod_ui_supertab_ids(pod_ui_t *, const char (*ids)[ID_MAX], int n);
 pod_out_t pod_ui_supertab(pod_ui_t *, const pod_swarm_t *s, uint32_t now_ms);
-pod_out_t pod_ui_supertab_recap(pod_ui_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+pod_out_t pod_ui_supertab_recap(pod_ui_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 pod_out_t pod_ui_supertab_focus(pod_ui_t *, const char *tab, const char *lead, uint32_t now_ms);   // now_ms: the quiet-window and waiting clocks, as pod_ui_focus's
 pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
 // The daemon took a recording for this agent (voice.result): Working now, before its turn starts (pod_model_sent).

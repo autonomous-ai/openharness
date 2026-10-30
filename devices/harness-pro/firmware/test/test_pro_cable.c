@@ -88,9 +88,9 @@ void pro_app_supertab(const pod_swarm_t *sw)
     rec_card = *sw;
     e->n1 = sw->lead_n;
 }
-void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
-    ev_t *e = add(EV_STRECAP, tab); put(e->a, lead); put(e->b, text); e->n1 = at; e->n2 = none;
+    ev_t *e = add(EV_STRECAP, tab); put(e->a, lead); put(e->b, text); snprintf(e->d, sizeof e->d, "%s", chat_id); e->n1 = at; e->n2 = none;
 }
 void pro_app_supertab_focus(const char *tab, const char *lead) { ev_t *e = add(EV_STFOCUS, tab); put(e->a, lead); }
 void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
@@ -1097,6 +1097,42 @@ static void seq_gaps(void)
     end_session();
 }
 
+// Each Lead's face chat: chat / chatId / chatName on the Lead; a bad field leaves the chat NONE, never drops the Lead or the frame.
+static void test_swarm_chat(void)
+{
+    welcome();
+    reset();   // supertab_reads_chat_fields
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"chat\":\"group\",\"chatId\":\"g1\",\"chatName\":\"review-cable-fit\"},"
+         "{\"id\":\"L2\",\"chat\":\"pm\",\"chatId\":\"p1\",\"chatName\":\"Mai\"},{\"id\":\"L3\",\"chat\":\"lead\"},"
+         "{\"id\":\"L4\",\"chat\":\"buddy\"},{\"id\":\"L5\",\"chat\":\"other\",\"chatId\":\"x\"},{\"id\":\"L6\"}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 6);
+    CHECK(rec_card.leads[0].chat == POD_CHAT_GROUP && !strcmp(rec_card.leads[0].chat_id, "g1") && !strcmp(rec_card.leads[0].chat_name, "review-cable-fit"));
+    CHECK(rec_card.leads[1].chat == POD_CHAT_PM && !strcmp(rec_card.leads[1].chat_id, "p1") && !strcmp(rec_card.leads[1].chat_name, "Mai"));
+    CHECK(rec_card.leads[2].chat == POD_CHAT_LEAD && rec_card.leads[3].chat == POD_CHAT_BUDDY);
+    CHECK(rec_card.leads[4].chat == POD_CHAT_NONE && rec_card.leads[5].chat == POD_CHAT_NONE &&
+          rec_card.leads[5].chat_id[0] == 0 && rec_card.leads[5].chat_name[0] == 0);
+
+    reset();   // chat_name_cut_on_codepoint: 60 bytes of "é" cut to 48 whole letters
+    char *name = repeat("\xc3\xa9", 30);
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"chat\":\"group\",\"chatName\":\"%s\"}]}", name);
+    free(name);
+    CHECK(nev == 1 && strlen(rec_card.leads[0].chat_name) == 48);
+
+    reset();   // bad_chat_types_keep_frame
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"chat\":7,\"chatId\":9,\"chatName\":[]},"
+         "{\"id\":\"L2\",\"chat\":\"group\",\"chatId\":\"0123456789012345678901234567890123456789012345678\"}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 2 && !strcmp(rec_card.leads[0].id, "L1"));
+    CHECK(rec_card.leads[0].chat == POD_CHAT_NONE && rec_card.leads[0].chat_id[0] == 0 && rec_card.leads[0].chat_name[0] == 0);
+    CHECK(rec_card.leads[1].chat == POD_CHAT_GROUP && rec_card.leads[1].chat_id[0] == 0);   // an id that does not fit is empty, whole or none
+
+    reset();   // supertab_recap_reads_chat_id
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"chatId\":\"g1\",\"text\":\"hi\",\"at\":5}");
+    CHECK(nev == 1 && evs[0].kind == EV_STRECAP && !strcmp(evs[0].d, "g1") && !strcmp(evs[0].b, "hi"));
+    reset();
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"text\":\"hi\",\"at\":5}");
+    CHECK(nev == 1 && evs[0].d[0] == 0);
+}
+
 // The Swarm cards (the hello's swarmCard:v1 is checked in test_pro_hello.py): supertabs {ids} + one supertab per Swarm +
 // supertab.recap / supertab.focus in, pro_app_supertab* out.
 static void test_swarm_cards(void)
@@ -1356,6 +1392,7 @@ int main(void)
     link_resync();
     seq_gaps();
     test_swarm_cards();
+    test_swarm_chat();
     self_replug();
     replug_spares_a_frame_in_flight();
     printf("test_pro_cable: %d checks passed\n", checks);
