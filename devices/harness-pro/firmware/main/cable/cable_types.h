@@ -84,6 +84,7 @@ typedef struct {
     uint32_t color;                      // 0xRRGGBB
     bool live;                           // the Buddy is answering now
 } pod_buddy_t;
+enum { POD_BUDDY_INK = 0xC49BFF };   // the lilac of a Buddy: its default colour, the pill's segment, the dot, its name
 typedef struct {
     char id[ID_MAX], projectId[ID_MAX], project[49], engine[16], owner[49], local[ID_MAX];   // owner: another person's machine; local: the harness to talk to
     pod_lead_state_t state;

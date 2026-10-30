@@ -163,6 +163,7 @@ int pod_ui_take_supertab(pod_ui_t *, pod_supertab_out_t out[], int max);
 // The person picked a side of that Swarm: queue `supertab.side`. False when the queue is full or `side` is NONE. A frame that could not be sent is dropped, not
 // retried (pod_ui_supertab_unsent ignores it): the next supertab frame shows the side the desktop really holds.
 bool pod_ui_supertab_side(pod_ui_t *, const char *tab, pod_side_t side);
+void pod_ui_side_unsent(pod_ui_t *, const char *tab);
 void pod_ui_supertab_unsent(pod_ui_t *, const pod_supertab_out_t *frame);
 
 // The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the

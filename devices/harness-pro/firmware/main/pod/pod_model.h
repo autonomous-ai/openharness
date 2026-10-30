@@ -134,6 +134,7 @@ typedef struct {
     // The PM | Buddy segment the person just tapped on this Swarm (the pill draws it selected at once); the Swarm's next supertab frame ends it.
     pod_side_t side_press;
     char side_press_swarm[ID_MAX];
+    uint32_t side_press_ms;              // the device clock when it was tapped
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -201,7 +202,17 @@ void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, 
 void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
 void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
 // A tap on the pill: the segment shows selected on this Swarm until its next supertab frame (NONE clears it). `buddy_unread` of the Lead is the glue's to clear.
-void pod_model_side_press(pod_model_t *, const char *swarm_id, pod_side_t side);
+void pod_model_side_press(pod_model_t *, const char *swarm_id, pod_side_t side, uint32_t now_ms);
+enum { POD_SIDE_PRESS_MS = 3000 };   // as POD_SUPERTAB_RETRY_MS: how long a tap waits for the daemon's frame
+// The side the pill and the body show for this Swarm (PM or BUDDY): the tapped segment while the daemon has not answered, else the Swarm's own (NONE counts
+// as PM). A press older than POD_SIDE_PRESS_MS is dropped: the frame it asked for may never come. The view and the glue both read it, so they cannot disagree.
+pod_side_t pod_model_side_shown(const pod_model_t *, const pod_swarm_t *);
+// The Buddy side of a Lead that has none is showing: "No Buddy here yet", no bubble, nothing to talk to.
+bool pod_model_no_buddy(const pod_model_t *, const pod_swarm_t *, const pod_lead_t *);
+// The milliseconds left before the press on this Swarm lapses; 0 when there is none.
+uint32_t pod_model_side_press_left_ms(const pod_model_t *, const pod_swarm_t *);
+// Mark (unread) or clear the lilac dot of a Buddy chat; the Lead must be held. True when the mark changed.
+bool pod_model_buddy_mark(pod_model_t *, const char *tab, const char *lead, bool unread);
 // supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
 void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
 const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none

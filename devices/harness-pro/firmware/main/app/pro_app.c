@@ -164,15 +164,21 @@ static __attribute__((noinline)) void send_supertabs(void)
     const int n = pod_ui_take_supertab(&s_pod, q, POD_SUPERTAB_OUT_MAX);
     if (s_pod.model.revision != rev) change();   // asking for a recap puts it LOADING: a change no feed announced (the flag is the model's revision: not consumed here)
     pro_app_unlock();
-    bool lost[POD_SUPERTAB_OUT_MAX] = {0};
+    bool lost[POD_SUPERTAB_OUT_MAX] = {0}, side_lost[POD_SUPERTAB_OUT_MAX] = {0};
     bool any = false;
     for (int i = 0; i < n; i++) {
-        if (!strcmp(q[i].t, "supertab.side")) { pro_cable_supertab_side(q[i].tab, q[i].side); continue; }   // not owed again: the next supertab frame shows the true side
+        if (!strcmp(q[i].t, "supertab.side")) {   // not owed again: the next supertab frame shows the true side
+            if (!pro_cable_supertab_side(q[i].tab, q[i].side)) { lost[i] = false; side_lost[i] = true; any = true; }
+            continue;
+        }
         any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
     }
     if (!any) return;
     pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
-    for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+    for (int i = 0; i < n; i++) {
+        if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+        if (side_lost[i]) { pod_ui_side_unsent(&s_pod, q[i].tab); change(); }   // the tapped segment would never be answered
+    }
     pro_app_unlock();
 }
 

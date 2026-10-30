@@ -588,7 +588,7 @@ static void read_buddy(const cJSON *l, pod_lead_t *ld)
     cut_of(b, "name", bd->name, sizeof bd->name);
     cut_of(b, "engine", bd->engine, sizeof bd->engine);
     const char *col = str_of(b, "color");
-    bd->color = 0xC49BFF;
+    bd->color = POD_BUDDY_INK;
     if (col && strlen(col) == 7 && col[0] == '#') {
         char *end = NULL;
         bool hex = true;

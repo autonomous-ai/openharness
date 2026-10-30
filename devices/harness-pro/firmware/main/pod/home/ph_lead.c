@@ -32,7 +32,7 @@ enum { BG = PH_ROOM_BG, BX = 60, BW = 600, BY = 150, RAD = 34, PAD_X = 34, PAD_Y
        PILL_X = 210, PILL_Y = 16, PILL_W = 300, PILL_H = 44, SEG_W = 150, PILL_CY = 38, HEAD_A_CY = 94, CHAT_PILL_CY = 130,   // the pill, header A, the chat name under the pill
        DOT = 12, DOT_X = 480, DOT_Y = 18, DOT_RING = 3,   // right of "Buddy", clear of its ink
        NB_CX = 360, NB_CY = 250, NB_D = 120, NB_DASHES = 12, NB_TITLE_CY = 364, NB_SUB_CY = 412,   // no Buddy yet: the dashed circle, the two lines
-       TRACK = 0x34302C, BUDDY_INK = 0xC49BFF,
+       TRACK = 0x34302C, BUDDY_INK = POD_BUDDY_INK,
        EDGE_ASK = 0xFF9A52, EDGE_STUCK = 0xE5484D, SWARM_INK = 0xB79CFF };   // the mockup's #ff9a52 and a red; the Swarm name's purple
 static const ht_pro_font_t *const FONT = &ph_rg_36;
 
@@ -102,23 +102,11 @@ static int rows_of(const char *text)
 
 int ph_lead_pitch(void) { return PITCH; }
 
-// The side the pill shows: the segment just tapped on this Swarm if the daemon has not answered yet, else the Swarm's own (NONE counts as PM).
-static pod_side_t side_shown(const pod_model_t *m, const pod_swarm_t *sw)
-{
-    pod_side_t side = m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, sw->id) ? m->side_press : sw->side;
-    return side == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
-}
-// The Buddy side of a Lead that has none: no bubble, no who row.
-static bool no_buddy(const pod_model_t *m, const pod_swarm_t *sw, const pod_lead_t *l)
-{
-    return l->buddies && !l->has_buddy && side_shown(m, sw) == POD_SIDE_BUDDY;
-}
-
 int ph_lead_max_row(const pod_nav_t *nav, const pod_model_t *m)
 {
     const pod_swarm_t *sw = NULL;
     const pod_lead_t *l = pod_nav_lead(nav, m, &sw);
-    if (!l || l->recap != POD_RECAP_LOADED || (sw && no_buddy(m, sw, l))) return 0;
+    if (!l || l->recap != POD_RECAP_LOADED || (sw && pod_model_no_buddy(m, sw, l))) return 0;
     const int rows = rows_of(l->text);
     return rows > ROWS_VIS ? rows - ROWS_VIS : 0;
 }
@@ -204,7 +192,7 @@ static void who_buddy(ht_scene_t *s, const pod_lead_t *l, int cy)
 }
 
 // No Buddy yet: a dashed circle (twelve short arcs) with a "+", then two muted lines.
-static void draw_no_buddy(ht_scene_t *s)
+static void draw_pod_model_no_buddy(ht_scene_t *s)
 {
     for (int k = 0; k < NB_DASHES; k++)
         pod_arc(s, NB_CX * 16, NB_CY * 16, (NB_D / 2 - 2) * 16, 4 * 16, k * 360 / NB_DASHES, 360 / NB_DASHES / 4, C(PH_ROOM_MUTED));
@@ -221,7 +209,7 @@ void ph_view_lead(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     const pod_lead_t *l = pod_nav_lead(nav, m, &sw);
     if (!l) return;   // the link dropped or the list has not come back: nothing to say yet (the view stays; pod_nav_sync decides when it goes)
     char line[HT_TEXT_BYTES];
-    const pod_side_t side = side_shown(m, sw);
+    const pod_side_t side = pod_model_side_shown(m, sw);
     if (l->buddies) {   // the pill, and the header on one line under it
         draw_pill(f, sw, side, l->buddy_unread && side == POD_SIDE_PM);
         head_a(s, sw->name, l->project);
@@ -235,7 +223,7 @@ void ph_view_lead(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
         fit_line(line, sizeof line, l->chat_name, &ph_sb_22, HEAD_W);
         centred(s, l->buddies ? CHAT_PILL_CY : CHAT_CY, &ph_sb_22, PH_ROOM_MUTED, line);
     }
-    if (no_buddy(m, sw, l)) { draw_no_buddy(s); return; }
+    if (pod_model_no_buddy(m, sw, l)) { draw_pod_model_no_buddy(s); return; }
 
     // The bubble: the text (loaded), "..." (loading) or nothing (no message yet, or not asked yet: the same "..." as loading)
     const bool empty = l->recap == POD_RECAP_EMPTY, loaded = l->recap == POD_RECAP_LOADED;
@@ -284,7 +272,8 @@ void ph_view_lead(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
 
 uint32_t ph_lead_next_ms(const pod_nav_t *nav, const pod_model_t *m, uint32_t now_ms)
 {
-    const pod_lead_t *l = pod_nav_lead(nav, m, NULL);
+    const pod_swarm_t *sw = NULL;
+    const pod_lead_t *l = pod_nav_lead(nav, m, &sw);
     if (!l) return POD_PET_STEP_MS;
     uint32_t ms = pod_pet_next_beat_ms(l->engine, l->recap == POD_RECAP_EMPTY ? POD_SCENE_REST : ph_lead_scene(l->state), now_ms, 0);
     if (ms < POD_PH_ANIM_MS) ms = POD_PH_ANIM_MS - now_ms % POD_PH_ANIM_MS;   // a pet redraws a lot: no faster than the Pets beat
@@ -292,5 +281,7 @@ uint32_t ph_lead_next_ms(const pod_nav_t *nav, const pod_model_t *m, uint32_t no
         const uint32_t into = (int32_t)(now_ms - l->since_at_ms) > 0 ? now_ms - l->since_at_ms : 0, t = 1000 - into % 1000;
         if (ms > t) ms = t;
     }
+    const uint32_t left = sw ? pod_model_side_press_left_ms(m, sw) : 0;   // a tapped segment the daemon never answered lapses: draw the Swarm's own side then
+    if (left && ms > left) ms = left;
     return ms;
 }

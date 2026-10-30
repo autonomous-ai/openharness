@@ -2372,6 +2372,60 @@ static void side_kept_across_swipe(void) {
     { bool buddy_on = false; for (int i = 0; i < S.count; i++) buddy_on |= S.runs[i].x == 360 && S.runs[i].y == 16 && S.runs[i].w == 150; CHECK(buddy_on); }
 }
 
+// The "No Buddy here yet" screen is not a chat: a tap on it talks to nobody (the words would land in the Lead's shared chat).
+static void nobuddy_screen_never_talks(void) {
+    pod_out_t o;
+    buddy_lead_open();
+    buddy_swarm()->leads[1].has_buddy = false;
+    buddy_swarm()->side = POD_SIDE_BUDDY;
+    render(3400);
+    take();
+    t_(true, MID_X, MID_Y, 6000);
+    CHECK(!U.talk_armed);
+    o = t_(false, MID_X, MID_Y, 6050);
+    CHECK(o.fx != POD_FX_VOICE_BEGIN && !U.talk_armed && !pod_ui_talking(&U));
+    buddy_swarm()->side = POD_SIDE_PM;   // and with the PM side up it talks again
+    take();
+    o = tap_(MID_X, MID_Y, 7000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+}
+// A tapped segment that no frame answers goes back to the Swarm's own side after POD_SUPERTAB_RETRY_MS, and the view wakes to draw it.
+static void pressed_side_expires(void) {
+    buddy_lead_open();
+    tap_(435, 38, 4000);   // the press is taken at 4050
+    take();
+    CHECK(pod_model_side_shown(&U.model, buddy_swarm()) == POD_SIDE_BUDDY);
+    render(4100);
+    CHECK(ph_lead_next_ms(&U.nav, &U.model, 4100) <= 2950);   // wakes at the expiry
+    pod_model_clock(&U.model, 4050 + 2999);
+    CHECK(pod_model_side_shown(&U.model, buddy_swarm()) == POD_SIDE_BUDDY);
+    pod_model_clock(&U.model, 4050 + 3001);
+    CHECK(pod_model_side_shown(&U.model, buddy_swarm()) == POD_SIDE_PM);
+}
+static void pressed_side_cleared_when_send_fails(void) {
+    buddy_lead_open();
+    tap_(435, 38, 4000);
+    take();
+    CHECK(U.model.side_press == POD_SIDE_BUDDY);
+    pod_ui_side_unsent(&U, "sw2");   // another Swarm's frame
+    CHECK(U.model.side_press == POD_SIDE_BUDDY);
+    pod_ui_side_unsent(&U, "sw1");
+    CHECK(U.model.side_press == POD_SIDE_NONE && pod_model_side_shown(&U.model, buddy_swarm()) == POD_SIDE_PM);
+}
+// The dot also goes whenever the Buddy chat is on the face of a lit screen (a notice that came while another Lead was shown).
+static void buddy_dot_clears_when_buddy_face_shown(void) {
+    buddy_lead_open();
+    buddy_swarm()->leads[2].chat = POD_CHAT_BUDDY;
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l2", "buddy", "bc2", "Hi.", true, 3500) && buddy_swarm()->leads[2].buddy_unread);
+    tap_(435, 38, 4000);   // Buddy on l1
+    take();
+    swipe(600, 400, 200, 410, 5000);
+    CHECK(top()->lead == 2);
+    render(5300);
+    tap_(285, 38, 6000);   // PM
+    CHECK(!buddy_swarm()->leads[2].buddy_unread);
+}
+
 int main(void) {
     notify_while_looking();
     swarm_card_pages();
@@ -2385,6 +2439,10 @@ int main(void) {
     opening_buddy_clears_dot();
     relink_clears_buddy_dot();
     side_kept_across_swipe();
+    nobuddy_screen_never_talks();
+    pressed_side_expires();
+    pressed_side_cleared_when_send_fails();
+    buddy_dot_clears_when_buddy_face_shown();
     notice_opens_lead();
     swarm_notice_toasts_and_beeps();
     swarm_notice_on_its_lead_view_reads_at_once();

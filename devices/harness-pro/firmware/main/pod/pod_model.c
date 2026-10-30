@@ -880,10 +880,33 @@ void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead)
     m->revision++;
 }
 
-void pod_model_side_press(pod_model_t *m, const char *swarm_id, pod_side_t side) {
+void pod_model_side_press(pod_model_t *m, const char *swarm_id, pod_side_t side, uint32_t now_ms) {
+    pod_model_clock(m, now_ms);
     m->side_press = side;
+    m->side_press_ms = m->clock_ms;
     pod_copy_str(m->side_press_swarm, sizeof m->side_press_swarm, side == POD_SIDE_NONE || !swarm_id ? "" : swarm_id);
     m->revision++;
+}
+
+pod_side_t pod_model_side_shown(const pod_model_t *m, const pod_swarm_t *sw) {
+    pod_side_t side = sw->side;
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, sw->id) && (uint32_t)(m->clock_ms - m->side_press_ms) < POD_SIDE_PRESS_MS) side = m->side_press;
+    return side == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
+}
+bool pod_model_no_buddy(const pod_model_t *m, const pod_swarm_t *sw, const pod_lead_t *l) {
+    return l->buddies && !l->has_buddy && pod_model_side_shown(m, sw) == POD_SIDE_BUDDY;
+}
+uint32_t pod_model_side_press_left_ms(const pod_model_t *m, const pod_swarm_t *sw) {
+    if (m->side_press == POD_SIDE_NONE || strcmp(m->side_press_swarm, sw->id)) return 0;
+    const uint32_t gone = m->clock_ms - m->side_press_ms;
+    return gone < POD_SIDE_PRESS_MS ? POD_SIDE_PRESS_MS - gone : 0;
+}
+bool pod_model_buddy_mark(pod_model_t *m, const char *tab, const char *lead, bool unread) {
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(m, tab);
+    const int j = sw ? pod_model_lead_index(sw, lead) : -1;
+    if (j < 0 || sw->leads[j].buddy_unread == unread) return false;
+    sw->leads[j].buddy_unread = unread;
+    return true;
 }
 
 void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
