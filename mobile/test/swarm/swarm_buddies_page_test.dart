@@ -58,6 +58,13 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
+  /// The Buddy chat is a page of its own, with its own header: Swarm Home C
+  /// has no Buddy tab, and no project page of direction B opens under it.
+  void expectOwnPage() {
+    expect(key('swarm-chat-header'), findsOneWidget, reason: 'its header');
+    expect(key('swarm-project-tab-buddy'), findsNothing, reason: "B's tabs");
+  }
+
   Finder inside(String row, Finder finder) =>
       find.descendant(of: key(row), matching: finder);
 
@@ -131,6 +138,7 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.swarmId, page.conversationId), (tab, buddiesMobileChat));
+    expectOwnPage();
   });
 
   testWidgets('a project with no Buddy chat opens one on a tap', (
@@ -150,6 +158,83 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.swarmId, page.conversationId), (tab, 'buddy-docs'));
+    expectOwnPage();
+  });
+
+  testWidgets('two quick taps on a row with no chat yet ask once and open '
+      'one chat', (tester) async {
+    final fake = buddiesBackend();
+    final gate = Completer<void>();
+    final answer = fake.routes['/api/super-tabs/$tab/commands']!;
+    fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
+      await gate.future;
+      return answer(body);
+    };
+    await pump(tester, fake);
+
+    await tester.tap(key(docs));
+    await tester.pump();
+    await tester.tap(key(docs));
+    await tester.pump();
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(fake.commands, hasLength(1));
+    expect(find.byType(SwarmConversationPage), findsOneWidget);
+  });
+
+  testWidgets('an open the server refuses says why and opens nothing', (
+    tester,
+  ) async {
+    final fake = buddiesBackend();
+    fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
+        throw const SuperTabFailure('FORBIDDEN', 'You cannot do that here.');
+    await pump(tester, fake);
+
+    await tester.tap(key(docs));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SwarmConversationPage), findsNothing);
+    expect(find.text('You cannot do that here.'), findsOneWidget);
+  });
+
+  testWidgets('a viewer with no Buddy chat there is told so, and nothing is '
+      'asked of the server', (tester) async {
+    final fake = buddiesBackend();
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...buddiesLoad(),
+      'members': [part(me, 1, person(me, role: 'viewer'))],
+    };
+    await pump(tester, fake);
+
+    await tester.tap(key(docs));
+    await tester.pumpAndSettle();
+
+    expect(fake.commands, isEmpty);
+    expect(find.byType(SwarmConversationPage), findsNothing);
+    expect(find.text('You have no Buddy in this project.'), findsOneWidget);
+  });
+
+  testWidgets('access lost while a chat is being opened: nothing opens', (
+    tester,
+  ) async {
+    final fake = buddiesBackend();
+    final gate = Completer<void>();
+    final answer = fake.routes['/api/super-tabs/$tab/commands']!;
+    fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
+      await gate.future;
+      return answer(body);
+    };
+    final host = await pump(tester, fake);
+
+    await tester.tap(key(docs));
+    await tester.pump();
+    host.session!.inbox.reader(tab)!.revoke();
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SwarmConversationPage), findsNothing);
+    expect(find.text('buddy-docs'), findsNothing);
   });
 
   testWidgets('out of sight, it reads no chat; in sight again, it does', (

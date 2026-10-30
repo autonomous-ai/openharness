@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +9,10 @@ import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
 
+import '../swarm/swarm_fixture.dart';
 import 'devices_fixture.dart';
 
 /// A message link (Desktop's Copy link to message) opened on the phone: the
@@ -123,6 +128,129 @@ void main() {
     );
   });
 
+  group('to a project chat', () {
+    /// One Swarm whose project Mobile's chat is [leadChat]; the person also
+    /// has a work chat g9 there, and a private chat.
+    FakeSwarm swarm({Future<void>? partsHeld}) {
+      final fake = FakeSwarm();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': 'person-me'},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
+        await partsHeld;
+        return {
+          ...firstLoad(
+            groups: [
+              groupData('g9', title: 'Fix login', agentIds: ['agent-lead']),
+              groupData('g-private', title: 'Theirs', audience: ['other']),
+            ],
+          ),
+          'members': [part('person-me', 1, person('person-me'))],
+        };
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2');
+      fake.routes['/api/super-tabs/$tab/conversations/'] = (_) => {
+        'messages': <Object>[],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$tab/'] = (_) => <String, dynamic>{};
+      return fake;
+    }
+
+    /// Frames enough for the Swarm's reads and the pages' transitions.
+    Future<void> frames(WidgetTester tester) async {
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    void expectProjectAt(WidgetTester tester, String messageId) {
+      expectHomeCProject('Mobile');
+      final chat = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      );
+      expect(
+        (chat.swarmId, chat.conversationId, chat.messageId),
+        (tab, leadChat, messageId),
+      );
+      expect(find.byType(SwarmPage, skipOffstage: false), findsOneWidget);
+    }
+
+    testWidgets("opens the project on Home C's screen, its chat at the "
+        'message', (tester) async {
+      (app as _LinkApp).swarm = swarm();
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('one that arrives before the Swarm is read opens the '
+        'project once it is', (tester) async {
+      final held = Completer<void>();
+      (app as _LinkApp).swarm = swarm(partsHeld: held.future);
+      waiting.add('harness://swarm/$tab/$leadChat/m7');
+      await start(tester);
+      await frames(tester);
+
+      held.complete();
+      await frames(tester);
+      expectProjectAt(tester, 'm7');
+      expect(find.byType(SwarmProjectPage), findsOneWidget);
+    });
+
+    testWidgets("a work chat's link opens that chat, not a project", (
+      tester,
+    ) async {
+      (app as _LinkApp).swarm = swarm();
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/$tab/g9/m1');
+      await frames(tester);
+
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expectOpened(tester, (tab, 'g9', 'm1'));
+    });
+
+    testWidgets("the project chat's id under another Swarm's id opens no "
+        'project, and names none', (tester) async {
+      (app as _LinkApp).swarm = swarm();
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/tab-other/$leadChat/m7');
+      await frames(tester);
+
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expect(find.text('#Mobile'), findsNothing);
+      expect(find.text('Mobile'), findsNothing);
+    });
+
+    testWidgets('access lost while it is open: the project goes from the '
+        'screen', (tester) async {
+      (app as _LinkApp).swarm = swarm();
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+      expectHomeCProject('Mobile');
+
+      final host = tester
+          .widget<SwarmScope>(find.byType(SwarmScope).first)
+          .notifier!;
+      host.session!.inbox.reader(tab)!.revoke();
+      await frames(tester);
+
+      expect(find.text('#Mobile'), findsNothing);
+      expect(key('swarm-project-tab-team'), findsNothing);
+    });
+  });
+
   testWidgets('after the shell is gone (signed out) a link is left for the '
       'next one', (tester) async {
     await start(tester);
@@ -135,7 +263,22 @@ void main() {
   });
 }
 
+Finder key(String value) => find.byKey(ValueKey(value));
+
 class _LinkApp extends DevicesApp {
+  /// The Swarm backend the shell's Swarm reads, when a test gives one.
+  FakeSwarm? swarm;
+
+  @override
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => switch (swarm) {
+    final fake? => fake.request(method, path, body: body),
+    null => super.swarmRequest(method, path, body: body),
+  };
+
   @override
   void handleAppResumed() {}
 }

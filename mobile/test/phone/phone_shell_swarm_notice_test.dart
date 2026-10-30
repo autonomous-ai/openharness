@@ -8,6 +8,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 
+import '../swarm/swarm_fixture.dart';
 import 'devices_fixture.dart';
 
 /// A tapped Swarm notice opens the conversation it was about, over the Swarm
@@ -120,6 +121,52 @@ void main() {
     expectOpened(tester);
   });
 
+  testWidgets("a tap on a project chat's notice opens the project on Home "
+      "C's screen, its chat at the message, its decision asked", (
+    tester,
+  ) async {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': 'person-me'},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(),
+      'members': [part('person-me', 1, person('person-me'))],
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/'] = (_) => <String, dynamic>{
+      'messages': <Object>[],
+      'next': null,
+    };
+    (app as _NoticeApp).swarm = fake;
+    await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    notices().openedSwarm.value = (
+      swarmId: tab,
+      conversationId: leadChat,
+      messageId: 'm7',
+      decisionId: 'd1',
+    );
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expectHomeCProject('Mobile');
+    final chat = tester.widget<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(
+      (chat.conversationId, chat.messageId, chat.decisionId),
+      (leadChat, 'm7', 'd1'),
+    );
+  });
+
   testWidgets('a tap that launched the app opens it too', (tester) async {
     // Read before the shell exists, so no listener sees it change.
     notices().openedSwarm.value = (
@@ -137,6 +184,19 @@ void main() {
 }
 
 class _NoticeApp extends DevicesApp {
+  /// The Swarm backend the shell's Swarm reads, when a test gives one.
+  FakeSwarm? swarm;
+
+  @override
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => switch (swarm) {
+    final fake? => fake.request(method, path, body: body),
+    null => super.swarmRequest(method, path, body: body),
+  };
+
   @override
   void handleAppResumed() {}
 }

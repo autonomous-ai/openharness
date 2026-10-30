@@ -47,21 +47,15 @@ import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
-/// Opens [conversationId] of Swarm [swarmId] over the current page.
+/// Opens [conversationId] of Swarm [swarmId] over the current page: a
+/// project's own chat as its project ([SwarmOpenedChat]).
 void openSwarmConversation(
   BuildContext context,
   String swarmId,
   String conversationId,
 ) => unawaited(
-  Navigator.of(context).push(
-    phoneRoute(
-      (_) => SwarmConversationPage(
-        swarmId: swarmId,
-        conversationId: conversationId,
-      ),
-      listensForItself: true,
-    ),
-  ),
+  Navigator.of(context)
+      .push(swarmChatRoute(swarmId: swarmId, conversationId: conversationId)),
 );
 
 /// Opens this app's page in the phone's Settings, where a refused camera is turned back on.
@@ -1135,17 +1129,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
   /// private line answered where the PM reads, and everyone with it.
-  void _answerIn(String projectId, String pmId) => unawaited(
-    Navigator.of(context).push(
-      phoneRoute(
-        (_) => SwarmProjectPage(
-          swarmId: widget.swarmId,
-          projectId: projectId,
-          mention: pmId,
-        ),
-        listensForItself: true,
-      ),
-    ),
+  void _answerIn(String projectId, String pmId) => openSwarmProject(
+    context,
+    swarmId: widget.swarmId,
+    projectId: projectId,
+    mention: pmId,
   );
 
   /// [m]'s author as a quote names them: the person's own messages are

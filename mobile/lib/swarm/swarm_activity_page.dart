@@ -12,10 +12,10 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'identity.dart';
 import 'swarm_activity.dart';
-import 'swarm_conversation_page.dart';
 import 'swarm_home_rows.dart' show swarmNeedAsk;
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
+import 'swarm_project_page.dart' show swarmChatRoute;
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -316,18 +316,15 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     session.activity.replied(item);
     unawaited(
       Navigator.of(context).push(
-        phoneRoute(
-          (_) => SwarmConversationPage(
-            swarmId: item.swarmId,
-            conversationId: item.conversationId,
-            messageId: item.messageId,
-            decisionId: switch (item) {
-              SwarmActivityNeed(need: SwarmDecisionNeed(:final decision)) =>
-                decision.id,
-              _ => null,
-            },
-          ),
-          listensForItself: true,
+        swarmChatRoute(
+          swarmId: item.swarmId,
+          conversationId: item.conversationId,
+          messageId: item.messageId,
+          decisionId: switch (item) {
+            SwarmActivityNeed(need: SwarmDecisionNeed(:final decision)) =>
+              decision.id,
+            _ => null,
+          },
         ),
       ),
     );
