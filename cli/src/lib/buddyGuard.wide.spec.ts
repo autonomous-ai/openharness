@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { BUDDY_ENGINE_HOMES, allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
+import { BUDDY_ENGINE_HOMES, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
   judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
@@ -38,6 +38,10 @@ const denied = [
   'work/aws/credentials', 'work/aws/credentials.json',
   // Delta reviews of #2310: Terminal's per-session shell history, hub's GitHub token, fish's history, and every engine's data.
   '.zsh_sessions/A1B2.history', '.config/hub', '.local/share/fish/fish_history',
+  // Final review of #2310: a backup of Claude Code's settings, its per-project MCP logs, bash's session histories, the
+  // Anthropic CLI's key, Antigravity's data, and engine homes beside the default ones.
+  '.claude.json.bak-20261030', 'Library/Caches/claude-cli-nodejs/-Users-me-worktree/mcp-logs-x/log.txt', '.bash_sessions/A1B2.history',
+  '.config/anthropic/api_key', 'Library/Application Support/Antigravity/state.vscdb', '.codex-work/auth.json', '.claude-work/settings.json',
   ...[...new Set(Object.values(BUDDY_ENGINE_HOMES).flat())].map(path => path.endsWith('.json') ? path : `${path}/held.txt`)
     .filter(path => path !== '.claude.json'),
   // Where Ken's clone keeps the read-only prod database login (Lead, 10-30), and the like.
@@ -513,7 +517,7 @@ describe('the launch\'s wide mode and sandbox', () => {
   spawnSync('git', ['init', '-q'], { cwd: repo })
   spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/autonomous-ai/openharness.git'], { cwd: repo })
   spawnSync('git', ['remote', 'add', 'fork', 'git@github.com:someone/openharness.git'], { cwd: repo })
-  const deps = { platform: 'darwin' as NodeJS.Platform, team: false, home: launchHome, dataDir, uid: 501, hasBwrap: false }
+  const deps = { platform: 'darwin' as NodeJS.Platform, team: false, home: launchHome, dataDir, uid: 501, hasBwrap: false, engineHomes: ['/Volumes/Work/codex-alt'] }
 
   it('turns wide mode on for its person\'s own Mac, naming its repositories and the hosts of their ArgoCD and cluster', () => {
     const launched = buddyLaunchWide(repo, deps)!
@@ -525,7 +529,12 @@ describe('the launch\'s wide mode and sandbox', () => {
       denied: expect.arrayContaining([join(launchHome, '.ssh'), join(launchHome, '.claude'), dataDir, '/tmp/claude-501', '/private/tmp/claude-501']) })
   })
 
+  it('closes the engine homes Harness points agents at beside the default ones', () => {
+    expect(buddyLaunchWide(repo, deps)!.denied).toContain('/Volumes/Work/codex-alt')
+  })
+
   it.each([
+    ['engine homes it cannot read, so it cannot tell where another engine keeps its data', { engineHomes: null }],
     ['a Harness Team account', { team: true }],
     ['Windows, where Claude Code has no sandbox', { platform: 'win32' as NodeJS.Platform }],
     ['Linux without bubblewrap', { platform: 'linux' as NodeJS.Platform, hasBwrap: false }],
@@ -701,5 +710,25 @@ describe('the secret check, past invisible characters', () => {
     ['a zero-width joiner', '‍']])('refuses a token broken by %s', (_, mark) => {
     const broken = `${token.slice(0, 12)}${mark}${token.slice(12, 30)}${mark}${token.slice(30)}`
     expect(bash(`harness super-tab post chat 'Key: ${broken}' op-1`)).toBe('deny')
+  })
+})
+
+// Final review of #2310: the engine homes Harness itself points agents at outside the defaults, read where Harness keeps
+// them: its linked Codex profiles, the homes it adopted, and the ones this process was started with.
+describe('engine homes outside the defaults', () => {
+  const profiles = join(dataDir, 'codex-profiles.json')
+  afterAll(() => rmSync(profiles, { force: true }))
+
+  it('names the linked Codex profiles and the homes in the environment', () => {
+    writeFileSync(profiles, JSON.stringify(['/Users/me/.codex-work', '/Volumes/Work/codex-alt']))
+    expect(engineHomesOutsideDefaults(dataDir, { CLAUDE_CONFIG_DIR: '/Users/me/claude-alt', CODEX_HOME: '/Users/me/codex-env', HOME: '/Users/me' }))
+      .toEqual(expect.arrayContaining(['/Users/me/.codex-work', '/Volumes/Work/codex-alt', '/Users/me/claude-alt', '/Users/me/codex-env']))
+  })
+
+  it('names none it cannot read as none: null, so the launch keeps the Buddy to its folder', () => {
+    writeFileSync(profiles, 'not json')
+    expect(engineHomesOutsideDefaults(dataDir, {})).toBeNull()
+    rmSync(profiles)
+    expect(engineHomesOutsideDefaults(dataDir, {})).toEqual([])
   })
 })

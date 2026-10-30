@@ -3155,4 +3155,15 @@ describe('the account a Buddy\'s grant holds for', () => {
     expect(account()).toBeNull()
     next.stop()
   })
+
+  // Final review of #2310: a running Buddy loses its grant at once when the host stops, not within the hour.
+  it('is none once the host stops', async () => {
+    const t = setup()
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'peer', email: 'peer@example.com' })
+    const host = t.open()
+    host.start()
+    await vi.waitFor(() => expect(account()).toBe('peer'))
+    host.stop()
+    expect(account()).toBeNull()
+  })
 })

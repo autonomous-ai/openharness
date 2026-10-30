@@ -64,7 +64,7 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
     git(clone, 'worktree', 'add', '-q', '-b', name, at)
     // Harness prepares it in wide mode, as on its person's own Mac: their home is the throwaway one.
     prepareSwarmSkill(at, { role: 'buddy', key }, (folderRoot) => buddyLaunchWide(folderRoot, { platform: 'darwin', team: false, home,
-      dataDir: process.env.ADAPTER_DATA_DIR!, uid: process.getuid?.() ?? 0, hasBwrap: false }))
+      dataDir: process.env.ADAPTER_DATA_DIR!, uid: process.getuid?.() ?? 0, hasBwrap: false, engineHomes: [] }))
     return realpathSync(at)
   }
 

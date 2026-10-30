@@ -383,6 +383,8 @@ export class SuperTabHost {
     this.pollMachines()
   }
   stop(): void {
+    // A running Buddy loses its wide grant at once (final review of #2310): the account it held for is none until a start.
+    try { writeBuddyAccount(null) } catch { /* the next start writes none again until it knows */ }
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null

@@ -2,9 +2,11 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
+import { buddyAccountFile } from './buddyAccount.js'
+import { durableEngineHomes } from './engineHomes.js'
 import type { AgentEngine } from '../engines/types.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
@@ -40,7 +42,7 @@ export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readon
   amp: ['.amp', '.config/amp', '.local/share/amp'],
   kilo: ['.kilocode', '.config/kilo', '.local/share/kilo'],
   grok: ['.grok'],
-  agy: ['.gemini', '.antigravity'],
+  agy: ['.gemini', '.antigravity', 'Library/Application Support/Antigravity'],
   copilot: ['.copilot', '.config/github-copilot'],
 }
 
@@ -48,8 +50,9 @@ export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readon
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
  *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
  *  the Buddy may not read (the Leads conversation, private chats, other projects). */
-const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/argocd',
-  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.local/share/fish', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
+const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/anthropic', '.config/argocd',
+  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.bash_sessions', '.local/share/fish',
+  'Library/Caches/claude-cli-nodejs', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
   '.mozilla', '.config/google-chrome', '.config/chromium', '.config/BraveSoftware', '.config/microsoft-edge', '.zsh_history',
   '.bash_history', '.zhistory', '.python_history', '.node_repl_history', '.mongodb', '.dbshell', '.psql_history', '.mysql_history',
   '.lesshst', '.viminfo', 'Library/Keychains', 'Library/Cookies', 'Library/Safari', 'Library/Messages', 'Library/Mail',
@@ -67,15 +70,46 @@ const SYSTEM_READABLE = process.platform === 'darwin'
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
-  system?: readonly string[]; launch?: string }): BuddyWide {
-  return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+  system?: readonly string[]; launch?: string; closed?: readonly string[] }): BuddyWide {
+  return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs, ...(input.closed ?? [])],
     approvalsDir: join(input.dataDir, 'buddy-approvals') }
 }
 
 /** What a Buddy's launch reads of its machine to decide wide mode (`buddyLaunchWide`). */
-export interface BuddyLaunchFacts { platform: NodeJS.Platform; team: boolean; home: string; dataDir: string; uid: number; hasBwrap: boolean }
+export interface BuddyLaunchFacts { platform: NodeJS.Platform; team: boolean; home: string; dataDir: string; uid: number; hasBwrap: boolean
+  /** Engine homes Harness points agents at beside the default ones; null when they cannot be read. */
+  engineHomes: readonly string[] | null }
 const launchFacts = (): BuddyLaunchFacts => ({ platform: process.platform, team: isTeamAccount(), home: homedir(), dataDir: env.ADAPTER_DATA_DIR,
-  uid: process.getuid?.() ?? -1, hasBwrap: spawnSync('/bin/sh', ['-c', 'command -v bwrap'], { stdio: 'ignore' }).status === 0 })
+  uid: process.getuid?.() ?? -1, hasBwrap: spawnSync('/bin/sh', ['-c', 'command -v bwrap'], { stdio: 'ignore' }).status === 0,
+  engineHomes: engineHomesOutsideDefaults(env.ADAPTER_DATA_DIR, process.env) })
+
+/** The settings that point an engine at a home of its own (vitest.setup.ts lists the same), which Harness passes on. */
+const ENGINE_HOME_SETTINGS = ['CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'GROK_HOME', 'COPILOT_HOME', 'CURSOR_HOME', 'CURSOR_CONFIG_DIR',
+  'CURSOR_DATA_DIR', 'HERMES_HOME', 'PI_HOME', 'PI_CODING_AGENT_DIR', 'COMMANDCODE_HOME', 'AGY_HOME', 'AGY_CONFIG_DIR']
+
+/**
+ * The engine homes Harness itself points agents at outside the defaults (final review of #2310: a probe read ~/.codex-work):
+ * the Codex profiles linked here (codex-profiles.json, lib/codexProfiles.ts), the Claude Code and Codex homes Harness
+ * adopted (lib/engineHomes.ts, for this machine's own data folder), and those this process was started with. Null when any
+ * of them cannot be read: the launch then keeps the Buddy to its folder rather than guess.
+ */
+export function engineHomesOutsideDefaults(dataDir: string, environment: NodeJS.ProcessEnv): string[] | null {
+  const homes = ENGINE_HOME_SETTINGS.map(name => environment[name]).filter((home): home is string => !!home && isAbsolute(home))
+  try {
+    const linked = JSON.parse(readFileSync(join(dataDir, 'codex-profiles.json'), 'utf8')) as unknown
+    if (!Array.isArray(linked)) return null
+    homes.push(...linked.filter((home): home is string => typeof home === 'string' && isAbsolute(home)))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+  }
+  if (dataDir === env.ADAPTER_DATA_DIR) {
+    try {
+      const adopted = durableEngineHomes()
+      homes.push(...adopted.claude, ...adopted.codex)
+    } catch { return null }
+  }
+  return [...new Set(homes)]
+}
 
 /** The GitHub repositories [root]'s remotes name, as owner/name: the only ones its gh api reads. */
 function githubRepos(root: string): string[] {
@@ -105,10 +139,10 @@ function configHosts(home: string): string[] {
  * with bubblewrap. Windows has none.
  */
 export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
-  if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap))) return null
+  if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
-  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home) })
+  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes })
 }
 
 
@@ -345,7 +379,10 @@ const under = (path, folder) => fold(path) === fold(folder) || fold(path).starts
 // folders and the person's prod database login (~/.harness-ro-prod-db, 10-28).
 const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^credentials/i,
   // A secrets folder, as Ken's clone keeps the read-only prod database login in .secrets/ (Lead, 10-30).
-  /^\.?secrets?(\.|$)/i, /^\.harness/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
+  /^\.?secrets?(\.|$)/i, /^\.harness/i,
+  // Every Claude Code and Codex home or file by its name, wherever it is: a settings backup (~/.claude.json.bak-…), a home
+  // beside the default one (~/.codex-work, final review of #2310).
+  /^\.claude/i, /^\.codex/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
 const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
 const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
 const DENIED = WIDE ? realRoots(WIDE.denied) : []
@@ -973,16 +1010,7 @@ export function revokeBuddyWide(reads: BuddyReads): void {
   if (typeof session === 'string') writeList(reads.file, session, { ...heldList(reads.file, session), wide: false })
 }
 
-/** The file that names the account signed in on this machine, beside the lists; not a list, so no sweep removes it. */
-export const buddyAccountFile = (dataDir: string = env.ADAPTER_DATA_DIR): string => join(dataDir, 'buddy-reads', 'signed-in.account')
-
-/** Records the account signed in on this machine, or that none is ([accountId] null), for every Buddy's guard. */
-export function writeBuddyAccount(accountId: string | null, dataDir: string = env.ADAPTER_DATA_DIR): void {
-  const file = buddyAccountFile(dataDir)
-  if (!accountId) { rmSync(file, { force: true }); return }
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  writeWhole(file, { accountId })
-}
+export { buddyAccountFile, writeBuddyAccount } from './buddyAccount.js'
 
 /** Where a Buddy's launch keeps its launch id in its folder, and what it says there now. */
 export const buddyLaunchFile = (folder: string): string => join(folder, '.claude', 'buddy-launch')
