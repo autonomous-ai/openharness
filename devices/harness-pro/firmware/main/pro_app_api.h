@@ -49,6 +49,10 @@ void pro_app_supertab(const pod_swarm_t *s);
 void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 // `supertab.focus`: the desktop opened this Swarm project. Both ids are non-empty.
 void pro_app_supertab_focus(const char *tab, const char *lead);
+// `supertab.notice`: a new message in one of that Lead's chats (`chat` "lead" | "pm" | "group" | "buddy"; `text` is cut to POD_UNREAD_TEXT). The alert tier of an agent's
+// notice: an entry, the toast, a wake and a beep. A Buddy's chat is ignored. `supertab.notice.read`: that chat was read on the desktop; its entry and toast go.
+void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text);
+void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
 
 // ---- library ----
 // Same layout as pod_library_row_t (pod_glue.h). `machine` is the machine NAME ("" when the machine list does not

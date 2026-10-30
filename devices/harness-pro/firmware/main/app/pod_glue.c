@@ -38,6 +38,7 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
     if (u->ban_on && !u->ban_stay && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
     if (u->ban_on && u->ban_stay && top(u) && top(u)->view == POD_V_INBOX) u->ban_on = false;
     if (u->ban_on && !(ban = pod_model_unread_find(&u->model, u->ban_agent))) u->ban_on = false;
+    if (ban && strcmp(ban->tab, u->ban_tab)) { ban = NULL; u->ban_on = false; }   // the entry was replaced by another kind
     u->frame.banner = ban && u->model.linked && !pod_ui_talking(u) && toast_fits(u);   // the toast, only over a room
     pod_render(&u->frame, &u->nav, &u->model, now_ms);
     if (u->frame.banner) {   // over everything, with the hit on top
@@ -238,6 +239,9 @@ static int iabs(int v) { return v < 0 ? -v : v; }
 static bool toast_fits(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
+    if (u->ban_tab[0])   // a Swarm chat's notice: also over another Lead's view, never over the Lead it is from
+        return u->ban_on && !u->ota && f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP ||
+               (f->view == POD_V_LEAD && (strcmp(f->swarm, u->ban_tab) || strcmp(f->lead_id, u->ban_agent))));
     return u->ban_on && !u->ota && f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP) && strcmp(f->agent, u->ban_agent);
 }
 
@@ -316,10 +320,19 @@ void pod_ui_scroll_sink(pod_ui_t *u, ht_scroll_emit_t emit, void *ctx, bool reve
     u->scroll_reversed = reversed;
 }
 
-// A tap on the toast: open Notices, which lists the entry.
+static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e);
+
+// A tap on the toast: open Notices, which lists the entry. A Swarm chat's notice opens its Lead instead.
 static pod_out_t banner_open(pod_ui_t *u, uint32_t now_ms)
 {
+    const pod_unread_t *e = pod_model_unread_find(&u->model, u->ban_agent);
     u->ban_on = false;
+    if (e && e->tab[0]) {
+        pod_out_t none;
+        memset(&none, 0, sizeof none);
+        swarm_entry_open(u, e);
+        return none;
+    }
     return pod_nav_act(&u->nav, &u->model, POD_A_INBOX, 0, now_ms);   // the toast opens Notices, which lists the entry
 }
 
@@ -359,6 +372,21 @@ static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *le
     pod_copy_str(o->tab, sizeof o->tab, tab);
     pod_copy_str(o->lead, sizeof o->lead, lead);
     return true;
+}
+
+// A tap on a Swarm chat's notice (its toast or its Notices row): read the entry and open that Lead's view, the desktop told to select it. Not Notices.
+static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat[ID_MAX];
+    pod_copy_str(tab, sizeof tab, e->tab);   // the read drops the entry
+    pod_copy_str(lead, sizeof lead, e->agent);
+    pod_copy_str(chat, sizeof chat, e->chat_id);
+    pod_model_swarm_notice_read(&u->model, tab, lead, chat);
+    if (pod_nav_follow_lead(&u->nav, &u->model, tab, lead)) {
+        sup_push(u, "supertab.select", tab, lead);
+        u->scroll_px = 0;
+    }
+    u->dirty = true;
 }
 
 // A Notices row whose harness is a Swarm's local Lead: read the entry and open that Lead's view the way supertab.focus does (over Home, on the Swarm's card), the
@@ -599,6 +627,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
+    if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && u->model.unread[arg].tab[0]) { swarm_entry_open(u, &u->model.unread[arg]); *changed = true; return none; }
     if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && notice_lead(u, u->model.unread[arg].agent)) { *changed = true; return none; }
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
         const pod_agent_t *ag = pod_model_find(&u->model, top(u)->agent);
@@ -913,12 +942,39 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
         const bool room = t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP);
         if (room && strcmp(t->agent, a->id)) {
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
+            u->ban_tab[0] = 0;
             u->ban_until = now_ms + POD_TOAST_MS;
             u->ban_on = true;
             u->ban_stay = question && pod_model_attention(&u->model, a) != POD_ATTN_NONE;   // a Super Tab's question waits for you
         }
     }
     return tier == POD_TIER_ALERT;
+}
+
+bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
+{
+    pod_model_clock(&u->model, now_ms);
+    const pod_swarm_t *sw = pod_model_swarm(&u->model, tab);
+    if (!sw || pod_model_lead_index(sw, lead) < 0) return false;
+    const pod_frame_t *t = top(u);
+    if (awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead)) return false;   // its own view is on screen: seen at once
+    pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);
+    u->dirty = true;
+    if (!pod_ui_talking(u) && !u->ota && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP || t->view == POD_V_LEAD)) {
+        pod_copy_str(u->ban_agent, sizeof u->ban_agent, lead);
+        pod_copy_str(u->ban_tab, sizeof u->ban_tab, sw->id);
+        u->ban_until = now_ms + POD_TOAST_MS;
+        u->ban_on = true;
+        u->ban_stay = false;
+    }
+    return true;
+}
+
+void pod_ui_swarm_notice_read(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id)
+{
+    if (!pod_model_swarm_notice_read(&u->model, tab, lead, chat_id)) return;
+    if (u->ban_on && !strcmp(u->ban_tab, tab) && !strcmp(u->ban_agent, lead)) u->ban_on = false;
+    u->dirty = true;
 }
 
 void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear(&u->model); }

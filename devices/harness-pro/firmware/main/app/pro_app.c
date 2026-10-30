@@ -402,6 +402,23 @@ void pro_app_supertab_focus(const char *tab, const char *lead)
     leave();
 }
 
+void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
+{
+    if (chat && !strcmp(chat, "buddy")) return;   // the Buddy's quiet notice is a dot on its button, not a row or a toast
+    pro_app_lock();
+    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
+    settle((pod_out_t){0});
+    leave();
+}
+
+void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
+{
+    pro_app_lock();
+    pod_ui_swarm_notice_read(&s_pod, tab, lead, chat_id);
+    settle((pod_out_t){0});
+    leave();
+}
+
 _Static_assert(sizeof(pro_library_row_t) == sizeof(pod_library_row_t) &&
                offsetof(pro_library_row_t, id) == offsetof(pod_library_row_t, id) &&
                offsetof(pro_library_row_t, name) == offsetof(pod_library_row_t, name) &&

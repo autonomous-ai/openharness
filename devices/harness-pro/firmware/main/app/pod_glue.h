@@ -58,6 +58,7 @@ typedef struct {
     // ban_stay: a Super Tab question's toast (pod_model_attention), which does not run out: it goes when swiped up, when the question
     // closes (its entry goes) or once Notices is on screen; ban_until then only dates its slide-in.
     char ban_agent[ID_MAX];
+    char ban_tab[ID_MAX];        // a Swarm chat's notice (pod_ui_swarm_notice): the Swarm it is from, with ban_agent = the Lead; "" for an agent's
     uint32_t ban_until;
     bool ban_on, ban_touch, ban_stay;
     // player.library sweep: see pod_ui_sweep_*.
@@ -212,6 +213,12 @@ uint32_t pod_ui_banner_shown_ms(const pod_ui_t *);
 // question closes).
 bool pod_ui_notify_text(pod_ui_t *, const char *agent_id, pod_tier_t tier, const char *text, bool question, bool awake, uint32_t now_ms);
 bool pod_ui_notify(pod_ui_t *, const char *agent_id, pod_tier_t tier, bool awake, uint32_t now_ms);
+// A Swarm chat's notice (supertab.notice), the alert tier: files the entry (one per Lead, the newest) and toasts over a room or another Lead's view; a tap on the toast
+// or on its Notices row opens that Lead (and selects it on the desktop) instead of Notices. Returns true when the caller must wake the glass and beep. Nothing
+// is filed for a Swarm or Lead the model does not hold. If that Lead's own view is on screen and the glass is lit, it is read at once: no entry, no toast, false.
+// The read (supertab.notice.read) drops the entry of that chat only, and ends its toast if that is the one showing.
+bool pod_ui_swarm_notice(pod_ui_t *, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms);
+void pod_ui_swarm_notice_read(pod_ui_t *, const char *tab, const char *lead, const char *chat_id);
 // notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);
 void pod_ui_notif_row(pod_ui_t *, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms);

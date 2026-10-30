@@ -98,6 +98,7 @@ typedef struct {
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
+    char tab[ID_MAX], chat_id[ID_MAX];   // a Swarm chat's notice (tab set): agent = the Lead's id, name = its project, tab = the Swarm's id, chat_id = the chat it is about
     bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
@@ -240,6 +241,11 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
+// A Swarm chat's notice (supertab.notice): an entry like an agent's, keyed by its Lead (one per Lead, the newest replacing, the 16 cap shared), named by the Lead's
+// project. Nothing is filed for a Swarm or Lead the model does not hold. The read drops only the entry of that tab, Lead AND chat (true when it did), so one that
+// arrives before its notice, or for another chat, leaves the row alone.
+void pod_model_swarm_notice(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms);
+bool pod_model_swarm_notice_read(pod_model_t *, const char *tab, const char *lead, const char *chat_id);
 // The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
 void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.

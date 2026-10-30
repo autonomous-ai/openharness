@@ -4,7 +4,7 @@
 //   agent:<id>, recap:<id>, talk:<id> (ids: fw ota be cli web desk docs vault site cur notes2 kilo; suffixes :long :offline :unread :viet ...),
 //   talk:listen|send, inbox[:viet|:quiet|:failed], ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Home screen with that pill),
 //   <room>:toast[@<ms after it showed>] (the notice toast; <room>:toast:decision / :stuck: a Super Tab question's staying toast, backend deciding or
-//   desktop stuck), inbox:supertab (Notices with those two asking rows above a plain entry), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
+//   desktop stuck), inbox:supertab (Notices with those two asking rows above a plain entry), toast:swarm[@<ms>] / inbox:swarm (a Swarm chat's notice: the toast over a Lead view, and its row in Notices), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
 //   HTML mockup's: the same agents, tabs and times. `--skin pets` is accepted and ignored (Pets is the only interface).
 #include <stdio.h>
 #include <stdlib.h>
@@ -297,7 +297,9 @@ static void overlay(bool banner, bool toast, uint32_t now)
     const pod_unread_t *bn = pod_model_unread_find(&M, s_toast_agent);
     if (!bn) return;
     const pod_frame_t *top = N.depth ? &N.stack[N.depth - 1] : NULL;
-    if ((banner || toast) && top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, s_toast_agent)) ph_toast(&F, &M, bn, T0, now);
+    const bool room = top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, s_toast_agent);
+    const bool lead = top && top->view == POD_V_LEAD && bn->tab[0] && strcmp(top->lead_id, bn->agent);   // a Swarm chat's notice also toasts over another Lead's view
+    if ((banner || toast) && (room || lead)) ph_toast(&F, &M, bn, T0, now);
 }
 
 // A Super Tab ("Launch v2") question: the agent asks with that attention and the question's entry is filed, as pro_app does.
@@ -418,8 +420,17 @@ int main(int argc, char **argv)
         supertab_ask("be", "backend", "Run the migration on staging first, or straight to prod?", POD_ATTN_DECISION);
         supertab_ask("desk", "desktop", "e2e failed 3 times, no write access to staging", POD_ATTN_STUCK);
     }
-    if (inbox) pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
-    else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
+    if (inbox) {
+        if (strstr(screen, "swarm")) {   // inbox:swarm, the mockup pro-swarm-parity 1E: a Lead's notice among the agents' (a minute old, so it sits second)
+            swarm_fixture("p1");
+            pod_model_swarm_notice(&M, "sw1", "l2", "c1", "Cable fit now counts JSON tokens for the Pro.", T0 - 60000u);
+        }
+        pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
+    } else if (!strncmp(screen, "toast:swarm", 11)) {   // the mockup 1D: Lead l1's view with a notice from the "harness" Lead (l2) over it
+        lead_fixture("ask");
+        pod_model_swarm_notice(&M, "sw1", "l2", "c1", "Cable fit now counts JSON tokens for the Pro.", T0);
+        s_toast_agent = "l2";
+    } else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
         pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_NOTICES, T0);
     } else if (!strncmp(screen, "tabs:working", 12)) {   // Home on the Working card (fw, be, web, cur work: three pets on page 0); :codex has be, web (Muse), site (Codex) work
         if (strstr(screen, ":codex")) {

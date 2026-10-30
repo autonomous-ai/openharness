@@ -669,6 +669,33 @@ static void handle_supertab_focus(const cJSON *p)
     pro_app_supertab_focus(tab, lead);
 }
 
+// supertab.notice / supertab.notice.read: a Swarm chat's new message, and that chat read on the desktop. The ids must fit; a frame with a bad one is dropped
+// (chatId may be empty: an older daemon names none, and the read then matches the same).
+static bool notice_ids(const cJSON *p, char tab[ID_MAX], char lead[ID_MAX], char chat_id[ID_MAX])
+{
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead"), *c = str_of(p, "chatId");
+    if (!id_fits(t) || !id_fits(l) || (c && strlen(c) >= ID_MAX)) return false;
+    snprintf(tab, ID_MAX, "%s", t);
+    snprintf(lead, ID_MAX, "%s", l);
+    snprintf(chat_id, ID_MAX, "%s", c ? c : "");
+    return true;
+}
+
+static void handle_supertab_notice(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], chat[16], text[POD_UNREAD_TEXT];
+    if (!notice_ids(p, tab, lead, chat_id)) return;
+    copy_cut(chat, sizeof chat, str_of(p, "chat") ? str_of(p, "chat") : "");
+    copy_cut(text, sizeof text, str_of(p, "text") ? str_of(p, "text") : "");
+    pro_app_supertab_notice(tab, lead, chat, chat_id, text);
+}
+
+static void handle_supertab_notice_read(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX];
+    if (notice_ids(p, tab, lead, chat_id)) pro_app_supertab_notice_read(tab, lead, chat_id);
+}
+
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
 // Streamed like the agents. cable_machines_end() answers "did anything change" before pro_app is touched, so the
 // daemon re-sending an identical list (its own diff key resets on every port reopen) costs one comparison.
@@ -1026,6 +1053,8 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "supertab")) { handle_supertab(p); return; }
     if (!strcmp(t, "supertab.recap")) { handle_supertab_recap(p); return; }
     if (!strcmp(t, "supertab.focus")) { handle_supertab_focus(p); return; }
+    if (!strcmp(t, "supertab.notice")) { handle_supertab_notice(p); return; }
+    if (!strcmp(t, "supertab.notice.read")) { handle_supertab_notice_read(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }

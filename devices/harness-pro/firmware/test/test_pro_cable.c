@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS, EV_STNOTICE, EV_STNOTICE_READ };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -93,6 +93,14 @@ void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_
     ev_t *e = add(EV_STRECAP, tab); put(e->a, lead); put(e->b, text); snprintf(e->d, sizeof e->d, "%s", chat_id); e->n1 = at; e->n2 = none;
 }
 void pro_app_supertab_focus(const char *tab, const char *lead) { ev_t *e = add(EV_STFOCUS, tab); put(e->a, lead); }
+void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
+{
+    ev_t *e = add(EV_STNOTICE, tab); put(e->a, lead); put(e->b, chat); put(e->c, text); snprintf(e->d, sizeof e->d, "%s", chat_id);
+}
+void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
+{
+    ev_t *e = add(EV_STNOTICE_READ, tab); put(e->a, lead); snprintf(e->d, sizeof e->d, "%s", chat_id);
+}
 void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
 {
     ev_t *e = add(EV_LIBRARY, NULL);
@@ -1378,6 +1386,38 @@ static void replug_spares_a_frame_in_flight(void)
     host_present = false;
 }
 
+// A Swarm chat's notice and its read reach the app with every field; a bad id drops the frame.
+static void test_swarm_notice(void)
+{
+    char big[ID_MAX + 8], frame[400];
+    memset(big, 'x', sizeof big - 1);
+    big[sizeof big - 1] = 0;
+
+    // supertab_notice_reaches_app
+    reset();
+    feed("{\"t\":\"supertab.notice\",\"tab\":\"S1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"c1\",\"id\":\"n1\",\"text\":\"Done. Tests pass.\",\"at\":1}");
+    CHECK(nev == 1 && evs[0].kind == EV_STNOTICE && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L1") && !strcmp(evs[0].b, "lead") &&
+          !strcmp(evs[0].d, "c1") && !strcmp(evs[0].c, "Done. Tests pass."));
+
+    // supertab_notice_read_reaches_app
+    reset();
+    feed("{\"t\":\"supertab.notice.read\",\"tab\":\"S1\",\"lead\":\"L1\",\"chatId\":\"c1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_STNOTICE_READ && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L1") && !strcmp(evs[0].d, "c1"));
+
+    // notice_with_bad_ids_ignored
+    reset();
+    feed("{\"t\":\"supertab.notice\",\"tab\":\"\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"c1\",\"text\":\"x\"}");
+    feed("{\"t\":\"supertab.notice\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"c1\",\"text\":\"x\"}");
+    snprintf(frame, sizeof frame, "{\"t\":\"supertab.notice\",\"tab\":\"S1\",\"lead\":\"%s\",\"chat\":\"lead\",\"chatId\":\"c1\",\"text\":\"x\"}", big);
+    feed(frame);
+    snprintf(frame, sizeof frame, "{\"t\":\"supertab.notice\",\"tab\":\"S1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"%s\",\"text\":\"x\"}", big);
+    feed(frame);
+    feed("{\"t\":\"supertab.notice.read\",\"tab\":\"S1\",\"lead\":\"\",\"chatId\":\"c1\"}");
+    snprintf(frame, sizeof frame, "{\"t\":\"supertab.notice.read\",\"tab\":\"%s\",\"lead\":\"L1\",\"chatId\":\"c1\"}", big);
+    feed(frame);
+    CHECK(nev == 0);
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1403,6 +1443,7 @@ int main(void)
     seq_gaps();
     test_swarm_cards();
     test_swarm_chat();
+    test_swarm_notice();
     self_replug();
     replug_spares_a_frame_in_flight();
     printf("test_pro_cable: %d checks passed\n", checks);

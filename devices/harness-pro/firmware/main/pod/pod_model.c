@@ -1005,6 +1005,26 @@ void pod_model_unread_ask(pod_model_t *m, const char *agent, const char *name, c
     if (i >= 0) m->unread[i].ask = true;
 }
 
+void pod_model_swarm_notice(pod_model_t *m, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms) {
+    if (!tab || !*tab || !lead || !*lead) return;
+    const pod_swarm_t *sw = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(sw, lead);
+    if (j < 0) return;
+    char project[CABLE_NAME_MAX];
+    pod_copy_str(project, sizeof project, sw->leads[j].project);
+    pod_model_unread_add(m, lead, project, text, -1, now_ms);
+    pod_unread_t *u = &m->unread[0];   // add puts it on top
+    pod_copy_str(u->tab, sizeof u->tab, sw->id);
+    pod_copy_str(u->chat_id, sizeof u->chat_id, chat_id);
+}
+
+bool pod_model_swarm_notice_read(pod_model_t *m, const char *tab, const char *lead, const char *chat_id) {
+    int i = unread_idx(m, lead);
+    if (i < 0 || !tab || strcmp(m->unread[i].tab, tab) || strcmp(m->unread[i].chat_id, chat_id ? chat_id : "")) return false;
+    unread_drop(m, i);
+    return true;
+}
+
 int pod_notice_count(const pod_model_t *m) {
     int n = 0;
     for (int i = 0; i < m->agent_count; i++) n += pod_model_eff(m, &m->agents[i]) == POD_ASKING;

@@ -1261,6 +1261,59 @@ static void pod_model_test_lead_chat(void) {
     CHECK(M.swarms[0].leads[0].chat == POD_CHAT_NONE && M.swarms[0].leads[0].chat_name[0] == 0 && M.swarms[0].leads[0].chat_id[0] == 0);
     pod_model_reset(&M);
 }
+// A Swarm chat's notice is an unread entry keyed by its Lead: it shares the order and the cap with agent entries, and a read must match its chat.
+static void swarm_card_for_notices(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"L1", "L2"};
+    pod_swarm_t s = card("S1", "openharness", l1, 2);
+    snprintf(s.leads[0].project, sizeof s.leads[0].project, "harness");
+    ids_of("S1", NULL, NULL, NULL);
+    pod_model_supertab(&M, &s, 100);
+}
+static void pod_model_test_swarm_notice(void) {
+    // swarm_notice_replaces_per_lead
+    swarm_card_for_notices();
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "First. More.", 1000);
+    pod_model_swarm_notice(&M, "S1", "L2", "c9", "Other.", 1500);
+    pod_model_swarm_notice(&M, "S1", "L1", "c2", "Second.", 2000);
+    CHECK(M.unread_count == 2);
+    CHECK(!strcmp(M.unread[0].agent, "L1") && !strcmp(M.unread[0].tab, "S1") && !strcmp(M.unread[0].chat_id, "c2") &&
+          !strcmp(M.unread[0].text, "Second.") && !strcmp(M.unread[0].name, "harness") && M.unread[0].at_ms == 2000);
+    CHECK(!strcmp(M.unread[1].agent, "L2") && !strcmp(M.unread[1].chat_id, "c9"));
+    pod_model_swarm_notice(&M, "S1", "NOPE", "c1", "x", 2100);   // a Lead the model does not hold: nothing filed
+    pod_model_swarm_notice(&M, "S9", "L1", "c1", "x", 2100);
+    CHECK(M.unread_count == 2);
+
+    // swarm_notice_cap_16 (shared with agent entries)
+    swarm_card_for_notices();
+    for (int i = 0; i < POD_UNREAD_MAX; i++) {
+        char id[8];
+        snprintf(id, sizeof id, "a%d", i);
+        pod_model_unread_add(&M, id, id, "x", 1, 1000 + (uint32_t)i);
+    }
+    CHECK(M.unread_count == POD_UNREAD_MAX);
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "News.", 3000);
+    CHECK(M.unread_count == POD_UNREAD_MAX && !strcmp(M.unread[0].agent, "L1") && !strcmp(M.unread[POD_UNREAD_MAX - 1].agent, "a1"));   // the oldest (a0) went
+    CHECK(!pod_model_unread_find(&M, "a0"));
+
+    // notice_read_other_chat_keeps_row
+    swarm_card_for_notices();
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "News.", 1000);
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "L1", "c2"));
+    CHECK(!pod_model_swarm_notice_read(&M, "S2", "L1", "c1"));
+    CHECK(M.unread_count == 1);
+    CHECK(pod_model_swarm_notice_read(&M, "S1", "L1", "c1") && M.unread_count == 0);
+
+    // notice_read_before_notice_is_noop
+    swarm_card_for_notices();
+    uint32_t rev = M.revision;
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "L1", "c1"));
+    CHECK(M.unread_count == 0 && M.revision == rev);
+    pod_model_unread_add(&M, "a1", "Alpha", "x", 1, 1000);   // an agent entry is never a Swarm notice's read target
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "a1", ""));
+    CHECK(M.unread_count == 1);
+}
+
 int main(void) {
     pod_model_test_work_alt();
     pod_model_test_states();
@@ -1295,6 +1348,7 @@ int main(void) {
     pod_model_test_step_total_and_fresh();
     pod_model_test_swarm_cards();
     pod_model_test_lead_chat();
+    pod_model_test_swarm_notice();
     printf("Pod model: PASS (%d checks)\n", checks);
     return 0;
 }

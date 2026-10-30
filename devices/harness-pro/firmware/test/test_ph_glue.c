@@ -1763,6 +1763,90 @@ static void notice_opens_lead(void) {
     CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a2") && top()->view != POD_V_LEAD);
 }
 
+// ---- a Swarm chat's notice: the alert tier of the glue (toast + Notices row), read by its chat, opening its Lead ----
+static void swarm_lead_open(int k) {   // sw1 on Home, the Lead at index k open
+    swarm_home(4);
+    tap_lead(k, 3000);
+    CHECK(top()->view == POD_V_LEAD && top()->lead == k);
+    take();
+    render(3300);
+}
+static void swarm_notice_toasts_and_beeps(void) {
+    swarm_lead_open(1);   // l1's view: a notice from l2 is for another screen
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Cable fit now counts tokens. More.", true, 3400));
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "l2");
+    CHECK(e && !strcmp(e->tab, "sw1") && !strcmp(e->chat_id, "c1") && !strcmp(e->name, "proj2") && U.model.unread_count == 1);
+    CHECK(U.ban_on && U.ban_until == 3400 + POD_TOAST_MS && !U.ban_stay);
+    render(3400);
+    CHECK(U.frame.banner && hits_of_banner() == 1 && !strcmp(find(POD_A_BANNER)->id, "l2"));
+    // it runs out like any toast; the row stays
+    render(3400 + POD_TOAST_MS);
+    CHECK(!U.frame.banner && !U.ban_on && pod_model_unread_find(&U.model, "l2"));
+    // a room is a place for it too, and a notice for a Lead the model does not hold is dropped
+    fresh();
+    to_agent(0, 2);
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l9", "c1", "x", true, 4000) && U.model.unread_count == 0);
+    swarm_home(4);
+    to_agent(0, 2);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l0", "c1", "Hi.", true, 4000) && U.ban_on);
+    render(4000);
+    CHECK(U.frame.banner);
+    // a dark glass is news: the row, and the caller wakes
+    swarm_lead_open(1);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Hi.", false, 4000) && pod_model_unread_find(&U.model, "l1"));
+}
+static void swarm_notice_on_its_lead_view_reads_at_once(void) {
+    swarm_lead_open(1);
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Seen already.", true, 3400));
+    CHECK(U.model.unread_count == 0 && !U.ban_on);
+    render(3500);
+    CHECK(!U.frame.banner);
+}
+static void swarm_toast_tap_opens_lead_and_selects(void) {
+    swarm_lead_open(1);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400));
+    render(3400);
+    CHECK(U.frame.banner);
+    pod_out_t o = tap_(360, 80, 3500);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw1") && !strcmp(top()->lead_id, "l2") && U.nav.depth == 2);
+    CHECK(!U.ban_on && U.model.unread_count == 0);
+    CHECK(take() >= 1 && is_q(0, "supertab.select", "sw1", "l2"));
+}
+static void swarm_row_tap_opens_lead_and_selects(void) {
+    swarm_home(4);
+    pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 2100);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l3", "c1", "Merged.", true, 2200));
+    act(POD_A_INBOX, 0);
+    render(2500);
+    const pod_hit_t *h = NULL;
+    for (int i = 0; i < U.frame.hit_count; i++) if (U.frame.hits[i].action == POD_A_OPEN_NOTIF && !strcmp(U.frame.hits[i].id, "l3")) h = &U.frame.hits[i];
+    CHECK(h);
+    take();
+    pod_out_t o = tap_(h->x + h->w / 2, h->y + h->h / 2, 3000);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw1") && !strcmp(top()->lead_id, "l3"));
+    CHECK(U.nav.depth == 2 && U.nav.stack[0].view == POD_V_TABS && !pod_model_unread_find(&U.model, "l3") && pod_model_unread_find(&U.model, "a2"));
+    CHECK(take() >= 1 && is_q(0, "supertab.select", "sw1", "l3"));
+}
+static void swarm_notice_read_ends_toast(void) {
+    swarm_lead_open(1);
+    pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400);
+    render(3400);
+    CHECK(U.frame.banner);
+    pod_ui_swarm_notice_read(&U, "sw1", "l2", "c2");   // another chat's read: the row and the toast stay
+    render(3500);
+    CHECK(U.frame.banner && pod_model_unread_find(&U.model, "l2"));
+    pod_ui_swarm_notice_read(&U, "sw1", "l2", "c1");
+    render(3600);
+    CHECK(!U.ban_on && !U.frame.banner && !pod_model_unread_find(&U.model, "l2"));
+    // a read of an entry that is not the toast's leaves that toast up
+    pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3700);
+    pod_model_unread_add(&U.model, "a1", "Alpha", "x", 1, 3700);
+    pod_ui_swarm_notice(&U, "sw1", "l0", "c5", "Other.", true, 3750);   // the newer toast is l0's
+    pod_ui_swarm_notice_read(&U, "sw1", "l2", "c1");
+    render(3800);
+    CHECK(U.ban_on && !strcmp(U.ban_agent, "l0") && U.frame.banner);
+}
+
 // ---- the Lead view ----
 static void lead_tap_sends(void) {
     swarm_home(4);
@@ -2114,6 +2198,11 @@ int main(void) {
     swarm_card_few_leads();
     swarm_card_tap();
     notice_opens_lead();
+    swarm_notice_toasts_and_beeps();
+    swarm_notice_on_its_lead_view_reads_at_once();
+    swarm_toast_tap_opens_lead_and_selects();
+    swarm_row_tap_opens_lead_and_selects();
+    swarm_notice_read_ends_toast();
     lead_tap_sends();
     lead_retry();
     lead_swipe_steps();
