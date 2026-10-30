@@ -1908,7 +1908,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = (await run(two.tab, { type: 'conversation.create', title: 'Other work', brief: '', checks: [] })).result.conversationId as string
     const read = (tab: string, conversation: string, user: AuthUser, query = '') =>
       app.inject({ url: `/api/super-tabs/${tab}/conversations/${conversation}/attempts${query}`, headers: { authorization: `Bearer ${user.sub}` } })
-    expect((await read(one.tab, 'lead', peer)).statusCode).toBe(403)
+    // A non-member is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    expect((await read(one.tab, 'lead', peer)).statusCode).toBe(404)
     expect((await read(one.tab, group, owner)).statusCode).toBe(404)
     expect((await read(two.tab, group, owner)).statusCode).toBe(200)
     expect((await read(one.tab, 'lead', host, `?asAgentId=${two.lead}`)).statusCode).not.toBe(200)

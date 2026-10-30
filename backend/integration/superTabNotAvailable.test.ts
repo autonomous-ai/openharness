@@ -13,7 +13,7 @@ import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attac
 import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import { NOT_AVAILABLE, PERSON_ROUTES, superTabRoutes } from '../src/routes/superTabs.js'
+import { NOT_AVAILABLE, NOT_AVAILABLE_ROUTES, superTabRoutes } from '../src/routes/superTabs.js'
 
 // The person routes through the real store and read service (Huy, 10-30, the follow-up of #2306): a Swarm, chat, project,
 // decision, file or link the caller cannot reach gets one answer, whether it is missing, refused, revoked or in another
@@ -105,6 +105,17 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
     multipart('POST /api/super-tabs/:tabId/avatars', `${t}/avatars`, form([file('me.png', 'image/png', 'not a png')])),
+    json('POST', 'POST /api/super-tabs/:tabId/workspace-visibility', `${t}/workspace-visibility`, { visibility: 'workspace' }),
+    json('POST', 'POST /api/super-tabs/:tabId/workspace-join', `${t}/workspace-join`, { operationId: op() }),
+    json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
+    json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
+    json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),
+    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', `${t}/conversations/${chat}/attempts`),
+    json('GET', 'GET /api/super-tabs/:tabId/terminal/:requestId', `${t}/terminal/${MISSING}`),
+    json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', `${t}/agents/${MISSING}/deliveries`),
+    json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`),
+    json('POST', 'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`,
+      { type: 'claim', claimId: op() }),
   ]
 }
 
@@ -121,12 +132,12 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Every person route is called here, so a route added to the list without a test fails.
-    expect(new Set(real.map(c => c.route))).toEqual(PERSON_ROUTES)
+    expect(new Set(real.map(c => c.route))).toEqual(NOT_AVAILABLE_ROUTES)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
       const expected = call.route.endsWith('/github/approve') ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
-      for (const [name, got] of Object.entries(cases)) expect(got, `${name}: ${call.url}`).toEqual(expected)
+      for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
     }
   })
 

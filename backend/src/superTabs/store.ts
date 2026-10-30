@@ -434,6 +434,15 @@ const authorForBuddy = <T extends Pick<Author, 'kind' | 'membershipGeneration'> 
   author?.kind === 'agent' && author.membershipGeneration ? { ...author, membershipGeneration: '' } : author
 const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [string, string]
 
+/** A Workspace refusal to someone not in the Swarm (a Workspace admin need not be): the routes answer it as for a Swarm that
+ *  does not exist (routes/superTabs.ts NOT_AVAILABLE), since its words would say the Swarm is there. Its members keep them. */
+async function outsiderRefusal(state: SuperTabState, userId: string, check: () => Promise<void>): Promise<void> {
+  try { await check() } catch (error) {
+    if (error instanceof SuperTabError && !state.people.some(p => p.id === userId)) throw new SuperTabError(error.code, error.message, error.status, true)
+    throw error
+  }
+}
+
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
   readonly workspaces: SwarmWorkspaces
@@ -864,9 +873,11 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
-      if (!state.workspaceId) fail('WORKSPACE_REQUIRED', `This Swarm has no ${WORKSPACE_LABEL} yet.`, 409)
-      const own = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
-      if (!(state.ownerId === user.sub && own && !own.removedAt && own.role !== 'guest')) await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.manage')
+      await outsiderRefusal(state, user.sub, async () => {
+        if (!state.workspaceId) fail('WORKSPACE_REQUIRED', `This Swarm has no ${WORKSPACE_LABEL} yet.`, 409)
+        const own = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
+        if (!(state.ownerId === user.sub && own && !own.removedAt && own.role !== 'guest')) await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.manage')
+      })
       state.workspaceVisibility = visibility
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       return { id: tabId, workspaceVisibility: visibility }
@@ -878,8 +889,10 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
-      if (!state.workspaceId || state.workspaceVisibility !== 'workspace') fail('FORBIDDEN', 'This Swarm is not open to its Workspace.', 403)
-      await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.joinOpen')
+      await outsiderRefusal(state, user.sub, async () => {
+        if (!state.workspaceId || state.workspaceVisibility !== 'workspace') fail('FORBIDDEN', 'This Swarm is not open to its Workspace.', 403)
+        await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.joinOpen')
+      })
       const existing = state.people.find(p => p.id === user.sub)
       if (existing) return { id: tabId, role: existing.role, alreadyMember: true }
       const member = { id: user.sub, email: authenticatedEmail(user.email)!, role: 'collaborator' as const, generation: stableId('workspace-join', tabId, user.sub, operationId) }

@@ -97,12 +97,11 @@ describe('the Workspace check on every Swarm read and command', () => {
     await db.swarmWorkspaceRemoval.create({ data: { id: `${removed.id}:${removed.generation}`, workspaceId: workspace!.id, userId: peer.sub, email: peer.email,
       generation: removed.generation, autonomousEnv: 'prod', removedAt: new Date(), removedBy: owner.sub, finishedAt: null } })
 
-    // The person routes answer as for a Swarm that does not exist; the routing reads agents make keep their own answer.
+    // Every Swarm route answers as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
     for (const url of reads) {
       const reply = await call('GET', url, peer)
-      const agentRoute = /\/route-decisions$|\/attempts$/.test(url)
-      expect(reply.statusCode, url).toBe(agentRoute ? 403 : NOT_AVAILABLE.status)
-      expect(reply.json().error.code, url).toBe(agentRoute ? 'WORKSPACE_ACCESS_REVOKED' : NOT_AVAILABLE.code)
+      expect(reply.statusCode, url).toBe(NOT_AVAILABLE.status)
+      expect(reply.json().error.code, url).toBe(NOT_AVAILABLE.code)
     }
     const send = await call('POST', `/api/super-tabs/${tab}/commands`, peer,
       { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'still here?', replyTo: null, recipientIds: [] } })
@@ -186,14 +185,16 @@ describe('Swarms open to the Workspace', () => {
     const names = async (who: AuthUser) => (await workspacesOf(who)).find(o => o.id === workspaceId)?.swarms.map(s => s.id) ?? []
     expect(await names(member)).not.toContain(tab)
     expect(await names(admin)).toContain(tab)
-    expect((await call('POST', `/api/super-tabs/${tab}/workspace-join`, member, { operationId: randomUUID() })).statusCode).toBe(403)
-    expect((await call('POST', `/api/super-tabs/${tab}/workspace-visibility`, member, { visibility: 'workspace' })).statusCode).toBe(403)
+    // Not open to them yet, and not theirs to open: refused as a Swarm that does not exist, as their Workspace list says.
+    expect((await call('POST', `/api/super-tabs/${tab}/workspace-join`, member, { operationId: randomUUID() })).statusCode).toBe(NOT_AVAILABLE.status)
+    expect((await call('POST', `/api/super-tabs/${tab}/workspace-visibility`, member, { visibility: 'workspace' })).statusCode).toBe(NOT_AVAILABLE.status)
     expect((await call('POST', `/api/super-tabs/${tab}/workspace-visibility`, owner, { visibility: 'workspace' })).statusCode).toBe(200)
     expect(await names(member)).toContain(tab)
     const joinedOf = async (who: AuthUser) => (await workspacesOf(who)).find(o => o.id === workspaceId)!.swarms.find(s => s.id === tab)!.member
     expect([await joinedOf(member), await joinedOf(owner)]).toEqual([false, true])
     expect(await names(peer)).not.toContain(tab)
-    expect((await call('POST', `/api/super-tabs/${tab}/workspace-join`, peer, { operationId: randomUUID() })).statusCode).toBe(403)
+    // A guest is never shown it, and is refused it as a Swarm that does not exist.
+    expect((await call('POST', `/api/super-tabs/${tab}/workspace-join`, peer, { operationId: randomUUID() })).statusCode).toBe(NOT_AVAILABLE.status)
     const joined = await call('POST', `/api/super-tabs/${tab}/workspace-join`, member, { operationId: randomUUID() })
     expect(joined.statusCode).toBe(200)
     expect(joined.json().data.role).toBe('collaborator')
