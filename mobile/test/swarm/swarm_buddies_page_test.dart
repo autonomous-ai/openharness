@@ -231,7 +231,10 @@ void main() {
     await tester.pump();
     host.session!.inbox.reader(tab)!.revoke();
     gate.complete();
-    await tester.pumpAndSettle();
+    // A chat opened would pulse its skeleton for ever: frames, not settle.
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
     expect(find.byType(SwarmConversationPage), findsNothing);
     expect(find.text('buddy-docs'), findsNothing);

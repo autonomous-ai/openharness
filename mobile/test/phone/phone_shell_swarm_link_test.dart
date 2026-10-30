@@ -10,6 +10,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../swarm/swarm_fixture.dart';
@@ -229,6 +230,83 @@ void main() {
       expect(find.byType(SwarmProjectPage), findsNothing);
       expect(find.text('#Mobile'), findsNothing);
       expect(find.text('Mobile'), findsNothing);
+    });
+
+    testWidgets("a private chat's or a Buddy chat's link opens no project, "
+        'and names none', (tester) async {
+      (app as _LinkApp).swarm = swarm();
+      await start(tester);
+      await frames(tester);
+      for (final chat in ['g-private', 'buddy-someone']) {
+        await arrive(tester, 'harness://swarm/$tab/$chat/m1');
+        await frames(tester);
+
+        expect(find.byType(SwarmProjectPage), findsNothing, reason: chat);
+        expect(find.text('#Mobile'), findsNothing, reason: chat);
+        expectOpened(tester, (tab, chat, 'm1'));
+      }
+    });
+
+    testWidgets('a first read that fails leaves the chat page, with no '
+        'Loading held; once a read gets through, the project opens', (
+      tester,
+    ) async {
+      final fake = swarm();
+      final answer = fake.routes['/api/super-tabs/$tab/parts']!;
+      var fail = true;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) => fail
+          ? throw const SuperTabFailure('TIMEOUT', 'The Swarm did not answer.')
+          : answer(body);
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
+      expect(key('swarm-project-loading'), findsNothing);
+
+      fail = false;
+      final host = tester
+          .widget<SwarmScope>(find.byType(SwarmScope).first)
+          .notifier!;
+      await host.session!.inbox.refresh();
+      await frames(tester);
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('a link replaced while its Swarm is read: the read opens '
+        'only the second, and once', (tester) async {
+      final held = Completer<void>();
+      (app as _LinkApp).swarm = swarm(partsHeld: held.future);
+      await start(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await arrive(tester, 'harness://swarm/$tab/g9/m1');
+
+      held.complete();
+      await frames(tester);
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expectOpened(tester, (tab, 'g9', 'm1'));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('access lost before the read says what the chat is: no '
+        'project opens', (tester) async {
+      final held = Completer<void>();
+      (app as _LinkApp).swarm = swarm(partsHeld: held.future);
+      await start(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      final host = tester
+          .widget<SwarmScope>(find.byType(SwarmScope).first)
+          .notifier!;
+      await frames(tester);
+      host.session!.inbox.reader(tab)?.revoke();
+
+      held.complete();
+      await frames(tester);
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expect(find.text('#Mobile'), findsNothing);
     });
 
     testWidgets('access lost while it is open: the project goes from the '
