@@ -15,6 +15,7 @@ import { author, type SuperTabState } from '../src/superTabs/model.js'
 import { refuseBuddyRouting } from '../src/superTabs/buddies.js'
 import { canReadGroup } from '../src/superTabs/projects.js'
 import { recentDecisions, timedDecisionOf } from '../src/superTabs/routeDecisions.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -39,6 +40,8 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  // The server lists the indexes hot reads name at start (watchGroupIndexes): a read names one only once it is listed.
+  await listNamedIndexes(db)
   store = new SuperTabStore(db)
 }, 120000)
 afterAll(async () => {
@@ -55,11 +58,14 @@ async function world(quiet = 0) {
   s.join(outsiderActor)
   const lead = s.add('lead-harness', 'lead', true, ownerActor, 'host', owner.sub)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
+  const secretLead = s.add('secret-lead', s.state.projects!.find(p => p.id === secret)!.leadConversationId, true, ownerActor, 'host', owner.sub)
   const docs = s.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const secretGroup = s.group('Secret work', secret)
+  const secretWorker = s.add('secret-worker', secretGroup, false, ownerActor, 'host', owner.sub)
+  s.run({ type: 'work.assign', conversationId: secretGroup, agentId: secretWorker })
   const docsGroup = s.group('Docs work', docs)
   const docsWorker = s.add('docs-worker', docsGroup, false, ownerActor, 'host', owner.sub)
   s.run({ type: 'work.assign', conversationId: docsGroup, agentId: docsWorker })
@@ -87,7 +93,7 @@ async function world(quiet = 0) {
   const { projectId: _project, ...legacy } = stored.data as Record<string, unknown>
   await db.swarmAgent.update({ where: { id: stored.id }, data: { data: legacy as never } })
   expect((await db.swarmGroup.findFirst({ where: { tabId, key: docsGroup } }))?.dormant, 'the Docs worker\'s only conversation is quiet').toBe(true)
-  return { tabId, lead, worker, docsWorker, web, docsGroup, secretGroup, peerChat, buddyChat, finished }
+  return { tabId, lead, worker, docsWorker, secretWorker, secretLead, web, docsGroup, secretGroup, peerChat, buddyChat, finished }
 }
 type World = Awaited<ReturnType<typeof world>>
 
@@ -118,7 +124,8 @@ function listedBefore(w: World, reader: AuthUser, asAgentId?: string) {
 }
 const settle = async <T>(read: () => Promise<T>) => read().then(value => ({ value }), (error: Error) => ({ error: error.message }))
 const readers = (w: World): Array<[string, AuthUser, string | undefined]> => [['the owner', owner, undefined], ['a collaborator', peer, undefined],
-  ['a member outside the private project', outsider, undefined], ['the Lead', owner, w.lead], ['a worker', owner, w.worker], ['the Docs worker with no project of its own', owner, w.docsWorker]]
+  ['a member outside the private project', outsider, undefined], ['the Lead', owner, w.lead], ['a worker', owner, w.worker], ['the Docs worker with no project of its own', owner, w.docsWorker],
+  ['the Secret project\'s worker', owner, w.secretWorker], ['the Lead of the Secret project', owner, w.secretLead]]
 
 /** Every reader gets, for the same Swarm, exactly what the list gave before. */
 async function sameAnswers(w: World) {
@@ -156,8 +163,11 @@ describe('what the route-decision list gives each reader', () => {
     await decide(w, [[w.web, 120], [w.secretGroup, 150]])
     const got = await sameAnswers(w)
     // The collaborator's read is the wider window, still without loading the Swarm's quiet groups.
-    const [, profile] = await profiled(() => store.routeDecisions(peer, w.tabId))
-    expect(profile.SuperTabRouteDecision).toMatchObject({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 100 + 270 })
+    const [answer, profile] = await profiled(() => store.routeDecisions(peer, w.tabId))
+    expect(profile.SuperTabRouteDecision!.plans).toContain('IXSCAN { tabId: 1, createdAt: 1 }')
+    expect(profile.SuperTabRouteDecision!.hinted, 'the index scans name their index').toBe(true)
+    // The wider window is read as conversation ids only: the replies hold the newest hundred whole, the answer's hundred, and ids.
+    expect(profile.SuperTabRouteDecision!.bytes).toBeLessThan(3 * JSON.stringify(answer).length)
     expect(profile.SwarmGroup!.docsExamined).toBeLessThan(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } }))
     // The collaborator and the outsider read only Web: its newest 100 reach back past 150 secret decisions.
     expect(ids(got['a collaborator'])).toHaveLength(100)
@@ -174,6 +184,28 @@ describe('what the route-decision list gives each reader', () => {
     expect(profile.SwarmGroup!.docsExamined).toBeGreaterThanOrEqual(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } }))
     expect(ids(got['a collaborator'])).toHaveLength(60)
     expect(ids(got['the owner'])).toHaveLength(100)
+  })
+
+  it('is what it gave before for a project\'s worker and Lead who read fewer than a hundred: only its project\'s groups are read, not the Swarm\'s', async () => {
+    const w = await world(60)
+    await decide(w, [[w.secretGroup, 30], [w.web, 600]])
+    const got = await sameAnswers(w)
+    expect(ids(got['the Secret project\'s worker'])).toHaveLength(30)
+    expect(ids(got['the Lead of the Secret project'])).toHaveLength(30)
+    const all = await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } })
+    for (const agent of [w.secretWorker, w.secretLead]) {
+      const [, profile] = await profiled(() => store.routeDecisions(owner, w.tabId, agent))
+      expect(profile.SwarmGroup!.docsExamined, 'the quiet groups of other projects stay unread').toBeLessThan(all / 2)
+    }
+  })
+
+  it('stops at one window of decisions when the Swarm holds no more than that, even if the reader reads fewer than a hundred of them', async () => {
+    const w = await world(5)
+    await decide(w, [[w.secretGroup, 60], [w.web, 40]], [w.secretGroup])
+    const got = await sameAnswers(w)
+    expect(ids(got['a member outside the private project'])).toHaveLength(40)
+    const [, profile] = await profiled(() => store.routeDecisions(outsider, w.tabId))
+    expect(profile.SuperTabRouteDecision!.docsExamined, 'a hundred decisions are all there are: no wider window to read').toBe(100)
   })
 
   it('names nothing of a conversation the reader may not read, whether it is private, another project\'s, a Buddy\'s or gone', async () => {
@@ -200,21 +232,23 @@ describe('what the route-decision list gives each reader', () => {
   })
 })
 
-interface Profiled { plans: string[]; docsExamined: number; returned: number }
+interface Profiled { plans: string[]; docsExamined: number; returned: number; bytes: number; hinted: boolean }
 /** What Mongo did for each collection while `read` ran: its plans, the documents it examined and the rows it returned. */
 async function profiled<T>(read: () => Promise<T>): Promise<[T, Record<string, Profiled>]> {
   await db.$runCommandRaw({ profile: 2 })
   const result = await read()
   await db.$runCommandRaw({ profile: 0 })
   const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
-    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; docsExamined?: number; nreturned?: number }> } }
+    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; docsExamined?: number; nreturned?: number; responseLength?: number; command?: { hint?: unknown } }> } }
   await db.$runCommandRaw({ drop: 'system.profile' })
   const by: Record<string, Profiled> = {}
   for (const row of found.cursor.firstBatch) {
-    const profile = by[row.ns.split('.').pop()!] ??= { plans: [], docsExamined: 0, returned: 0 }
+    const profile = by[row.ns.split('.').pop()!] ??= { plans: [], docsExamined: 0, returned: 0, bytes: 0, hinted: false }
     if (row.planSummary && !profile.plans.includes(row.planSummary)) profile.plans.push(row.planSummary)
     profile.docsExamined += row.docsExamined ?? 0
     profile.returned += row.nreturned ?? 0
+    profile.bytes += row.responseLength ?? 0
+    profile.hinted ||= row.command?.hint !== undefined
   }
   return [result, by]
 }
@@ -231,7 +265,7 @@ describe('what the route-decision list costs the database', () => {
     const [answer, profile] = await profiled(() => store.routeDecisions(owner, w.tabId, w.lead))
     const groups = profile.SwarmGroup!
     expect(answer).toHaveLength(100)
-    expect(profile.SuperTabRouteDecision).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 100, returned: 100 })
+    expect(profile.SuperTabRouteDecision).toMatchObject({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 101, returned: 101, hinted: true })
     // The live groups, the Lead's own, and the hundred the decisions name: not the quiet ones nobody asked about.
     expect(groups.docsExamined).toBeLessThanOrEqual(live + 1 + 100)
     expect(groups.docsExamined).toBeLessThan(all / 2)
