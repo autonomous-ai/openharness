@@ -13,7 +13,8 @@ import { failureNotice, publicReason } from './startFailure.js'
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
 export const LEAD_NAME = 'Product Manager'
-export const LEAD_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 85,
+/** Memory and disk gate it; CPU use is one momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
+export const LEAD_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100,
   tools: ['git'], devices: [], quotaRequired: false }
 
 /** Where the project's Product Manager is: starting on the machine its person named, started, or failed with the reason. */
