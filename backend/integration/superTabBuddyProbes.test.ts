@@ -86,8 +86,8 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
     const f = await swarm(), {agentId} = await buddy(f)
     const group = String((await f.execute({type:'conversation.create', projectId:'lead', title:'Routing privacy probe', brief:'', checks:[]})).result.conversationId)
     const decision:any = { assessment:{difficulty:'low',risk:'low',why:'Small task'},
-      candidates:[{id:'c0',kind:'new',machineId:'owner-mac',engine:'claude',model:'fixture-model',effort:'high',quality:2,cost:2,
-        title:'Engineer · Claude fixture-model high · OWNER-PRIVATE-HOST',label:'Candidate on OWNER-PRIVATE-HOST'}],
+      candidates:[{id:'c0',kind:'new',machineId:'owner-mac',engine:'claude',model:'opus',effort:'high',quality:3,cost:3,
+        title:'Engineer · Claude opus high · OWNER-PRIVATE-HOST',label:'Candidate on OWNER-PRIVATE-HOST'}],
       excluded:[{title:'OTHER-PRIVATE-HOST',reason:'Owner rule: do not use this machine'}], floor:1,notes:false,pick:'c0',via:'only',p:null,belowFloor:false,why:'Only candidate'}
     const id=String((await f.execute({type:'route.record',conversationId:group,decision},owner,f.lead)).result.routeDecisionId)
     expect(JSON.stringify(await f.store.routeDecision(owner,f.tab,id,f.lead))).toContain('OWNER-PRIVATE-HOST')
@@ -251,8 +251,8 @@ describe('a Buddy and threads', () => {
     const f = await swarm(), { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Routed task', brief: '', checks: [] })).result.conversationId)
     const decision: any = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'fixture-model', effort: 'high', quality: 2, cost: 2,
-        title: 'Engineer · Claude fixture-model high · OWNER-PRIVATE-HOST', label: 'Candidate on OWNER-PRIVATE-HOST' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
+        title: 'Engineer · Claude opus high · OWNER-PRIVATE-HOST', label: 'Candidate on OWNER-PRIVATE-HOST' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate' }
     await f.execute({ type: 'route.record', conversationId: group, decision }, owner, f.lead)
     const route = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages.find(m => (m.source as { kind?: string } | null)?.kind === 'route')!

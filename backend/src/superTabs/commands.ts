@@ -2309,12 +2309,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'work.cancel': {
       const group = open(state, command.conversationId)
       const assignment = group.assignment
-      if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
       const project = groupProject(state, group)
       const isLead = actor.kind === 'agent' && conversation(state, project.leadConversationId).leadId === actor.agentId
-      if (!isLead && !(actor.kind === 'person' && actor.userId === state.ownerId)) {
-        fail('FORBIDDEN', 'Only this project’s Lead or the tab owner can cancel work.', 403)
+      const allowed = isLead || (actor.kind === 'person' && actor.userId === state.ownerId)
+      // A task nobody was ever assigned, such as a review no Reviewer was free for, has no assignment to name: its Lead or
+      // the tab owner cancels it by "current", and it archives with the reason (Ken, 2026-10-30: 28 reviews waited for a
+      // Reviewer with no way out). So does a review whose Reviewer stopped or finished, by "current" or that ended attempt's
+      // id (the CLI fills "current" with it). A named id, a chat, or anyone else is refused as before.
+      const unassigned = !assignment && command.assignmentId === 'current'
+      const reviewEnded = !!group.reviewOf && !!assignment && ['stopped', 'done'].includes(assignment.status)
+        && (command.assignmentId === 'current' || command.assignmentId === assignment.id)
+      if ((unassigned || reviewEnded) && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
+        message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
+        // Its line is a report the Lead acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
+        group.archived = true
+        break
       }
+      if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
+      if (!allowed) fail('FORBIDDEN', 'Only this project’s Lead or the tab owner can cancel work.', 403)
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
       const lost = assignment.status === 'lost'

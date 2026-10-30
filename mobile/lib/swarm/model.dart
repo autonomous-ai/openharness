@@ -929,11 +929,18 @@ class SuperTabDelivery {
       status = row['status'] as String? ?? '',
       holdReason = row['holdReason'] as String?,
       holdSince = _date(row['holdSince']),
+      claimFailingSince = _date(row['claimFailingSince']),
+      claimFailures = (row['claimFailures'] as num?)?.toInt(),
       deliveredAt = _date(row['deliveredAt']),
       answeredAt = _date(row['answeredAt']),
       updatedAt = _date(row['updatedAt']);
   final String? id, holdReason;
   final String agentId, status;
+
+  /// Since when the backend's claims of this delivery fail, and how many have
+  /// (prod 10-30, v1.3.71). Null from an older backend, and once a claim works.
+  final DateTime? claimFailingSince;
+  final int? claimFailures;
   final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
   static DateTime? _date(Object? value) =>
       value is String ? DateTime.tryParse(value) : null;
