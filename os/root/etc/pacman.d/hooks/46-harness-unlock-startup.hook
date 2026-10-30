@@ -1,0 +1,14 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/harness-os/unlock/*
+Target = usr/share/plymouth/themes/harness/*
+
+[Action]
+Description = Carrying the new unlock and power button into an encrypted computer's startup
+When = PostTransaction
+# The startup holds copies of these (initcpio/install/harness-unlock, the plymouth hook), which
+# mkinitcpio's own hook refreshes only for files under usr/lib/initcpio: an update that changes only
+# them would leave the old ones waiting for the password.
+Exec = /usr/bin/sh -c 'test -e /etc/harness-live || ! grep -Eq "^HOOKS=\(.*[ (]harness-unlock[ )]" /etc/mkinitcpio.conf || mkinitcpio -P'
