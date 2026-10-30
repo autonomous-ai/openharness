@@ -14,7 +14,8 @@ const PROPOSAL_KIND = 'buddy-proposal'
  *  nothing once its person left, rejoined or stopped reading the project. */
 function listeningBuddy(state: SuperTabState, personId: string, group: Conversation): Agent | undefined {
   const project = groupProject(state, group)
-  const buddy = state.agents.find(a => isBuddy(a) && a.buddyOf!.personId === personId && agentProjectId(state, a) === project.id)
+  // The main Buddy alone: a thread session hears only its own thread (buddySessions.ts).
+  const buddy = state.agents.find(a => isBuddy(a) && !a.buddySession && a.buddyOf!.personId === personId && agentProjectId(state, a) === project.id)
   return buddy && canReadGroup(state, { kind: 'agent', agentId: buddy.id, machineOwnerId: buddy.machineOwnerId }, group) ? buddy : undefined
 }
 

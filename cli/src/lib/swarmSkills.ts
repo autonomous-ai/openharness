@@ -739,6 +739,21 @@ function harnessClaudeHooks(): Record<string, unknown[]> {
  * also reads outside its folder and runs its person's approved reads, its shell in Claude Code's sandbox
  * (docs/specs/2026-10-30-buddy-read-access.md).
  */
+/** What a Buddy's launch writes in its folder's .claude, ignored by a file that ignores itself too: in a project that does
+ *  not ignore .claude, these left every ended Buddy's worktree reading as uncommitted work, so neither the close nor the
+ *  weekly sweep removed it (security review 1 of #2345; the same as .harness/.gitignore, #2266). */
+export const BUDDY_IGNORE = '/settings.local.json\n/buddy-guard.mjs\n/buddy-launch\n/.gitignore\n'
+function ignoreBuddyFiles(root: string): void {
+  const file = join(root, '.claude', '.gitignore')
+  // A project's own file stays exactly as it is: only a missing one, or the one this wrote, is written.
+  if (existsSync(file)) {
+    const stat = lstatSync(file)
+    if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(file, 'utf8') !== BUDDY_IGNORE) return
+    chmodSync(file, 0o600)
+  }
+  writeFileSync(file, BUDDY_IGNORE, { mode: 0o600 })
+}
+
 function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): void {
   const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
@@ -752,6 +767,7 @@ function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): voi
   if (wide) writeFileSync(launchFile, `${wide.launch}\n`, { mode: 0o600 }); else rmSync(launchFile, { force: true })
   writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide), { mode: 0o600 })
   writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide) : null), null, 2)}\n`, { mode: 0o600 })
+  ignoreBuddyFiles(root)
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (dir === root && (entry.name === '.harness' || entry.name === '.git')) continue

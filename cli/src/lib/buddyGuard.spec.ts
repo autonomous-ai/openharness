@@ -103,6 +103,9 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     // Its Super Tab commands, as the pane it runs in identifies it (superTabs/command.ts callerOf).
     'harness super-tab --tab t status',
     'harness super-tab --tab t messages chat',
+    // A thread session reads its own thread (spec 2026-10-30-buddy-thread-sessions).
+    'harness super-tab --tab t messages chat --thread root-1',
+    'harness super-tab --tab t messages chat --thread root-1 --before 40 m-1',
     'harness super-tab --tab t message chat m1',
     'harness super-tab --tab t decisions --answered',
     "harness super-tab --tab t post chat 'see /etc and ../up, as text' op-3 --reply-to m1",
@@ -163,6 +166,8 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'harness super-tab --tab t --agent me status',
     'harness super-tab --tab t --port 18474 status',
     'harness super-tab --tab t --machine other status',
+    'harness super-tab --tab t messages chat --thread root-1 --agent other',
+    'harness super-tab --tab t messages chat --thread root-1 --machine other',
     'harness super-tab --tab t command op {}',
     'harness super-tab --tab t start op {}',
     'harness super-tab --tab t resume start-1',

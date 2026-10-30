@@ -935,6 +935,18 @@ describe('leadsOf Buddies', () => {
     expect(leadsOf(on(), 'm1', idle, undefined, 'pm-web').leads.find(l => l.projectId === 'web')).toMatchObject({ chat: lead, sideChat: lead })
   })
 
+  // Spec 2026-10-30-buddy-thread-sessions: a thread session is a second Buddy agent in the chat, answering in its thread only.
+  it('takes the main Buddy for the block, never a thread session listed first', () => {
+    const session = agent('s1', { name: "diego's Buddy", displayName: 'Thread', buddyOf: { personId: 'me', generation: 'g1' }, configuration: { engine: 'claude' },
+      buddySession: { thread: 'root-1', from: 3 } })
+    const state = chats({ buddies: true, agents: [...chats().agents as object[], session, buddy()],
+      conversations: [...swarm().conversations, pm({ agentIds: ['s1', 'y1'] }), group()] })
+    expect(web(state).buddy).toMatchObject({ chatId: 'pm-web', name: "diego's Buddy", engine: 'codex', local: 'h-y1' })
+    // A chat with only a thread session (its main Buddy removed) has no Buddy for the block.
+    const alone = chats({ buddies: true, agents: [...chats().agents as object[], session], conversations: [...swarm().conversations, pm({ agentIds: ['s1'] }), group()] })
+    expect(web(alone)).not.toHaveProperty('buddy')
+  })
+
   it('never puts a read-only Chat with PM on the face while Buddies are on', () => {
     const chatWithPm = conv('cpm-web', null, { projectId: 'web', agentIds: ['a1'], audience: { people: [{ id: 'me' }] } })
     const state = on({ conversations: [...swarm().conversations, pm({ agentIds: ['y1'] }), chatWithPm] })

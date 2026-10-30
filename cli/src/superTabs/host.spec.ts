@@ -10,7 +10,8 @@ import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
@@ -1365,6 +1366,11 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       ['its person from an earlier membership', { author: { ...person, membershipGeneration: 'before' } }, {}, {}],
       ['another person\'s Buddy chat', {}, { conversations: [{ ...buddyChat, buddyOwnerId: 'sam' }] }, {}],
       ['its chat once archived', {}, { conversations: [{ ...buddyChat, archived: true }] }, {}],
+      // Security review 1 of #2345: a thread session hears its person only in its own thread.
+      ['a thread session, from a message outside its thread', { thread: 'main-root' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] }, {}],
+      // Security re-check 2 of #2345: a session whose thread cannot be read fails closed, even for a message naming the same.
+      ['a thread session whose thread id is malformed', { thread: 'not an id/..' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'not an id/..', from: 1 } }] }, {}],
+      ['a thread session with no thread at all', {}, { agents: [{ ...buddyAgent, buddySession: 'garbage' }] }, {}],
     ])('records nothing for %s, and still delivers the message', async (_, message, read, claim) => {
       const { host, delivered, guard } = approving({ text: 'run: argocd app list', ...message }, read, claim)
       await host.tick()
@@ -1384,6 +1390,13 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       await host.tick()
       expect(recorded()).toEqual([])
       expect(delivered[0]!.text).toContain('Your owner sent run: lines, but wider reads are off for you on this computer, so nothing was approved.')
+    })
+
+    it('records them for a thread session from its person\'s message in its own thread', async () => {
+      const { host, delivered } = approving({ text: 'run: argocd app list', thread: 'root-1' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] })
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      expect(recorded()).toEqual(['argocd app list'])
     })
 
     // Delta reviews of #2310: a delivery tried again must not add time to an approval.
@@ -2618,6 +2631,152 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
 }
 const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
 
+// Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
+// with it. Its host asks the backend to end it, as the machine's owner, when idle or when its terminal is gone.
+describe('ending a Buddy\'s thread sessions', () => {
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const sessionRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', projectId: 'proj', buddyOf: BUDDY_OF, buddySession: { thread: 'root-1', from: 7 } }, ...extra })
+  const ends = (t: ReturnType<typeof lifeFixture>) => t.commands.filter(c => (c.command as Record<string, unknown>)?.type === 'buddy.sessionEnd')
+  const chat = buddyChatIdOf('proj', 'peer', 'g')
+  let progress: ReturnType<typeof vi.spyOn> | undefined
+  afterEach(() => { progress?.mockRestore(); progress = undefined })
+  /** Time passing as the host sees it awake: a look each minute, never a gap it would take for sleep. */
+  const awake = async (t: ReturnType<typeof lifeFixture>, ms: number) => { for (let left = ms; left > 0; left -= 60_000) await t.poll(Math.min(60_000, left)) }
+
+  it('ends one idle for 30 minutes, once, naming its own chat and thread, as the backend computes the chat', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect(ends(t)[0]).toEqual({ operationId: 'buddy-session-end-agent-idle', command: { type: 'buddy.sessionEnd', conversationId: chat, thread: 'root-1', reason: 'idle' } })
+    // The backend's own id for the person's chat (backend buddies.ts buddyChatId).
+    expect(chat).toBe(createHash('sha256').update(JSON.stringify(['buddy', 'proj', 'peer', 'g'])).digest('hex').slice(0, 24))
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(ends(t)).toHaveLength(1)
+  })
+
+  it('never ends one still working: a screen that keeps changing keeps it, however long the question takes', async () => {
+    let clock = 0
+    progress = vi.spyOn(TerminalHost.prototype, 'progressOf').mockImplementation(() => ({ harness: clock }))
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    for (let i = 0; i < 120; i++) { clock += 60_000; await t.poll(60_000) }
+    expect(ends(t)).toEqual([])
+    // Its screen stops changing: idle 30 minutes later, not before.
+    const still = clock
+    progress.mockImplementation(() => ({ harness: still }))
+    await awake(t, BUDDY_SESSION_IDLE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+  })
+
+  it('never ends one a delivery waits for', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    const backendOf = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => method === 'GET' && path.includes('/agents/agent/deliveries')
+      ? { status: 200, body: { data: [{ id: 'waiting', conversationId: chat, status: 'queued' }] } } : backendOf(method, path, body)
+    await awake(t, 2 * BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+  })
+
+  it('ends one whose terminal is gone for a minute as stopped, and never one gone for less', async () => {
+    const t = lifeFixture([sessionRow()])
+    await t.poll()
+    await t.poll(BUDDY_SESSION_GONE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect((ends(t)[0]!.command as Record<string, unknown>).reason).toBe('stopped')
+  })
+
+  it('never ends the main Buddy, another machine\'s session or one the backend is already ending', async () => {
+    const main = { ...sessionRow(), agent: { ...sessionRow().agent, buddySession: undefined } }
+    const other = sessionRow({ agent: { ...sessionRow().agent, id: 'elsewhere', machineId: 'machine-2' } })
+    const closing = sessionRow({ closeSession: true, agent: { ...sessionRow().agent, id: 'closing', harnessId: 'closing' } })
+    const t = lifeFixture([main, other, closing])
+    t.live(true)
+    await awake(t, 2 * BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+  })
+
+  it('asks again with backoff while the backend does not answer, with the same operation', async () => {
+    const t = lifeFixture([sessionRow()])
+    const backendOf = t.core.account.backend
+    let refusals = 2
+    t.core.account.backend = async (method, path, body) => (body as any)?.command?.type === 'buddy.sessionEnd' && refusals-- > 0
+      ? (t.commands.push(body as Record<string, unknown>), { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } })
+      : backendOf(method, path, body)
+    await t.poll()
+    await t.poll(BUDDY_SESSION_GONE_MS)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    await t.poll(4_999)
+    expect(ends(t)).toHaveLength(1)
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(2))
+    await t.poll(10_000)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(3))
+    expect(new Set(ends(t).map(c => c.operationId))).toEqual(new Set(['buddy-session-end-agent-stopped']))
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(ends(t)).toHaveLength(3)
+  })
+
+  // Security review 1 of #2345: a Mac asleep over 30 minutes ended a working session as it woke.
+  it('never ends a session as its Mac wakes: idle time counts from the wake', async () => {
+    progress = vi.spyOn(TerminalHost.prototype, 'progressOf').mockImplementation(() => ({ harness: 0 }))
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    await awake(t, 10 * 60_000)
+    await t.poll(40 * 60_000)
+    expect(ends(t)).toEqual([])
+    await awake(t, BUDDY_SESSION_IDLE_MS - 60_000)
+    expect(ends(t)).toEqual([])
+    await awake(t, 60_000)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect(BUDDY_SESSION_SLEEP_GAP_MS).toBeLessThan(BUDDY_SESSION_IDLE_MS)
+  })
+
+  // Security review 1 of #2345: once decided, an end was retried even after the session had new work.
+  it('drops an end the backend did not take once the session has work again', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    const backendOf = t.core.account.backend
+    let waiting = false
+    t.core.account.backend = async (method, path, body) => {
+      if ((body as any)?.command?.type === 'buddy.sessionEnd') {
+        t.commands.push(body as Record<string, unknown>)
+        return { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } }
+      }
+      if (method === 'GET' && path.includes('/agents/agent/deliveries')) return { status: 200, body: { data: waiting ? [{ id: 'new-work', conversationId: chat, status: 'queued' }] : [] } }
+      return backendOf(method, path, body)
+    }
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    waiting = true
+    await awake(t, 15 * 60_000)
+    expect(ends(t)).toHaveLength(1)
+  })
+
+  // Security review 1 of #2345: a delivery this host has settled (withheld) kept the session from ever going idle.
+  it('ends one idle with only a settled delivery listed', async () => {
+    const t = lifeFixture([sessionRow({ leadsConversationId: 'leads' })])
+    t.live(true)
+    const backendOf = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => method === 'GET' && path.includes('/agents/agent/deliveries')
+      ? { status: 200, body: { data: [{ id: 'withheld', conversationId: 'leads', status: 'queued' }] } } : backendOf(method, path, body)
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect((ends(t)[0]!.command as Record<string, unknown>).reason).toBe('idle')
+  })
+})
+
 describe('keeping a Swarm Lead alive', () => {
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
   // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
@@ -2700,6 +2859,58 @@ describe('closing the sessions the backend ends', () => {
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
     expect(t.commands).toHaveLength(1)
+  })
+
+  // Security review 1 of #2345: what a Buddy's person sent it stayed in its Claude Code transcript and paste cache after its
+  // session ended. Its own traces go once it is closed; another session's stay, the same paste included only when theirs names it.
+  it('removes an ended Buddy session\'s own Claude Code transcript, history and pastes, and nothing of another session', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude')
+    const folder = '/work/worktrees/openharness/buddy-session', other = '/work/worktrees/openharness/someone-else'
+    const slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    try {
+      for (const cwd of [folder, other]) { mkdirSync(join(claude, 'projects', slug(cwd)), { recursive: true }); writeFileSync(join(claude, 'projects', slug(cwd), 'x.jsonl'), 'transcript') }
+      mkdirSync(join(claude, 'paste-cache'), { recursive: true })
+      for (const hash of ['ownpaste', 'theirpaste']) writeFileSync(join(claude, 'paste-cache', `${hash}.txt`), hash)
+      writeFileSync(join(claude, 'history.jsonl'), [
+        JSON.stringify({ sessionId: 'buddy-sid', project: folder, pastedContents: { 1: { contentHash: 'ownpaste' } } }),
+        JSON.stringify({ sessionId: 'other-sid', project: other, pastedContents: { 1: { contentHash: 'theirpaste' } } }),
+      ].join('\n') + '\n')
+      const t = lifeFixture([ended()], { claudeHome: home })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      await t.poll()
+      await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+      expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false)
+      expect(existsSync(join(claude, 'paste-cache', 'ownpaste.txt'))).toBe(false)
+      expect(existsSync(join(claude, 'projects', slug(other), 'x.jsonl'))).toBe(true)
+      expect(existsSync(join(claude, 'paste-cache', 'theirpaste.txt'))).toBe(true)
+      expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).not.toContain('buddy-sid')
+      expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toContain('other-sid')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security re-check 2 of #2345: what to scrub was known only in memory, so a host restarted between the close and the scrub
+  // left the transcript for good. It is written to the journal before the close, and the restarted host scrubs from there.
+  it('still scrubs an ended Buddy session\'s traces when its host restarts between the close and the scrub', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude')
+    const folder = '/work/worktrees/openharness/buddy-session', slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    try {
+      mkdirSync(join(claude, 'projects', slug(folder)), { recursive: true })
+      writeFileSync(join(claude, 'projects', slug(folder), 'x.jsonl'), 'transcript')
+      const t = lifeFixture([ended()], { claudeHome: home })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      // The first host's close never returns: it stops before the scrub.
+      t.closeMember.mockImplementation(() => new Promise(() => {}))
+      await t.poll()
+      expect(t.saved().scrubs).toEqual({ agent: { agentId: 'agent', sessionId: 'buddy-sid', cwd: folder, engine: 'claude', codexHome: null } })
+      t.host.stop()
+      // Restarted: the session is no longer registered here, and the close goes through.
+      t.core.agents.byAgent = vi.fn(() => undefined as never)
+      t.closeMember.mockImplementation(async () => ({ closed: true as const }))
+      const again = t.open({ claudeHome: home })
+      await again.tick()
+      await vi.waitFor(() => expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false))
+      await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   // Diego, 10-30: removing an agent or deleting its project left its worktree to the weekly sweep, up to a week later. It goes

@@ -111,6 +111,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(command.personId ?? undefined)
       break
     case 'message.send': {
+      // A thread session's start counts its machine's slots, as buddy.create's does (buddySessions.ts).
+      if (command.newSession) {
+        const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
+        if (start) { slots(start.request.machineId); head() }
+      }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.
       const waiting = before.conversations.find(c => c.id === command.conversationId)

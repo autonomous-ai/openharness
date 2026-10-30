@@ -101,13 +101,13 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
  */
 export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
-  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds'>>> {
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession'>>> {
   if (!ids.length) return []
   const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
-    { $project: { source: 1, recipientIds: 1 } }])
+    { $project: { source: 1, recipientIds: 1, thread: 1, buddySession: 1 } }])
   return rows.map(row => {
-    const { id, source, recipientIds } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
-    return { id, source, recipientIds }
+    const { id, source, recipientIds, thread, buddySession } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds, thread: thread ?? null, buddySession: buddySession ?? null }
   })
 }
 
@@ -135,10 +135,12 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
 /** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root.
  *  `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
 export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean
-  count?: number }
+  count?: number
+  /** A reply in a Buddy thread session's thread (buddySessions.ts), which the main Buddy never counts. */
+  session?: boolean }
 
 /** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
-interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean }
+interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
 
@@ -154,7 +156,8 @@ interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?
 export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
   const root = { $eq: ['$_id', '$thread'] }
   const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
-    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' } }
+    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
+    session: { $eq: ['$buddySession', true] } }
   // (sequence, id) lead each place, so the database's min and max order rows as the sort below does (ids are ASCII).
   const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
   // No $sort: it makes the planner walk the conversation's sequence index instead.
@@ -179,7 +182,7 @@ export async function pageThreads(tx: Transaction, tabId: string, conversationId
   const row = (key: ThreadPart, at: ThreadPlace) => {
     let kept = rows.get(at.i)
     if (!kept) rows.set(at.i, kept = { thread: key.thread, id: at.i, author: at.author, mentions: [], sequence: at.s, createdAt: new Date(ms(at.at)),
-      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), count: 0, slots: [] })
+      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), ...(key.session ? { session: true } : {}), count: 0, slots: [] })
     return kept
   }
   for (const p of parts) {

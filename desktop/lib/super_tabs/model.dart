@@ -129,6 +129,7 @@ class SuperTabAgent {
         {'personId': final String person} => person,
         _ => null,
       },
+      buddySession = SuperTabBuddySessionOf.fromJson(row['buddySession']),
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
@@ -175,8 +176,46 @@ class SuperTabAgent {
 
   /// The person whose Buddy it is; null for any other agent.
   final String? buddyOf;
+
+  /// Set on a Buddy's thread session (spec 2026-10-30-buddy-thread-sessions):
+  /// the thread it answers in. Null on the main Buddy and every other agent.
+  final SuperTabBuddySessionOf? buddySession;
+
+  /// A person's main Buddy: a Buddy that is no thread's session.
+  bool get isMainBuddy => isBuddy && buddySession == null;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
+}
+
+/// What makes an agent a thread session: its thread's root and the sequence
+/// of the message that started it (backend model.ts `Agent.buddySession`).
+class SuperTabBuddySessionOf {
+  const SuperTabBuddySessionOf(this.thread, this.from);
+  final String thread;
+  final int from;
+
+  static SuperTabBuddySessionOf? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final json = superTabMap(value);
+    final thread = json['thread'];
+    if (thread is! String || thread.isEmpty) return null;
+    final from = json['from'];
+    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
+  }
+}
+
+/// One live or starting thread session of a Buddy chat (backend model.ts
+/// `Conversation.buddySessions`): no [agentId] while it starts.
+class SuperTabBuddySession {
+  SuperTabBuddySession.fromJson(Map<String, dynamic> json)
+    : thread = json['thread'] is String ? json['thread'] as String : '',
+      startId = json['startId'] is String ? json['startId'] as String : '',
+      agentId = json['agentId'] is String ? json['agentId'] as String : null,
+      at = json['at'] is num ? (json['at'] as num).toInt() : 0;
+  final String thread, startId;
+  final String? agentId;
+  final int at;
+  bool get starting => agentId == null;
 }
 
 class SuperTabTask {
@@ -200,6 +239,12 @@ class SuperTabConversation {
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
+      buddySessions = List.unmodifiable(
+        (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
+            .whereType<Map>()
+            .map((json) => SuperTabBuddySession.fromJson(superTabMap(json)))
+            .where((session) => session.thread.isNotEmpty),
+      ),
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -255,6 +300,14 @@ class SuperTabConversation {
   /// The name a Buddy chat's person chose for their Buddy, kept while no
   /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
   final String? buddyName;
+
+  /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
+  /// every other conversation and from older backends.
+  final List<SuperTabBuddySession> buddySessions;
+
+  /// The live or starting session answering [thread], if any.
+  SuperTabBuddySession? sessionFor(String thread) =>
+      buddySessions.where((s) => s.thread == thread).firstOrNull;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -934,6 +987,7 @@ class SuperTabMessage {
       replyTo = row['replyTo'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
+      buddySession = row['buddySession'] == true,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -958,6 +1012,18 @@ class SuperTabMessage {
 
   /// A thread reply also shown in the conversation's main stream.
   final bool alsoInChat;
+
+  /// A reply in a Buddy thread session's thread, from the person or that
+  /// session (spec 2026-10-30-buddy-thread-sessions).
+  final bool buddySession;
+
+  /// The line the server writes in a thread when its session ends.
+  bool get sessionEnded => source['kind'] == 'buddy-session-ended';
+
+  /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
+  /// `stopped` or `failed`.
+  String? get sessionEndReason =>
+      sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.

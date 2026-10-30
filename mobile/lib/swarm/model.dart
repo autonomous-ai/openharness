@@ -129,6 +129,8 @@ class SuperTabAgent {
         {'personId': final String person} => person,
         _ => null,
       },
+      // Read as the desktop does; the phone draws no thread sessions yet.
+      buddySession = SuperTabBuddySessionOf.fromJson(row['buddySession']),
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
@@ -187,8 +189,39 @@ class SuperTabAgent {
 
   /// The person whose Buddy it is; null for any other agent.
   final String? buddyOf;
+
+  /// Set on a Buddy's thread session (desktop model.dart); null otherwise.
+  final SuperTabBuddySessionOf? buddySession;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
+}
+
+/// A thread session's thread and starting sequence (desktop model.dart).
+class SuperTabBuddySessionOf {
+  const SuperTabBuddySessionOf(this.thread, this.from);
+  final String thread;
+  final int from;
+
+  static SuperTabBuddySessionOf? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final json = superTabMap(value);
+    final thread = json['thread'];
+    if (thread is! String || thread.isEmpty) return null;
+    final from = json['from'];
+    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
+  }
+}
+
+/// One live or starting thread session of a Buddy chat (desktop model.dart).
+class SuperTabBuddySession {
+  SuperTabBuddySession.fromJson(Map<String, dynamic> json)
+    : thread = json['thread'] is String ? json['thread'] as String : '',
+      startId = json['startId'] is String ? json['startId'] as String : '',
+      agentId = json['agentId'] is String ? json['agentId'] as String : null,
+      at = json['at'] is num ? (json['at'] as num).toInt() : 0;
+  final String thread, startId;
+  final String? agentId;
+  final int at;
 }
 
 class SuperTabTask {
@@ -212,6 +245,12 @@ class SuperTabConversation {
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
+      buddySessions = List.unmodifiable(
+        (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
+            .whereType<Map>()
+            .map((json) => SuperTabBuddySession.fromJson(superTabMap(json)))
+            .where((session) => session.thread.isNotEmpty),
+      ),
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -274,6 +313,9 @@ class SuperTabConversation {
   /// The name a Buddy chat's person chose for their Buddy, kept while no
   /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
   final String? buddyName;
+
+  /// A Buddy chat's live or starting thread sessions (desktop model.dart).
+  final List<SuperTabBuddySession> buddySessions;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -1008,6 +1050,7 @@ class SuperTabMessage {
       replyTo = row['replyTo'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
+      buddySession = row['buddySession'] == true,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -1032,6 +1075,9 @@ class SuperTabMessage {
 
   /// A thread reply also shown in the conversation's main stream.
   final bool alsoInChat;
+
+  /// A reply in a Buddy thread session's thread (desktop model.dart).
+  final bool buddySession;
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.

@@ -52,6 +52,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.onOpenThread,
+    this.threadTrailing,
     this.member,
     this.link,
     this.linkTarget,
@@ -71,6 +72,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
   final VoidCallback? onOpenThread;
+
+  /// Ends the thread line: the mark of a thread's own Buddy session.
+  final Widget? threadTrailing;
 
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
@@ -531,6 +535,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   unread: widget.threadUnread,
                                   onOpen: open,
                                   member: widget.member,
+                                  trailing: widget.threadTrailing,
                                 ),
                               ...widget.receipts,
                             ],
@@ -699,7 +704,8 @@ class SuperTabLink extends StatefulWidget {
     required this.child,
   });
 
-  final VoidCallback onTap;
+  /// Null disables it, for pointer, keyboard and screen readers alike.
+  final VoidCallback? onTap;
   final String label;
   final Widget child;
 
@@ -714,13 +720,16 @@ class _SuperTabLinkState extends State<SuperTabLink> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final radius = BorderRadius.circular(DesktopChrome.controlRadius);
+    final enabled = widget.onTap != null;
     return Semantics(
       button: true,
+      enabled: enabled,
       label: widget.label,
       child: InkWell(
         onTap: widget.onTap,
+        canRequestFocus: enabled,
         onFocusChange: (focused) => setState(() => _focused = focused),
-        mouseCursor: SystemMouseCursors.click,
+        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
         borderRadius: radius,
         hoverColor: Colors.transparent,
         focusColor: Colors.transparent,
@@ -759,9 +768,13 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.unread,
     required this.onOpen,
     this.member,
+    this.trailing,
   });
 
   final SuperTabThread thread;
+
+  /// Drawn after the line's link, outside it: a thread session's mark.
+  final Widget? trailing;
   final bool unread;
   final VoidCallback onOpen;
 
@@ -795,36 +808,38 @@ class SuperTabThreadLine extends StatelessWidget {
     grid.AppTheme.watch(context);
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
     final last = thread.lastAt;
+    final link = SuperTabLink(
+      label: unread ? '$count, unread' : count,
+      onTap: onOpen,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final author in thread.authors) ...[
+            _face(author),
+            const SizedBox(width: grid.AppDesktop.menuInset),
+          ],
+          Text(
+            count,
+            key: ValueKey('super-thread-count-${thread.id}'),
+            style: DesktopChrome.control(
+              color: DesktopChrome.accent,
+            ).copyWith(fontWeight: unread ? FontWeight.w700 : FontWeight.w500),
+          ),
+          if (last != null) ...[
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            Text(
+              'Last reply ${superTabAgo(DateTime.now().difference(last))}',
+              style: DesktopChrome.metadata(),
+            ),
+          ],
+        ],
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-      child: SuperTabLink(
-        label: unread ? '$count, unread' : count,
-        onTap: onOpen,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final author in thread.authors) ...[
-              _face(author),
-              const SizedBox(width: grid.AppDesktop.menuInset),
-            ],
-            Text(
-              count,
-              key: ValueKey('super-thread-count-${thread.id}'),
-              style: DesktopChrome.control(color: DesktopChrome.accent)
-                  .copyWith(
-                    fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
-                  ),
-            ),
-            if (last != null) ...[
-              const SizedBox(width: grid.AppDesktop.controlGap),
-              Text(
-                'Last reply ${superTabAgo(DateTime.now().difference(last))}',
-                style: DesktopChrome.metadata(),
-              ),
-            ],
-          ],
-        ),
-      ),
+      child: trailing == null
+          ? link
+          : Row(mainAxisSize: MainAxisSize.min, children: [link, trailing!]),
     );
   }
 }

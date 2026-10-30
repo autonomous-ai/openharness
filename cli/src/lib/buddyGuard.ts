@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
 import { buddyAccountFile } from './buddyAccount.js'
@@ -24,7 +24,11 @@ export interface BuddyWide { home: string; denied: readonly string[];
   /** This launch, at random: a grant from before a relaunch is none (delta reviews of #2310). */
   launch: string
   /** Where the host keeps the account signed in on this machine (`writeBuddyAccount`): a grant holds only for it. */
-  accountFile: string }
+  accountFile: string
+  /** Where every Swarm session's folder on this machine is (Harness's worktrees folder): closed to this one's reads but its
+   *  own folder, so a Buddy's thread session never reads another session's folder or the files sent to it (spec
+   *  2026-10-30-buddy-thread-sessions). The guard's alone: closing it in the sandbox would close the session's own folder. */
+  otherSessions?: readonly string[] }
 
 /** Where each engine Harness runs keeps its sessions, history and sign-in in a home: closed to a Buddy, as other agents on
  *  this machine keep Swarm chats there (delta reviews of #2310). Typed by the engine list, so a new engine names its own. */
@@ -70,9 +74,9 @@ const SYSTEM_READABLE = process.platform === 'darwin'
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
-  system?: readonly string[]; launch?: string; closed?: readonly string[] }): BuddyWide {
+  system?: readonly string[]; launch?: string; closed?: readonly string[]; otherSessions?: readonly string[] }): BuddyWide {
   return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs, ...(input.closed ?? [])],
-    approvalsDir: join(input.dataDir, 'buddy-approvals') }
+    approvalsDir: join(input.dataDir, 'buddy-approvals'), ...(input.otherSessions?.length ? { otherSessions: input.otherSessions } : {}) }
 }
 
 /** What a Buddy's launch reads of its machine to decide wide mode (`buddyLaunchWide`). */
@@ -142,7 +146,19 @@ export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFa
   if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
-  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes })
+  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes,
+    otherSessions: sessionsFolderOf(root, facts.home) })
+}
+
+/** Harness's worktrees folder, where every Swarm session's folder is (lib/gitProject.ts), when [root] is one of them: a
+ *  Buddy or thread session in a worktree of its own. None for a folder elsewhere, which nothing here would close. */
+function sessionsFolderOf(root: string, home: string): string[] {
+  const real = (path: string) => { try { return realpathSync(path) } catch { return null } }
+  // lib/projectFolder.ts projectsRoot, which this module does not import: it brings git and every source host with it.
+  const worktrees = join(home, process.env.HARNESS_OS === '1' ? 'projects' : 'harnesses', 'worktrees'), at = real(root), folder = real(worktrees)
+  if (!at || !folder) return []
+  const inside = relative(folder, at)
+  return inside && !inside.startsWith('..') && !isAbsolute(inside) ? [worktrees] : []
 }
 
 
@@ -385,7 +401,8 @@ const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdb
   /^\.claude/i, /^\.codex/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
 const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
 const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
-const DENIED = WIDE ? realRoots(WIDE.denied) : []
+// Other sessions' folders (WIDE.otherSessions) are closed as these are; its own folder is read as its folder, before any of this.
+const DENIED = WIDE ? realRoots([...WIDE.denied, ...(WIDE.otherSessions ?? [])]) : []
 // What may be read outside the folder at all: the person's home and the system folders named for it. Everything else is
 // closed, the process and device folders and every temporary folder among it (security reviews 1 and 2 of #2310: on Linux
 // /proc/<pid>/environ held the read-only DB URL while db-size ran; on macOS /private/var/folders held other processes'

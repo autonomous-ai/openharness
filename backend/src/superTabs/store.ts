@@ -24,7 +24,8 @@ import { retryTransient } from './retry.js'
 import { buddyChatId, type ChosenBuddyName } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
-import { isBuddy, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
+import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
+import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -46,7 +47,7 @@ import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, 
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, forRecipients, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  SuperTabError, forRecipients, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -1069,7 +1070,14 @@ export class SuperTabStore {
   }
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
-    try { return await this.executeOnce(user, tabId, input, asAgentId, hostMachineId) } catch (error) {
+    try {
+      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId)
+      // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
+      // server log that prod watch reads.
+      if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
+      return done
+    } catch (error) {
+      if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
       // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
       // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
       // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
@@ -1232,9 +1240,14 @@ export class SuperTabStore {
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
         const root = reply?.thread && reply.thread !== reply.id
           ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
+        // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most.
+        const buddyChat = original.conversations.find(c => c.id === command.conversationId)
+        const sessionThread = reply?.thread && buddyChat && isBuddyChat(buddyChat)
+          ? !!await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true }, select: { id: true } })
+          : false
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
           thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
-          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}) }
+          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionThread ? { sessionThread: true as const } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
@@ -1257,7 +1270,7 @@ export class SuperTabStore {
         const ownerId = (asked?.author as unknown as Author | undefined)?.id
         const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
         if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
-          source: !!asked.source, createdAt: asked.createdAt.getTime(), ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
+          source: !!asked.source, createdAt: asked.createdAt.getTime(), thread: asked.thread, ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -1286,7 +1299,7 @@ export class SuperTabStore {
         claimed = context.attachments.map(a => a.id)
       }
       if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
-      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
+      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
       }
@@ -1500,6 +1513,7 @@ export class SuperTabStore {
       }
       await recordEvidence(tx, tabId, original, effects.state, context.now)
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
+      if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)
       // The Lead acting on a group ends the tags it held back about it (mentions.ts), before this command's own are written.
@@ -1754,10 +1768,15 @@ export class SuperTabStore {
 
   /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
    *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
-  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
+  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, state: SuperTabState): Promise<ReactionTarget | undefined> {
     const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
-      select: { id: true, source: true, recipientIds: true } })
+      select: { id: true, source: true, recipientIds: true, thread: true, buddySession: true } })
     if (!message || (agentOnly(message.source, message.recipientIds) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    // A Buddy reacts only to what it may read (buddySessions.ts): a session to its own thread, the main Buddy to no session's
+    // replies (security review 2 of #2345). Refused as a message it cannot see.
+    const group = state.conversations.find(c => c.id === command.conversationId)
+    const reader = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+    if (group && !sessionReadsRow(reader, group)(message)) return undefined
     if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
     return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
   }
@@ -2003,7 +2022,8 @@ export class SuperTabStore {
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
         text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [],
         // A top-level message is its own thread's root; only a row written before threads has none (its replies stay inline).
-        thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}) })
+        thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}),
+        ...(message.buddySession ? { buddySession: true } : {}) })
       for (const recipient of [...message.recipients, ...message.buddyRecipients ?? []]) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
@@ -2016,9 +2036,37 @@ export class SuperTabStore {
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    for (const message of messages) {
+      // Once committed, so a retried write logs once.
+      if (message.source?.kind === SESSION_ENDED_KIND && !kept.has(message.id)) {
+        const reason = message.source.reason
+        afterCommit(tx, () => logger.info('Buddy session ended', { tabId, reason }))
+      }
+    }
     if (kept.size) {
       const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
       deliveries = deliveries.filter(d => !have.has(d.id))
+    }
+    if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
+    for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
+  }
+
+  /** A Buddy thread session's first deliveries (buddySessions.ts): its person's messages sent in its thread while it started,
+   *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored message of
+   *  that conversation by that person in a session thread. */
+  private async writeLateDeliveries(tx: Transaction, tabId: string, state: SuperTabState, late: NonNullable<CommandEffects['lateDeliveries']>) {
+    const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
+    // At most MAX_SESSION_WAITING, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
+    for (const l of late) {
+      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true, buddySession: true } })
+      const author = row?.author as unknown as Author | undefined
+      if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !row.buddySession || author?.kind !== 'person' || author.id !== l.author.id
+        || author.membershipGeneration !== l.author.generation) continue
+      if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
+      const target = agent(state, l.agentId)
+      deliveries.push({ id: stableId(l.messageId, l.agentId), tabId, conversationId: l.conversationId, messageId: l.messageId, agentId: l.agentId,
+        machineId: target.machineId, machineOwnerId: target.machineOwnerId, assignmentId: null, membershipGeneration: target.membershipGeneration,
+        authorKind: 'person', authorId: l.author.id, authorGeneration: l.author.generation })
     }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
     for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
@@ -2042,13 +2090,23 @@ export class SuperTabStore {
     const group = readConversation(state, actor, conversationId)
     // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
     // and why others could not (security review 2 of #2115). Left out like an agent-only notice (readsRow), so no page is shorter.
-    const buddy = isBuddyReader(state, actor), readable = readsRow(actor, buddy)
+    const buddy = isBuddyReader(state, actor), rowRead = readsRow(actor, buddy)
+    // A Buddy thread session reads its own thread alone, and the main Buddy none of a session's (buddySessions.ts): the one
+    // check every agent read of a Buddy chat applies, here and through every row it points at below.
+    const reader = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+    const sessionRead = sessionReadsRow(reader, group), own = isBuddyChat(group) ? reader?.buddySession : undefined
+    const readable = (m: Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession'>) => rowRead(m) && sessionRead(m)
+    // A session reads its chat through its own thread, so it never walks the main chat to fill a page; another thread reads empty.
+    if (own) {
+      if (cursor.thread && cursor.thread !== own.thread) return { messages: [], next: null, threads: [], reactionSeq: group.reactionSeq ?? 0 }
+      cursor = { ...cursor, thread: own.thread }
+    }
     // One thread is read only through a root this reader may read. A hidden root (an agent-only note to someone else; for a
     // Buddy, a route row) reads as one that is not in this conversation, and as an exact message it may not see: an empty
     // page, never its replies alone (review 2 of #2168). By its id, through the primary key.
     if (cursor.thread) {
       const root = await tx.superTabMessage.findFirst({ where: { tabId, conversationId, id: cursor.thread },
-        select: { id: true, source: true, recipientIds: true } })
+        select: { id: true, source: true, recipientIds: true, thread: true, buddySession: true } })
       // A task chat's copy of a Lead's notice stored before it was marked is read by no one either (pageReads.ts).
       if (!root || !readable(root) || (await deliveredCopies(tx, tabId, [root])).size) {
         return { messages: [], next: null, threads: [], reactionSeq: group.reactionSeq ?? 0 }
@@ -2088,7 +2146,9 @@ export class SuperTabStore {
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread && !hidden.has(m.thread) ? [m.thread] : []))]
     const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
-    const summaries = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing) : threadRows) : []
+    // The main Buddy counts none of a session thread's replies, as it reads none (buddySessions.ts).
+    const counted = buddy ? threadRows.filter(r => !r.routing && (own || !(isBuddyChat(group) && r.session))) : threadRows
+    const summaries = counted.length ? threadSummaries(state, group, counted) : []
     const threads = buddy ? summaries.map(t => ({ ...t, authors: t.authors.map(authorForBuddy) })) : summaries
     // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115), and
     // an agent's rows without its membership (delta review 1 of #2258).
@@ -2096,10 +2156,22 @@ export class SuperTabStore {
       ? { ...m, ...(m.thread && hidden.has(m.thread) ? { thread: null } : {}), ...(m.replyTo && hidden.has(m.replyTo) ? { replyTo: null } : {}) } : m)
     // Whose Buddy hears a row is its person's own: its news shows to that Buddy alone.
     const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
+    // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
+    const context = own && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, rowRead) : undefined
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)) })), next, threads,
+      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
+  }
+
+  /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session
+   *  thread's, never a reply only in its thread), by the conversation's sequence index, at most 50 rows read for 10 kept. */
+  private async sessionExcerpt(tx: Transaction, tabId: string, conversationId: string, from: number,
+    rowRead: (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>) => boolean) {
+    const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { lte: from } }, orderBy: [{ sequence: 'desc' }, { id: 'desc' }],
+      take: 50, select: { id: true, sequence: true, text: true, author: true, createdAt: true, thread: true, alsoInChat: true, buddySession: true, source: true, recipientIds: true } })
+    const main = rows.filter(r => !r.buddySession && (!r.thread || r.thread === r.id || r.alsoInChat) && rowRead(r))
+    return sessionContext(main.map(r => ({ ...r, author: r.author as unknown as ContextRow["author"] })))
   }
 
   /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
