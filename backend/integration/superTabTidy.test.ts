@@ -648,6 +648,45 @@ describe('a delivery that cannot move', () => {
       deliveredAt: new Date(f.clock.now), holdReason: null })
   })
 
+  // Prod 10-30: two hours of SWARM_BUSY kept hosts' acknowledgements out past the 10-minute quiet time. The pass ended claims
+  // the agents had received, their senders saw Not sent and sent them again, and the agents acted twice.
+  it('counts a quiet claim the pass ended as delivered once its host\'s acknowledgement gets through, and never types it again', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Typed while the backend was busy.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await settleAfter(f, id, 10 * MINUTE + 1_000)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'claim_quiet', holdSince: null })
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'another', receipt: 'Typed.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    f.clock.now += 20 * MINUTE
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'delivered', receipt: 'Typed.',
+      deliveredAt: new Date(f.clock.now), holdReason: null, claimId: 'claim' })
+    // Delivered stays delivered: a later pass ends nothing, and the same acknowledgement again changes nothing.
+    await settleAfter(f, id, 2 * HOUR)
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    expect(await status(id)).toBe('delivered')
+  })
+
+  it('never takes a late acknowledgement for a claim an archive ended, nor one the pass ended as unreadable, once the group is back', async () => {
+    const f = await swarm()
+    const archived = await toWorker(f, 'Ended by the archive.'), unread = await toWorker(f, 'Left claimed in the archived group.')
+    for (const id of [archived, unread]) await f.timed.delivery(host, f.tab, f.worker, id, { type: 'claim', claimId: 'claim' })
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: archived } })).toMatchObject({ status: 'cancelled', holdReason: null })
+    // As a backend from before the archive cancelled its deliveries left one: still claimed, quiet, in the archived group.
+    await db.superTabDelivery.update({ where: { id: unread }, data: { status: 'claimed' } })
+    await settleAfter(f, unread, 10 * MINUTE + 1_000)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: unread } })).toMatchObject({ status: 'cancelled', holdReason: null })
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: false })
+    for (const id of [archived, unread]) {
+      await expect(f.timed.delivery(host, f.tab, f.worker, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false }))
+        .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+      expect(await status(id)).toBe('cancelled')
+    }
+  })
+
   it('never types a hold the pass ended: claiming it again is refused', async () => {
     const f = await swarm()
     const id = await toLead(f, 'Held and ended, never typed.')

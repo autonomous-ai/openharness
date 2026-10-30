@@ -254,6 +254,16 @@ const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
+/** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
+ *  (backend superTabs/deliverySettle.ts CLAIM_QUIET_MS), so its delivery pass ended claims the agents had in fact received and
+ *  their senders saw Not sent. A typed delivery the backend ended is acknowledged again after 10 s, doubling to 5 minutes, for
+ *  a day; the backend takes it for a claim its pass ended, and refuses it for one a person, an archive or a stop ended. */
+const LATE_ACK_RETRY_MS = 10_000
+const LATE_ACK_RETRY_MAX_MS = 5 * 60_000
+const LATE_ACK_GIVE_UP_MS = 24 * 60 * 60_000
+/** A refusal no later acknowledgement can change: the delivery is no longer this agent's, or another claim or receipt holds it.
+ *  A sign-in (401), an update (426), throttling (429) and a server failure (5xx) say nothing of the delivery. */
+const ackRefused = (error: unknown) => error instanceof SuperTabHostError && [400, 403, 404, 409].includes(error.status)
 /** The first wait after a session the backend ended could not be closed or acknowledged, doubling up to ten minutes. */
 const END_RETRY_MS = 5_000
 const END_RETRY_MAX_MS = 10 * 60_000
@@ -361,6 +371,8 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
   private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; saidAt?: number; said?: string; list?: string }>()
+  /** Per typed delivery the backend ended before it heard the acknowledgement: the failed late tries and when the next may run. */
+  private readonly lateAcks = new Map<string, { failures: number; retryAt: number; since: number }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -739,10 +751,44 @@ export class SuperTabHost {
         const terminal = entry.stage === 'prepared' ? ['answered', 'cancelled'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
-        delete this.journal.entries[entry.deliveryId]
-        this.withheld.clear(entry.deliveryId)
-        this.persist()
+        if (entry.stage === 'delivered' && result.status === 'cancelled') {
+          const done = await this.ackLate(entry)
+          if (this.stopped) return
+          if (!done) continue
+        }
+        this.retireEntry(entry)
       } catch { /* Missing authority or a network failure is not a receipt. */ }
+    }
+  }
+  private retireEntry(entry: Entry): void {
+    if (this.journal.entries[entry.deliveryId] !== entry) return
+    delete this.journal.entries[entry.deliveryId]
+    this.lateAcks.delete(entry.deliveryId)
+    this.withheld.clear(entry.deliveryId)
+    this.persist()
+  }
+  /** The agent has a delivery the backend ended, as cancelled, before this host's acknowledgement got through: it is sent again,
+   *  with the same claim and receipt. Whether the entry is done: taken, refused for good, or a day of failures. Only a typed one:
+   *  one reported uncertain, or never typed, is never confirmed this way. */
+  private async ackLate(entry: Entry): Promise<boolean> {
+    const now = this.now(), late = this.lateAcks.get(entry.deliveryId)
+    if (late && now < late.retryAt) return false
+    try {
+      await backend(this.core, 'POST', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`,
+        { type: 'ack', claimId: entry.claimId, receipt: entry.receipt, uncertain: false })
+      if (late) this.log(`Delivery ${entry.deliveryId} was acknowledged after the backend ended it, ${late.failures + 1} tries, ${Math.round((this.now() - late.since) / 60_000)} min.`)
+      return true
+    } catch (error) {
+      if (ackRefused(error)) return true
+      const retry = late ?? { failures: 0, retryAt: 0, since: now }
+      if (this.now() - retry.since >= LATE_ACK_GIVE_UP_MS) {
+        this.log(`Gave up acknowledging delivery ${entry.deliveryId} to agent ${entry.agentId} in Swarm ${entry.tabId} after a day: `
+          + `${error instanceof Error ? error.message : String(error)}. Its sender sees Not sent.`)
+        return true
+      }
+      retry.retryAt = this.now() + Math.min(LATE_ACK_RETRY_MAX_MS, LATE_ACK_RETRY_MS * 2 ** retry.failures++)
+      this.lateAcks.set(entry.deliveryId, retry)
+      return false
     }
   }
 
@@ -933,6 +979,7 @@ export class SuperTabHost {
       else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
+    for (const deliveryId of this.lateAcks.keys()) if (!this.journal.entries[deliveryId]) this.lateAcks.delete(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
