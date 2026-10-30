@@ -27,6 +27,9 @@ class SuperTabReadMarkSender<K> {
   /// The mark waiting for the one on its way, by conversation.
   final _next = <K, int>{};
   final _sending = <K>{};
+
+  /// The mark on its way, by conversation: one asked for again meanwhile is not sent twice.
+  final _inFlight = <K, int>{};
   bool _disposed = false;
 
   /// Asks for [sequence] to be [conversationId]'s mark on the server, unless [kept] (what the server already
@@ -35,6 +38,7 @@ class SuperTabReadMarkSender<K> {
     if (_disposed || sequence <= kept) return;
     if (sequence <= (_sent[conversationId] ?? 0)) return;
     if (sequence <= (_next[conversationId] ?? 0)) return;
+    if (sequence <= (_inFlight[conversationId] ?? 0)) return;
     if (_failed[conversationId] case (final failed, final at)
         when sequence <= failed && _now().difference(at) < retryAfter) {
       return;
@@ -47,6 +51,7 @@ class SuperTabReadMarkSender<K> {
     while (!_disposed) {
       final sequence = _next.remove(conversationId);
       if (sequence == null) break;
+      _inFlight[conversationId] = sequence;
       try {
         await _send(conversationId, sequence);
         _failed.remove(conversationId);
@@ -58,6 +63,7 @@ class SuperTabReadMarkSender<K> {
         // Offline or refused: this device's mark stands, and the next one asked for is sent afresh.
       }
     }
+    _inFlight.remove(conversationId);
     _sending.remove(conversationId);
   }
 
