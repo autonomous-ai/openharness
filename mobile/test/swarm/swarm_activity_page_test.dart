@@ -225,6 +225,7 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.conversationId, page.messageId), (leadChat, 'msg-tag'));
+    expectHomeCProject('Mobile');
   });
 
   testWidgets('Threads: the person\'s threads, the one with news first', (
@@ -256,6 +257,7 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.conversationId, page.messageId), (leadChat, 'root-1'));
+    expectHomeCProject('Mobile');
   });
 
   testWidgets("Reactions: who reacted how to the person's message", (

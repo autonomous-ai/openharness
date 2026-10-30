@@ -34,6 +34,11 @@ enum SwarmProjectTab {
 
   static const homeB = [chat, buddy, tasks, leaderboard];
   static const homeC = [chat, team];
+
+  /// The tabs a project opens with: Swarm Home C's, the phone's Swarm Home
+  /// since #2262 (Tony, 2026-10-30). Every way into a project takes these
+  /// ([SwarmProjectPage]'s default), so none opens direction B's by mistake.
+  static const current = homeC;
 }
 
 /// The row of a project's [tabs] under its header: each an equal share of the

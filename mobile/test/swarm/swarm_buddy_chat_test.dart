@@ -401,6 +401,7 @@ void main() {
         findsOneWidget,
         reason: 'the project chat',
       );
+      expectHomeCProject('Mobile');
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         '@River ',

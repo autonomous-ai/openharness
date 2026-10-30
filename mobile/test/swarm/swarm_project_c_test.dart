@@ -778,7 +778,11 @@ void main() {
       await pump(
         tester,
         backend(),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
 
       for (final name in ['chat', 'buddy', 'tasks', 'leaderboard']) {
@@ -1058,7 +1062,11 @@ void main() {
       await pump(
         tester,
         chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
 
       expect(find.text('Update 4.'), findsOneWidget);
@@ -1069,7 +1077,11 @@ void main() {
       await pump(
         tester,
         chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
       await tester.drag(key('swarm-messages'), const Offset(0, 1500));
       await tester.pumpAndSettle();
