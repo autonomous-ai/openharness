@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
@@ -133,6 +134,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   set shown(bool value) {
     if (_shown == value) return;
     _shown = value;
+    // Back on screen: what the line last read may be long gone, so it is read
+    // again before it is believed, under a new [_receiptReadFor].
+    if (value) _dropReceipt();
     _markRead();
   }
 
@@ -416,6 +420,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       _answeredAlerts = answered;
       notifyListeners();
     }
+    _checkReceipt();
   }
 
   /// The prompt warnings the page last hid, as one key.
@@ -445,6 +450,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     _readingOlder = null;
     _rereading = null;
     _reactionSeq = null;
+    _dropReceipt();
   }
 
   /// The person cannot read this conversation: nothing of it stays, here or
@@ -553,7 +559,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     bool again = false,
     bool tell = true,
   }) async {
-    final epoch = _epoch;
+    final epoch = _epoch, asked = ++_readsAsked;
     var reacted = false;
     try {
       final tail = latest ? null : messages.lastOrNull?.sequence;
@@ -594,6 +600,15 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       var changed = !_read || error != null || _refused || latest;
       changed |= _keepThreads(answer['threads']);
       for (final m in incoming) {
+        if (m.id == _receiptOf) {
+          // A read of it asked after this one holds where its delivery is now.
+          final held = messages.where((m) => m.id == _receiptOf).firstOrNull;
+          if (held != null && asked < _receiptAskedAs) {
+            byId[m.id] = held;
+            continue;
+          }
+          _receiptAskedAs = asked;
+        }
         if (byId[m.id] case final shown? when _same(shown, m)) continue;
         byId[m.id] = m;
         changed = true;
@@ -873,7 +888,25 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       a.authorName == b.authorName &&
       a.createdAt == b.createdAt &&
       a.attachments.length == b.attachments.length &&
-      _sameReactions(a.reactions, b.reactions);
+      _sameReactions(a.reactions, b.reactions) &&
+      _sameDeliveries(a, b);
+
+  /// What the delivery line draws from: each failed claim's count changes
+  /// nothing there, so it draws nothing again.
+  static bool _sameDeliveries(SuperTabMessage a, SuperTabMessage b) {
+    if (a.deliveries.length != b.deliveries.length) return false;
+    for (var i = 0; i < a.deliveries.length; i++) {
+      for (final field in const [
+        'id',
+        'agentId',
+        'status',
+        'claimFailingSince',
+      ]) {
+        if (a.deliveries[i][field] != b.deliveries[i][field]) return false;
+      }
+    }
+    return true;
+  }
 
   static bool _sameReactions(
     List<SuperTabReactionCount> a,
@@ -886,6 +919,125 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       }
     }
     return true;
+  }
+
+  /// How often the person's newest message is read again while its delivery
+  /// is queued, and for how long once it is on screen (Lead, 10-30): a phone
+  /// pays for every read, and the chat's own reads see no delivery change.
+  static const _receiptReadEvery = Duration(seconds: 30);
+  static const _receiptReadFor = Duration(minutes: 10);
+
+  String? _receiptOf;
+  DateTime? _receiptSince, _receiptAsked;
+
+  /// The newest message when it was last asked: one that came after it may
+  /// have answered it, so it is read once more, even past [_receiptReadFor].
+  int? _receiptTail;
+
+  /// Reads are numbered as they are asked; [_receiptAskedAs] is the one the
+  /// row held came from, so an older answer landing later cannot put it back.
+  int _readsAsked = 0, _receiptAskedAs = -1;
+  bool _receiptCurrent = false;
+  Future<void>? _readingReceipt;
+
+  /// The person's newest message here, written by them and not by an agent or
+  /// a terminal: the only one that can carry a delivery line.
+  SuperTabMessage? get latestOwn {
+    for (final m in messages.reversed) {
+      if (!m.fromAgent && !m.fromTerminal && m.authorId == reader.accountId) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  /// [message]'s deliveries were last read here, and that read worked: a row
+  /// kept from an earlier open, or a read that failed, proves nothing about
+  /// where the delivery is now.
+  bool receiptCurrent(SuperTabMessage message) =>
+      _receiptCurrent && _receiptOf == message.id;
+
+  void _dropReceipt() {
+    _receiptOf = _receiptSince = _receiptAsked = _receiptTail = null;
+    _receiptAskedAs = -1;
+    _receiptCurrent = false;
+    _readingReceipt = null;
+  }
+
+  /// Reads the person's newest message again, at the Swarm's own reads, while
+  /// it is on screen and its delivery is queued. No timer of its own: off
+  /// screen nothing asks.
+  void _checkReceipt() {
+    if (!_shown || _readingReceipt != null || reader.error != null) return;
+    final own = latestOwn;
+    if (own == null || own.receiptDelivery?.status != 'queued') return;
+    final now = clock.now();
+    if (_receiptOf != own.id) {
+      _dropReceipt();
+      _receiptOf = own.id;
+      _receiptSince = now;
+    }
+    final asked = _receiptAsked;
+    if (asked != null && now.difference(asked) < _receiptReadEvery) return;
+    final tail = messages.last.sequence;
+    final answered = tail > own.sequence && tail != _receiptTail;
+    if (!answered && now.difference(_receiptSince!) >= _receiptReadFor) return;
+    _receiptAsked = now;
+    _receiptTail = tail;
+    late final Future<void> reading;
+    reading = _readReceipt(own.id).whenComplete(() {
+      if (identical(_readingReceipt, reading)) _readingReceipt = null;
+    });
+    _readingReceipt = reading;
+  }
+
+  Future<void> _readReceipt(String messageId) async {
+    final epoch = _epoch, generation = reader.generation, asked = ++_readsAsked;
+    bool stale() =>
+        _disposed ||
+        epoch != _epoch ||
+        generation != reader.generation ||
+        _receiptOf != messageId;
+    SuperTabMessage? read;
+    try {
+      final answer = superTabMap(
+        await reader.request(
+          'GET',
+          '$messagesPath?messageId=${Uri.encodeQueryComponent(messageId)}',
+        ),
+      );
+      if (stale()) return;
+      read = [
+        for (final row in answer['messages'] as List)
+          SuperTabMessage.fromJson(superTabMap(row)),
+      ].where((m) => m.id == messageId && m.conversationId == id).firstOrNull;
+    } on SuperTabFailure catch (failure) {
+      if (stale()) return;
+      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+        _lose();
+        error = failure.message;
+        notifyListeners();
+        return;
+      }
+    } catch (_) {
+      if (stale()) return;
+    }
+    final fresh = read;
+    final at = fresh == null
+        ? -1
+        : messages.indexWhere((m) => m.id == fresh.id);
+    final current = at >= 0;
+    // The chat's own read may have been asked after this one and landed first.
+    final newest = current && asked >= _receiptAskedAs;
+    if (newest) _receiptAskedAs = asked;
+    final replaced = newest && !_same(messages[at], fresh!);
+    if (replaced) {
+      messages = List.unmodifiable([...messages]..[at] = fresh);
+    }
+    if (replaced || current != _receiptCurrent) {
+      _receiptCurrent = current;
+      notifyListeners();
+    }
   }
 
   /// A refused post's text back in the draft, before anything typed since.
