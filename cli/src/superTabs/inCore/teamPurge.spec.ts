@@ -157,8 +157,11 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
   // no path, and that the purge then finishes on its own next try (host.ts endSession retries it).
   it('tells the owner what to fix for each unreadable kind, and that the purge then finishes', () => {
     for (const said of [...(['unreadFolder', 'unreadMemory', 'unreadTranscript'] as const).map(left), OWN_LEFT.unreadTranscript, SWEEP_LEFT.unlistedFolder, SWEEP_LEFT.unreadFile]) {
-      expect(said).toMatch(/could not be read: its owner makes it readable for the Team account, and the purge finishes on its next try$/)
+      expect(said).toMatch(/could not be read: its owner (finds it \([^)]+\) and )?makes it readable for the Team account, and the purge finishes on its next try$/)
     }
+    // With no path to name, what holds the account says where to look (re-check of 8c0b019).
+    expect(SWEEP_LEFT.unlistedFolder).toContain('search the Team account\'s Claude Code and Codex homes for folders it can\'t read')
+    expect(SWEEP_LEFT.unreadFile).toContain('search the Team account\'s Claude Code and Codex homes for files it can\'t read')
   })
 
   // Security review 2 of #2385, P3: a transcript that records no working folder is no proof it is the session's; it stays,
@@ -217,6 +220,33 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     await scrubClaudeSession(home, target())
     expect(existsSync(join(claude, 'todos', 'pm-session-agent-pm-session.json'))).toBe(false)
     expect(existsSync(join(claude, 'todos', 'pm-session2-agent-pm-session2.json'))).toBe(true)
+  })
+
+  // Re-check of 8c0b019: a todos or config backups folder that could not be listed was read as empty, and a Buddy's cleanup,
+  // which no sweep follows, finished with its todo file and its folder in the backups left. Only one that is not there is
+  // empty; any other is told by its kind alone, whatever the error, and what it holds stays.
+  it('tells its caller when its todos or config backups folder cannot be listed, by kind, and keeps what is in it', async () => {
+    for (const [sub, kind] of [['todos', 'unreadTodos'], ['backups', 'unreadBackups']] as const) {
+      for (const code of ['EMFILE', 'EACCES']) {
+        const { home, claude } = teamHome(), told = vi.fn()
+        Object.assign(fail, { path: join(claude, sub), code })
+        await scrubClaudeSession(home, target(), [], undefined, told)
+        expect(told.mock.calls, `${sub} ${code}`).toEqual([[kind]])
+        expect(existsSync(join(claude, 'todos', 'pm-session-agent-pm-session.json'))).toBe(sub === 'todos')
+        expect(readFileSync(join(claude, 'backups', '.claude.json.backup.1793236000000'), 'utf8').includes(`"${CWD}"`)).toBe(sub === 'backups')
+        // Listed again, it finishes, and says nothing.
+        told.mockClear()
+        await scrubClaudeSession(home, target(), [], undefined, told)
+        expect(told).not.toHaveBeenCalled()
+        expect(await sweepForSession(home, target(), [])).toBeNull()
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // One that is not there is empty.
+    const { home, claude } = teamHome(), told = vi.fn()
+    for (const sub of ['todos', 'backups']) rmSync(join(claude, sub), { recursive: true })
+    await scrubClaudeSession(home, target(), [], undefined, told)
+    expect(told).not.toHaveBeenCalled()
   })
 
   it('removes every file and entry its session or folder names, and keeps every other session\'s', async () => {

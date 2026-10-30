@@ -90,6 +90,14 @@ function isTarget(id: string, entry: unknown): entry is PurgeTarget {
     && (target.pastes === undefined || (Array.isArray(target.pastes) && target.pastes.every(paste => typeof paste === 'string')))
 }
 
+/** What a scrub tells its caller: another folder's transcripts share its transcript folder, or what it could not read and
+ *  left, by kind alone. */
+export type ScrubTold = 'shared' | 'unread' | 'unreadTodos' | 'unreadBackups'
+/** [dir]'s names; null when it is there but cannot be listed. Only a folder that is not there is empty: read as empty, an
+ *  unlistable todos or backups folder let a Buddy's cleanup, which no sweep follows, finish and leave its todo file and its
+ *  folder in the backups (re-check of 8c0b019). The error itself is dropped, as its message names the path. */
+const listed = (dir: string) => readdir(dir).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] as string[] : null)
+
 /** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
 const SESSION = /^[A-Za-z0-9_-]{1,160}$/
@@ -178,7 +186,7 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
  * and 2 of #2385: a Bash append, a subagent, a transcript Claude Code pruned, `Notes.md` on a Mac), and the Team purge's
  * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
  */
-async function removeTranscripts(dir: string, folder: string, told?: (what: 'shared' | 'unread') => void): Promise<void> {
+async function removeTranscripts(dir: string, folder: string, told?: (what: ScrubTold) => void): Promise<void> {
   // Only a folder that is not there is empty. One that cannot be listed stays whole, and its caller is told, by that word
   // alone: read as empty it went whole, its error's path into the log, or another folder's transcripts unread on a passing
   // error such as too many open files (security reviews 1 and 2 of 58b035e). The Team purge's sweep then holds the account;
@@ -235,8 +243,11 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
   return null
 }
 /** What a held account's owner does about what could not be read: nothing names its path, and the host tries the purge again
- *  by itself (host.ts endSession), so fixing it is the whole of it (security review 1 of 58b035e). */
-const MAKE_READABLE = 'could not be read: its owner makes it readable for the Team account, and the purge finishes on its next try'
+ *  by itself (host.ts endSession), so fixing it is the whole of it (security review 1 of 58b035e). [find]: where to look, when
+ *  its kind alone does not say (re-check of 8c0b019). */
+const makeReadable = (find?: string) =>
+  `could not be read: its owner ${find ? `finds it (${find}) and ` : ''}makes it readable for the Team account, and the purge finishes on its next try`
+const MAKE_READABLE = makeReadable()
 /** What a failed sweep says of its shared transcript folder, in place of a path. */
 export const SHARED_LEFT = {
   transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
@@ -261,8 +272,8 @@ export const SWEEP_LEFT = {
   config: 'its folder in Claude Code\'s config, or in a backup of it',
   claudeNamed: 'a file or folder in Claude Code\'s home named for its session or its folder',
   codexNamed: 'a file or folder in Codex\'s home named for its session or its folder',
-  unreadFile: `a file in the Team account's Claude Code or Codex home that ${MAKE_READABLE}`,
-  unlistedFolder: `a folder in the Team account's Claude Code or Codex home that ${MAKE_READABLE}`,
+  unreadFile: `a file in the Team account's Claude Code or Codex home that ${makeReadable('search the Team account\'s Claude Code and Codex homes for files it can\'t read')}`,
+  unlistedFolder: `a folder in the Team account's Claude Code or Codex home that ${makeReadable('search the Team account\'s Claude Code and Codex homes for folders it can\'t read')}`,
 }
 
 /**
@@ -272,10 +283,11 @@ export const SWEEP_LEFT = {
  * share it, and [told] 'shared'; [told] 'unread' when its transcript folder or one of its transcripts could not be read, and
  * stays),
  * its file history, todos, session environment and debug log, and its folder's entry and repository paths in the config
- * and in every backup of it. The pastes its history named, for the record.
+ * and in every backup of it ([told] 'unreadTodos' or 'unreadBackups' when that folder could not be listed). The pastes its
+ * history named, for the record.
  */
 export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = [],
-  onPastes?: (pastes: string[]) => void, told?: (what: 'shared' | 'unread') => void): Promise<string[]> {
+  onPastes?: (pastes: string[]) => void, told?: (what: ScrubTold) => void): Promise<string[]> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
   const folder = folderOf(target)
   if (!sessionId && !folder) return []
@@ -307,14 +319,16 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
   if (sessionId) {
     for (const sub of ['file-history', 'session-env']) await rm(join(claude, sub, sessionId), { recursive: true, force: true })
     await rm(join(claude, 'debug', `${sessionId}.txt`), { force: true })
-    const todos = await readdir(join(claude, 'todos')).catch(() => [] as string[])
+    const todos = await listed(join(claude, 'todos'))
+    if (!todos) told?.('unreadTodos')
     // `<session>-agent-<agent>.json`: by prefix alone, a one-character id took every todo starting with it (security review 2 of #2375).
-    for (const name of todos) if (name.startsWith(`${sessionId}-agent-`)) await rm(join(claude, 'todos', name), { force: true })
+    for (const name of todos ?? []) if (name.startsWith(`${sessionId}-agent-`)) await rm(join(claude, 'todos', name), { force: true })
   }
   if (folder) {
     await rewriteIfUnchanged(join(home, '.claude.json'), text => withoutFolder(text, folder))
-    const backups = await readdir(join(claude, 'backups')).catch(() => [] as string[])
-    for (const name of backups) await rewriteIfUnchanged(join(claude, 'backups', name), text => withoutFolder(text, folder))
+    const backups = await listed(join(claude, 'backups'))
+    if (!backups) told?.('unreadBackups')
+    for (const name of backups ?? []) await rewriteIfUnchanged(join(claude, 'backups', name), text => withoutFolder(text, folder))
   }
   return [...new Set(found)]
 }

@@ -18,7 +18,7 @@ import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
-import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget } from './inCore/teamPurge.js'
+import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
@@ -180,6 +180,13 @@ function buddyWorktree(cwd: string, worktrees: string): boolean {
 }
 /** A Claude Code session id: a saved one of another shape is dropped (security review 2 of #2375). */
 const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** The fixed code an ended Buddy's cleanup fails with for each kind of folder or file it could not read: never its path. */
+const UNREAD_CODES: Record<Exclude<ScrubTold, 'shared'>, string> = {
+  unread: 'TRANSCRIPTS_UNREAD',
+  unreadTodos: 'TODOS_UNREAD',
+  unreadBackups: 'CONFIG_BACKUPS_UNREAD',
+}
+
 /** Whether [sessionId] is [folder]'s session: no prompt history line names it with another project, and no transcript of
  *  it records another folder. A person's own session id beside a Buddy's worktree took their history, a paste, file history
  *  and debug log (security review 2 of #2375). A file that cannot be read is no answer: the scrub fails and is tried again. */
@@ -1084,14 +1091,15 @@ export class SuperTabHost {
         const scrub = await this.ownScrub(agent.id, agent.harnessId, state.scrub)
           .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
         if (scrub) {
-          let unread = false
+          const unread = new Set<string>()
           await scrubClaudeSession(this.claudeHome, scrub, [], undefined, what => {
-            if (what === 'unread') unread = true
-            else this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
+            if (what === 'shared') this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
+            else unread.add(UNREAD_CODES[what])
           }).catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
           // No sweep follows a Buddy's cleanup: a transcript folder or transcript it could not read would be left behind for good
-          // once this marked itself done (re-check 2 of 68ec6f0). It fails, by a fixed code, and is tried again.
-          if (unread) throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, TRANSCRIPTS_UNREAD`)
+          // once this marked itself done (re-check 2 of 68ec6f0), and so would its todo file or its folder in a config backup
+          // (re-check of 8c0b019). It fails, by fixed codes, and is tried again.
+          if (unread.size) throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, ${[...unread].join(', ')}`)
         }
         state.scrubbed = true
         if (this.journal.scrubs?.[agent.id]) {
