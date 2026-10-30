@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
@@ -185,6 +186,52 @@ void main() {
   /// The page with its Team sheet open.
   Future<SwarmHost> team(WidgetTester tester, FakeSwarm fake) =>
       fromMenu(tester, fake, 'swarm-project-menu-team');
+
+  /// [data] of a group whose agent last reported progress [ago] before [at].
+  Map<String, dynamic> progressed(
+    Map<String, dynamic> data,
+    DateTime at,
+    Duration ago,
+  ) => {
+    ...data,
+    'assignment': <String, dynamic>{
+      ...data['assignment'] as Map<String, dynamic>,
+      'progressAt': at.subtract(ago).millisecondsSinceEpoch,
+    },
+  };
+
+  /// [fake] whose first read has Nova's g1 progress 4m 30s and Juno's g2
+  /// 2h before [at].
+  FakeSwarm timed(FakeSwarm fake, DateTime at) {
+    final load = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+      final read = (await load(body))! as Map<String, dynamic>;
+      read['groups'] = [
+        for (final g in (read['groups'] as List).cast<Map<String, dynamic>>())
+          switch (g['key']) {
+            'g1' => {
+              ...g,
+              'data': progressed(
+                g['data'] as Map<String, dynamic>,
+                at,
+                const Duration(minutes: 4, seconds: 30),
+              ),
+            },
+            'g2' => {
+              ...g,
+              'data': progressed(
+                g['data'] as Map<String, dynamic>,
+                at,
+                const Duration(hours: 2),
+              ),
+            },
+            _ => g,
+          },
+      ];
+      return read;
+    };
+    return fake;
+  }
 
   /// The page with its Leaderboard sheet open.
   Future<SwarmHost> leaderboard(WidgetTester tester, FakeSwarm fake) =>
@@ -917,6 +964,108 @@ void main() {
           reason: id,
         );
       }
+    });
+
+    testWidgets("each says how long since its agent's last progress, in the "
+        "desktop's words, worked out again no more than once a minute, and "
+        'from now when its state changes', (tester) async {
+      final start = clock.now();
+      final fake = timed(backend(), start);
+      await team(tester, fake);
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      expect(
+        heard(tester, 'swarm-member-agent-juno'),
+        'Juno, Needs input · #2160 Saved views cache · 2h',
+      );
+      expect(heard(tester, 'swarm-member-agent-ash'), 'Ash, Idle');
+
+      // Past 5m since its progress, but the minute's tick is not due yet.
+      expect(SwarmProjectTeam.tick, const Duration(minutes: 1));
+      await tester.pump(const Duration(seconds: 40));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      await tester.pump(const Duration(seconds: 20));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 5m',
+      );
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            'g1',
+            9,
+            progressed(
+              groupData(
+                'g1',
+                title: 'Buddy chat header',
+                number: 2156,
+                agentIds: ['agent-lead', 'agent-builder'],
+                status: 'needs_human',
+                workerId: 'agent-builder',
+                lastMessageSequence: 3,
+              ),
+              clock.now(),
+              Duration.zero,
+            ),
+          ),
+        ],
+      );
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Needs input · #2156 Buddy chat header · now',
+      );
+    });
+
+    testWidgets('back in the app, its times are worked out at once', (
+      tester,
+    ) async {
+      final start = clock.now();
+      await team(tester, timed(backend(), start));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+
+      // Away for 40s, short of the minute's tick, in the states a phone
+      // passes through.
+      void go(List<AppLifecycleState> states) {
+        for (final state in states) {
+          tester.binding.handleAppLifecycleStateChanged(state);
+        }
+      }
+
+      go(const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ]);
+      await tester.pump(const Duration(seconds: 40));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      go(const [
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]);
+      await tester.pump();
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 5m',
+      );
     });
 
     testWidgets('a row opens the task its agent holds', (tester) async {
@@ -1728,7 +1877,8 @@ void main() {
     const messages = '/api/super-tabs/$tab/conversations/$leadChat/messages';
 
     /// [backend] whose Swarm has a second project, Desktop, the person reads
-    /// too: Ash, Mobile's agent, still holds work there; another agent named
+    /// too: Ash, Mobile's agent, still holds work there, its last progress 3h
+    /// ago; another agent named
     /// Nova waits on the person there; and Mobile has the person's Buddy chat
     /// with Pip.
     FakeSwarm twoProjects() {
@@ -1773,14 +1923,18 @@ void main() {
             'g3',
             8,
             there(
-              groupData(
-                'g3',
-                title: 'Desktop sign-in',
-                number: 3001,
-                agentIds: ['agent-ash'],
-                status: 'working',
-                workerId: 'agent-ash',
-                lastMessageSequence: 2,
+              progressed(
+                groupData(
+                  'g3',
+                  title: 'Desktop sign-in',
+                  number: 3001,
+                  agentIds: ['agent-ash'],
+                  status: 'working',
+                  workerId: 'agent-ash',
+                  lastMessageSequence: 2,
+                ),
+                clock.now(),
+                const Duration(hours: 3),
               ),
             ),
           ),
@@ -1958,6 +2112,26 @@ void main() {
         findsOneWidget,
       );
       expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('access taken away with the Team open says none of its '
+        "agents' times again, though its minute ticks by", (tester) async {
+      await team(tester, timed(backend(), clock.now()));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+      await tester.pump(SwarmProjectTeam.tick * 3);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectTeamSheet), findsNothing);
+      expect(find.byType(SwarmMemberRow), findsNothing);
+      for (final words in ['· 4m', '· 5m', '· 7m', '· 2h', 'Nova', 'Juno']) {
+        expect(shown(words), findsNothing, reason: words);
+      }
     });
 
     testWidgets('access taken away with the menu open: it closes, and its rows '

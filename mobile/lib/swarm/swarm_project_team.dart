@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -46,36 +48,63 @@ enum SwarmMemberState {
   final String counted;
 }
 
-/// One agent on a project's Team: its state in a word or two ([label]) and
-/// the open work it holds ([task]).
+/// How long since an agent's last progress, shortest: "now", "4m", "2h",
+/// "3d" — the desktop's `superTabAgentAge`, word for word.
+String swarmAgentAge(Duration age) {
+  if (age.inMinutes < 1) return 'now';
+  if (age.inMinutes < 60) return '${age.inMinutes}m';
+  if (age.inHours < 24) return '${age.inHours}h';
+  return '${age.inDays}d';
+}
+
+/// One agent on a project's Team: its state in a word or two ([label]), the
+/// open work it holds ([task]) and how long since its last progress on it
+/// ([age]).
 class SwarmTeamAgent {
-  SwarmTeamAgent(this.agent, this.name, this.state, this.label, this.task);
+  SwarmTeamAgent(
+    this.agent,
+    this.name,
+    this.state,
+    this.label,
+    this.task, {
+    this.age,
+  });
   final SuperTabAgent agent;
   final String name;
   final SwarmMemberState state;
   final String label;
   final SuperTabConversation? task;
 
-  /// Its row's quiet line: "Working · #2156 Buddy chat header".
-  String get line => [label, ?task?.label].join(' · ');
+  /// "4m" since the agent last reported progress on [task] (the Swarm's
+  /// assignment.progressAt, which every status, check or post it sends
+  /// renews), as the desktop's Agents list says it (#2281); null with no
+  /// task named, or none the Swarm sent a time for.
+  final String? age;
+
+  /// Its row's quiet line: "Working · #2156 Buddy chat header · 4m".
+  String get line => [label, ?task?.label, ?age].join(' · ');
 }
 
 /// [projectId]'s agents as its Team lists them: each in its state
 /// ([SwarmMemberState]), the most urgent first, then by name, letter case
 /// aside. Read from the Swarm alone, as the team glance is: an agent is of
 /// the project it records or whose work it is in, matched by id, never by
-/// name; a Buddy is no one's team. Work it still holds in another project is
-/// not named here, nor opened: its state stays, as the glance counts it.
+/// name; a Buddy is no one's team. Work it still holds in another project, a
+/// Buddy chat or a private chat whose people leave out [viewerId] is not
+/// named here, nor timed, nor opened: its state stays, as the glance counts
+/// it.
 List<SwarmTeamAgent> swarmProjectAgents(
   SuperTabSnapshot snapshot,
   String projectId, {
   DateTime? now,
+  String? viewerId,
 }) {
-  final glance = swarmTeamGlance(snapshot, projectId: projectId, now: now);
+  final at = now ?? clock.now();
+  final glance = swarmTeamGlance(snapshot, projectId: projectId, now: at);
   final team = [
     // The read names its Buddies; one it has not named yet says so itself.
     for (final a in glance.agents)
-      if (!a.agent.isBuddy) _member(a, projectId),
+      if (!a.agent.isBuddy) _member(a, projectId, at, viewerId),
   ];
   String sortName(SwarmTeamAgent a) => a.name.toLowerCase();
   return team..sort((a, b) {
@@ -86,7 +115,12 @@ List<SwarmTeamAgent> swarmProjectAgents(
   });
 }
 
-SwarmTeamAgent _member(SwarmAgentGlance glance, String projectId) {
+SwarmTeamAgent _member(
+  SwarmAgentGlance glance,
+  String projectId,
+  DateTime now,
+  String? viewerId,
+) {
   final agent = glance.agent;
   final work = glance.task?.assignment?['status'];
   // Offline outranks a stop, which outranks the work it still holds.
@@ -110,13 +144,24 @@ SwarmTeamAgent _member(SwarmAgentGlance glance, String projectId) {
     ),
     SwarmAgentState.idle => (SwarmMemberState.idle, 'Idle'),
   };
-  final task = glance.task;
+  // Only a task the viewer reads in this project: the desktop's
+  // superTabGroupReadable, should the server ever send another.
+  final task = switch (glance.task) {
+    final t?
+        when t.projectId == projectId &&
+            !t.isBuddyChat &&
+            (t.audience == null || t.audience!.contains(viewerId)) =>
+      t,
+    _ => null,
+  };
+  final since = task == null ? null : swarmProgressAt(task);
   return SwarmTeamAgent(
     agent,
     glance.name,
     state,
     label,
-    task?.projectId == projectId ? task : null,
+    task,
+    age: since == null ? null : swarmAgentAge(now.difference(since)),
   );
 }
 
@@ -193,8 +238,10 @@ class SwarmProjectTeamSheet extends StatelessWidget {
 /// a row that shows the rest in place — each opening its chat ([onOpen]).
 /// Then its agents, each in its state with the task it holds, the most urgent
 /// first ([swarmProjectAgents]), with what needs a look counted beside their
-/// caption, each opening the task it holds ([onOpen]). Its humans are on the
-/// project's leaderboard. A pull reads the Swarm again.
+/// caption, each opening the task it holds ([onOpen]), its time since its
+/// last progress kept true by a tick a minute ([tick]) and on coming back to
+/// the app. Its humans are on the project's leaderboard. A pull reads the
+/// Swarm again.
 class SwarmProjectTeam extends StatefulWidget {
   const SwarmProjectTeam({
     super.key,
@@ -215,6 +262,11 @@ class SwarmProjectTeam extends StatefulWidget {
   /// hundred open tasks still reaches its agents (Tony, 2026-10-30).
   static const workShown = 5;
 
+  /// How often the agents' times are worked out again on a quiet Swarm: they
+  /// count minutes, so no more often than once a minute; a read of the Swarm
+  /// redraws them anyway.
+  static const tick = Duration(minutes: 1);
+
   @override
   State<SwarmProjectTeam> createState() => _SwarmProjectTeamState();
 }
@@ -222,6 +274,31 @@ class SwarmProjectTeam extends StatefulWidget {
 class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
   /// See all was tapped: kept here, so no read of the Swarm folds it again.
   bool _allWork = false;
+
+  /// One tick for the whole Team, cancelled with it.
+  late final Timer _tick;
+
+  /// Back in the app, times are worked out at once: a phone asleep for an
+  /// hour does not show the hour before until the next tick.
+  late final AppLifecycleListener _lifecycle;
+
+  void _redraw() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(SwarmProjectTeam.tick, (_) => _redraw());
+    _lifecycle = AppLifecycleListener(onResume: _redraw);
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    _lifecycle.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(SwarmProjectTeam old) {
@@ -249,7 +326,12 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
         final now = clock.now();
         final tasks = swarmProjectTasks(session.inbox, reader, project.id, now);
         final personName = swarmTaskPersonName(snapshot);
-        final agents = swarmProjectAgents(snapshot, project.id);
+        final agents = swarmProjectAgents(
+          snapshot,
+          project.id,
+          now: now,
+          viewerId: reader.accountId,
+        );
         final working = tasks.working;
         final folds = working.length > SwarmProjectTeam.workShown;
         final work = folds && !_allWork
