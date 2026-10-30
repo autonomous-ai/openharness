@@ -63,6 +63,7 @@ void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; return true; }
 bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) { CHECK(LOCK_DEPTH == 0); (void)t; (void)tab; (void)lead; return true; }
+bool pro_cable_supertab_side(const char *tab, const char *side) { CHECK(LOCK_DEPTH == 0); (void)tab; (void)side; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) { (void)phase; (void)dy; (void)velocity; return true; }
 static int lib_req_offset = -1;
 static uint32_t lib_req_id;

@@ -1266,6 +1266,27 @@ static void pod_model_test_lead_chat(void) {
     CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "named"));
     pod_model_reset(&M);
 }
+// buddy_unread is the device's own mark: a frame for the same Lead keeps it, a new Lead starts without it.
+static void pod_model_test_buddy_unread(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"a"};
+    pod_swarm_t s = card("S1", "T1", l1, 1);
+    s.side = POD_SIDE_PM;
+    s.leads[0].buddies = s.leads[0].has_buddy = true;
+    s.leads[0].buddy.cells = 25513;
+    ids_of("S1", NULL, NULL, NULL);
+    pod_model_supertab(&M, &s, 100);
+    CHECK(!M.swarms[0].leads[0].buddy_unread && M.swarms[0].side == POD_SIDE_PM && M.swarms[0].leads[0].buddy.cells == 25513);
+    M.swarms[0].leads[0].buddy_unread = true;
+    s.side = POD_SIDE_BUDDY;
+    pod_model_supertab(&M, &s, 200);
+    CHECK(M.swarms[0].leads[0].buddy_unread && M.swarms[0].side == POD_SIDE_BUDDY);
+    const char *l2[] = {"b", "a"};
+    pod_swarm_t t = card("S1", "T1", l2, 2);
+    pod_model_supertab(&M, &t, 300);
+    CHECK(!M.swarms[0].leads[0].buddy_unread && M.swarms[0].leads[1].buddy_unread);   // "a" moved; its mark went with it; "b" is new
+    pod_model_reset(&M);
+}
 // A Swarm chat's notice is an unread entry keyed by its Lead: it shares the order and the cap with agent entries, and a read must match its chat.
 static void swarm_card_for_notices(void) {
     pod_model_reset(&M);
@@ -1353,6 +1374,7 @@ int main(void) {
     pod_model_test_step_total_and_fresh();
     pod_model_test_swarm_cards();
     pod_model_test_lead_chat();
+    pod_model_test_buddy_unread();
     pod_model_test_swarm_notice();
     printf("Pod model: PASS (%d checks)\n", checks);
     return 0;

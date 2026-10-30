@@ -2232,11 +2232,26 @@ static void swarm_card_shrinks(void) {
     CHECK(!find(POD_A_LEAD) && find(POD_A_ENTER_TAB));
 }
 
+// A side the person picked is owed to the daemon as supertab.side {tab, side}; it takes a queue slot like the other frames.
+static void side_frame_queued(void) {
+    swarm_home(4);
+    take();
+    CHECK(pod_ui_supertab_side(&U, "S1", POD_SIDE_BUDDY));
+    CHECK(pod_ui_supertab_side(&U, "S1", POD_SIDE_PM));
+    CHECK(!pod_ui_supertab_side(&U, "S1", POD_SIDE_NONE));
+    const int n = take();
+    CHECK(n == 2 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].tab, "S1") && !strcmp(Q[0].side, "buddy") && !strcmp(Q[1].side, "pm"));
+    for (int i = 0; i < POD_SUPERTAB_OUT_MAX; i++) CHECK(pod_ui_supertab_side(&U, "S1", POD_SIDE_PM));
+    CHECK(!pod_ui_supertab_side(&U, "S1", POD_SIDE_PM));   // full: not sent
+    take();
+}
+
 int main(void) {
     notify_while_looking();
     swarm_card_pages();
     swarm_card_few_leads();
     swarm_card_tap();
+    side_frame_queued();
     notice_opens_lead();
     swarm_notice_toasts_and_beeps();
     swarm_notice_on_its_lead_view_reads_at_once();

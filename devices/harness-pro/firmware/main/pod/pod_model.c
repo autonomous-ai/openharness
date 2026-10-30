@@ -806,7 +806,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         m->swarm_n++;
     }
     pod_swarm_t *d = &m->swarms[at];
-    struct { pod_recap_state_t recap; char *text; uint32_t text_at; } carry[SWARM_LEADS_MAX];
+    struct { pod_recap_state_t recap; char *text; uint32_t text_at; bool buddy_unread; } carry[SWARM_LEADS_MAX];
     memset(carry, 0, sizeof carry);
     const int ln = s->lead_n > SWARM_LEADS_MAX ? SWARM_LEADS_MAX : s->lead_n;
     for (int j = 0; j < ln; j++) {
@@ -814,6 +814,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         if (k < 0) continue;
         pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
         carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
+        carry[j].buddy_unread = ol->buddy_unread;   // the device's own mark: no frame sets or clears it
         ol->text = NULL;
         if (strcmp(ol->chat_id, s->leads[j].chat_id)) {   // another chat: the old message is not its message
             free(carry[j].text);
@@ -830,6 +831,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         l->text = carry[j].text;
         l->recap = carry[j].recap;
         l->text_at = carry[j].text_at;
+        l->buddy_unread = carry[j].buddy_unread;
         l->since_at_ms = now_ms;
     }
     m->revision++;

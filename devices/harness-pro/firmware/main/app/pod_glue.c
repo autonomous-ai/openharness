@@ -364,15 +364,17 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
 }
 
 // ---- the Lead view's frames for the daemon ----
-static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *lead)
+static bool sup_push_side(pod_ui_t *u, const char *t, const char *tab, const char *lead, const char *side)
 {
     if (u->sup_qn >= POD_SUPERTAB_OUT_MAX) return false;   // a burst past the queue is lost, like any frame on a busy link: the caller counts it as not sent
     pod_supertab_out_t *o = &u->sup_q[u->sup_qn++];
     o->t = t;
     pod_copy_str(o->tab, sizeof o->tab, tab);
     pod_copy_str(o->lead, sizeof o->lead, lead);
+    pod_copy_str(o->side, sizeof o->side, side);
     return true;
 }
+static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *lead) { return sup_push_side(u, t, tab, lead, ""); }
 
 // A tap on a Swarm chat's notice (its toast or its Notices row): read the entry and open that Lead's view, the desktop told to select it. Not Notices.
 static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e)
@@ -1127,6 +1129,12 @@ int pod_ui_take_supertab(pod_ui_t *u, pod_supertab_out_t out[], int max)
     if (n < u->sup_qn) memmove(u->sup_q, u->sup_q + n, (size_t)(u->sup_qn - n) * sizeof u->sup_q[0]);
     u->sup_qn = (uint8_t)(u->sup_qn - n);
     return n;
+}
+
+bool pod_ui_supertab_side(pod_ui_t *u, const char *tab, pod_side_t side)
+{
+    if (!tab || !tab[0] || (side != POD_SIDE_PM && side != POD_SIDE_BUDDY)) return false;
+    return sup_push_side(u, "supertab.side", tab, "", side == POD_SIDE_BUDDY ? "buddy" : "pm");
 }
 
 void pod_ui_supertab_unsent(pod_ui_t *u, const pod_supertab_out_t *frame)

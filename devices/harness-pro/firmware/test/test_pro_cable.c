@@ -1141,6 +1141,53 @@ static void test_swarm_chat(void)
     CHECK(nev == 1 && evs[0].d[0] == 0);
 }
 
+// Each Lead's Buddy and the Swarm's side (swarmBuddy): a bad field never drops the Lead or the frame.
+static void test_swarm_buddy(void)
+{
+    welcome();
+    reset();   // supertab_reads_buddy_block
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddies\":true,\"buddy\":{\"chatId\":\"b1\",\"name\":\"diego's Buddy\","
+         "\"engine\":\"codex\",\"cells\":25513,\"color\":\"#d6a79a\",\"live\":true}},{\"id\":\"L2\",\"buddies\":\"yes\"},{\"id\":\"L3\",\"buddies\":true,"
+         "\"buddy\":{\"cells\":3,\"color\":\"red\",\"live\":1}}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 3);
+    const pod_lead_t *l = &rec_card.leads[0];
+    CHECK(l->buddies && l->has_buddy && !l->buddy_unread && !strcmp(l->buddy.chat_id, "b1") && !strcmp(l->buddy.name, "diego's Buddy") &&
+          !strcmp(l->buddy.engine, "codex") && l->buddy.cells == 25513 && l->buddy.color == 0xD6A79A && l->buddy.live);
+    CHECK(!rec_card.leads[1].buddies && !rec_card.leads[1].has_buddy);   // buddies is true only for JSON true
+    CHECK(rec_card.leads[2].has_buddy && rec_card.leads[2].buddy.cells == 3 && rec_card.leads[2].buddy.color == 0xC49BFF &&
+          !rec_card.leads[2].buddy.live && rec_card.leads[2].buddy.chat_id[0] == 0);
+
+    reset();   // buddy_bad_cells_dropped
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddy\":{\"cells\":-1}},{\"id\":\"L2\",\"buddy\":{\"cells\":40000}},"
+         "{\"id\":\"L3\",\"buddy\":{\"cells\":\"x\"}},{\"id\":\"L4\",\"buddy\":{}},{\"id\":\"L5\",\"buddy\":7},{\"id\":\"L6\",\"buddy\":{\"cells\":32767}}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 6);
+    for (int i = 0; i < 5; i++) CHECK(!rec_card.leads[i].has_buddy);
+    CHECK(rec_card.leads[5].has_buddy && rec_card.leads[5].buddy.cells == 32767);
+
+    reset();   // buddy_name_cut_on_codepoint: 60 bytes of "é" cut to 48 whole letters
+    char *name = repeat("\xc3\xa9", 30);
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddy\":{\"cells\":1,\"name\":\"%s\"}}]}", name);
+    free(name);
+    CHECK(nev == 1 && rec_card.leads[0].has_buddy && strlen(rec_card.leads[0].buddy.name) == 48 && utf8_ok(rec_card.leads[0].buddy.name));
+
+    reset();   // supertab_reads_side
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"pm\",\"leads\":[]}");
+    CHECK(nev == 1 && rec_card.side == POD_SIDE_PM);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"buddy\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_BUDDY);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"x\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":3,\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+
+    reset();   // side_frame_written: exactly these keys, only pm / buddy
+    CHECK(pro_cable_supertab_side("S1", "buddy") && nsent == 1);
+    CHECK(!strcmp(sent[0], "{\"t\":\"supertab.side\",\"tab\":\"S1\",\"side\":\"buddy\"}"));
+    CHECK(!pro_cable_supertab_side("S1", "x") && !pro_cable_supertab_side("", "pm") && !pro_cable_supertab_side("S1", NULL) && nsent == 1);
+}
+
 // The Swarm cards (the hello's swarmCard:v1 is checked in test_pro_hello.py): supertabs {ids} + one supertab per Swarm +
 // supertab.recap / supertab.focus in, pro_app_supertab* out.
 static void test_swarm_cards(void)
@@ -1446,6 +1493,7 @@ int main(void)
     seq_gaps();
     test_swarm_cards();
     test_swarm_chat();
+    test_swarm_buddy();
     test_swarm_notice();
     self_replug();
     replug_spares_a_frame_in_flight();

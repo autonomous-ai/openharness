@@ -166,7 +166,10 @@ static __attribute__((noinline)) void send_supertabs(void)
     pro_app_unlock();
     bool lost[POD_SUPERTAB_OUT_MAX] = {0};
     bool any = false;
-    for (int i = 0; i < n; i++) any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(q[i].t, "supertab.side")) { pro_cable_supertab_side(q[i].tab, q[i].side); continue; }   // not owed again: the next supertab frame shows the true side
+        any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    }
     if (!any) return;
     pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
     for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
