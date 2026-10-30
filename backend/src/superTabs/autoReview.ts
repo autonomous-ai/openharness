@@ -53,22 +53,19 @@ const free = (state: SuperTabState, agent: Agent) =>
 
 /**
  * The Reviewer for [group]'s review: the one that reviewed its earlier head while it is still free (a delta review), else
- * a free Reviewer of the project: one at least as strong as the Engineer ([strength], up to the top tier) first, as the CLI's
- * route holds a Reviewer to the Builder's strength (review of #2274), and among those one on another engine than the
- * Engineer's first; else the weaker ones in that order. Never one that is stopping, waiting to
- * resume a lost task, down (its session gone or its machine silent), or (`mayWork`) not allowed to take this work: on its
- * machine, or by the owner's rules (#610 review).
+ * the strongest free Reviewer of the project ([strength]), of any engine (Ken, 2026-10-30), so one at least as strong as the
+ * Engineer goes first, as the CLI's route holds a Reviewer to the Builder's strength (review of #2274). Never one that is
+ * stopping, waiting to resume a lost task, down (its session gone or its machine silent), or (`mayWork`) not allowed to take
+ * this work: on its machine, by the owner's rules (#610 review), or as the review rule (rules.ts reviewRefusal) has it.
  */
 function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: Conversation | undefined,
   mayWork: (agent: Agent) => boolean, strength: (agent: Agent) => number, now: number): Agent | null {
   const projectId = groupProject(state, group).id
-  const candidates = state.agents.filter(a => agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
+  const candidates = state.agents.filter(a => a.id !== engineer?.id && agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
     a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && free(state, a) && mayWork(a))
   const previous = candidates.find(a => a.id === earlier?.assignment?.agentId)
-  const floor = engineer ? Math.min(3, strength(engineer)) : 0
-  const strong = candidates.filter(a => strength(a) >= floor), weaker = candidates.filter(a => strength(a) < floor)
-  const otherEngine = (list: Agent[]) => list.find(a => a.configuration.engine !== engineer?.configuration.engine) ?? list[0]
-  return previous ?? otherEngine(strong) ?? otherEngine(weaker) ?? null
+  // Strongest first; at equal strength the roster's order stands (sort is stable).
+  return previous ?? [...candidates].sort((a, b) => strength(b) - strength(a))[0] ?? null
 }
 
 function briefOf(group: Conversation, handoff: string, pullRequest: string, earlier: Conversation | undefined): string {
@@ -97,8 +94,7 @@ export interface OpenedReview { review: Conversation; reviewer: Agent | null; me
  * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
-  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number;
-    sameEngine?: (agent: Agent) => string | null }): OpenedReview | null {
+  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
@@ -131,9 +127,7 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
       execution: { machineId: reviewer.machineId, harnessId: reviewer.harnessId, machineOwnerId: reviewer.machineOwnerId }, result: null }
     renewLease(review.assignment, context.now)
     recordRun(state, review, review.assignment, reviewer, context.now)
-    // A review on its Builder's own engine says so first, as work.assign does (rules.ts sameEngineReview).
-    const sameEngine = context.sameEngine?.(reviewer)
-    messages.push(row('assign', `${sameEngine ? `${sameEngine}\n\n` : ''}${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
+    messages.push(row('assign', `${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
   }
   const name = reviewer && (reviewer.displayName ?? reviewer.name)
   if (leadId) messages.push(row('lead', reviewer
