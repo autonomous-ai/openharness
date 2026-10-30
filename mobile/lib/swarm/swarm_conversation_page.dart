@@ -1323,7 +1323,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final line = root == m.id ? c.thread(m.id) : null;
           final faces = line == null
               ? const <SwarmThreadFace>[]
-              : swarmThreadFaces(snapshot, line);
+              : swarmThreadFaces(snapshot, line, roles: view.roles);
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
           final pm = swarmIsPmLine(c.reader, m);
@@ -1364,7 +1364,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               line,
               [
                 for (final who in faces)
-                  '${who.id}:${who.name}:${swarmLookKey(who.look)}',
+                  '${who.id}:${who.name}:${who.pm}:${swarmLookKey(who.look)}',
               ].join(','),
             ),
             () => SwarmMessageRow(
