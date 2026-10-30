@@ -64,7 +64,10 @@ static int gesture;
 static void ht_gesture_guard(int *g,uint32_t time) { (void)g;(void)time; }
 static bool congested,transport_ok=true,pending_receipt;
 static action_t queued;
-static int queued_answers,sent_answers,removed,notices,reads;
+static int queued_answers,sent_answers,removed,notices,reads,read_now;
+static const char *face_agent="";
+static bool on_face(const char *id) { return !strcmp(id,face_agent); }
+static void notice_read_now(const char *id) { assert(id && *id);read_now++; }
 static uint8_t sent_choices[4];
 static char sent_draft[48];
 static agent_t *active(void) { return &agents[s.active]; }
@@ -240,7 +243,11 @@ int main(int argc,char **argv) {
     // A question does NOT change the screen — the home face shows it in the recap's place — but it
     // does wake the display, and it still counts in the bell until it is answered.
     reset(false);view(HOME);wakes=0;notices=0;
-    ui_question_show("b","Other","M2","q-b2",NULL);assert(s.view==HOME && wakes==1 && notices==1);
+    assert(ui_question_show("b","Other","M2","q-b2",NULL) && s.view==HOME && wakes==1 && notices==1 && !read_now);
+    // The pane on the face already shows its question: still filed, but read at once, no wake, no beep.
+    wakes=0;notices=0;face_agent="b";
+    assert(!ui_question_show("b","Other","M2","q-b3",NULL) && wakes==0 && notices==1 && read_now==1);
+    face_agent="";
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
     // at their real capacities and prove that no neighboring state changes.

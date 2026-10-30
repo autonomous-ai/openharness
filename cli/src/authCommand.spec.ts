@@ -222,6 +222,53 @@ describe.skipIf(process.platform === 'win32')('harness status connection setting
   })
 })
 
+// 10-27: a desktop test ran the real `harness logout` with no person anywhere near it, and signed the whole Mac
+// out, every agent on it with it. The sign-in goes only when a person asks: at a terminal, or through the
+// desktop app's sign-out button, which says so with a flag. Every removal is logged with who asked.
+describe('signing out takes a person', () => {
+  const sessionFile = (root: string): string => join(root, 'auth', 'session.json')
+  const logFile = (root: string): string => join(root, 'data', 'harness.log')
+
+  it.each([['logout'], ['reset']])('%s with no terminal and no flag refuses, and keeps the sign-in', (command) => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, [command])
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('--from-sign-out-button')
+    expect(existsSync(sessionFile(root))).toBe(true)
+  })
+
+  it('reset logs its removal though it empties the data folder that holds harness.log', () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, ['reset', '--from-sign-out-button'])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(sessionFile(root))).toBe(false)
+    expect(readFileSync(logFile(root), 'utf8')).toMatch(/\[auth\] sign-in removed · reason=reset · asked=sign-out button/)
+  })
+
+  it('logout from the sign-out button signs out, and harness.log names what asked and its parent', () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, ['logout', '--from-sign-out-button'])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(sessionFile(root))).toBe(false)
+    const line = readFileSync(logFile(root), 'utf8').split('\n').find((l) => l.includes('[auth]'))
+    expect(line).toContain('sign-in removed')
+    expect(line).toContain('reason=logout')
+    expect(line).toContain('asked=sign-out button')
+    expect(line).toContain(`parent=${process.pid}`)
+    // The parent's own command line: here, the node running this suite.
+    expect(line).toContain(process.execPath.split('/').pop()!)
+  })
+})
+
 describe('harness auth status --json', () => {
   it('reports loggedIn:false with no saved session, and never touches the network', () => {
     const root = tempRoot()
@@ -280,6 +327,41 @@ describe('harness auth status --json', () => {
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, offline: true, machineId: 'm_seeded' })
   })
 
+  // 10-27: nothing automatic deletes the sign-in any more; it is kept, marked signed out (lib/authSession.ts
+  // `markSignedOut`), and the app is told which kind so it can say what happens next.
+  it('a sign-in whose refresh was refused reports signed out, waiting for a refresh, and keeps it', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'refresh-refused' } } })
+    const backend = await fakeBackend({ routes: { '/api/auth/refresh': () => new Refusal(401, 'REFRESH_TOKEN_INVALID', 'expired') } })
+
+    const result = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'pending-refresh' })
+    expect(backend.calls.map((c) => c.url)).toEqual(['/api/auth/refresh'])
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(true)
+  })
+
+  it('a refused refresh the service now renews signs the computer back in', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'refresh-refused' } } })
+    const backend = await fakeBackend({ routes: { '/api/auth/refresh': () => ({ token: 'tok_renewed', refreshToken: 'refresh_2', expiresIn: 3600 }) } })
+
+    const result = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, machineId: 'm_seeded' })
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).not.toHaveProperty('signedOut')
+  })
+
+  it('a revoked sign-in reports signed out, waiting for a sign-in, and asks the network nothing', () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'revoked' } } })
+
+    const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'waiting-for-sign-in' })
+  })
+
   it('carries this machine\'s fingerprint when its key is on disk', () => {
     const root = tempRoot()
     seedSession(root)
@@ -318,6 +400,9 @@ describe('harness status — device row', () => {
     const result = runSync(root, ['status'])
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('○ stopped')
+    // A stopped daemon's block says how to start it, never that it runs in the background (infoBlockFooter.ts).
+    expect(result.stdout).toContain('  start with: harness start')
+    expect(result.stdout).not.toContain('running in background')
     expect(deviceLine(result.stdout)).toBe(`   device     ${fp}  (in your account)`)
     // After `machine` (when named) and before `version`.
     const lines = result.stdout.split('\n')
@@ -493,6 +578,25 @@ describe('harness login --json', () => {
     // And the account it was made to, which lets the device key log start over for it at any time.
     expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/), signInAcct: 'acct_qr' })
     expect(calls.map((c) => c.url)).not.toContain('/api/auth/qr/cancel')
+  }, 30_000)
+
+  it('reports an expired spoken-code claim as EXPIRED after the person says yes', async () => {
+    const root = tempRoot()
+    const { base } = await fakeBackend({
+      routes: {
+        '/api/auth/qr/start': () => ({ code: 'hnq_x', pollToken: 'hnp_poll', expiresIn: 120, spokenCode: '12345678' }),
+        '/api/auth/qr/poll': () => ({ status: 'approved', email: 'dee@example.com' }),
+        '/api/auth/qr/claim': () => new Refusal(401, 'QR_INVALID', 'Nothing to claim: scan again.'),
+        '/api/auth/qr/cancel': () => ({ cancelled: true }),
+      },
+    })
+    const login = jsonChild(root, base, ['login', '--force', '--code', '--json'])
+    expect(await login.next()).toEqual({ type: 'code', code: '12345678', expiresIn: 120 })
+    expect(await login.next()).toEqual({ type: 'confirm', email: 'dee@example.com' })
+    login.child.stdin.end('yes\n')
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'error', code: 'EXPIRED' })
+    expect(await login.exit).toBe(1)
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
   }, 30_000)
 
   it('already signed in, an app that closes its pipe at once still gets the one success line', async () => {
@@ -718,4 +822,184 @@ describe('harness login --ticket', () => {
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ type: 'result', status: 'error', code: 'TICKET_INVALID' })
     expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
   }, 30_000)
+})
+
+// Ken (GO 10-28): people sign in through SSO once; after that this computer holds a Harness session (backend
+// lib/ssoSession.ts), so an ordinary request never waits on the account service. Nobody signed in today is signed out.
+describe('a Harness session in place of SSO tokens', () => {
+  const HNA = `hna_${'a'.repeat(43)}`
+  const HNR = `hnr_${'b'.repeat(43)}`
+  const sessionOnDisk = (root: string): Record<string, unknown> => JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))
+  // The sign-in's own calls: `auth status` may also ask other routes (the models list) on its own.
+  const authCalls = (calls: Array<{ url: string; body: unknown }>) => calls.filter((c) => c.url.startsWith('/api/auth/'))
+  // The backend's answer to a renewal: a Harness session when asked for one, the SSO tokens as before otherwise.
+  const renewal = (body: any) => body.harnessSession
+    ? { token: HNA, refreshToken: HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }
+    : { token: 'tok_renewed', refreshToken: 'refresh_2', expiresIn: 3600 }
+
+  it('a sign-in from before the upgrade stays signed in, and its next renewal moves it to a Harness session', async () => {
+    const root = tempRoot()
+    // Exactly what today's CLI writes after an SSO sign-in from the desktop app, its access token about to run out.
+    seedSession(root, { expiresInMs: 30_000, overrides: { clientId: 'harness-desktop', signInEpoch: 'e1@1' } })
+    const backend = await fakeBackend({ routes: { '/api/auth/refresh': renewal } })
+
+    const result = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, machineId: 'm_seeded' })
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/refresh', body: {
+      refreshToken: 'refresh_seeded', autonomousEnv: 'prod', clientId: 'harness-desktop',
+      harnessSession: { kind: 'computer', label: expect.any(String) },
+    } }])
+    // The same sign-in, now holding the Harness session's tokens; nothing else about it changed.
+    expect(sessionOnDisk(root)).toMatchObject({
+      accessToken: HNA, refreshToken: HNR, computerId: 'a'.repeat(32), machineId: 'm_seeded', signInEpoch: 'e1@1',
+    })
+    expect(sessionOnDisk(root)).not.toHaveProperty('signedOut')
+    // No token is printed.
+    for (const token of [HNA, HNR, 'refresh_seeded', 'tok_seeded']) expect(result.stdout + result.stderr).not.toContain(token)
+  })
+
+  it('a Harness session renews as one, asking for nothing more; a QR or team sign-in never asks', async () => {
+    for (const overrides of [{ refreshToken: HNR }, { method: 'qr', refreshToken: 'refresh_qr' }, { kind: 'team', refreshToken: `htr_${'c'.repeat(43)}` }]) {
+      const root = tempRoot()
+      seedSession(root, { expiresInMs: 30_000, overrides })
+      const backend = await fakeBackend({ routes: { '/api/auth/refresh': renewal } })
+      await runAsync(root, ['auth', 'status', '--json'], backend.base)
+      expect(authCalls(backend.calls).map((c) => c.body)).toEqual([expect.not.objectContaining({ harnessSession: expect.anything() })])
+    }
+  }, 30_000)
+
+  it('signing in asks for a Harness session for this computer, and keeps what the backend gave', async () => {
+    const root = tempRoot()
+    let redirectUri = ''
+    let exchanged: any = null
+    const { base } = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: (body) => { exchanged = body; return { token: HNA, refreshToken: HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true } },
+      resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+    })
+    const login = jsonChild(root, base, ['login', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    await login.exit
+    expect(exchanged).toMatchObject({ code: 'code_123', harnessSession: { kind: 'computer', label: expect.any(String) } })
+    expect(sessionOnDisk(root)).toMatchObject({ accessToken: HNA, refreshToken: HNR, machineId: 'm_new' })
+  }, 30_000)
+
+  it('signing out ends the Harness session on the server too', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+    const backend = await fakeBackend({ routes: { '/api/auth/revoke': () => ({ revoked: true }) } })
+
+    const result = await runAsync(root, ['logout', '--from-sign-out-button'], backend.base)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
+    expect(result.stdout + result.stderr).not.toContain(HNR)
+  })
+
+  it('signing out still signs out when the server cannot be reached, and says the server sign-out is pending', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+
+    const result = await runAsync(root, ['logout', '--from-sign-out-button'], 'http://127.0.0.1:1')
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
+    expect(result.stdout + result.stderr).toMatch(/could not end this sign-in on the server/i)
+    expect(result.stdout + result.stderr).not.toContain(HNR)
+  })
+
+  it('a sign-in SSO has not confirmed for 7 days says "sign in again", and is kept, not signed out', async () => {
+    const root = tempRoot()
+    seedSession(root, { expiresInMs: 30_000, overrides: { accessToken: HNA, refreshToken: HNR } })
+    const backend = await fakeBackend({ routes: {
+      '/api/auth/refresh': () => new Refusal(403, 'SIGN_IN_AGAIN', 'Sign in again: this sign-in could not be confirmed with your Autonomous account for 7 days'),
+    } })
+
+    const json = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+    expect(JSON.parse(json.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'sign-in-again' })
+    // Kept as it was: not marked signed out, so SSO coming back renews it.
+    expect(sessionOnDisk(root)).toMatchObject({ accessToken: HNA, refreshToken: HNR })
+    expect(sessionOnDisk(root)).not.toHaveProperty('signedOut')
+
+    const text = await runAsync(root, ['auth', 'status'], backend.base)
+    expect(text.stdout).toMatch(/sign in again.*harness login/i)
+  })
+
+  it('recovers from "sign in again": harness login opens a fresh sign-in that replaces the stuck one', async () => {
+    const root = tempRoot()
+    // A Harness session SSO has not confirmed for 7 days: every renewal answers "sign in again".
+    seedSession(root, { expiresInMs: 30_000, overrides: { accessToken: HNA, refreshToken: HNR } })
+    const NEW_HNA = `hna_${'f'.repeat(43)}`
+    const NEW_HNR = `hnr_${'g'.repeat(43)}`
+    let redirectUri = ''
+    const backend = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: () => ({ token: NEW_HNA, refreshToken: NEW_HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }),
+      resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }),
+      routes: {
+        '/api/auth/refresh': () => new Refusal(403, 'SIGN_IN_AGAIN', 'Sign in again'),
+        '/api/auth/revoke': () => ({ revoked: true }),
+      },
+    })
+
+    // What the message says to run: plain `harness login`, no flag.
+    const login = jsonChild(root, backend.base, ['login', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    await login.exit
+
+    // The stuck session is replaced, and ended on the server; the computer is signed in again.
+    expect(sessionOnDisk(root)).toMatchObject({ accessToken: NEW_HNA, refreshToken: NEW_HNR })
+    expect(authCalls(backend.calls).filter((c) => c.url === '/api/auth/revoke')).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+    const status = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+    expect(JSON.parse(status.stdout.trim())).toMatchObject({ loggedIn: true })
+  }, 30_000)
+
+  it('reset ends the Harness session on the server too', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+    const backend = await fakeBackend({ routes: { '/api/auth/revoke': () => ({ revoked: true }) } })
+
+    const result = await runAsync(root, ['reset', '--from-sign-out-button'], backend.base)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+  })
+
+  it('login --force ends the previous Harness session once the new sign-in is in', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+    const NEW_HNR = `hnr_${'d'.repeat(43)}`
+    let redirectUri = ''
+    const backend = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: () => ({ token: `hna_${'e'.repeat(43)}`, refreshToken: NEW_HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }),
+      resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+      routes: { '/api/auth/revoke': () => ({ revoked: true }) },
+    })
+    const login = jsonChild(root, backend.base, ['login', '--force', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    await login.exit
+    expect(sessionOnDisk(root)).toMatchObject({ refreshToken: NEW_HNR })
+    expect(authCalls(backend.calls).filter((c) => c.url === '/api/auth/revoke')).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+  }, 30_000)
+
+  it('signing out of an SSO sign-in asks the server nothing, as before', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const backend = await fakeBackend({ routes: { '/api/auth/revoke': () => ({ revoked: true }) } })
+
+    const result = await runAsync(root, ['logout', '--from-sign-out-button'], backend.base)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(authCalls(backend.calls)).toEqual([])
+  })
 })

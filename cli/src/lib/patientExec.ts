@@ -31,6 +31,8 @@ export interface PatientExecOptions {
   maxBuffer?: number
   env?: NodeJS.ProcessEnv
   cwd?: string
+  /** Windows: no console window for the child. */
+  windowsHide?: boolean
 }
 
 /**

@@ -11,8 +11,11 @@ import '../core/models.dart' show SharedHarness;
 /// is, and the tile follows) and never persisted: a restored layout re-opens
 /// it from the agent's next frame, so a stale URL from a previous run can
 /// never be loaded. [companion] and [devices] are built-in native DSH viewers,
-/// derived only after their account's experiment is enabled.
-enum PaneKind { terminal, web, companion, devices }
+/// derived only after their account's experiment is enabled. A [finder] tile
+/// is a folder on its machine, browsed in place (`lib/finder/`), opened beside
+/// the chat New Harness starts with it; like the other viewers it is never in
+/// the saved layout or the desk.
+enum PaneKind { terminal, web, companion, devices, finder }
 
 /// One tile in the terminal grid.
 ///
@@ -32,24 +35,44 @@ class TerminalPane {
     this.url,
     this.viewerError,
     this.ownerAgentId,
+    this.finderRoot,
   }) : assert(
          kind != PaneKind.web || (agentId == null && ownerAgentId != null),
          'a web tile belongs to an agent through ownerAgentId, never agentId',
+       ),
+       assert(
+         (kind == PaneKind.finder) == (finderRoot != null) &&
+             (kind != PaneKind.finder || agentId == null),
+         'a Finder tile has a folder and no agent; no other tile has a folder',
        );
 
   final PaneKind kind;
   bool get isWeb => kind == PaneKind.web;
   bool get isCompanion => kind == PaneKind.companion;
   bool get isDevices => kind == PaneKind.devices;
-  bool get isViewer => isWeb || isCompanion || isDevices;
+  bool get isFinder => kind == PaneKind.finder;
+  bool get isViewer => isWeb || isCompanion || isDevices || isFinder;
+
+  /// Whether this is [agentId]'s own viewer on [machineId] — its harness's
+  /// page, or the Finder opened with its chat — which lives beside that
+  /// agent's terminal, so it moves and closes with it.
+  bool viewsAgent(String machineId, String? agentId) =>
+      (isWeb || isFinder) &&
+      agentId != null &&
+      this.machineId == machineId &&
+      ownerAgentId == agentId;
+
+  /// [PaneKind.finder] only: the folder the tile browses, on [machineId].
+  final String? finderRoot;
 
   /// [PaneKind.web] only: what the tile loads. Changes when the agent's frame
   /// names a new viewer URL; the panel navigates rather than remounts.
   String? url;
   String? viewerError;
 
-  /// The agent whose viewer this is. The native companion viewer can exist
-  /// before its agent starts, then follows the selected individual.
+  /// The agent whose viewer this is: a web viewer's harness, a Finder's
+  /// chat. The native companion viewer can exist before its agent starts,
+  /// then follows the selected individual.
   /// Kept OFF [agentId]
   /// on purpose — everything that attaches a terminal, persists a layout or
   /// remembers a closed agent keys on [agentId] being set, and none of that
@@ -81,8 +104,22 @@ class TerminalPane {
 
   TerminalSession? session;
 
+  /// Ephemeral input provenance. Never persisted in shared pane layout.
+  String? inputContext;
+  bool watchOnly = false;
+
   /// Browser viewer input, installed only while its renderer is mounted.
   bool Function()? focusViewerInput;
+
+  /// A width in pixels this tile asks for instead of its share of the tab:
+  /// a Finder showing only its files, or folded to a rail. The grid gives it
+  /// to a full-height tile at the tab's left or right edge
+  /// (`pinFixedColumn`); never saved.
+  double? fixedWidth;
+
+  /// What closing this tile must ask first, installed only while its panel
+  /// is mounted: a Finder tile's unsaved tabs. False keeps the tile open.
+  Future<bool> Function()? beforeClose;
   SharedHarness? sharedHarness;
   String? sharedOwnerName;
 
@@ -127,6 +164,9 @@ class TerminalPane {
   /// pane pays a network round trip per keystroke. Off by default, and remembered, so the choice
   /// survives a restart the way the rest of the layout does.
   bool composerVisible = false;
+
+  /// First-arrival suggestion, local to this view and never part of the shared layout.
+  String? firstTask;
 }
 
 /// A tile as it survives a restart: intent only, never the session.

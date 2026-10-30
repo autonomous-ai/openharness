@@ -1,8 +1,13 @@
+import 'home_dir.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'host_platform.dart';
+import 'posix_file_mode.dart';
 import 'viewer_mode.dart';
 import 'local_key_value_store.dart';
 
@@ -29,6 +34,12 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
   static final HarnessFileStore shared = HarnessFileStore();
   static final Map<String, Future<void>> _pathTails = {};
 
+  /// Starts `/bin/chmod` where libc's is not bound ([PosixFileMode.supported]
+  /// is false). A test replaces it to prove macOS and Linux start none.
+  @visibleForTesting
+  static Future<ProcessResult> Function(String executable, List<String> args)
+  runProcess = Process.run;
+
   final Directory directory;
 
   HarnessFileStore({Directory? directory})
@@ -39,18 +50,8 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     Map<String, String>? environment,
     String? name,
   }) {
-    final env = environment ?? Platform.environment;
-    var home = env['HOME'];
-    if ((home == null || home.isEmpty) && Platform.isWindows) {
-      home = env['USERPROFILE'];
-      if (home == null || home.isEmpty) {
-        final drive = env['HOMEDRIVE'];
-        final path = env['HOMEPATH'];
-        if (drive != null && path != null) home = '$drive$path';
-      }
-    }
-    if (home == null || home.isEmpty) home = containerHome;
-    if (home == null || home.isEmpty) {
+    final home = maybeHomeDir(environment: environment);
+    if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
     return _join(_join(home, '.harness'), name ?? directoryName);
@@ -76,6 +77,10 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
       return {for (final key in requested) key: values[key]};
     });
   }
+
+  /// The keys the document holds, without their values.
+  Future<Set<String>> keys() =>
+      _serialized(() async => (await _readDocument()).keys.toSet());
 
   @override
   Future<void> write(String key, String value) => _serialized(() async {
@@ -163,6 +168,12 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     final suffix = '${pid}_${DateTime.now().microsecondsSinceEpoch}';
     final temporary = File(_join(directory.path, '.$fileName.$suffix.tmp'));
     try {
+      // Created 0600 before anything is written to it, so no mode needs
+      // changing afterwards. Created by `writeAsString` (0644), every write
+      // started `/bin/chmod` on the UI isolate (see PosixFileMode).
+      if (PosixFileMode.supported) {
+        PosixFileMode.createExclusive(temporary.path, 0x180);
+      }
       await temporary.writeAsString(
         '${const JsonEncoder.withIndent('  ').convert({'version': schemaVersion, 'values': values})}\n',
         flush: true,
@@ -210,7 +221,11 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     final expected = int.parse(mode, radix: 8);
     final actual = (await FileStat.stat(path)).mode;
     if ((actual & 0xfff) == expected) return;
-    final result = await Process.run('/bin/chmod', [mode, path]);
+    if (PosixFileMode.supported) {
+      PosixFileMode.chmod(path, expected);
+      return;
+    }
+    final result = await runProcess('/bin/chmod', [mode, path]);
     if (result.exitCode != 0) {
       throw FileSystemException('Could not set mode $mode', path);
     }

@@ -16,6 +16,7 @@ import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
+import { unusedChat } from './closeAgentService.js'
 import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
@@ -195,9 +196,27 @@ export interface PurgeDeps {
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
+  /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
+  atFolderTrust?(session: RegisteredSession): Promise<boolean>
+  /** A fresh read of the pane says nothing is running, nothing is asked and the composer is empty (`teamHold` null, not busy). */
+  atEmptyComposer?(session: RegisteredSession): Promise<boolean>
   inspect?: typeof inspectNativeHistory
   erase?: typeof eraseNativeHistory
   now?: () => number
+}
+
+/**
+ * A Claude Code or Codex row a daemon restart (or a resume of a saved agent that had none) put back, that has never shown
+ * a conversation. `resumeOnly` only says that Enter must not start a fresh conversation (registry.ts:103); it carries no
+ * conversation of its own. This row has no id (`sessionId`), no transcript, was never bound (`boundAt`), and no hook has
+ * reached it since its process started: `resumePendingAgent` zeroes `lastHookAt` (registry.ts:1725) and registering a hook
+ * sets it (registry.ts:2046), so a prompt submitted in this pane would have moved it. A pending admission (`admissionHold`, a
+ * hook that arrived but is not yet confirmed) or an external resume counts as evidence, not as absence.
+ */
+export function restoredWithoutConversation(s: RegisteredSession): boolean {
+  return (s.engine === 'claude' || s.engine === 'codex') && s.resumeOnly === true && s.lastHookAt === 0
+    && !s.sessionId && !s.transcriptPath && s.boundAt == null && !s.admissionHold && !s.externalResume
+    && (s.launch == null || s.launch.state === 'ready')
 }
 
 export class PurgeAgentService {
@@ -260,6 +279,25 @@ export class PurgeAgentService {
       return { error: 'WORKTREE_DELETE_REFUSED', stopped, detail: (error instanceof Error ? error.message : 'The worktree could not be deleted.')
         + (stopped ? ' The harness is stopped. Review its worktree again before retrying.' : '') }
     }
+  }
+
+  /**
+   * An engine waiting at its folder-trust question has opened no conversation, and cannot before it is answered. Stop
+   * is told so, as Close tells it of a chat it saw empty: otherwise a Codex with no bound conversation is held while
+   * the shared server runs ("Cannot confirm which conversation is open"), and where the process cannot be read its
+   * conversation is held too, so two agents a Super Tab started into an untrusted folder could not be deleted
+   * (2026-10-22). Anything that ever bound a conversation is not this, whatever the screen shows.
+   */
+  private async unstartedChat(live: RegisteredSession | undefined): Promise<Pick<StopAgentOptions, 'withoutConversation' | 'confirmUnusedConversation'>> {
+    const shows = (session: RegisteredSession): Promise<boolean> => this.showsNoConversation(session)
+    if (!live || !await shows(live)) return {}
+    return { withoutConversation: () => {}, confirmUnusedConversation: async captured => await shows(captured) }
+  }
+
+  /** The row and a fresh read of its pane agree that no conversation was ever started. */
+  private async showsNoConversation(session: RegisteredSession): Promise<boolean> {
+    if (unusedChat(session)) return await this.deps.atFolderTrust?.(session) === true
+    return restoredWithoutConversation(session) && await this.deps.atEmptyComposer?.(session) === true
   }
 
   private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
@@ -335,7 +373,7 @@ export class PurgeAgentService {
           await this.deps.stop(request.agentId, { current: () => {
             const live = this.deps.live(request.agentId)
             return !!live && identity(live) === review.signature
-          } })
+          }, ...await this.unstartedChat(this.deps.live(request.agentId)) })
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true

@@ -38,7 +38,6 @@ vi.mock('../lib/createAgentPane.js', () => ({
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
-vi.mock('../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => pane.tmux) }))
 vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 
@@ -51,7 +50,7 @@ let apiBase = ''
 let port = ''
 const saved: Record<string, string | undefined> = {}
 /** The variables a launch reads of the daemon's own environment, each pinned (or cleared) for the record. */
-const VARS = ['ADAPTER_DATA_DIR', 'HOME', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH', 'CURSOR_PATH',
+const VARS = ['ADAPTER_DATA_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH', 'CURSOR_PATH',
   'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH', 'AGY_PATH', 'COPILOT_PATH'] as const
 /** The launch scripts the cases name, by digest: most shapes share theirs with others. */
 const scripts: Record<string, string> = {}
@@ -119,6 +118,7 @@ beforeAll(async () => {
   for (const name of VARS) delete process.env[name]
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.HOME = join(root, 'home')
+  process.env.USERPROFILE = join(root, 'home')
   process.env.SHELL = '/bin/zsh'
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   // A zsh user with a startup file of their own: the plain launch.
@@ -147,7 +147,7 @@ beforeAll(async () => {
   store.save({ provider: 'custom', name: 'Keyed', baseUrl: apiBase, apiKey: 'other-key', authHeader: 'x-api-key', authPrefix: '' })
   const { launchShapes } = await import('../testing/launchShapes.js')
   shapes = (machine) => launchShapes({
-    dataDir: join(root, 'data'), machine: () => ({ ...machine }), tmuxSupportsSessionEnv: async () => pane.tmux,
+    dataDir: join(root, 'data'), machine: () => ({ ...machine }), capabilities: async () => ({ sessionEnv: pane.tmux }),
     readCodexConfig: () => null, setGridLaunch: () => {},
   })
 })
@@ -175,7 +175,7 @@ async function logged<T>(run: () => Promise<T>): Promise<{ value: T; lines: stri
 
 const pending = { agentId: 'created', sessionId: '', engine: 'claude' } as RegisteredSession
 const rest = () => ({
-  tmuxBackend: {} as never, registry: { setLaunch: () => pending } as never,
+  createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
   watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false, gridSetup: () => null,

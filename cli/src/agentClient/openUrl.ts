@@ -4,9 +4,11 @@
  * any failure: the script opens the page on this computer instead. Prints nothing; not for people.
  */
 import { openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
+import { sendPane } from '../messages/command.js'
 
 export interface OpenUrlDeps {
   pane?: string | undefined
+  env?: NodeJS.ProcessEnv
   where?: (pane: string) => Where
   open?: (where: Where) => Promise<Daemon>
 }
@@ -16,7 +18,7 @@ const ASK_MS = 5_000
 
 export async function openUrlCommand(args: string[], deps: OpenUrlDeps = {}): Promise<number> {
   const url = args[0]
-  const pane = 'pane' in deps ? deps.pane : process.env.TMUX_PANE
+  const pane = 'pane' in deps ? deps.pane : sendPane(deps.env ?? process.env)
   if (!url || !pane) return 1
   const where = (deps.where ?? whereFor)(pane)
   // A pane no Harness daemon made: nobody to ask.

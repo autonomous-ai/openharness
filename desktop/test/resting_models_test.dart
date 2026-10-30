@@ -161,16 +161,21 @@ void main() {
           ),
         ),
       );
-      expect(
-        asleep.subtitle,
-        'Asleep 9h ago',
-      );
+      // How old the list is, and no state word: the tooltip says why it rests.
+      expect(asleep.subtitle, '9h ago');
       expect(
         asleep.tooltip,
         'Resting to save resources. It starts by itself when you send a message.',
       );
       expect(asleep.sentence, isNull);
       expect(asleep.offerWake, isFalse);
+      // A resting list of no known age has nothing to say beside it.
+      expect(
+        sectionWords(
+          _only(section('team', state: 'asleep', models: served)),
+        ),
+        SectionWords.none,
+      );
 
       final noRecord = sectionWords(_only(section('team', state: 'asleep')));
       expect(noRecord.offerWake, isTrue);
@@ -275,8 +280,7 @@ void main() {
         kSwitchAnyway,
         kSwitchAnywayAction,
         kRestingUntilNextMessage,
-        restingSubtitle(null),
-        for (final age in [0, 60, 3600, 86400]) restingSubtitle(age),
+        for (final age in [0, 60, 3600, 86400]) restingSubtitle(age)!,
         couldNotStart(own),
         couldNotStart(shared),
         offlineRowSentence('Studio'),

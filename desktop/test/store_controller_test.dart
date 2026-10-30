@@ -2,6 +2,8 @@
 // reviews, read defensively off the wire; and the controller the store screen
 // holds, which turns every failure into a sentence — a control plane that
 // predates the store (404) most of all, since the store is whole without it.
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
@@ -481,7 +483,108 @@ void main() {
         'Sign in to see ratings and reviews.',
       );
     });
+
+    test('submit re-reads reviews while a load is pending', () async {
+      final api = _Held();
+      final store = StoreController(api);
+      addTearDown(store.dispose);
+      final opened = store.loadReviews('autonomous/marp');
+
+      var answered = false;
+      final posted = store.submit('autonomous/marp', rating: 5)
+        ..then((_) => answered = true);
+      await pumpEventQueue();
+      // The page's first read was asked before the post, and answers so.
+      api.reads.first.complete(api.page());
+      await pumpEventQueue();
+      expect(api.reads, hasLength(2), reason: 'the post is read back');
+      expect(
+        store.reviews['autonomous/marp'],
+        isNull,
+        reason: 'an answer from before the post is dropped',
+      );
+      expect(answered, isFalse, reason: 'submit waits for the read-back');
+
+      api.reads.last.complete(api.page(mine: api.posted));
+      expect(await posted, isNull);
+      await opened;
+      expect(store.reviews['autonomous/marp']!.mine!.id, 'mine');
+      expect(store.reviewsLoading, isEmpty);
+    });
+
+    test('remove re-reads reviews while a load is pending', () async {
+      final api = _Held();
+      final store = StoreController(api);
+      addTearDown(store.dispose);
+      final opened = store.loadReviews('autonomous/marp');
+
+      final removed = store.remove('autonomous/marp');
+      await pumpEventQueue();
+      // Asked before the delete, the first read still has the review.
+      api.reads.first.complete(api.page(mine: api.posted));
+      await pumpEventQueue();
+      expect(api.reads, hasLength(2), reason: 'the delete is read back');
+      expect(store.reviews['autonomous/marp'], isNull);
+
+      api.reads.last.complete(api.page());
+      expect(await removed, isNull);
+      await opened;
+      expect(store.reviews['autonomous/marp']!.mine, isNull);
+      expect(store.reviewsLoading, isEmpty);
+    });
+
+    test(
+      'a failed read from before the post gives way to the read-back',
+      () async {
+        final api = _Held();
+        final store = StoreController(api);
+        addTearDown(store.dispose);
+        final opened = store.loadReviews('autonomous/marp');
+
+        final posted = store.submit('autonomous/marp', rating: 5);
+        await pumpEventQueue();
+        api.reads.first.completeError(StateError('socket closed'));
+        await pumpEventQueue();
+        expect(api.reads, hasLength(2), reason: 'a failure is no read-back');
+
+        api.reads.last.complete(api.page(mine: api.posted));
+        expect(await posted, isNull);
+        await opened;
+        expect(store.reviewsError, isEmpty);
+        expect(store.reviews['autonomous/marp']!.mine!.id, 'mine');
+      },
+    );
   });
+}
+
+/// Reviews that land when the test says, to order a read against a write.
+class _Held implements StoreApi {
+  final reads = <Completer<StoreReviews>>[];
+  final posted = StoreReview.fromJson(_review(id: 'mine', mine: true))!;
+
+  StoreReviews page({StoreReview? mine}) => StoreReviews(
+    rating: StoreRating.none('autonomous/marp'),
+    reviews: [?mine],
+    mine: mine,
+  );
+
+  @override
+  Future<List<StoreRating>> ratings() async => const [];
+  @override
+  Future<StoreReviews> reviews(String harnessId) {
+    reads.add(Completer());
+    return reads.last.future;
+  }
+
+  @override
+  Future<StoreReview> putReview(
+    String harnessId, {
+    required int rating,
+    String? title,
+    String? body,
+  }) async => posted;
+  @override
+  Future<void> deleteReview(String harnessId) async {}
 }
 
 class _Throwing implements StoreApi {

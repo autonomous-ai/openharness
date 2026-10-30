@@ -1,0 +1,316 @@
+{
+ "about": "Inputs for the 2026-10-26 night that the Swarm status does not hold. Policy: the default routing policy (backend/src/superTabs/routingPolicy.ts), as the tab's effective policy is not in the snapshot. Dependencies: read from the group titles (a review after its build, the 1726 chain), an estimate.",
+ "policy": {
+  "models": [
+   {
+    "engine": "claude",
+    "model": "opus",
+    "effort": "high",
+    "quality": 3,
+    "cost": 3,
+    "enabled": true
+   },
+   {
+    "engine": "codex",
+    "model": "default",
+    "effort": "default",
+    "quality": 3,
+    "cost": 2,
+    "enabled": true
+   },
+   {
+    "engine": "claude",
+    "model": "sonnet",
+    "effort": "medium",
+    "quality": 2,
+    "cost": 2,
+    "enabled": true
+   },
+   {
+    "engine": "claude",
+    "model": "haiku",
+    "effort": "auto",
+    "quality": 1,
+    "cost": 1,
+    "enabled": true
+   }
+  ],
+  "floor": {
+   "low": 1,
+   "medium": 2,
+   "high": 3
+  },
+  "quotaReserve": 10,
+  "localModels": {
+   "quality": 1,
+   "enabled": true
+  }
+ },
+ "assessments": {
+  "2b8a76771f8d6e8380101ad0": {
+   "route": 20,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "5c48779c71d5111602eab51f": {
+   "route": 28,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "c2e38ce017f6f8e65ef8bdce": {
+   "route": 30,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "0a84ea687a435833d1649933": {
+   "route": 30,
+   "note": "no request of its own; takes G3's read-path request (same rewrite, CLI side)"
+  },
+  "2e2d726a3ff6196c26d44f8f": {
+   "route": 32,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "5f0d3516fb850999cb824c90": {
+   "route": 44,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "7a23487b3220d1564f9c7522": {
+   "route": 54,
+   "note": "no request of its own; takes the log's standard independent review request"
+  },
+  "e141b9c91ab56d8509789a49": {
+   "route": 54,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "1e43f418b6c92f435689581d": {
+   "route": 55,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "d71cdb0a2ab3181904d5eb3d": {
+   "route": 56,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "32777a379c1fd8cccfde3e85": {
+   "route": 57,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "400c47daa5f4e2be6ab1c2e3": {
+   "route": 67,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "4bc913c9bf52f96cadbcd419": {
+   "route": 68,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "42f34fffe4223cab2ff79e69": {
+   "route": 69,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "977d937c468e7720151c780e": {
+   "route": 73,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "b365e73faae5aa84b1b4d544": {
+   "route": 73,
+   "note": "no request of its own; takes fix C1's request"
+  },
+  "3f97d137a02c078abfdc7d74": {
+   "route": 73,
+   "note": "no request of its own; takes fix C1's request"
+  },
+  "42095c031091b32d2d5e163b": {
+   "route": 74,
+   "note": "no request of its own; takes the focused re-check request"
+  },
+  "a8c17a1e4fb9b75f771b67a7": {
+   "route": 74,
+   "note": "no request of its own; takes the focused re-check request"
+  },
+  "5c6b795d846d44bfb7591837": {
+   "route": 74,
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  "e6115d403f62dd42d5cf3ab3": {
+   "estimate": {
+    "difficulty": "medium",
+    "risk": "low",
+    "size": "medium",
+    "kind": "research"
+   },
+   "note": "no route request; estimate"
+  },
+  "acdc5546b9fcc601abb8b22c": {
+   "estimate": {
+    "difficulty": "medium",
+    "risk": "low",
+    "size": "medium",
+    "kind": "research"
+   },
+   "note": "no route request; estimate"
+  },
+  "8f099aef658fa637127c3482": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "high",
+    "size": "medium",
+    "kind": "backend"
+   },
+   "note": "no route request; estimate"
+  },
+  "4c650945b01ab59703017bfb": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "high",
+    "size": "large",
+    "kind": "backend"
+   },
+   "note": "no route request; estimate like v1 DM"
+  },
+  "b27e3b7574be0b1bf4a76986": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "high",
+    "size": "large",
+    "kind": "cli"
+   },
+   "note": "no route request; estimate like v1 DM"
+  },
+  "fa552b26cc36df06a9145405": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "medium",
+    "size": "large",
+    "kind": "cli"
+   },
+   "note": "no route request (started directly); estimate"
+  },
+  "88a2196381c696b3b458543f": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "medium",
+    "size": "large",
+    "kind": "cli"
+   },
+   "note": "no route request (started directly); estimate"
+  },
+  "04f4dd68dc6273061f4e6194": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "medium",
+    "size": "large",
+    "kind": "cli"
+   },
+   "note": "no route request (started directly); estimate"
+  },
+  "9109dbd1ee0f97b1f12ce4f5": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "medium",
+    "size": "large",
+    "kind": "cli"
+   },
+   "note": "no route request (started directly); estimate"
+  },
+  "1dace4d8419a80177f226de1": {
+   "estimate": {
+    "difficulty": "high",
+    "risk": "medium",
+    "size": "large",
+    "kind": "research"
+   },
+   "note": "no route request (started directly); estimate"
+  }
+ },
+ "deps": {
+  "5c48779c71d5111602eab51f": [
+   "aeef05a35995ca9f7cca7060"
+  ],
+  "df0940f037c9f6eef1b92b67": [
+   "5c48779c71d5111602eab51f"
+  ],
+  "c2e38ce017f6f8e65ef8bdce": [
+   "5c48779c71d5111602eab51f"
+  ],
+  "0a84ea687a435833d1649933": [
+   "c2e38ce017f6f8e65ef8bdce"
+  ],
+  "2e2d726a3ff6196c26d44f8f": [
+   "c2e38ce017f6f8e65ef8bdce"
+  ],
+  "6bc636fa6713886102b9cbfa": [
+   "659a6cc93b944bd24cae2884"
+  ],
+  "5f0d3516fb850999cb824c90": [
+   "0a84ea687a435833d1649933"
+  ],
+  "7a23487b3220d1564f9c7522": [
+   "c2e38ce017f6f8e65ef8bdce"
+  ],
+  "e141b9c91ab56d8509789a49": [
+   "2e2d726a3ff6196c26d44f8f"
+  ],
+  "0da3404ca7a4a33f57d4c871": [
+   "df0940f037c9f6eef1b92b67"
+  ],
+  "8f099aef658fa637127c3482": [
+   "0da3404ca7a4a33f57d4c871",
+   "7a23487b3220d1564f9c7522",
+   "5f0d3516fb850999cb824c90",
+   "e141b9c91ab56d8509789a49"
+  ],
+  "45e5e3322e966e128a7d0f3d": [
+   "c2e38ce017f6f8e65ef8bdce"
+  ],
+  "b483494ef289e282021b1e2a": [
+   "45e5e3322e966e128a7d0f3d"
+  ],
+  "400c47daa5f4e2be6ab1c2e3": [
+   "8f099aef658fa637127c3482"
+  ],
+  "4bc913c9bf52f96cadbcd419": [
+   "8f099aef658fa637127c3482",
+   "b483494ef289e282021b1e2a"
+  ],
+  "8718795de795e643c928d3cc": [
+   "4bc913c9bf52f96cadbcd419"
+  ],
+  "42f34fffe4223cab2ff79e69": [
+   "4bc913c9bf52f96cadbcd419"
+  ],
+  "977d937c468e7720151c780e": [
+   "42f34fffe4223cab2ff79e69"
+  ],
+  "b365e73faae5aa84b1b4d544": [
+   "42f34fffe4223cab2ff79e69"
+  ],
+  "3f97d137a02c078abfdc7d74": [
+   "42f34fffe4223cab2ff79e69"
+  ],
+  "5c6b795d846d44bfb7591837": [
+   "977d937c468e7720151c780e"
+  ],
+  "42095c031091b32d2d5e163b": [
+   "b365e73faae5aa84b1b4d544"
+  ],
+  "a8c17a1e4fb9b75f771b67a7": [
+   "3f97d137a02c078abfdc7d74"
+  ],
+  "4f49c22420c3c3fc57dda058": [
+   "b0b28597aa6be5ef38defa6e"
+  ],
+  "1e43f418b6c92f435689581d": [
+   "b27e3b7574be0b1bf4a76986"
+  ],
+  "d71cdb0a2ab3181904d5eb3d": [
+   "4c650945b01ab59703017bfb"
+  ],
+  "32777a379c1fd8cccfde3e85": [
+   "f3a620e144116d08c3a68338"
+  ]
+ },
+ "exclude": {
+  "274baf5b89089a604ebbff4b": "a person pinned it to one machine and the shared DeepSeek model",
+  "aa409e467756f366f8ec67d4": "a person pinned it to one machine and the shared DeepSeek model",
+  "feb85d3aef2375b81b4275eb": "a person pinned it to one machine and the shared DeepSeek model",
+  "d80142e540abade0e9ac21de": "a person pinned it to one machine and the shared DeepSeek model",
+  "8c0d038efe1b63d3b6628552": "a person pinned it to one machine and the shared DeepSeek model",
+  "e37ffff373d0afd7fc763726": "a person pinned it to one machine (a version and log check)"
+ }
+}

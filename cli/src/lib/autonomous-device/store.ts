@@ -3,7 +3,7 @@ import { closeSync, constants, fsyncSync, openSync, readdirSync, renameSync, rmS
 import { join } from 'node:path'
 import { z } from 'zod'
 import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../agentCreationReceipt.js'
-import { readPrivateStateFile, secureStateDirectory } from '../secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../secureState.js'
 import { DeviceOperationSchema, DeviceStoreError, DeviceStoreRequestSchema, type DeviceOperation, type PrepareRequest } from './storeContract.js'
 
 export interface StoreAgent {
@@ -106,8 +106,7 @@ export class AutonomousDeviceStore {
       opened = true
       try { writeFileSync(fd, JSON.stringify(row)); fsyncSync(fd) } finally { closeSync(fd) }
       if (!exclusive) renameSync(target, file)
-      const dir = openSync(this.deps.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(dir) } finally { closeSync(dir) }
+      syncStateDirectory(this.deps.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally { if (!exclusive && opened) rmSync(target, { force: true }) }
   }
   private read(id: string): Journal | null {

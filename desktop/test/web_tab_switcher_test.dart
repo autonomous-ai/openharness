@@ -193,11 +193,10 @@ void main() {
         find.byKey(const ValueKey('workspace-subscription-usage')),
         findsNothing,
       );
-      // Beside it, Download app alone: Share is off until asked for.
-      expect(
-        tester.getRect(find.byKey(footer)).right,
-        lessThanOrEqualTo(tester.getRect(find.byType(WebDownloadButton)).left),
-      );
+      // Nothing beside it: a test runs as Android, a phone, whose download
+      // is the store bar's (a computer's footer: web_footer_bar_test), and
+      // Share is off until asked for.
+      expect(find.byType(WebDownloadButton), findsNothing);
       expect(
         find.byKey(const ValueKey('workspace-share-button')),
         findsNothing,
@@ -235,6 +234,58 @@ void main() {
       app.dispose();
     },
   );
+
+  const barControls = [
+    'web-app-menu-button',
+    'web-tab-switcher',
+    'web-new-tab-button',
+    'swarm-search-button',
+    'workspace-notifications-button',
+  ];
+
+  testWidgets('a phone bar is a finger wide at every control, its icons not', (
+    tester,
+  ) async {
+    final app = await mount(tester, const Size(360, 740));
+    final bar = tester.getRect(find.byKey(const ValueKey('workspace-tab-bar')));
+    final rects = <Rect>[];
+    for (final key in barControls) {
+      final control = find.byKey(ValueKey(key));
+      final rect = tester.getRect(control);
+      expect(rect.width, greaterThanOrEqualTo(44), reason: key);
+      expect(rect.height, greaterThanOrEqualTo(44), reason: key);
+      // Inside the bar: a bigger target never reaches into the pane below.
+      expect(bar.contains(rect.topLeft), isTrue, reason: key);
+      expect(bar.contains(rect.bottomRight - const Offset(1, 1)), isTrue);
+      for (final other in rects) {
+        expect(rect.overlaps(other), isFalse, reason: key);
+      }
+      rects.add(rect);
+    }
+    for (final key in ['web-app-menu-button', 'swarm-search-button']) {
+      final icon = tester.widget<Icon>(
+        find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(Icon),
+        ),
+      );
+      expect(icon.size, 16, reason: key);
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+  });
+
+  testWidgets('a wide window keeps the mouse-sized bar controls', (
+    tester,
+  ) async {
+    final app = await mount(tester, const Size(1280, 800));
+    for (final key in ['web-app-menu-button', 'swarm-search-button']) {
+      expect(tester.getSize(find.byKey(ValueKey(key))).height, 28);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+  });
 
   testWidgets('a wide window keeps the grid of harnesses', (tester) async {
     final app = await mount(tester, const Size(1280, 800), harnesses: 3);

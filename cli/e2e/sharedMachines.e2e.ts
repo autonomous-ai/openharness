@@ -5,10 +5,11 @@
  * Dee shares her machine with everyone at acme.io; Kim, at acme.io on another account, adds it. Kim's
  * daemon then pins Dee's machine and Dee's daemon trusts Kim's (services/sharedMachines.ts, through the
  * gateway: gateway/sharedTrust.ts), so a window on Kim's computer reaches Dee's machine through the relay,
- * end to end encrypted, with the owner's rights. Neither joins the other's trust group. Dee stopping
+ * end to end encrypted, as a guest (docs/plans/2026-10-19-guest-machine-sharing-plan.md): its own harnesses
+ * and nothing of Dee's, not even her harnesses' events. Neither joins the other's trust group. Dee stopping
  * sharing ends the session and takes the trust back on both sides.
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -51,7 +52,7 @@ describe('a machine shared across accounts', () => {
     backend = null
   })
 
-  it('is reached from a colleague’s computer once shared and added, with the owner’s rights, and no longer once sharing stops', async () => {
+  it('is reached from a colleague’s computer once shared and added, as a guest, and no longer once sharing stops', async () => {
     backend = await FakeBackend.start()
     const specs = [
       { machineId: 'd1'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000d1', name: 'dee-studio', token: 'e2e-token-dee', account: 'dee', email: 'dee@acme.io', identity: newIdentity() },
@@ -72,6 +73,7 @@ describe('a machine shared across accounts', () => {
     })
     await Promise.all(daemons.map((daemon) => daemon.start()))
     await until('both machines on the relay', () => backend!.nodeUp(deeSpec.machineId) && backend!.nodeUp(kimSpec.machineId), 30_000)
+    await until('both shared-machine services ready', () => daemons.every(daemon => daemon.log().includes('[service sharedMachines] connected to the core')), 30_000)
 
     // Not shared: Kim's computer has no way to Dee's machine.
     expect(await select(kim, deeSpec.machineId)).toBe(4404)
@@ -93,15 +95,36 @@ describe('a machine shared across accounts', () => {
     await until('Kim’s machine trusted on Dee’s', () => e2eFile(dee, 'paired.json')
       .some((p) => (p as { identityPub: string; shared?: boolean }).identityPub === b64e(kimSpec.identity.pub) && (p as { shared?: boolean }).shared === true) || null, 30_000)
 
-    // A window on Kim's computer works on Dee's machine, with the owner's rights: the sharing itself reads.
+    // A window on Kim's computer reaches Dee's machine as a guest. Dee's own harness is there, and Kim sees none
+    // of it: not in the list, not its terminal, not its events.
     const viaKim = await LocalClient.connect(kim, { machineId: deeSpec.machineId })
     clients.push(viaKim)
-    expect((await viaKim.request<{ agents?: unknown[] }>('agents_list', {}, 30_000)).agents).toEqual(expect.any(Array))
-    expect(await viaKim.request('shared_machines', { action: 'get' }, 30_000)).toMatchObject({
-      sameDomain: true, members: [{ email: 'kim@acme.io', via: 'domain', machines: 1 }] })
+    const deeHarness = await onDee.request<{ agent?: { id: string } }>('agent_create', { engine: 'terminal' }, 30_000)
+    const deeAgent = deeHarness.agent!.id
+    await onDee.request('agent_update', { agentId: deeAgent, name: 'Dee’s private notes' }, 30_000)
+    expect((await viaKim.request<{ agents?: unknown[] }>('agents_list', {}, 30_000)).agents).toEqual([])
+    expect(await viaKim.request('terminal_open', { agentId: deeAgent }, 30_000)).toMatchObject({ error: 'NOT_YOUR_HARNESS' })
+    for (const [type, payload] of [['shared_machines', { action: 'get' }], ['e2ee_pairings_list', {}], ['fs_list_dir', { path: '/' }],
+      ['sessions_list', {}], ['agent_resume', { agentId: deeAgent }]] as const) {
+      expect(await viaKim.request(type, payload, 30_000), type).toMatchObject({ error: 'GUEST_NOT_ALLOWED' })
+    }
+    // A harness of its own runs as its own OS account, which this machine's owner has not allowed yet.
+    expect(await viaKim.request('agent_create', { engine: 'claude', cwd: '/' }, 60_000)).toMatchObject({ error: 'GUEST_HELPER_REQUIRED' })
+    expect(viaKim.frames.some((frame) => JSON.stringify(frame).includes(deeAgent))).toBe(false)
+    // The owner reads that guest access is off, and who uses the machine now.
+    expect(await onDee.request('shared_machines', { action: 'get' }, 30_000)).toMatchObject({
+      sameDomain: true, members: [{ email: 'kim@acme.io', via: 'domain', machines: 1 }], guestAccess: expect.any(String) })
+    // She shares a folder of hers with guests; Kim reads where he may start: his workspace, and that folder.
+    const project = join(dee.dataDir, 'shared-project')
+    mkdirSync(project)
+    expect(await onDee.request('shared_machines', { action: 'set_folders', folders: [{ path: project, write: false }] }, 30_000))
+      .toMatchObject({ folders: [{ path: project, write: false }] })
+    expect(await viaKim.request('guest_folders', {}, 30_000)).toEqual({ requestId: expect.any(String),
+      workspace: expect.stringMatching(/\/hg_[0-9a-f]{12}\/work$/), folders: [{ path: project, write: false }] })
     // Sealed end to end: the relay saw the outer type and never what was in it.
-    const relayed = [...backend.webSent.values()].flat().filter((frame) => frame.type === 'agents_list' || frame.type === 'shared_machines')
-    expect(relayed.length).toBeGreaterThanOrEqual(2)
+    const relayed = [...backend.webSent.values()].flat().filter((frame) => frame.type === 'agents_list' || frame.type === 'shared_machines' || frame.type === 'guest_folders')
+    expect(relayed.some((frame) => frame.type === 'guest_folders')).toBe(true)
+    expect(relayed.length).toBeGreaterThanOrEqual(3)
     expect(relayed.every((frame) => !!(frame.payload as { __e2e?: unknown } | undefined)?.__e2e)).toBe(true)
 
     // Neither account's trust group took in the other's machine.

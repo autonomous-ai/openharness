@@ -38,16 +38,16 @@ export function createAgent(config: Config, name: string, description = ''): Age
   mkdirSync(cwd, { recursive: true })
 
   const entry: AgentEntry = { id, name: trimmed, description: description.trim(), cwd }
-  config.agents.push(entry)
-  persist(config)
+  persist(config, [...config.agents, entry])
   return entry
 }
 
 export function deleteAgent(config: Config, id: string): void {
   const index = config.agents.findIndex((a) => a.id === id)
   if (index === -1) throw new WorkspaceError('unknown agent')
-  const [removed] = config.agents.splice(index, 1)
-  persist(config)
+  const agents = config.agents.slice()
+  const [removed] = agents.splice(index, 1)
+  persist(config, agents)
   // The DIRECTORY is left alone on purpose. Removing an agent from the list is reversible; deleting
   // whatever work it produced is not, and an example provider is the last place to be destructive.
   void removed
@@ -58,17 +58,18 @@ export function renameAgent(config: Config, id: string, name: string): AgentEntr
   if (!entry) throw new WorkspaceError('unknown agent')
   const trimmed = name.trim()
   if (!trimmed) throw new WorkspaceError('name is required')
-  entry.name = trimmed
-  persist(config)
-  return entry
+  const renamed = { ...entry, name: trimmed }
+  persist(config, config.agents.map((agent) => agent === entry ? renamed : agent))
+  return renamed
 }
 
-/** Write-then-rename: a crash mid-write must not leave a truncated agents.json. */
-function persist(config: Config): void {
-  const rows = config.agents.map(({ id, name, description, cwd }) => ({ id, name, description, cwd }))
+/** Write-then-rename keeps the file whole; publish memory only after the replacement succeeds. */
+function persist(config: Config, agents: AgentEntry[]): void {
+  const rows = agents.map(({ id, name, description, cwd }) => ({ id, name, description, cwd }))
   const tmp = `${config.agentsFile}.tmp`
   writeFileSync(tmp, `${JSON.stringify(rows, null, 2)}\n`)
   renameSync(tmp, config.agentsFile)
+  config.agents = agents
 }
 
 /** Used by the tests to read back what was persisted. */

@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, realpath } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
 import { AgentClientError } from '../agentClient/daemon.js'
 import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineName } from '../messages/model.js'
+import { cloudRequestRefusal, isCloudAgent } from './cloudAgents.js'
 import { projectFolderSlug } from './agentNames.js'
 import { permissionModeFlags } from './engineLaunch.js'
 import { projectsRoot } from './projectFolder.js'
@@ -44,6 +45,12 @@ export interface NewArgs {
   modeGiven: boolean
   prompt: string | null
   name: string | null
+  /** A cloud coding agent's GitHub repository, `owner/name` or its address, as typed: the machine reads it. */
+  repo: string | null
+  /** Devin Cloud's ACU limit. */
+  acuLimit: number | null
+  /** The model to launch with, as the engine names it (`haiku`, `gpt-5.4-mini`); the machine checks it (lib/launchModel.ts). */
+  model: string | null
   json: boolean
 }
 
@@ -70,16 +77,26 @@ export const NEW_USAGE = [
   '  -- <words…>    everything after -- is the first message, unquoted:',
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
+  '  --model <m>    the model it launches with, as the agent names it: haiku, opus, gpt-5.4-mini',
+  '  --repo <r>    a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
+  '                 (Cursor Cloud needs one; Devin Cloud works without)',
+  '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
   '  --json         print the result as one JSON line',
   '',
   'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
 ].join('\n')
 
 const MODES = new Set(['auto', 'ask', 'plan', 'full'])
-const looksLikePath = (word: string): boolean =>
+/** On Windows also `C:\x`, `C:/x`, `\\server\share`, `.\x`, `..\x` and `~\x`: the paths PowerShell and cmd.exe hand over.
+ *  Read as a project name, `harness new terminal C:\Users\me\proj` was refused ("a terminal … does not make a project")
+ *  and `harness new codex C:\code\api` made ~\harnesses\<slug> instead (the Windows install job, B5.12, on the VM). */
+const looksLikePath = (word: string, windows: boolean): boolean =>
   word === '.' || word === '..' || word === '~' || /^(\/|~\/|\.\/|\.\.\/)/.test(word)
+  || (windows && /^([A-Za-z]:[\\/]|\\\\|~\\|\.\\|\.\.\\)/.test(word))
 
-export function parseNewArgs(argv: string[], env: { cwd: string; home: string }): NewArgs {
+export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform }): NewArgs {
+  const windows = (env.platform ?? process.platform) === 'win32'
+  const path = windows ? win32 : posix
   const words: string[] = []
   let machine: string | null = null
   let folder: string | null = null
@@ -88,6 +105,9 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   let modeGiven = false
   let prompt: string | null = null
   let name: string | null = null
+  let repo: string | null = null
+  let acuLimit: number | null = null
+  let model: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -108,6 +128,23 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
+    // The app's New Harness box sends a model the same way; `harness new` had no word for it, so an agent asked to
+    // get "another model's view" could start only the engine's default model.
+    else if (word === '--model') {
+      model = value(word, i).trim()
+      if (!model) throw new NewUsageError('--model needs a value.')
+      i++
+    }
+    else if (word === '--repo') {
+      repo = value(word, i).trim()
+      if (!repo) throw new NewUsageError('--repo needs a value.')
+      i++
+    }
+    else if (word === '--acu-limit') {
+      acuLimit = Number(value(word, i))
+      if (!Number.isInteger(acuLimit) || acuLimit < 1 || acuLimit > 1000) throw new NewUsageError('--acu-limit takes a whole number from 1 to 1000.')
+      i++
+    }
     else if (word === '--machine') {
       if (machine !== null) throw new NewUsageError('Name one machine.')
       machine = value(word, i).trim()
@@ -117,7 +154,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     else if (word === '--new') {
       // `--new @office`: the old machine word is refused below, never taken for the project's name.
       const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith('-') && !next.startsWith('@') && !looksLikePath(next)) { projectName = next; i++ }
+      if (next !== undefined && !next.startsWith('-') && !next.startsWith('@') && !looksLikePath(next, windows)) { projectName = next; i++ }
       else projectName = ''
     }
     // Any dash: `-x` read as an agent called "-x" turns a typo into a confusing refusal from the machine.
@@ -125,12 +162,18 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     // `@office` named the machine until every command took `--machine`. Taken as a word now, it would quietly be a new
     // project called "@office" on this machine: refused, with what to type instead.
     else if (word.startsWith('@')) throw new NewUsageError(atMachineRefusal(word))
-    else if (looksLikePath(word)) {
+    else if (looksLikePath(word, windows)) {
       if (folder !== null) throw new NewUsageError('Name one folder.')
       folder = word
     }
     else words.push(word)
   }
+  if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
+    throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
+  }
+  // What the cloud service would refuse, refused before anything is sent, in its words.
+  const cloudRefusal = isCloudAgent(words[0]) ? cloudRequestRefusal(words[0], prompt ?? '', [repo]) : null
+  if (cloudRefusal) throw new NewUsageError(cloudRefusal)
   if (!MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
   if (words.length > 2) throw new NewUsageError(`Too many words: ${words.slice(2).join(' ')}.`)
   if (words[1] !== undefined) {
@@ -144,6 +187,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   // A terminal opens in a folder and never makes one (the machine's INVALID_PROJECT_SOURCE), so the project was left
   // out of what is sent: `harness new terminal my-game` opened a terminal in the home folder, with no ~/harnesses/my-game
   // and no word about it (CLI 0.3.76, 2026-10-12).
+  if (words[0] === 'terminal' && model !== null) throw new NewUsageError('A terminal runs no model: --model is for an agent.')
   if (words[0] === 'terminal' && projectName !== null) {
     throw new NewUsageError('A terminal opens in a folder; it does not make a project. Name a folder (harness new terminal ~/code/x), or none to open it here.')
   }
@@ -151,20 +195,22 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   if (folder !== null) {
     // `~` is this machine's home only when this machine is the target; for another machine it is
     // resolved there (resolveRemoteHome), so it is kept as typed until then.
-    cwd = folder === '~' || folder.startsWith('~/')
-      ? (machine === null ? join(env.home, folder.slice(2)) : folder)
+    // Another machine reads `~\x` typed on Windows as its own `~/x`: it may not be Windows, and the home is resolved there.
+    const home = (rest: string) => `~${windows ? rest.replace(/\\/g, '/') : rest}`
+    cwd = folder === '~' || folder.startsWith('~/') || (windows && folder.startsWith('~\\'))
+      ? (machine === null ? path.join(env.home, folder.slice(2)) : home(folder.slice(1)))
       // An unquoted ~/x reaches us as /Users/you/x: the shell expanded it against THIS machine. For
       // another machine that path means nothing, and what was typed was its home — so give it back.
-      : machine !== null && (folder === env.home || folder.startsWith(`${env.home}/`)) ? `~${folder.slice(env.home.length)}`
-      : isAbsolute(folder) ? folder
-      : machine === null ? resolve(env.cwd, folder)
+      : machine !== null && (folder === env.home || folder.startsWith(`${env.home}${path.sep}`) || folder.startsWith(`${env.home}/`)) ? home(folder.slice(env.home.length))
+      : path.isAbsolute(folder) ? folder
+      : machine === null ? path.resolve(env.cwd, folder)
       : (() => { throw new NewUsageError('A folder on another machine is an absolute path or starts with ~/.') })()
   } else if (projectName === null) {
     // Nothing named: here, on this machine — and a new project on another, where "here" means nothing.
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, repo, acuLimit, model, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -198,6 +244,9 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
     ...(terminal || mode === null ? {} : { permissionMode: mode }),
     ...(args.prompt ? { prompt: args.prompt } : {}),
     ...(args.name ? { name: args.name } : {}),
+    ...(args.repo ? { repositoryUrl: args.repo } : {}),
+    ...(args.acuLimit !== null ? { acuLimit: args.acuLimit } : {}),
+    ...(args.model !== null ? { model: args.model } : {}),
     creationId: randomUUID(),
   }
 }
@@ -336,8 +385,8 @@ const ERRORS: Record<string, string> = {
   INVALID_CWD: 'That folder does not exist on the machine.',
   INVALID_ENGINE: 'That agent is not one this machine knows.',
   INVALID_DSH: 'That harness is not in the machine\'s catalog, or does not run on that engine.',
-  PROJECT_EXISTS: 'A project with that name already exists. Name its folder instead.',
-  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message.',
+  PROJECT_EXISTS: 'A project with that name already exists. Choose another name, or name its folder to start in it.',
+  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message. Run it again without --task.',
   PROMPT_TOO_LONG: 'A first message holds at most 2,000 characters. Put the rest in a file and name the file in it.',
   SPAWN_FAILED: 'The agent could not be started.',
   // Recorded as a refusal only where a launch cannot be held (a new project's folder): its detail says what it waited for.
@@ -402,6 +451,30 @@ function projectStep(args: NewArgs, project: string, env: NodeJS.ProcessEnv): st
   if (env[VIA_MCP_ENV] === '1') return `harness_start (project: "${project}", …)`
   const name = args.name === null ? '' : ` --name ${/^[\w.-]+$/.test(args.name) ? args.name : JSON.stringify(args.name)}`
   return `harness new ${args.agent} ${project}${name} -- …`
+}
+
+/** How the caller starts [args] in the existing [folder] instead: the shell's words, or the tool `harness mcp` offers. */
+function folderStep(args: NewArgs, folder: string, env: NodeJS.ProcessEnv): string {
+  if (env[VIA_MCP_ENV] === '1') return `harness_start (folder: "${folder}"${args.machine === null ? '' : `, machine: "${args.machine}"`}, …)`
+  const name = args.name === null ? '' : ` --name ${/^[\w.-]+$/.test(args.name) ? args.name : JSON.stringify(args.name)}`
+  const machine = args.machine === null ? '' : ` ${machineOption(args.machine)}`
+  // Quoted, `~/` still means the home: parseNewArgs reads it, not the shell.
+  return `harness new ${args.agent}${machine} ${/^[\w./~-]+$/.test(folder) ? folder : JSON.stringify(folder)}${name}${args.prompt ? ' -- …' : ''}`
+}
+
+/**
+ * What `harness new` says when the new project it was to make is already there. A name the person chose is never quietly
+ * changed (lib/projectFolder.ts), so the ways on are that folder or another name. "Name its folder instead", followed by
+ * the app's "Select that folder from your projects", left out where the folder was and how to name one (PROJECT_EXISTS
+ * was 4 of 7 failed starts on Oct 18). The machine names the folder when it is one to start in (`existingFolder`).
+ */
+function projectExists(args: NewArgs, folder: string | null, at: { local: boolean; machine: string; home: string }, env: NodeJS.ProcessEnv): string {
+  const slug = args.projectName ? projectFolderSlug(args.projectName) : null
+  const called = slug ? `“${slug}”` : 'A project with that name'
+  if (!folder) return `${called} already exists on ${at.machine}. Choose another name for the new project.`
+  const shown = at.local ? tildeOf(folder, at.home) : folder
+  return `${called} already exists on ${at.machine}: ${shown}. Choose another name for the new project, or start in that folder: `
+    + folderStep(args, shown, env)
 }
 
 /** One loopback session with the daemon: select the machine, then ask, one request at a time. */
@@ -638,9 +711,11 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
         const failure = (result.failure ?? {}) as Record<string, unknown>
         const code = typeof failure.code === 'string' ? failure.code : ''
         const detail = typeof failure.detail === 'string' && failure.detail ? failure.detail : ''
+        const existing = typeof failure.existingFolder === 'string' && failure.existingFolder ? failure.existingFolder : null
         throw new Error(result.state === 'failed'
+          ? code === 'PROJECT_EXISTS' ? projectExists(args, existing, { local, machine: machineLabel, home: deps.home }, env)
           // A code this has no words for is shown by the daemon's own detail, which names the engine and why.
-          ? (ERRORS[code] ? `${ERRORS[code]}${detail ? ` (${detail})` : ''}` : detail || code || 'The harness could not be started.')
+          : ERRORS[code] ? `${ERRORS[code]}${detail ? ` (${detail})` : ''}` : detail || code || 'The harness could not be started.'
           : `Harness could not confirm the harness started (${String(result.state)}). Check with \`${psThere}\` before starting another.`)
       }
       const agent = (result.agent ?? {}) as Record<string, unknown>

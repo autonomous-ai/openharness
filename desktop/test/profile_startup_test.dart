@@ -59,7 +59,7 @@ class _Environment extends EnvironmentProvisioner {
     bool install = true,
     EnvironmentSetupMode? mode,
   }) async {
-    expect(install, isFalse);
+    expectSync(install, isFalse);
     final ready = EnvironmentReadiness(
       steps: {
         for (final step in EnvironmentStep.values)

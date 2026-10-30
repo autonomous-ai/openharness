@@ -49,10 +49,22 @@ enum ExperimentalFeature {
     'agent_messages_hide_summary',
     'Share a one-line summary of what your harnesses are doing with people in your shared tabs',
     'One line of at most 120 characters, for the harnesses listed in a shared tab.',
+  ),
+
+  /// `harness tell` (cli/src/messages/tell.ts): one way, from the starter, apart
+  /// from Agent Messages, which give a started harness no exception (owner, 2026-10-11).
+  agentsTellAgents(
+    'agents_tell_agents',
+    'Agents can give more work to harnesses they started',
+    'Turn on to let an agent send a harness it started its next task with harness tell, in the same conversation, on any of your machines.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
   final String id, label, description;
+
+  /// Super Tab owns coordination. Keep the old wire values readable for existing
+  /// clients and sessions, without asking people to assemble the feature here.
+  bool get visibleInSettings => this == focusBarCreature || this == shareButton;
 
   /// The switch shows the opposite of the stored value.
   bool get inverted => this == agentMessagesHideSummary;
@@ -62,7 +74,8 @@ enum ExperimentalFeature {
     agentsStartAgents ||
     agentPullRequestLine ||
     agentMessages ||
-    agentMessagesHideSummary => true,
+    agentMessagesHideSummary ||
+    agentsTellAgents => true,
   };
 }
 
@@ -92,8 +105,23 @@ class ApiExperimentalSettingsTransport
 /// Account opt-ins. No installation-wide cache can enable another account's experiments.
 /// Changes are displayed only after acknowledgement; reads never write or migrate local choices.
 class ExperimentalFeaturesStore extends ChangeNotifier {
-  ExperimentalFeaturesStore({this.pollInterval = const Duration(seconds: 30)});
+  ExperimentalFeaturesStore({
+    this.pollInterval = safetyNet,
+    this.retryInterval = const Duration(seconds: 30),
+  });
+
+  /// The read with no push: a missed one. Every write is pushed
+  /// (`desk_changed`, backend routes/experimentalSettings.ts), so the 30 s poll
+  /// this was read from every open app and almost always found nothing new
+  /// (WebSocket roadmap, Phase 2 item 4). The CLI's copy waits as long.
+  static const safetyNet = Duration(minutes: 5);
+
+  /// How long the safety net waits after a good read, by it or by a push.
   final Duration pollInterval;
+
+  /// How soon a read that failed is tried again, as the old poll did.
+  final Duration retryInterval;
+  int _quietLooks = 0;
   final _choices = <ExperimentalFeature, bool>{};
   final _available = <ExperimentalFeature, bool>{};
   ExperimentalSettingsTransport? _transport;
@@ -130,9 +158,20 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
     if (account != null && transport != null) {
       unawaited(refresh());
       if (pollInterval > Duration.zero) {
-        _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
+        final every = pollInterval < retryInterval
+            ? pollInterval
+            : retryInterval;
+        _poll = Timer.periodic(every, (_) => _look(every));
       }
     }
+  }
+
+  /// Counted in looks, not by the clock: a good read holds the next one off
+  /// for [pollInterval]; a failed one, or none yet, is tried at the next look.
+  void _look(Duration every) {
+    final quiet =
+        loaded && error == null && every * ++_quietLooks < pollInterval;
+    if (!quiet) unawaited(refresh());
   }
 
   void _notify() {
@@ -155,18 +194,41 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
   }
 
   Future<void> _read(int generation, int epoch) async {
+    Map<String, dynamic>? result;
     try {
-      final result = await _transport!.read();
-      if (!_current(generation) || epoch != _epoch) return;
+      result = await _transport!.read();
+    } catch (_) {}
+    if (!_current(generation) || epoch != _epoch) return;
+    final before = _shown();
+    try {
+      if (result == null) throw const FormatException('Unreadable');
       _apply(result);
       error = null;
       errorFeature = null;
+      _quietLooks = 0;
     } catch (_) {
-      if (!_current(generation) || epoch != _epoch) return;
       error = 'Couldn’t read your account settings. Refresh to try again.';
     }
-    _notify();
+    // The fallback poll reads every 30 s and almost always finds nothing new.
+    // Every pane header, the workspace screen (a setState and a native menu
+    // sync) and search listen here, so notifying on each read rebuilt them
+    // twice a minute for every account, on the UI thread whose long frames
+    // production samples (Oct 17: 6.7% of Linux samples over 250 ms, macOS
+    // 0.25%). Only a read that changes what is shown notifies.
+    if (!listEquals(before, _shown())) _notify();
   }
+
+  /// Everything a listener can read after a read: a newer revision that
+  /// changes no choice changes nothing on screen.
+  List<Object?> _shown() => [
+    loaded,
+    error,
+    errorFeature,
+    for (final feature in ExperimentalFeature.values) ...[
+      _choices[feature],
+      _available[feature],
+    ],
+  ];
 
   void _apply(Map<String, dynamic> result) {
     final revision = result['revision'];
@@ -236,4 +298,24 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
     _poll?.cancel();
     super.dispose();
   }
+}
+
+/// One experiment's [ExperimentalFeaturesStore.choice] as a listenable: null
+/// until the account's settings are read. It notifies whenever the store does
+/// — when any experiment, its availability, a save or an error changes — so a
+/// listener compares with the value it last saw.
+class ExperimentChoice implements ValueListenable<bool?> {
+  const ExperimentChoice(this.store, this.feature);
+
+  final ExperimentalFeaturesStore store;
+  final ExperimentalFeature feature;
+
+  @override
+  bool? get value => store.choice(feature);
+
+  @override
+  void addListener(VoidCallback listener) => store.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) => store.removeListener(listener);
 }

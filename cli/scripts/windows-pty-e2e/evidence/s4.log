@@ -1,0 +1,54 @@
+12:23:30
+SUCCESS: The process with PID 12232 has been terminated.
+--- processes 3s after taskkill
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    12364            8708 powershell.exe  05:23:29 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+    12612            9408 node.exe        05:22:53 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9408           12336 node.exe        05:22:52 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+    11616           12612 harness-pty.exe 05:23:27 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+
+
+
+--- list +5 s
+--- list +10 s
+--- list +20 s
+--- all rows for the 3
+{"id":"a61b5044â€¦","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"9f4d41e4â€¦","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"a9332983â€¦","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+
+2026-10-15 03:32:11.769 [terminal] enabled backends: ptyhost
+2026-10-15 03:32:11.878 [terminal] ptyhost: available (p2)
+2026-10-15 03:34:18.221 [terminal] enabled backends: ptyhost
+2026-10-15 03:34:18.225 [terminal] ptyhost: available (p2)
+2026-10-15 03:43:06.784 [terminal] enabled backends: ptyhost
+2026-10-15 03:43:06.792 [terminal] ptyhost: available (p2)
+2026-10-15 03:45:24.355 [terminal] enabled backends: ptyhost
+2026-10-15 03:45:24.359 [terminal] ptyhost: available (p2)
+2026-10-15 03:50:54.408 [terminal] enabled backends: ptyhost
+2026-10-15 03:50:54.413 [terminal] ptyhost: available (p2)
+2026-10-15 05:19:27.286 [discovery] 59076af0 retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:21:07.409 [discovery] c99673b5 retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:21:07.418 [discovery] 0d55651b retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:21:17.416 [discovery] bab75801 retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:21:17.421 [discovery] 470475a2 retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:21:22.421 [discovery] 61f56d06 retained Aú engine process absent after 2 confirmed scans
+2026-10-15 05:22:07.347 [terminal] enabled backends: ptyhost
+2026-10-15 05:22:07.350 [terminal] ptyhost: available (p2)
+2026-10-15 05:22:53.656 [terminal] enabled backends: ptyhost
+2026-10-15 05:22:53.660 [terminal] ptyhost: available (p2)
+2026-10-15 05:23:26.161 [terminal] ptyhost: lost the connection to the host; reconnecting
+2026-10-15 05:23:27.233 [terminal] ptyhost: reconnected (p2, a new host: its panes are gone)
+2026-10-15 05:23:29.006 [discovery] a61b5044 removed Aú terminal runtime absent after 2 confirmed scans
+2026-10-15 05:23:29.014 [discovery] 9f4d41e4 removed Aú terminal runtime absent after 2 confirmed scans
+2026-10-15 05:23:29.019 [discovery] a9332983 removed Aú terminal runtime absent after 2 confirmed scans
+
+

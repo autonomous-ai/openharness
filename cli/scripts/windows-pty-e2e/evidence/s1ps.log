@@ -1,0 +1,8 @@
+12:20:19.969 PASS PowerShell (rerun): prompt shows on the stream — after 1013 ms; raw output so far ""
+12:20:20.979 PASS PowerShell (rerun): type a command, see its output — PS C:\work\e2e\proj> 'SIZE=' + $Host.UI.RawUI.WindowSize.Width + 'x' + $Host.UI.RawUI.WindowSize.Height | SIZE=120x40 | PS C:\work\e2e\proj> Write-Output ('E2E_' + (40+2))
+12:20:23.501 PASS PowerShell (rerun): paste 30 KB (300 lines) through ReadLine, count + checksum — TOTAL=30000 HASH=333713715 (30299 bytes, 1005 ms)
+12:20:25.834 PASS PowerShell (rerun): paste Vietnamese/CJK/Korean/emoji, echoed by PowerShell — output line == pasted text: Tiếng Việt: Xin chào thế giới — 中文：你好世界 — 日本語：こんにちは — 한국어: 안녕하세요 — 🎉🚀👍
+12:20:27.728 PASS PowerShell (rerun): typed (not pasted) Unicode reaches PowerShell — gõ tiếng Việt 汉字 ✓ | PS C:\work\e2e\proj>
+12:20:30.256 PASS PowerShell (rerun): resize 120x40 → 100x30, the shell sees it — keyframe rows=30; SIZE=100x30
+12:20:32.282 PASS PowerShell (rerun): resize back to 120x40 — keyframe rows=40; SIZE=120x40
+12:20:32.283 SUMMARY 7/7 passed

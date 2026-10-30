@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { request, type Server } from 'node:http'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -9,8 +10,22 @@ import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
+import { pipeRequest } from './lib/windows/pipeClient.js'
 
 let server: Server | null = null
+
+/** The fetch a test's calls go through: this OS user's process, so over the loopback port it shows the daemon's
+ *  local credential (lib/localCredential.ts) — unless the test names its own `x-harness-local`. */
+const realFetch = globalThis.fetch
+function credentialedFetch(base: string, credential: string): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!url.startsWith(base)) return realFetch(input, init)
+    const headers = new Headers(init?.headers)
+    if (!headers.has('x-harness-local')) headers.set('x-harness-local', credential)
+    return realFetch(input, { ...init, headers })
+  })
+}
 
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -29,6 +44,7 @@ async function start(overrides: Partial<HookServerHandlers> = {}) {
   server = started.server
   const credential = readHookCredential(env.ADAPTER_DATA_DIR)
   if (!credential) throw new Error('hook credential was not created')
+  credentialedFetch(`http://127.0.0.1:${started.port}`, credential)
   return {
     handlers,
     base: `http://127.0.0.1:${started.port}`,
@@ -59,6 +75,31 @@ describe('process-owned hook server', () => {
       }
       expect(handlers.onRegistered).not.toHaveBeenCalled()
       expect(onPromptSubmitted).not.toHaveBeenCalled()
+    } finally { admit.mockRestore(); byAgent.mockRestore() }
+  })
+
+  it('keeps both hints of a mixed tmux and pty host array', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const runtimeHints = [{ backend: 'tmux', paneId: '%5' }, { backend: 'ptyhost', instance: 'p2', paneId: '%1003' }]
+    await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', runtimeHints, callerPid: 4242 }) })
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints }))
+  })
+
+  it('holds a hook whose pty host pane is another host instance\'s pane with the same id', async () => {
+    const admit = vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: false, reason: 'codex_subagent' })
+    const runtime = { backend: 'ptyhost', instance: 'p1', paneId: '%1' }
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [runtime], primaryRuntimeKey: 'ptyhost\u0000p1\u0000%1', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as unknown as RegisteredSession
+    const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    try {
+      const { base, headers } = await start({ resolveHookAgent: async () => agent })
+      const post = async (instance: string) => (await fetch(`${base}/api/hook/session-start`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ engine: 'codex', runtimeHints: [{ backend: 'ptyhost', instance, paneId: '%1' }], sessionId: `child-${instance}`, hookEvent: 'UserPromptSubmit' }),
+      })).json()
+      expect(await post('p2')).toEqual({ pending: true })
+      expect(await post('p1')).toEqual({ ignored: true, reason: 'codex_subagent' })
     } finally { admit.mockRestore(); byAgent.mockRestore() }
   })
 
@@ -106,6 +147,38 @@ describe('process-owned hook server', () => {
       engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
       onWait: expect.any(Function),
     })
+  })
+
+  it('resolves a hook from a pty host pane (Windows) by its instance and pane', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'claude',
+        sessionId: '7f3b1c2e-0a4d-4e5f-9a6b-1c2d3e4f5a6b',
+        runtimeHints: [{ backend: 'ptyhost', instance: 'p2', paneId: '%1003' }],
+        callerPid: 4242,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'claude', tmuxPane: undefined, runtimeHints: [{ backend: 'ptyhost', instance: 'p2', paneId: '%1003' }], callerPid: 4242,
+      onWait: expect.any(Function),
+    })
+  })
+
+  it.each(['p2-0.4.21-dev.win1', 'p2-h0123456789ab'])('resolves a hook from a versioned pty host\'s pane by its instance: %s', async (instance) => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const runtimeHints = [{ backend: 'ptyhost', instance, paneId: '%7' }]
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', runtimeHints, callerPid: 4242 }),
+    })
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints }))
   })
 
   it('answers a hook whose agent has yet to record its process before the wait, and only logs what the wait finds', async () => {
@@ -205,6 +278,14 @@ describe('process-owned hook server', () => {
   it.each([
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', unknown: true }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'tmux', paneId: '%1', extra: true }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1', extra: true }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'host', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p2-0.4.21 x', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p2-', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 1, paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1\n' }] }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', source: { forged: true } }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', input: 'x'.repeat(128 * 1024 + 1) }],
     [null],
@@ -341,6 +422,87 @@ describe('the Agent Messages proxy', () => {
   })
 })
 
+// The desktop and web apps approve a device that says its code aloud (a lamp, #1410), as the phone does:
+// the daemon passes the phone half of a sign-in through with its own session, and nothing else.
+describe('sign-in approval proxy', () => {
+  it('passes lookup, approve and deny through with the code only, guarded from cross-origin requests', async () => {
+    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { ok: true } } }))
+    const { base } = await start({ onSignInAnswer: send })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
+      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers: h, body: JSON.stringify({ code: '12345678' }) })).status).toBe(403)
+    }
+    for (const invalid of [{}, { code: '' }, { code: 5 }, { code: 'x'.repeat(129) }, { code: '12345678', userId: 'u2' }]) {
+      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
+    }
+    expect((await fetch(`${base}/api/auth/qr/claim`, { method: 'POST', headers, body: JSON.stringify({ code: '12345678' }) })).status).toBe(404)
+    expect(send).not.toHaveBeenCalled()
+    for (const action of ['lookup', 'approve', 'deny'] as const) {
+      expect((await fetch(`${base}/api/auth/qr/${action}`, { method: 'POST', headers, body: JSON.stringify({ code: '1234 5678' }) })).status).toBe(200)
+      expect(send).toHaveBeenLastCalledWith(action, { code: '1234 5678' })
+    }
+  })
+
+  it('is unavailable on a daemon that cannot reach the backend for it', async () => {
+    const { base } = await start({})
+    const r = await fetch(`${base}/api/auth/qr/lookup`, { method: 'POST', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ code: '12345678' }) })
+    expect(r.status).toBe(503)
+  })
+})
+
+// The native desktop's chat files: its REST client has no account token, so the daemon streams the upload on with its own.
+describe('Super Tab attachment pass-through', () => {
+  it('hands a local multipart POST to the pass-through as a stream, guarded like the other writes', async () => {
+    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
+      let bytes = 0
+      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ path, bytes }))
+    })
+    const { base } = await start({ onSuperTabAttachment: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
+    const body = Buffer.alloc(300 * 1024, 1)
+    for (const h of [{ 'content-type': headers['content-type'] }, { ...headers, origin: 'https://untrusted.example' }]) {
+      expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST', headers: h, body })).status).toBe(403)
+    }
+    expect((await fetch(`${base}/api/super-tabs/../attachments`, { method: 'POST', headers, body })).status).toBe(404)
+    expect((await fetch(`${base}/api/super-tabs/tab-1/commands`, { method: 'POST', headers, body })).status).toBe(404)
+    expect(forward).not.toHaveBeenCalled()
+    // Past the 256 KiB the JSON routes read: the body reaches the pass-through whole, as a stream.
+    const r = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=agent-1&other=x`, { method: 'POST', headers, body })
+    expect(r.status).toBe(201)
+    // An agent's own `post --attach` names it; nothing else in the query goes on.
+    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments?asAgentId=agent-1', bytes: body.byteLength })
+    const person = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=../x`, { method: 'POST', headers, body: 'x' })
+    expect(await person.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments', bytes: 1 })
+  })
+
+  // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
+  // showed only "Could not upload the file".
+  it('hands an avatar picture to the pass-through, guarded the same way', async () => {
+    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
+      let bytes = 0
+      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ path, bytes }))
+    })
+    const { base } = await start({ onSuperTabAttachment: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
+    expect((await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
+      headers: { ...headers, origin: 'https://untrusted.example' }, body: 'x' })).status).toBe(403)
+    expect(forward).not.toHaveBeenCalled()
+    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST', headers, body: 'picture' })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
+  })
+
+  it('is unavailable on a daemon without it', async () => {
+    const { base } = await start({})
+    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'x' })).status).toBe(503)
+  })
+})
+
 describe('account Experimental settings proxy', () => {
   it('proxies only voluntary fixed-choice feedback and guards it from cross-origin requests', async () => {
     const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
@@ -379,6 +541,14 @@ describe('account Experimental settings proxy', () => {
     const failed = await post(body)
     expect(failed.status).toBe(502)
     expect(await failed.text()).not.toContain('PRIVATE_CANARY')
+    // The backend's busy answer reaches the Desktop with its Retry-After, which the Desktop waits out.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }
+    send.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_500 } as never)
+    const refused = await post(body)
+    expect(refused.status).toBe(429)
+    expect(refused.headers.get('retry-after')).toBe('91')
+    expect(await refused.json()).toEqual(busy)
+    expect((await post(body)).headers.get('retry-after')).toBeNull()
   })
   it('forwards the current Desktop health report intact while rejecting private context', async () => {
     const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
@@ -396,6 +566,35 @@ describe('account Experimental settings proxy', () => {
     expect(send).not.toHaveBeenCalled()
     expect((await post(body)).status).toBe(200)
     expect(send).toHaveBeenCalledExactlyOnceWith(body)
+  })
+  it('forwards a newer Desktop report without the names it does not know, and says which it knows', async () => {
+    // Refused whole before: the Desktop drops a refused packet for good, so one new name lost all of it.
+    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
+    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
+    const { base } = await start({ onProductUsageReport: send })
+    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
+    const post = (value: unknown, h: Record<string, string> = headers) =>
+      fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
+    const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
+    const kept = await post(newer)
+    expect(kept.status).toBe(200)
+    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('6')
+    expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
+      counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
+    expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
+    // Everything else is refused as before, and every answer names the vocabulary.
+    for (const [refused, h] of [
+      [{ ...body, counters: { health_desktop_PRIVATE_CANARY: 1 } }, headers],
+      [{ ...newer, counters: { ...newer.counters, turns_started: 1 } }, headers],
+      [{ ...newer, prompt: 'PRIVATE_CANARY' }, headers],
+      [newer, { 'content-type': 'application/json' }],
+    ] as const) {
+      const response = await post(refused, h)
+      expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
+      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('6')
+      expect(await response.text()).not.toContain('PRIVATE_CANARY')
+    }
+    expect(send).toHaveBeenCalledOnce()
   })
   it('serves the Privacy switch and rejects cross-origin, extra-field and malformed writes', async () => {
     const write = vi.fn(async () => ({ status: 200, body: { success: true, data: { enabled: false, revision: 1 } } }))
@@ -592,8 +791,10 @@ describe('requests must name this server', () => {
   // A page that re-points its hostname at 127.0.0.1 is same-origin to this port; only its Host gives it away.
   async function send(base: string, method: string, path: string, headers: Record<string, string>): Promise<number> {
     const url = new URL(path, base)
+    // This OS user's process: it shows the local credential, as every route but liveness wants over the port.
+    const credentialed = { 'x-harness-local': readHookCredential(env.ADAPTER_DATA_DIR) ?? '', ...headers }
     return new Promise((resolve, reject) => {
-      const r = request({ host: '127.0.0.1', port: url.port, path: url.pathname, method, headers }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+      const r = request({ host: '127.0.0.1', port: url.port, path: url.pathname, method, headers: credentialed }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
       r.on('error', reject)
       r.end()
     })
@@ -759,8 +960,67 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(200)
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff')).toBe(403)
       const port = (started.server.address() as { port: number }).port
+      // Over the port: refused without the local credential, and still refused with it.
       const tcp = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: local })
-      expect(tcp.status).toBe(403)
+      expect(tcp.status).toBe(401)
+      const credential = readHookCredential(env.ADAPTER_DATA_DIR) ?? ''
+      const credentialed = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: { ...local, 'x-harness-local': credential } })
+      expect(credentialed.status).toBe(403)
+      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('takes `harness stop` over the trusted endpoint only — never on the loopback port', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const onDaemonStop = vi.fn(async () => ({ status: 202, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onDaemonStop }, { socketPath })
+    server = started.server
+    try {
+      const local = { 'x-adapter-local': '1' }
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop', local)).toBe(202)
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop')).toBe(403)
+      const port = (started.server.address() as { port: number }).port
+      const tcp = await fetch(`http://127.0.0.1:${port}/api/daemon/stop`, { method: 'POST', headers: local })
+      expect(tcp.status).toBe(401)
+      const credential = readHookCredential(env.ADAPTER_DATA_DIR) ?? ''
+      const credentialed = await fetch(`http://127.0.0.1:${port}/api/daemon/stop`, { method: 'POST', headers: { ...local, 'x-harness-local': credential } })
+      expect(credentialed.status).toBe(403)
+      expect(onDaemonStop).toHaveBeenCalledTimes(1)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('has no `harness stop` route where no handler is given: a Mac or Linux core, unchanged', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+    server = started.server
+    try {
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop', { 'x-adapter-local': '1' })).toBe(404)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('over the Windows pipe, serves only requests that prove the token, and trusts those', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, `harness-${randomBytes(16).toString('hex')}`)
+    const token = randomBytes(32)
+    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath, pipeToken: token })
+    server = started.server
+    try {
+      const local = { 'x-adapter-local': '1' }
+      // The route a Unix socket's file mode guards: here the token is what lets it through.
+      expect((await pipeRequest({ pipe: socketPath, token }, { method: 'POST', path: '/api/auth/handoff', headers: local })).status).toBe(200)
+      expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(401)
       expect(onAuthHandoff).toHaveBeenCalledTimes(1)
     } finally {
       await started.localSocket?.close()
@@ -850,3 +1110,75 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     expect(mutation).not.toHaveBeenCalled()
   },
 )
+
+describe('the loopback port wants this OS user\'s local credential', () => {
+  // Another OS user's process reaches 127.0.0.1 too — a guest's harness running as its own user
+  // (docs/plans/2026-10-19-guest-machine-sharing-plan.md). Only this user can read the 0600 credential.
+  const raw = (port: number, method: string, path: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> =>
+    new Promise((resolve, reject) => {
+      const r = request({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => { body += chunk })
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+      })
+      r.on('error', reject)
+      r.end()
+    })
+
+  it('refuses every route without it, takes it by header or bearer, and leaves liveness and the hook routes alone', async () => {
+    const onMachinesList = vi.fn(async () => ({ status: 200, body: { success: true, data: { machines: [] } } }))
+    const started = await startHookServer(0, {
+      onRegistered: vi.fn(), onSessionEnd: vi.fn(), onMachinesList,
+      onStatus: () => ({ version: '9.9.9', pid: 42, corePid: 43, computerId: 'c1', machineId: 'm1', dataDir: '/secret/data', signedIn: true, localWs: { path: '/api/local-ws' }, localSocket: null }),
+    } as Partial<HookServerHandlers> as HookServerHandlers)
+    server = started.server
+    const port = started.port
+    const credential = readHookCredential(env.ADAPTER_DATA_DIR)!
+    // Without it: the account's routes, reads and writes alike, are refused.
+    for (const [method, path] of [['GET', '/api/machines'], ['GET', '/api/pairs'], ['POST', '/api/revoke-all'], ['GET', '/api/agent-settings'], ['GET', '/nowhere']] as const) {
+      const answer = await raw(port, method, path, { 'x-adapter-local': '1' })
+      expect(answer.status, `${method} ${path}`).toBe(401)
+      expect(JSON.parse(answer.body)).toEqual({ error: 'LOCAL_CREDENTIAL_REQUIRED' })
+    }
+    // A wrong one is no better.
+    expect((await raw(port, 'GET', '/api/machines', { 'x-harness-local': 'x'.repeat(43) })).status).toBe(401)
+    // With it, by its header or as a bearer.
+    expect((await raw(port, 'GET', '/api/machines', { 'x-harness-local': credential })).status).toBe(200)
+    expect((await raw(port, 'GET', '/api/machines', { authorization: `Bearer ${credential}` })).status).toBe(200)
+    expect(onMachinesList).toHaveBeenCalledTimes(2)
+    // Liveness answers anyone; the status, only who the daemon is and where its socket is.
+    expect((await raw(port, 'GET', '/api/health')).status).toBe(200)
+    const open = await raw(port, 'GET', '/api/status')
+    expect(open.status).toBe(200)
+    expect(JSON.parse(open.body)).toEqual({ credentialRequired: true, version: '9.9.9', pid: 42, corePid: 43, computerId: 'c1', localWs: { path: '/api/local-ws' }, localSocket: null })
+    const whole = JSON.parse((await raw(port, 'GET', '/api/status', { 'x-harness-local': credential })).body)
+    expect(whole).toMatchObject({ machineId: 'm1', dataDir: '/secret/data', signedIn: true })
+    // A hook route keeps its own token: refused for want of it, not of the local credential.
+    const hook = await raw(port, 'POST', '/api/hook/session-end')
+    expect(hook.status).toBe(401)
+    expect(JSON.parse(hook.body)).toEqual({ error: 'UNAUTHORIZED' })
+  })
+
+  const viaSocket = (socketPath: string, method: string, path: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const r = request({ socketPath, path, method }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+      r.on('error', reject)
+      r.end()
+    })
+
+  it('takes nothing over the daemon\'s own socket', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const onMachinesList = vi.fn(async () => ({ status: 200, body: { success: true, data: { machines: [] } } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onMachinesList } as Partial<HookServerHandlers> as HookServerHandlers, { socketPath })
+    server = started.server
+    try {
+      expect(await viaSocket(socketPath, 'GET', '/api/machines')).toBe(200)
+      expect(onMachinesList).toHaveBeenCalledTimes(1)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

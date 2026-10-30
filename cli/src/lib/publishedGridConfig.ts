@@ -8,6 +8,7 @@ import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts, type NativePathFact } from '../engines/kit/nativePaths.js'
 import { HookPreparationHeld, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationAttempt, type HookPreparationProof } from '../engines/kit/nativeHookFiles.js'
 import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
+import { directorySyncSupported } from './secureState.js'
 
 const identity = (info: NonNullable<ReturnType<typeof lstatSync>>) => `${info.dev}:${info.ino}:${info.mode}:${info.uid}`
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -24,7 +25,8 @@ async function syncDirectory(path: string, attempt: HookPreparationAttempt): Pro
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     if (identity(fstatSync(fd)) !== expected) throw new HookPreparationHeld('the directory changed before confirmation')
-    await attempt.flush(fd)
+    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+    if (directorySyncSupported()) await attempt.flush(fd)
     if (identity(lstatSync(path)) !== expected) throw new HookPreparationHeld('the directory changed during confirmation')
   } finally { closeSync(fd) }
 }

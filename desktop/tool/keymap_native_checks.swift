@@ -11,6 +11,10 @@ let source = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])
 let fixture = try JSONSerialization.jsonObject(with: source) as! [String: [String: Any]]
 let defaults = HarnessNativeKeymap(fixture["defaults"]!)!
 let changed = HarnessNativeKeymap(fixture["changed"]!)!
+try checkKeymap(defaults.match([stroke("cmd+k")], context: "swarmChat").binding?.command == "swarm.quick_switcher",
+  "Command-K switches conversations in Swarm chat")
+try checkKeymap(defaults.match([stroke("cmd+k")], context: "terminal").binding?.command == "pane.focus_above",
+  "Command-K retains the existing terminal shortcut")
 for key in ["n", "o", "g", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {
   try checkKeymap(defaults.match([stroke(key)], context: "project").binding?.command.hasPrefix("creation.project_") != true,
     "Project search does not bind action or recent shortcuts to \(key)")
@@ -25,7 +29,7 @@ try checkKeymap(changed.match([stroke("down")], context: "project").binding == n
 for (key, command) in [
   ("cmd+left", "pane.focus_left"), ("cmd+down", "pane.focus_below"),
   ("cmd+up", "pane.focus_above"), ("cmd+right", "pane.focus_right"),
-  ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
+  ("cmd+ctrl+s", "app.store"), ("cmd+s", "super_tab.new"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
   ("cmd+p", "harnesses.list"), ("cmd+o", "agent.open"), ("cmd+shift+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
@@ -57,9 +61,11 @@ for context in HarnessNativeKeymap.contexts {
     "Command-U has no default workspace action")
   try checkKeymap(defaults.match([stroke("cmd+y")], context: context).binding == nil,
     "Command-Y has no default workspace action")
-  let store = defaults.match([stroke("cmd+s")], context: context).binding
-  try checkKeymap(store?.command == "app.store" && store?.menuAction == "store" && store?.hint == "⌘S",
-    "Command-S opens Store with the matching native action and hint")
+  let store = defaults.match([stroke("cmd+ctrl+s")], context: context).binding
+  try checkKeymap(store?.command == "app.store" && store?.menuAction == "store" && store?.hint == "⌃⌘S",
+    "Control-Command-S opens Store with the matching native action and hint")
+  try checkKeymap(defaults.match([stroke("cmd+s")], context: context).binding?.command == "super_tab.new",
+    "Command-S opens New Swarm from \(context)")
   try checkKeymap(defaults.match([stroke("cmd+o")], context: context).binding?.command == "agent.open",
     "Command-O opens the project picker")
   try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",
@@ -156,7 +162,7 @@ try checkKeymap(stroke("cmd+shift+left").menuEquivalent == "\u{f702}" && stroke(
   "Native menu equivalents preserve function keys")
 
 func payload(_ rows: [[String: Any]]) -> [String: Any] {
-  ["version": 1, "contexts": ["workspace": rows, "terminal": rows, "picker": rows, "project": rows]]
+  ["version": 1, "contexts": Dictionary(uniqueKeysWithValues: HarnessNativeKeymap.contexts.map { ($0, rows) })]
 }
 let prefix: [String: Any] = ["keys": ["cmd+k"], "command": "example", "hint": "⌘K", "repeatable": false]
 let remappedOrchestrator = HarnessNativeKeymap(payload([

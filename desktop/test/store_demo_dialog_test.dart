@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/store/store_demo_dialog.dart';
-import 'package:webview_all/webview_all.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/real_fonts.dart';

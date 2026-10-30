@@ -101,7 +101,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
   service's own, crash or leak the whole process: it is one process.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
-  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss.
+  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests
+  (`waitsThroughRestart`) wait for its process to come back instead, bounded as a first start's wait is.
 - `src/services/searchProcess.ts` is the example to copy. `e2e/serviceProcesses.e2e.ts` is the proof
   to copy: killed, hung (SIGSTOP), leaking, crashing on every start.
 - A port the core calls asynchronously, answered when it is read, can be a request to the process: the
@@ -155,7 +156,7 @@ master too old to run it starts it beside itself, still in its own process (`src
   (`src/core/messagesLink.ts`, `MESSAGES_QUERIES` in `src/core/api.ts`) is shown the agents, told how this daemon is
   reached and whether it is signed in, calls the backend only through `MESSAGES_BACKEND_ROUTES` (the account's tabs, and shared tabs' shares, rosters,
   invitations, members and moves), sends the windows its log's change notice and nothing else, and hears
-  `desk_changed`. It holds no credential: the core signs each backend call, and the gateway signs and seals shared
+  `desk_changed` and `machines_changed`. It holds no credential: the core signs each backend call, and the gateway signs and seals shared
   tabs' rosters and frames (`core.account.tabKey`, asked as `tab_key`) and holds their sockets (`tab_relay`).
   `account` reads the account signed in here, and `observers` tells the core that a roster changed, which it hands to
   Share, so that a removed member stops watching at once. A core from before `account` answers `UNKNOWN_QUERY`, and

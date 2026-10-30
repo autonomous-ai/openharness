@@ -39,7 +39,6 @@ void pro_app_button_hold(void);
 void pro_app_notice(const char *text);
 // Leave the Talk frame whose recording is over (pod_ui_talk_over), redrawing.
 void pro_app_talk_over(void);
-bool pro_app_linked(void);
 // Why a recording for this agent must not start (the copy is the screen's), or NULL when it may.
 const char *pro_app_voice_block_reason(const char *agent_id);
 // The agent has an unanswered question (pro_app_question and not yet closed or answered by a new turn).
@@ -57,5 +56,4 @@ bool pro_app_take_scene(ht_scene_t *scene);   // draw the model into `scene` whe
 // ---- host test seams ----
 pod_ui_t *pro_app_test_pod(void);
 bool pro_app_test_take_dirty(void);      // the scene needs a redraw; clears the flag
-bool pro_app_test_take_force_frame(void); // the next awake frame must paint the whole glass; clears the flag
 void pro_app_test_reset(void);           // a fresh model; link down; nothing busy, open or requested

@@ -13,6 +13,20 @@ pub(super) struct Catalog {
     seed: Vec<Row>,
     revision: String,
 }
+/// A composed command's computer, when the list says it is up and hn has no link to it (one that dropped while it
+/// read offline, an error, or never dialled), is dialled now: `launch` then waits for it as for one still connecting.
+/// It answered "That computer is offline" while it was up (a shared Mac, 2026-10-22). A dial already pending or in
+/// its backoff is left to it (`dial_if_idle`): the waiting command asks again every 100 ms.
+fn wake(app: &mut App, name: &str) {
+    let mut found = app.fleet.machines.iter()
+        .filter(|m| !m.shared && (m.id == name || m.name.eq_ignore_ascii_case(name)));
+    let (Some(m), None) = (found.next(), found.next()) else { return };
+    if m.online() && matches!(m.reach, crate::fleet::Reach::Unknown | crate::fleet::Reach::Offline | crate::fleet::Reach::Error(_)) {
+        let id = m.id.clone();
+        app.dial_if_idle(&id);
+    }
+}
+
 fn host(app: &App, source: &str, name: Option<&str>, connecting: bool) -> Result<String, String> {
     let Some(name) = name else {
         return Ok(source.into());
@@ -490,6 +504,7 @@ pub(super) fn launch(app: &mut App, request: Request) {
     else {
         return;
     };
+    if let Some(name) = launch.host.as_deref() { wake(app, name) }
     let machine = match host(app, &source.0, launch.host.as_deref(), true) {
         Ok(m) => m,
         Err(e) => return reply(app, &request, 1, &e),
@@ -568,6 +583,47 @@ pub(super) fn launch(app: &mut App, request: Request) {
     } else {
         path
     };
+    // A computer shared with this account (guest sharing): its owner's daemon answers a guest only what
+    // cli core/guestPolicy.ts lists, which is not fs_list_dir, shell_capabilities or the terminal that runs
+    // shell-launch, so a composed command there was refused GUEST_NOT_ALLOWED. Start it as New Harness does there,
+    // and Desktop: Claude Code or Codex in that folder, on the owner's plans (a model route stays behind).
+    if app.fleet.shares.contains_key(&machine) {
+        if launch.model.is_some() {
+            return reply(app, &request, 1, "On a computer shared with you, the harness runs on its owner's plans: leave the model out.");
+        }
+        if !guest_folder(&path, app.homes.get(&machine).map(String::as_str), app.guest_folders.get(&machine)) {
+            return reply(app, &request, 1, "On a computer shared with you, start in your workspace (~) or a folder its owner shares.");
+        }
+        let mode = guest_mode(&launch.engine, app.options.get("@hn-permission-mode", "", None));
+        let payload = match guest_launch(&launch.engine, &path, &args, &mode) {
+            Ok(p) => p,
+            Err(e) => return reply(app, &request, 1, &e),
+        };
+        app.shell_context.pending = Some(request.clone());
+        let epoch = app.account_epoch;
+        let source_cwd = Some(launch.cwd.clone());
+        let creation = payload["creationId"].clone();
+        app.spawn(async move {
+            // A lost answer is not a launch that failed: the receipt says whether it started (as shell_open_status
+            // does for the remote shell), and `started` closes one this command no longer waits for.
+            match link.rpc("agent_create", payload, Duration::from_secs(180)).await {
+                Err(error) => match link.rpc("agent_create_status", json!({"creationId":creation}), Duration::from_secs(15)).await {
+                    Ok(reply) if reply["state"] == "created" => Ok(reply),
+                    _ => Err(error),
+                },
+                other => other,
+            }
+        }, move |app, result| {
+            if app.account_epoch != epoch { return }
+            // A refusal recorded on the receipt is `failure`, as New Harness reads it.
+            let result = result.and_then(|v| match v["failure"]["code"].as_str() {
+                Some(code) => Err(crate::daemon::RpcError::new(code, v["failure"]["detail"].as_str().unwrap_or(""))),
+                None => Ok(v),
+            });
+            started(app, request, machine, source, source_cwd, result);
+        });
+        return;
+    }
     app.shell_context.pending = Some(request.clone());
     let epoch = app.account_epoch;
     let local = machine == source.0;
@@ -600,23 +656,59 @@ pub(super) fn launch(app: &mut App, request: Request) {
             open_shell(&link2, payload).await
         },move |app,result| {
             if app.account_epoch!=epoch {return}
-            let current=app.shell_context.pending.as_ref().is_some_and(|r|r.id==request.id);
-            match result {
-                Ok(v)=>if let Some(id)=v.pointer("/agent/id").and_then(Value::as_str) {
-                    app.fleet.agents.insert((machine.clone(),id.into()),crate::fleet::agent_from(&machine,&v["agent"],None));
-                    if !current {if let Some(link)=app.link(&machine){link.send("agent_delete",json!({"agentId":id}));}return}
-                    app.shell_context.pending=None;
-                    if app.focused()!=Some(request.pane) {
-                        reply_data(app,&request,0,"",Some(json!({"attached":true,"message":"Agent started. Open it with Ctrl+B s."})));return
-                    }
-                    reply_data(app,&request,0,"",Some(json!({"attached":true})));
-                    let shell=app.shells.remove(&source);app.open_agent(&machine,id,Placement::Replace);if shell{app.shells.insert(source.clone());}
-                    visiting_shell_launch(app,&source,source_cwd,&machine,id);app.save_sessions();
-                }else{finish(app,1,"The computer did not create the agent.")},
-                Err(e)=>finish(app,1,&format!("Could not start: {e}")),
-            }
+            started(app, request, machine, source, source_cwd, result);
         });
     });
+}
+
+/// A composed command's agent, created on [machine]: it replaces the shell's view, which it returns to on exit.
+fn started(app: &mut App, request: Request, machine: String, source: (String, String), source_cwd: Option<String>,
+    result: Result<Value, crate::daemon::RpcError>) {
+    let current=app.shell_context.pending.as_ref().is_some_and(|r|r.id==request.id);
+    match result {
+        Ok(v)=>if let Some(id)=v.pointer("/agent/id").and_then(Value::as_str) {
+            app.fleet.agents.insert((machine.clone(),id.into()),crate::fleet::agent_from(&machine,&v["agent"],None));
+            if !current {if let Some(link)=app.link(&machine){link.send("agent_delete",json!({"agentId":id}));}return}
+            app.shell_context.pending=None;
+            if app.focused()!=Some(request.pane) {
+                reply_data(app,&request,0,"",Some(json!({"attached":true,"message":"Agent started. Open it with Ctrl+B s."})));return
+            }
+            reply_data(app,&request,0,"",Some(json!({"attached":true})));
+            let shell=app.shells.remove(&source);app.open_agent(&machine,id,Placement::Replace);if shell{app.shells.insert(source.clone());}
+            visiting_shell_launch(app,&source,source_cwd,&machine,id);app.save_sessions();
+        }else{finish(app,1,"The computer did not create the agent.")},
+        Err(e)=>finish(app,1,&format!("Could not start: {e}")),
+    }
+}
+
+/// The permission mode a guest's harness asks: @hn-permission-mode when [engine] has it (as New Harness reads it), or
+/// auto. One setting serves every engine, and the owner's daemon refuses a mode the engine lacks.
+fn guest_mode(engine: &str, option: Option<String>) -> String {
+    option.filter(|m| crate::new_harness::data::modes(engine).iter().any(|(id, _)| id == m)).unwrap_or_else(|| "auto".into())
+}
+
+/// Whether a guest may start in [path]: its workspace ([home]) or a folder the owner shares, or below one. The owner's
+/// daemon starts anything else in the workspace without saying so. Not loaded yet ([shared] none): its daemon decides.
+fn guest_folder(path: &str, home: Option<&str>, shared: Option<&Vec<(String, bool)>>) -> bool {
+    let Some(shared) = shared else { return true };
+    if path.split('/').any(|part| part == "..") { return false }
+    let under = |root: &str| { let root = root.trim_end_matches('/'); path == root || path.starts_with(&format!("{root}/")) };
+    home.is_some_and(under) || shared.iter().any(|(folder, _)| under(folder))
+}
+
+/// What a composed command starts on a computer shared with this account: Claude Code or Codex in [cwd], on its
+/// owner's plans, as New Harness starts it there. A task typed after the command is its first message; the
+/// engine's own options are not for a guest's harness (cli core/agents/guestCreate.ts builds its command).
+fn guest_launch(engine: &str, cwd: &str, args: &[String], permission_mode: &str) -> Result<Value, String> {
+    if !["claude", "codex"].contains(&engine) { return Err("On a computer shared with you, start Claude Code or Codex.".into()) }
+    if args.iter().any(|a| a.starts_with('-')) {
+        return Err("On a computer shared with you, start it without options: it runs on its owner's plans.".into())
+    }
+    let mut payload = json!({ "engine": engine, "cwd": cwd, "creationId": uuid::Uuid::new_v4().to_string(),
+        "bypassPermission": true, "permissionMode": permission_mode });
+    let task = args.join(" ");
+    if !task.trim().is_empty() { payload["prompt"] = json!(task.trim()) }
+    Ok(payload)
 }
 
 /// The composer's `@ computer` rows.
@@ -657,6 +749,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_composed_command_on_a_computer_shared_with_you_starts_claude_code_or_codex_as_new_harness_does() {
+        // `claude @<shared computer> :<shared folder>`: one agent_create a guest may send, never shell-launch.
+        let p = guest_launch("claude", "/Users/dee/projects/app", &[], "auto").unwrap();
+        assert_eq!(p["engine"], "claude");
+        assert_eq!(p["cwd"], "/Users/dee/projects/app");
+        assert_eq!(p["permissionMode"], "auto");
+        assert!(uuid::Uuid::parse_str(p["creationId"].as_str().unwrap()).is_ok());
+        for key in ["argv", "grid", "model", "apiConnection", "dsh", "agent"] { assert!(p.get(key).is_none(), "{key} is not for a guest") }
+        // A task typed after it is its first message.
+        assert_eq!(guest_launch("codex", "/w", &["fix the login test".into()], "auto").unwrap()["prompt"], "fix the login test");
+        // Its own options, and other agents, are refused with why.
+        assert!(guest_launch("claude", "/w", &["--model".into(), "opus".into()], "auto").unwrap_err().contains("without options"));
+        assert!(guest_launch("gemini", "/w", &[], "auto").unwrap_err().contains("Claude Code or Codex"));
+    }
+
+    #[test]
+    fn a_guest_launch_asks_only_what_its_engine_has_in_a_folder_it_may_use() {
+        // @hn-permission-mode is one setting for every engine; the daemon refuses a mode its engine lacks.
+        assert_eq!(guest_mode("codex", Some("plan".into())), "auto");
+        assert_eq!(guest_mode("claude", Some("plan".into())), "plan");
+        assert_eq!(guest_mode("claude", None), "auto");
+        // Its workspace or a folder the owner shares (and below them); the owner's daemon would start anything
+        // else in the workspace without saying so.
+        let shared = vec![("/Users/dee/code/app".to_string(), true)];
+        let home = Some("/Users/Shared/HarnessGuests/hg_1/work");
+        for ok in ["/Users/Shared/HarnessGuests/hg_1/work", "/Users/Shared/HarnessGuests/hg_1/work/sub", "/Users/dee/code/app", "/Users/dee/code/app/src"] {
+            assert!(guest_folder(ok, home, Some(&shared)), "{ok}");
+        }
+        for no in ["/Users/dee", "/Users/dee/code/application", "/Users/dee/code/app/../secret", "/etc"] {
+            assert!(!guest_folder(no, home, Some(&shared)), "{no}");
+        }
+        // Not loaded yet: the owner's daemon decides.
+        assert!(guest_folder("/Users/dee", home, None));
+    }
+
+    #[test]
     fn offline_computers_are_listed_dim_after_the_connected_ones_never_disabled() {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19449, sink, (100, 35));
@@ -669,6 +797,31 @@ mod tests {
         assert!(rows.iter().all(|r| !r.disabled), "every computer is reachable");
         assert_eq!((row("Mac Auto").right.as_str(), row("Mac Auto").label_dim, row("Mac Auto").tier), ("connected", 0, 0));
         assert_eq!((row("grid-dev").right.as_str(), row("grid-dev").label_dim, row("grid-dev").tier), (crate::shell_picker::OFFLINE, 8, 1));
+    }
+
+    /// `claude @<computer>` on a computer the list says is up, which hn has no link to (dropped while it read
+    /// offline, or never dialled), answered "That computer is offline". It is dialled now, and the launch
+    /// waits for it as for one still connecting; one the list says is down is still offline.
+    #[tokio::test]
+    async fn a_composed_command_dials_a_computer_that_is_up_but_not_linked_yet() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19449, sink, (100, 35));
+        use crate::fleet::Reach;
+        for (id, name, status, reach) in [("m1", "MacBooks-MacBook-Pro-9.local", "online", Reach::Offline), ("m2", "grid-dev", "online", Reach::Error("DISCONNECTED".into())),
+            ("m3", "lab", "offline", Reach::Offline), ("m4", "air", "online", Reach::Ready)] {
+            app.fleet.machines.push(crate::fleet::Machine { id: id.into(), name: name.into(), shared: false, local: false, status: status.into(), reach });
+        }
+        for name in ["MacBooks-MacBook-Pro-9.local", "grid-dev"] {
+            wake(&mut app, name);
+            let id = app.fleet.machines.iter().find(|m| m.name == name).unwrap().id.clone();
+            assert_eq!(app.fleet.machine(&id).unwrap().reach, Reach::Connecting, "{name} is dialled");
+            assert!(host(&app, "m4", Some(name), true).is_ok(), "{name}: the launch waits for it");
+        }
+        wake(&mut app, "lab");
+        assert_eq!(app.fleet.machine("m3").unwrap().reach, Reach::Offline);
+        assert_eq!(host(&app, "m4", Some("lab"), true).unwrap_err(), "That computer is offline. The command was not started.");
+        wake(&mut app, "air");
+        assert_eq!(app.fleet.machine("m4").unwrap().reach, Reach::Ready, "a linked computer is left as it is");
     }
 
     #[tokio::test]

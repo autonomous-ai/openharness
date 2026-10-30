@@ -9,7 +9,9 @@ import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/tty_controls.dart' show TtyFieldMic;
 import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 
 import '../voice_fakes.dart';
 import 'edge_fixture.dart';
@@ -55,7 +57,11 @@ void main() {
       FakeTranscriber stt,
     })
   >
-  openFind(WidgetTester tester, {bool handshaken = false}) async {
+  openFind(
+    WidgetTester tester, {
+    bool handshaken = false,
+    VoidCallback? onShowSwarm,
+  }) async {
     setPhone(tester, largePhone);
     final app = edgeApp(
       conn: EdgeConn(const {}, machine)..handshaken = handshaken,
@@ -91,6 +97,7 @@ void main() {
       PhoneShellScope(
         onMachineLinked: (_) {},
         onOpenAgent: (machineId, agentId) => opened.add((machineId, agentId)),
+        onShowSwarm: onShowSwarm,
         child: phoneApp(
           Scaffold(
             body: TerminalSearchOverlay(
@@ -266,6 +273,49 @@ void main() {
     await frames(tester, count: 6);
     expect(closes, isNotEmpty);
     expect(find.byType(SettingsPage), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('Swarm is a command only while its experiment is on', (
+    tester,
+  ) async {
+    // In memory only: the value, not the store's write, so nothing reaches the state file.
+    addTearDown(() => experimentalFeaturesStore.value = const {});
+    final (:app, :closes, opened: _, voice: _, stt: _) = await openFind(tester);
+    await tester.enterText(find.byType(TextField), 'swarm');
+    await frames(tester);
+    expect(find.text('Swarm', findRichText: true), findsNothing);
+
+    experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+    await tester.enterText(find.byType(TextField), 'swar');
+    await frames(tester);
+    await tester.tap(find.text('Swarm', findRichText: true).last);
+    await frames(tester, count: 6);
+    expect(closes, isNotEmpty);
+    expect(find.byType(SwarmPage), findsOneWidget);
+    // Outside a signed-in shell there is no account's Swarm to read: the page says so.
+    expect(find.byKey(const ValueKey('swarm-unavailable')), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('in the shell, Swarm goes back to Swarm Home, the root', (
+    tester,
+  ) async {
+    addTearDown(() => experimentalFeaturesStore.value = const {});
+    experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+    var shown = 0;
+    final (:app, :closes, opened: _, voice: _, stt: _) = await openFind(
+      tester,
+      onShowSwarm: () => shown++,
+    );
+    await tester.enterText(find.byType(TextField), 'swar');
+    await frames(tester);
+    await tester.tap(find.text('Swarm', findRichText: true).last);
+    await frames(tester, count: 6);
+
+    expect(closes, isNotEmpty);
+    expect(shown, 1);
+    expect(find.byType(SwarmPage), findsNothing, reason: 'not a page over it');
     await close(tester, app);
   });
 

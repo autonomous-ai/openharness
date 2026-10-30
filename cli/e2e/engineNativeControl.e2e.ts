@@ -91,6 +91,64 @@ describe('Codex\'s shared server, from the Codex worker', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
+  it('restarts a failed shared conversation after a Codex update without leaving its writer locked', async () => {
+    const { d, c, s, agent, count } = await fresh()
+    // The old client shares its server; the installed update supports --no-daemon. The failed turn
+    // has no active goal, but its server still owns the thread, exactly as Codex 0.163.0 did.
+    s.state.failed = true
+    s.holdWriter()
+    writeFileSync(join(d.root, 'bin', 'codex'), `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(join(CLI_ROOT, 'e2e/harness/fakeEngine.mjs')).href)}).then(m => m.run('codex', ${JSON.stringify(d.engineConfig)}))\n`, { mode: 0o755 })
+    const before = s.state.requests.length
+    const restarted = await c.request('agent_restart', { agentId: agent.id }, 90_000)
+    expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
+    expect(s.state.loaded, 'the old server must release the conversation before the replacement opens it').toBe(false)
+    expect(s.state.archived).toBe(false)
+    expect(count('thread/archive', before)).toBe(1)
+    expect(count('thread/unarchive', before)).toBe(1)
+    expect(count('turn/interrupt', before)).toBe(0)
+    expect(count('thread/goal/set', before)).toBe(0)
+    const screen = await d.tmux.run('capture-pane', '-p', '-t', agent.tmuxPane)
+    expect(screen).not.toContain('This conversation is open in another app')
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 30_000, 'a turn in the resumed conversation')
+    c.send('message', { agentId: agent.id, content: 'continue after the failed turn' })
+    await ended
+    const row = (await c.request('agents_list', {})).agents.find((row: Row) => row.id === agent.id)
+    expect(row.sessionId).toBe(agent.sessionId)
+    expect(d.coresStarted()).toBe(1)
+  })
+
+  it('keeps the original client when the Codex worker is lost while restart releases its shared conversation', async () => {
+    const { d, c, s, agent, count, pane } = await fresh()
+    const panePid = await pane()
+    s.state.hold = 'thread/turns/list'
+    const restarting = c.request('agent_restart', { agentId: agent.id }, 90_000)
+    await until('restart waiting on the server', () => count('thread/turns/list') > 0 || null, 30_000, 50)
+    process.kill(harnessdProcesses(d).get('engine-codex')!, 'SIGKILL')
+    const refused = await restarting
+    expect(refused.error, JSON.stringify(refused)).toBe('RESTART_FAILED')
+    expect(refused.detail).toContain('could not stop')
+    s.release()
+    expect(await pane()).toBe(panePid)
+    expect(s.state.loaded).toBe(true)
+    expect(count('thread/archive')).toBe(0)
+    expect(d.coresStarted()).toBe(1)
+  })
+
+  it('restarts a process-owned conversation without unloading an unrelated shared server', async () => {
+    const { d, c, s, agent, count } = await fresh({}, false)
+    const before = s.state.requests.length
+    const restarted = await c.request('agent_restart', { agentId: agent.id }, 90_000)
+    expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
+    expect(count('thread/read', before)).toBe(0)
+    expect(count('thread/archive', before)).toBe(0)
+    expect(s.state.loaded).toBe(true)
+    expect(s.state.archived).toBe(false)
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 30_000, 'a turn after process-owned restart')
+    c.send('message', { agentId: agent.id, content: 'continue in this terminal' })
+    await ended
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('a worker killed while a stop waits on the server sends nothing more, leaves the pane, and a second close stops it once', async () => {
     const { d, s, count, close, pane } = await fresh()
     const core = d.corePid(), worker = harnessdProcesses(d).get('engine-codex')!, panePid = await pane()

@@ -9,8 +9,11 @@ import '../state/app_state.dart';
 import '../state/swarm_catalog.dart';
 import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
+import '../state/workspace_chrome.dart';
 import '../state/session_activity.dart';
 import 'engine_identity.dart';
+import 'finger_target.dart';
+import 'new_tab_actions.dart';
 import 'desktop_chrome.dart';
 import 'session_activity_label.dart';
 import '../shared/theme/appearance_prefs_store.dart';
@@ -40,6 +43,9 @@ class WorkspaceWelcome extends StatefulWidget {
     this.projects = const [],
     this.onOpen,
     this.composerBuilder,
+    this.closedSuperTabs = const [],
+    this.onOpenSuperTab,
+    this.swarmDraft = false,
     this.now = DateTime.now,
   });
 
@@ -48,6 +54,15 @@ class WorkspaceWelcome extends StatefulWidget {
   final List<SavedSwarmProject> projects;
   final ValueChanged<SwarmDestination>? onOpen;
   final DateTime Function() now;
+
+  /// Swarms closed on this computer, so a tab closed by accident is found
+  /// on the page a person lands on, not only in the command palette.
+  final List<({String id, String name})> closedSuperTabs;
+  final ValueChanged<String>? onOpenSuperTab;
+
+  /// True on a Swarm draft: its box starts a Swarm, so the plain buttons
+  /// leave New Swarm out rather than start the thing already on screen.
+  final bool swarmDraft;
 
   /// Embedded creation and the popup supply the exact same form. Welcome
   /// only contributes its existing recent-session data beneath that form.
@@ -194,7 +209,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       return Material(
         key: const ValueKey('workspace-welcome'),
         color: grid.AppPalette.windowBg,
-        child: composer(_desktopSessions()),
+        child: composer(
+          _withNewTabActions(_withClosedSuperTabs(_desktopSessions())),
+        ),
       );
     }
     final palette = grid.AppTheme.surfacePalette;
@@ -258,6 +275,11 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       ink: ink,
       accent: accent,
       cell: cell,
+    );
+    final closed = _closedSuperTabsSection(
+      DesktopChrome.control(color: ink),
+      DesktopChrome.metadata().copyWith(color: ink.withValues(alpha: .55)),
+      ink,
     );
     final footerInset = line + 52;
     return Focus(
@@ -350,6 +372,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                                 accent,
                               ),
                             ],
+                            if (closed != null) ...[
+                              SizedBox(height: line),
+                              SizedBox(width: listWidth, child: closed),
+                            ],
                           ],
                         ),
                       ),
@@ -361,16 +387,110 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             Positioned(
               right: 20,
               bottom: 16,
-              child: TerminalTextAction(
-                key: const ValueKey('welcome-customize'),
-                onPressed: () => onCommand('app.customize'),
-                label: 'Appearance',
-                overArtwork: hasArtwork,
+              child: fingerTarget(
+                enabled: workspaceIsCompact(context),
+                TerminalTextAction(
+                  key: const ValueKey('welcome-customize'),
+                  onPressed: () => onCommand('app.customize'),
+                  label: 'Appearance',
+                  overArtwork: hasArtwork,
+                ),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// [recent] under the plain buttons a host without key hints (the web)
+  /// shows in place of chords; [recent] alone on Desktop.
+  Widget? _withNewTabActions(Widget? recent) {
+    if (WorkspaceChrome.of(context).showsKeyHints) return recent;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        NewTabActions(onCommand: onCommand, offersNewSwarm: !widget.swarmDraft),
+        if (recent != null) ...[const SizedBox(height: 32), recent],
+      ],
+    );
+  }
+
+  Widget? _withClosedSuperTabs(Widget? recent) {
+    final closed = _closedSuperTabsSection(
+      DesktopChrome.control(color: DesktopChrome.muted),
+      DesktopChrome.metadata(),
+      DesktopChrome.muted,
+    );
+    if (closed == null) return recent;
+    if (recent == null) return closed;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [recent, const SizedBox(height: 16), closed],
+    );
+  }
+
+  /// Null when nothing is closed or the host cannot open one. The caller
+  /// passes the styles of its own layout.
+  Widget? _closedSuperTabsSection(
+    TextStyle rowStyle,
+    TextStyle headerStyle,
+    Color color,
+  ) {
+    final open = widget.onOpenSuperTab;
+    if (widget.closedSuperTabs.isEmpty || open == null) return null;
+    return Column(
+      key: const ValueKey('welcome-closed-super-tabs'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8, left: 10),
+          child: Semantics(
+            header: true,
+            child: Text('Recent Swarms', style: headerStyle),
+          ),
+        ),
+        for (final tab in widget.closedSuperTabs)
+          TextButton(
+            key: ValueKey('welcome-closed-super-tab-${tab.id}'),
+            onPressed: () => open(tab.id),
+            style:
+                TextButton.styleFrom(
+                  foregroundColor: color,
+                  backgroundColor: Colors.transparent,
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(
+                      grid.AppDesktop.rowRadius,
+                    ),
+                  ),
+                ).copyWith(
+                  side: WidgetStateProperty.resolveWith(
+                    (states) => BorderSide(
+                      width: 1.5,
+                      color: states.contains(WidgetState.focused)
+                          ? (MediaQuery.highContrastOf(context)
+                                ? DesktopChrome.accent
+                                : DesktopChrome.focusRing)
+                          : Colors.transparent,
+                    ),
+                  ),
+                ),
+            child: Text(
+              tab.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: rowStyle,
+            ),
+          ),
+      ],
     );
   }
 
@@ -512,6 +632,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
   }
 
+  /// A row's least size: a finger's height on a phone, its text's elsewhere.
+  Size get _rowMinimum =>
+      workspaceIsCompact(context) ? const Size(0, kFingerTarget) : Size.zero;
+
   /// The commands, each with its shortcut: the whole page before there is
   /// anything to pick up, and the column beside the list after.
   Widget _commands(
@@ -534,7 +658,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
               foregroundColor: ink,
               textStyle: style,
               padding: const EdgeInsets.symmetric(vertical: 2),
-              minimumSize: Size.zero,
+              minimumSize: _rowMinimum,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               shape: const RoundedRectangleBorder(),
             ),
@@ -565,7 +689,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             foregroundColor: ink,
             textStyle: style,
             padding: const EdgeInsets.symmetric(vertical: 2),
-            minimumSize: Size.zero,
+            minimumSize: _rowMinimum,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             shape: const RoundedRectangleBorder(),
           ),
@@ -661,7 +785,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             : Colors.transparent,
         textStyle: style,
         padding: const EdgeInsets.symmetric(vertical: 2),
-        minimumSize: Size.zero,
+        minimumSize: _rowMinimum,
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         shape: const RoundedRectangleBorder(),
       ),

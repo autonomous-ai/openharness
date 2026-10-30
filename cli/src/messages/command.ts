@@ -18,6 +18,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { MessageError } from './model.js'
 import { messagesRpc, type Rpc } from './rpc.js'
+import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 
 export const SEND_USAGE = `harness send — message your teammates in this tab
 
@@ -80,6 +81,8 @@ export function parseSendArgs(argv: readonly string[], read: (path: string) => s
 /** The daemon that made this pane: its port and data folder, from the pane's owner tag and the hook routes. */
 export function paneOwner(pane: string, tmux: (args: string[]) => string = (args) => execFileSync('tmux', args, { encoding: 'utf8', timeout: 2000 }),
   routesDir: string = env.HARNESS_HOOK_ROUTES_DIR): { port: number; dataDir: string } | null {
+  // A pty host pane (`<instance>:%N`) is no tmux pane: its daemon is this install's.
+  if (!pane.startsWith('%')) return null
   try {
     const tag = tmux(['display-message', '-p', '-t', pane, `#{${HARNESS_OWNER_OPTION}}`]).trim()
     if (!/^[0-9a-f]{16}$/.test(tag)) return null
@@ -87,6 +90,13 @@ export function paneOwner(pane: string, tmux: (args: string[]) => string = (args
     if (typeof record.dataDir !== 'string' || !isAbsolute(record.dataDir) || !Number.isInteger(record.port)) return null
     return { port: record.port as number, dataDir: record.dataDir }
   } catch { return null }
+}
+
+/** The pane `harness send` runs in: tmux's `$TMUX_PANE`, or a pty host pane's `$HARNESS_PANE` (`<instance>:%N`, Windows),
+ *  which has no TMUX_PANE (messages/service.ts takes both). */
+export function sendPane(vars: NodeJS.ProcessEnv): string | undefined {
+  if (vars.TMUX_PANE) return vars.TMUX_PANE
+  return PTY_HOST_PANE.test(vars.HARNESS_PANE ?? '') ? vars.HARNESS_PANE : undefined
 }
 
 /** How many tasks `harness send` alone lists: a short section, the windows show the rest. */
@@ -151,7 +161,7 @@ export async function sendCommand(argv: readonly string[], deps: {
     err((error as Error).message)
     return 2
   }
-  const pane = 'pane' in deps ? deps.pane : process.env.TMUX_PANE
+  const pane = 'pane' in deps ? deps.pane : sendPane(process.env)
   if (!pane) {
     err('Run harness send from a harness pane: it says who is sending.')
     return 1

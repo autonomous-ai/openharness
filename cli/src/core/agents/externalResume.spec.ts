@@ -10,6 +10,7 @@ import type { ProcessView, RunningProcess } from '../../lib/sessionSearch/extern
 import { createExternalSessions } from '../../services/externalSessions.js'
 import { createExternalResumes, type ExternalResumeDeps } from './externalResume.js'
 import { stopExternalOwner } from './externalOwner.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 vi.mock('./externalOwner.js', () => ({ stopExternalOwner: vi.fn(async () => false) }))
 
 const cwd = mkdtempSync(join(tmpdir(), 'external-resume-'))
@@ -50,19 +51,21 @@ function setup() {
     finishExternalCancellation: vi.fn(id => rows.delete(id)),
   }
   let paneSequence = 0
-  const create = vi.fn<NonNullable<ExternalResumeDeps['tmux']>['create']>(async request => {
+  const create = vi.fn<NonNullable<ExternalResumeDeps['backend']>['create']>(async request => {
     if (request.current?.() === false) return { state: 'failed', dispatch: 'not_started', reason: 'cancelled' }
     const paneId = `%${++paneSequence}`
     panes.set(paneId, request.command!.at(-1)!)
     return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId } }
   })
-  const killHeld = vi.fn<NonNullable<ExternalResumeDeps['tmux']>['killHeld']>(async (runtime, token, current) => {
+  const killHeld = vi.fn<NonNullable<NonNullable<ExternalResumeDeps['backend']>['killHeld']>>(async (runtime, token, current) => {
     if (!current() || panes.has(runtime.paneId) && panes.get(runtime.paneId) !== token) return { state: 'failed', dispatch: 'not_started', reason: 'pane changed' }
     panes.delete(runtime.paneId); return { state: 'succeeded', dispatch: 'executed' }
   })
   const inspect = vi.fn(async (request: ExternalSessionRequest) => free(request))
   const deps: ExternalResumeDeps = {
-    registry, tmux: { create, killHeld }, inspect, generation: () => 1,
+    registry, backend: { create, killHeld }, inspect, generation: () => 1,
+    // Each pane's own backend: here the one adoption panes open on, while there is one.
+    backendFor: vi.fn(() => deps.backend ?? undefined),
     stopped: vi.fn(() => []), cancelled: () => cancelled,
     waiting: vi.fn(async row => panes.get(row.tmuxPane) === row.externalResume?.token),
     preflight: vi.fn(async () => null), announce: vi.fn(), launch: vi.fn(),
@@ -82,6 +85,20 @@ function setup() {
   }
   return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, cancelWork: () => { cancelled = true } }
 }
+
+it('opens no conversation of an agent a stopped move may still run beside, by its id or an alias the search names', async () => {
+  for (const [asked, aliases] of [['conversation', []], ['other', ['conversation']]] as const) {
+    const test = setup()
+    test.deps.heldConversation = (sessionId) => sessionId === 'conversation' ? 'a1' : null
+    test.inspect.mockImplementation(async (request) => ({ ...free(request), session: { ...fact, sessionId: request.sessionId, aliases: [...aliases] } }) as ExternalSessionAnswer)
+    const warn = vi.mocked(console.warn)
+    warn.mockClear()
+    expect(await test.controller.create(input({ resumeSessionId: asked }))).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(test.create).not.toHaveBeenCalled()
+    expect(test.rows.size).toBe(0)
+    expect(warn).toHaveBeenCalledWith(moveHeldLine('a1'))
+  }
+})
 
 it('persists an inert held intent during search outage, then admits and launches the exact conversation', async () => {
   const test = setup(); test.inspect.mockResolvedValue(externalUnavailable('Reader unavailable.'))
@@ -111,7 +128,13 @@ it('preserves known refusals before creating a pane, but holds thrown or malform
   expect(await test.controller.create(input())).toMatchObject({ ok: false, error: 'SESSION_NOT_FOUND' })
   expect(test.create).not.toHaveBeenCalled()
   expect(await test.controller.create(input({ engine: 'terminal' }))).toMatchObject({ error: 'INVALID_SESSION' })
-  test.deps.tmux = null
+  test.deps.backend = null
+  expect(await test.controller.create(input())).toMatchObject({ error: 'TMUX_UNAVAILABLE' })
+  // The configured backend's own code where there is none (Windows: the pty host).
+  test.deps.noBackendCode = 'PTY_HOST_UNAVAILABLE'
+  expect(await test.controller.create(input())).toMatchObject({ error: 'PTY_HOST_UNAVAILABLE' })
+  // A backend that cannot close a waiting pane by its token is still tmux's refusal, as before.
+  test.deps.backend = { create: test.create } as never
   expect(await test.controller.create(input())).toMatchObject({ error: 'TMUX_UNAVAILABLE' })
 })
 
@@ -369,13 +392,41 @@ it('reserves stopped conversations before any pane exists and cleans up an alloc
   expect(test.deps.launch).not.toHaveBeenCalled()
 })
 
+it('opens and cancels an adoption on a ptyhost pane through that pane\'s own backend', async () => {
+  const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
+  const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%3' }
+  test.create.mockImplementationOnce(async request => {
+    test.panes.set(pty.paneId, request.command!.at(-1)!)
+    return { state: 'succeeded', dispatch: 'executed', runtime: pty }
+  })
+  const id = await test.stage(); await test.controller.settled()
+  expect(test.rows.get(id)!.runtimes).toEqual([pty])
+  const ptyKill = vi.fn(async (..._args: unknown[]) => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
+  vi.mocked(test.deps.backendFor).mockImplementation(runtime => runtime.backend === 'ptyhost' ? { killHeld: ptyKill } : undefined)
+  expect(await test.controller.cancel(test.rows.get(id)!)).toBe(true)
+  expect(ptyKill).toHaveBeenCalledExactlyOnceWith(pty, test.rows.get(id)?.externalResume?.token ?? expect.any(String), expect.any(Function))
+  expect(test.killHeld).not.toHaveBeenCalled()
+  expect(test.deps.forget).toHaveBeenCalledWith(id)
+})
+
+it('refuses to cancel when any of its panes is on a backend that cannot close a held pane', async () => {
+  const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
+  const id = await test.stage(); await test.controller.settled()
+  const row = test.rows.get(id)!
+  row.runtimes = [...row.runtimes, { backend: 'ptyhost', instance: 'p1', paneId: '%3' }]
+  vi.mocked(test.deps.backendFor).mockImplementation(runtime => runtime.backend === 'tmux' ? test.deps.backend! : { })
+  await expect(test.controller.cancel(row)).rejects.toThrow('The waiting pane could not be verified.')
+  expect(test.killHeld).not.toHaveBeenCalled()
+  expect(test.rows.has(id)).toBe(true)
+})
+
 it('refuses every unverified cancellation boundary without forgetting or archiving its intent', async () => {
   for (const failure of ['changed', 'save', 'tmux', 'route', 'commit', 'replaced-during-close'] as const) {
     const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
     const id = await test.stage(); await test.controller.settled()
     const row = test.rows.get(id)!
     if (failure === 'save') vi.mocked(test.registry.setExternalResume).mockReturnValue(null)
-    if (failure === 'tmux') test.deps.tmux = null
+    if (failure === 'tmux') test.deps.backend = null
     if (failure === 'route') row.runtimes = []
     if (failure === 'commit') vi.mocked(test.registry.finishExternalCancellation).mockReturnValue(false)
     if (failure === 'replaced-during-close') test.killHeld.mockImplementation(async () => {

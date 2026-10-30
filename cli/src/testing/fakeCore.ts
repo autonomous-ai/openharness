@@ -43,6 +43,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     turns: {
       send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
       deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
+      leaseDeliveries: vi.fn(async () => true),
       ...over.turns,
     },
     questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => false), ...over.questions },
@@ -92,5 +93,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     // Only a spec that gives the cloud agents doors has them, as only a core that offers them does.
     ...(over.cloud ? { cloud: Object.assign({ publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }, over.cloud) } : {}),
+    // The Super Tab service's door, likewise.
+    ...(over.superTabs ? { superTabs: Object.assign({ attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }, over.superTabs) } : {}),
   }
 }

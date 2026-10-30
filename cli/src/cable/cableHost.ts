@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 import type { RegisteredSession } from '../lib/registry.js'
-import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
+import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 import { FleetRouter } from '../services/fleetRouter.js'
@@ -28,7 +28,8 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { CardChat, CardSide, LeadRecap, SaidOnCard, SwarmCard } from '../superTabs/cards.js'
+import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -36,6 +37,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
 import type { MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
+import { isTier, type Tier } from '../lib/notifyTier.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -103,8 +105,21 @@ export interface CableHostWiring {
   forkAgent?: (agentId: string) => Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
   /** The dial picked a swarm: the window switches to it. */
   swarmSelected?: (swarmId: string) => void
-  /** A finger on the dial's glass, in pieces, while it is down. */
-  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => void
+  /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
+  swarmCardsWanted?: (on: boolean) => void
+  /** One Lead's last message, read on request; null when it could not be read. */
+  swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
+  /** The recap a device (one cable `session`) has open, or null once closed. */
+  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
+  /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
+  swarmCardSide?: (tabId: string, side: CardSide) => void
+  /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
+   *  `refused` with the backend's reason when it refused the post. */
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
+  /** A device picked a Lead: the window opens that Swarm tab and project. */
+  superTabSelected?: (superTabId: string, projectId: string) => void
+  /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
+  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
   dialStatus?: (status: DialStatus) => void
   appFocus?: CableHost['appFocus']
@@ -133,6 +148,9 @@ function isPlaceholder(id: string): boolean {
   return id.startsWith('cable:')
 }
 
+/** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
+const RELEASE_KEEP_MS = 30 * 60_000
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -149,6 +167,9 @@ export class DaemonCableHost implements CableHost {
    * remember across a daemon restart either — that is when the registry reloads anyway.
    */
   private selected = ''
+
+  /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
+  private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
 
   /**
    * `fleet` is a bare lane to the other machines for this host's own router — its tests give it one. A
@@ -391,9 +412,58 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes, ...(s.superTabId ? { superTabId: s.superTabId } : {}) })),
       tiles: app.tiles,
     }
+  }
+
+  /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (superTabs/inCore/cards.ts replays). */
+  private cards: SwarmCard[] | null = null
+
+  setSwarmCards(items: SwarmCard[]): void {
+    this.cards = items
+  }
+
+  swarmCards(): SwarmCard[] | null {
+    return this.cards
+  }
+
+  swarmCardsWanted(on: boolean): void {
+    this.wiring.swarmCardsWanted?.(on)
+  }
+
+  swarmCardRecap(tabId: string, leadId: string, chat: CardChat = false): Promise<LeadRecap | null> {
+    return this.wiring.swarmCardRecap?.(tabId, leadId, chat) ?? Promise.resolve(null)
+  }
+
+  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat: CardChat = false): void {
+    this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
+  }
+
+  swarmCardSide(tabId: string, side: CardSide): void {
+    this.wiring.swarmCardSide?.(tabId, side)
+  }
+
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
+    const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
+    return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
+  }
+
+  superTabSelected(superTabId: string, projectId: string): void {
+    this.wiring.superTabSelected?.(superTabId, projectId)
+  }
+
+  /**
+   * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
+   * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
+   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
+   * conversation it has open there, when the window names one, which the round dial's face follows.
+   */
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null {
+    const app = this.swarms
+    const tab = app?.swarms.find((s) => s.id === app.active)
+    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
+      ...(tab.conversationId ? { conversationId: tab.conversationId } : {}), fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {
@@ -630,7 +700,7 @@ export class DaemonCableHost implements CableHost {
     return { machineId: this.machineOf(agentId), agentId }
   }
 
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void {
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void {
     // THE ENDS ARE LOGGED, THE MIDDLE IS NOT. A stroke is a `down`, a dozen `move`s and an `up`, several
     // times a second: logging the middle buries every other line in the file. But the failure this
     // protocol is most exposed to is a stroke that never CLOSES — the far side then holds a drag forever
@@ -640,7 +710,8 @@ export class DaemonCableHost implements CableHost {
 
       this.wiring.log(phase === 'down' ? 'cable: scroll ↓' : `cable: scroll ↑ (v=${velocity})`)
     }
-    this.wiring.scrolled?.(phase, dy, velocity)
+    if (superTabId) this.wiring.scrolled?.(phase, dy, velocity, superTabId)
+    else this.wiring.scrolled?.(phase, dy, velocity)
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
@@ -674,9 +745,19 @@ export class DaemonCableHost implements CableHost {
    * only thing that could plug in, and a brick the moment a Pro could: its ESP32-P4 cannot run an
    * ESP32-S3 image, and the cable that would let us put it right is the firmware that just stopped.
    */
-  async firmwareFor(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
+  async firmwareFor(runningVersion: string, key: string, keepalive = false): Promise<{ version: string; image: Buffer; sha256: string } | null> {
     if (env.CABLE_FW_DISABLE) return null
-    const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+    // A plugged-in dial greets every fifteen seconds, and each greeting read the manifest from GCS: 240 GETs
+    // an hour per device, with the pets' sync waiting behind each one (2026-10-29). A keepalive is answered
+    // from the last good read for half an hour, so a new image reaches a dial already plugged in within that;
+    // a new dial, image or connection reads at once. A failed read is not kept, so the next greeting retries.
+    const kept = this.releases.get(key)
+    let release = keepalive && kept && Date.now() - kept.at < RELEASE_KEEP_MS ? kept.release : null
+    if (!release) {
+      release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+      if (release) this.releases.set(key, { release, at: Date.now() })
+      else this.releases.delete(key)
+    }
     if (!release || !shouldOffer(runningVersion, release.version)) return null
     const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'), key)
     if (!image) return null
@@ -901,8 +982,8 @@ export function cableStepFor(
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown; failed?: unknown; tier?: unknown } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string; failed?: boolean; tier?: Tier } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
@@ -911,9 +992,13 @@ export function cableEventFor(
   const silent = frame.payload?.subagent === true || frame.payload?.restored === true
   const update = frame.payload?.update
   const fullText = frame.payload?.fullText
+  // `tier`: how loudly the turn tells, decided once by the recaps (services/recaps.ts) for every screen.
+  const tier = frame.payload?.tier
   return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: silent,
     ...(kind === 'processing' && typeof update === 'string' ? { update } : {}),
-    ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}) }
+    ...(kind === 'summary' && frame.payload?.failed === true ? { failed: true } : {}),
+    ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}),
+    ...(kind === 'summary' && isTier(tier) ? { tier } : {}) }
 }
 
 /**
@@ -924,13 +1009,16 @@ export function cableEventFor(
  * question screen was complete, wired and unreachable: nothing on this side ever produced the message.
  */
 export function cableQuestionFor(
-  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } },
-): { agentId: string; requestId: string; questions: unknown } | null {
+  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown; superTab?: unknown; attention?: unknown } },
+): { agentId: string; requestId: string; questions: unknown; superTab?: SuperTabAsk } | null {
   if (frame.type !== 'commander_question' || !frame.agentId) return null
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  return { agentId: frame.agentId, requestId, questions }
+  // A Super Tab member waiting on a person (superTabs/inCore/attention.ts): the tab's name and what it needs ride along.
+  const superTab = frame.payload?.superTab, attention = frame.payload?.attention
+  const tab = typeof superTab === 'string' && superTab && (attention === 'decision' || attention === 'stuck') ? { superTab, attention } as SuperTabAsk : null
+  return { agentId: frame.agentId, requestId, questions, ...(tab ? { superTab: tab } : {}) }
 }
 
 /**

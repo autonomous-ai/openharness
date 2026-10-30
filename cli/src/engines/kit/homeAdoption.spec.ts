@@ -2,11 +2,19 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHomeAdopter, readAdoptedHomes } from './homeAdoption.js'
+import { createHomeAdopter, homeIsAbsolute, homeIsNetworkOrDevice, inspectJournalEntry, networkHomeSentence, readAdoptedHomes } from './homeAdoption.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0, remaining: Infinity }))
+const platform = vi.hoisted(() => ({ windows: false }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : clock.now } })) // past NATIVE_EVIDENCE_MS
+vi.mock('./windowsFiles.js', async original => {
+  const actual = await original<typeof import('./windowsFiles.js')>()
+  return { ...actual,
+    hostPlatform: () => platform.windows ? 'win32' : actual.hostPlatform(),
+    journalFlushFlags: () => actual.journalFlushFlags(platform.windows ? 'win32' : undefined),
+  }
+})
 
 vi.mock('node:fs', async original => {
   const actual = await original<typeof fs>()
@@ -23,7 +31,7 @@ const seal = (index: number) => index ? join(file + '.confirmations', `${String(
 const unavailable = () => Object.assign(new Error('fixture storage unavailable'), { code: 'EIO' })
 const files = new Map<number, string>()
 beforeEach(async () => {
-  clock.now = 0; clock.remaining = Infinity
+  clock.now = 0; clock.remaining = Infinity; platform.windows = false
   actual = await vi.importActual<typeof fs>('node:fs')
   for (const name of ['openSync', 'closeSync', 'fsyncSync', 'linkSync', 'readSync', 'writeFileSync', 'opendirSync', 'lstatSync'] as const) {
     vi.mocked(fs[name]).mockReset().mockImplementation(actual[name] as never)
@@ -40,6 +48,14 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); actual.rmSync(root, { recursive: true, force: true }) })
 
 describe('durable monotone home adoption', () => {
+  it('does not reopen a Windows journal record for a flush after its staged bytes were synced', () => {
+    platform.windows = true
+    expect(adopter.adopt(add('C:\\saved'))).toEqual(add('C:\\saved'))
+    const writableRecordOpens = vi.mocked(fs.openSync).mock.calls.filter(([path, flags]) =>
+      String(path) === record(0) && typeof flags === 'number' && (flags & 3) === fs.constants.O_RDWR)
+    expect(writableRecordOpens).toHaveLength(0)
+  })
+
   it('leaves a new installation alone for an empty request', () => {
     expect(adopter.adopt(empty())).toEqual(empty())
     expect(actual.existsSync(file + '.adoptions')).toBe(false)
@@ -309,5 +325,51 @@ describe('durable monotone home adoption', () => {
     vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); clock.now += NATIVE_EVIDENCE_MS + 1 })
     expect(() => adopter.adopt(add('/held'))).toThrow('work deadline')
     expect(actual.existsSync(record(0))).toBe(false)
+  })
+})
+
+describe('the adoption journal on Windows', () => {
+  const ntfs = (kind: 'file' | 'dir' | 'link') => ({
+    dev: 1n, ino: 2n, uid: 0n, size: 10n, mtimeNs: 1n, ctimeNs: 1n, mode: kind === 'dir' ? 0o40666n : 0o100666n,
+    isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link',
+  }) as unknown as fs.BigIntStats
+
+  it('trusts a file and folder NTFS reports with no owner and every write bit, on Windows only', () => {
+    expect(() => inspectJournalEntry(ntfs('file'), false, 'win32')).not.toThrow()
+    expect(() => inspectJournalEntry(ntfs('dir'), true, 'win32')).not.toThrow()
+    expect(() => inspectJournalEntry(ntfs('file'), false, 'linux')).toThrow(/unsafe owner, type or write permission/)
+  })
+
+  it('still refuses a link or junction on Windows', () => {
+    expect(() => inspectJournalEntry(ntfs('link'), false, 'win32')).toThrow(/unsafe owner, type or write permission/)
+    expect(() => inspectJournalEntry(ntfs('link'), true, 'win32')).toThrow(/unsafe owner, type or write permission/)
+  })
+
+  it('takes a Windows home on Windows and a POSIX home elsewhere', () => {
+    expect(homeIsAbsolute('C:\\Users\\u\\.claude-work', 'win32')).toBe(true)
+    expect(homeIsAbsolute('c:/Users/u/.codex-2', 'win32')).toBe(false)
+    expect(homeIsAbsolute('\\\\server\\share\\.claude', 'win32')).toBe(false)
+    expect(homeIsAbsolute('/Users/u/.claude', 'win32')).toBe(false)
+    expect(homeIsAbsolute('/Users/u/.claude', 'darwin')).toBe(true)
+    expect(homeIsAbsolute('C:\\Users\\u\\.claude', 'linux')).toBe(false)
+  })
+
+  it('catches a network or device path on Windows alone', () => {
+    for (const home of ['\\\\server\\share\\.codex', '\\\\?\\C:\\Users\\u', '\\\\.\\pipe\\x', '//server/share']) expect(homeIsNetworkOrDevice(home, 'win32')).toBe(true)
+    for (const home of ['C:\\Users\\u\\.codex', 'C:/Users/u/.codex', '/Users/u/.codex', '']) expect(homeIsNetworkOrDevice(home, 'win32')).toBe(false)
+    for (const platform of ['darwin', 'linux'] as const) expect(homeIsNetworkOrDevice('\\\\server\\share', platform)).toBe(false)
+  })
+
+  it('names the setting and a folder in the person\'s own profile', () => {
+    expect(networkHomeSentence('CODEX_HOME', 'C:\\Users\\ann')).toBe('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows. Set it to a folder on this computer\'s drive, such as C:\\Users\\ann\\.codex.')
+    expect(networkHomeSentence('CLAUDE_CONFIG_DIR', 'C:\\Users\\ann')).toContain('such as C:\\Users\\ann\\.claude.')
+    expect(networkHomeSentence('HERMES_HOME', 'C:\\Users\\ann')).toMatch(/drive\.$/)
+  })
+
+  it('round-trips a home built from the real temp folder through seal and inspect on this host', () => {
+    const home = join(root, 'home')
+    const adopter = createHomeAdopter(file)
+    adopter.adopt({ claude: [home], codex: [] })
+    expect(readAdoptedHomes(file).homes).toEqual({ claude: [home], codex: [] })
   })
 })

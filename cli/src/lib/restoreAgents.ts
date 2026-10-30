@@ -37,9 +37,11 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
-import type { TerminalDispatchControl, TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { terminalRouteKey } from './terminalRuntime.js'
+import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
+import type { WindowsPaneLaunch } from './windows/engineStart.js'
+import { sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
@@ -47,6 +49,22 @@ export interface RestoreLaunch {
   current?(): boolean
   argv: string[]
   env?: Record<string, string>
+  /** Windows: the folder the engine starts in and the shell its pane becomes after it (lib/windows/engineStart.ts
+   *  `windowsPaneLaunch`); elsewhere the launch script enters the folder and hands the pane on itself. */
+  paneLaunch?: WindowsPaneLaunch
+  /** Built with `prepare: false` (a move, hostMove/moveAgent.ts): what the build left out, and what it was built with,
+   *  so the caller prepares and relaunches with the same overrides once the engine has stopped, without asking the
+   *  grid or the Store again. */
+  deferred?: DeferredLaunch
+}
+
+export interface DeferredLaunch {
+  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Throws when the
+   *  conversation could not be prepared. */
+  prepare(): void
+  /** The overrides (`relaunchOverrides`) and the permission (`downgradedPermission`) the launch was built with. */
+  overrides: LaunchOverrides
+  permission: { permissionMode?: string | null; bypassPermission?: boolean }
 }
 
 /** The launch, why there is none, or the service its launch asks that could not be asked (`held`). */
@@ -61,6 +79,9 @@ export function heldLaunch(service: string, label = service === 'models' ? 'the 
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
 export interface RestoreAgentsDeps {
+  /** Whether restore can rebuild and relaunch a pane on [runtime]'s backend: one that respawns in place
+   *  (`canRestart`). Left out: tmux's alone, as before any other backend could. */
+  restorable?: (runtime: TerminalRuntimeRef) => boolean
   /** Fresh inventory for each boot/held pass; no tmux snapshot survives a restore. */
   survey?: () => Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'>
   /** Stop/restart own the agent from the moment their job begins, before the registry changes. */
@@ -96,33 +117,36 @@ export interface RestoreAgentsDeps {
    * without tmux inventory (tests) treats a pane with no engine process as gone. `'unknown'` when the
    * inventory could not be read.
    */
-  waitingPane?: (runtime: TmuxRuntimeRef, token: string) => Promise<boolean | 'unknown'>
-  livePane?: (runtime: TmuxRuntimeRef) => Promise<boolean | 'unknown'>
+  waitingPane?: (runtime: TerminalRuntimeRef, token: string) => Promise<boolean | 'unknown'>
+  livePane?: (runtime: TerminalRuntimeRef) => Promise<boolean | 'unknown'>
   /** The engine process still running in this row's pane, or null when tmux does not know the pane
    *  at all — including when no tmux server is running — or the pane has become something else.
    *  `'unknown'` when tmux or `ps` could not be asked. */
-  liveProcess: (entry: RegisteredSession, runtime: TmuxRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
+  liveProcess: (entry: RegisteredSession, runtime: TerminalRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
-  buildLaunch: (entry: RegisteredSession, opts: { resumeSessionId?: string; current(): boolean }) => Promise<RestoreLaunchResult>
+  /** [opts.prepare] false builds the launch without the writes it makes for it (the conversation's resume preparation,
+   *  the row's grid web search): a caller that builds it while the engine still runs does them itself once it has
+   *  stopped (hostMove/moveAgent.ts). */
+  buildLaunch: (entry: RegisteredSession, opts: { resumeSessionId?: string; current(): boolean; prepare?: false }) => Promise<RestoreLaunchResult>
   createPane: (entry: RegisteredSession, launch: RestoreLaunch, control?: TerminalDispatchControl) => Promise<
-    | { ok: true; runtime: TmuxRuntimeRef }
+    | { ok: true; runtime: TerminalRuntimeRef }
     | { ok: false; reason: string }
   >
   /** `tmux respawn-pane` over the restored pane — the resume → fresh fallback. */
-  respawn: (runtime: TmuxRuntimeRef, launch: RestoreLaunch, control?: TerminalDispatchControl) => Promise<{ ok: boolean; reason?: string }>
+  respawn: (runtime: TerminalRuntimeRef, launch: RestoreLaunch, control?: TerminalDispatchControl) => Promise<{ ok: boolean; reason?: string }>
   /** A pane was rebuilt on this conversation: its engine is a new one (core/transcripts/relaunch.ts). */
   engineStarted?: (sessionId: string) => void
   /** One probe of the pane for a recognizable engine process. */
-  probeProcess: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<ProcessIdentity | null>
+  probeProcess: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<ProcessIdentity | null>
   /** `'gone'` when tmux no longer knows the pane, `'unknown'` when it could not be asked (`tmuxPaneState`).
    *  `engineExit` set: the engine left and the pane is a shell now (`ENGINE_EXIT_PANE_OPTION`), which for
    *  a restore is the same news as `dead`. */
-  paneState: (runtime: TmuxRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
-  clearRemainOnExit: (runtime: TmuxRuntimeRef) => Promise<void>
+  paneState: (runtime: TerminalRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
+  clearRemainOnExit: (runtime: TerminalRuntimeRef) => Promise<void>
   holdRoute: (routeKey: string, autoReleaseMs: number) => void | (() => void)
   releaseRoute: (routeKey: string) => void
-  triggerHint: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<void>
+  triggerHint: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<void>
   log: (message: string) => void
   /** The service a launch of this row asks for its part (a grid's or a saved API's: `models`), or null. */
   needs?: (entry: RegisteredSession) => string | readonly string[] | null
@@ -133,7 +157,7 @@ export interface RestoreAgentsDeps {
   /** What a held agent's pane runs while it waits: the reason, and nothing else. */
   waitingLaunch?: (entry: RegisteredSession, launch: Extract<AgentLaunch, { state: 'held' }>) => RestoreLaunch
   /** Close a held agent's pane whose launch then failed: it would otherwise go on saying it waits. */
-  killPane?: (runtime: TmuxRuntimeRef) => Promise<void>
+  killPane?: (runtime: TerminalRuntimeRef) => Promise<void>
   /** How long a restored pane may take to show an engine process. Default matches `agent_create`. */
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
@@ -181,28 +205,34 @@ async function surveyed<T>(deps: RestoreAgentsDeps, patience: { left: boolean },
   throw new Unsurveyed('tmux or ps could not say whether its pane or engine is alive')
 }
 
+/** One backend's harness panes, for a survey: tmux's whitelist (`listTmuxPanes`), the pty host's own panes. */
+export type SurveyListing = { ok: true; panes: readonly TerminalRuntimeRef[] } | { ok: false }
+
 /**
- * The survey's two questions, asked of tmux: one pane listing for the whole survey, read again only
- * after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
+ * The survey's two questions, each asked of the runtime's own backend: one pane listing per backend for the whole
+ * survey, read again only after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
+ * A pane counts only on its own backend: `%3` on tmux is not `%3` on the pty host.
  */
-export function tmuxSurvey(
-  listPanes: () => Promise<{ ok: true; panes: Array<{ tmuxPane: string }> } | { ok: false }>,
-  lookup: (pane: string, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
+export function terminalSurvey(
+  listPanes: (runtime: TerminalRuntimeRef) => Promise<SurveyListing>,
+  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
 ): Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'> {
-  let inventory: ReturnType<typeof listPanes> | null = null
+  const inventories = new Map<string, Promise<SurveyListing>>()
   return {
     livePane: async (runtime) => {
-      // One inventory for the whole restore, not one `tmux list-panes` per row: this runs between the
-      // control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
-      inventory ??= listPanes()
+      // One inventory per backend for the whole restore, not one `tmux list-panes` per row: this runs between
+      // the control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
+      const backend = terminalInstanceId(runtime)
+      let inventory = inventories.get(backend)
+      if (!inventory) { inventory = listPanes(runtime); inventories.set(backend, inventory) }
       const read = await inventory
-      if (!read.ok) { inventory = null; return 'unknown' }
+      if (!read.ok) { inventories.delete(backend); return 'unknown' }
       // Only a harness pane counts (the inventory is already that whitelist): a new tmux server hands
       // out `%N` from zero again, and a stale id can name somebody's own shell.
-      return read.panes.some((pane) => pane.tmuxPane === runtime.paneId)
+      return read.panes.some((pane) => sameTerminalPlacement(pane, runtime))
     },
     liveProcess: async (entry, runtime) => {
-      const found = await lookup(runtime.paneId, entry.engine)
+      const found = await lookup(runtime, entry.engine)
       return found.ok ? found.identity : found.unknown ? 'unknown' : null
     },
   }
@@ -213,9 +243,13 @@ const DEFAULT_SETTLE_MS = 10_000
 const SETTLE_POLL_MS = 500
 const HOLD_SLACK_MS = 30_000
 
-function tmuxRuntime(entry: RegisteredSession): TmuxRuntimeRef | null {
-  const runtime = entry.runtimes.find((candidate): candidate is TmuxRuntimeRef => candidate.backend === 'tmux')
-  return runtime ?? null
+const tmuxOnly = (runtime: TerminalRuntimeRef): boolean => runtime.backend === 'tmux'
+
+/** The runtime restore rebuilds [entry] on: its tmux pane first, as before any other backend could restore, then
+ *  its others in row order; only one on a backend restore can drive (`restorable`). */
+export function restoreRuntimeOf(entry: { readonly runtimes: readonly TerminalRuntimeRef[] }, restorable: (runtime: TerminalRuntimeRef) => boolean = tmuxOnly): TerminalRuntimeRef | null {
+  const ordered = [...entry.runtimes].sort((a, b) => Number(b.backend === 'tmux') - Number(a.backend === 'tmux'))
+  return ordered.find(restorable) ?? null
 }
 
 /** A service or tmux answer cannot act on a newer binding, launch, route or in-progress Stop. */
@@ -257,7 +291,7 @@ function engineGone(state: Awaited<ReturnType<RestoreAgentsDeps['paneState']>>):
 /** Watch a pane whose engine just appeared: 'settled' once it has stayed up for `settleMs`, 'gone' the
  *  moment tmux reports it dead or forgotten. A read that could not answer is no news: the relaunch it
  *  used to set off killed a resumed engine that was working, and started its conversation over. */
-async function waitForSettle(deps: RestoreAgentsDeps, runtime: TmuxRuntimeRef, settleMs: number): Promise<'settled' | 'gone'> {
+async function waitForSettle(deps: RestoreAgentsDeps, runtime: TerminalRuntimeRef, settleMs: number): Promise<'settled' | 'gone'> {
   const sleep = deps.sleep ?? defaultSleep
   const until = Date.now() + settleMs
   while (Date.now() < until) {
@@ -269,7 +303,7 @@ async function waitForSettle(deps: RestoreAgentsDeps, runtime: TmuxRuntimeRef, s
 
 interface MissingPane {
   entry: RegisteredSession
-  runtime: TmuxRuntimeRef
+  runtime: TerminalRuntimeRef
   alive?: true
   current: () => boolean
 }
@@ -283,7 +317,7 @@ async function allocateWaitingPanes(deps: RestoreAgentsDeps, missing: MissingPan
   // group for all these rows; unrelated durable registry writes are never held back while tmux runs.
   const ids: string[] = []
   for (const row of deps.registry.list()) {
-    const runtime = tmuxRuntime(row)
+    const runtime = restoreRuntimeOf(row, deps.restorable)
     if (runtime && (!deps.livePane || await deps.livePane(runtime) !== true)) ids.push(row.agentId)
   }
   for (const item of needed) if (!ids.includes(item.entry.agentId)) ids.push(item.entry.agentId)
@@ -300,7 +334,7 @@ async function allocateWaitingPanes(deps: RestoreAgentsDeps, missing: MissingPan
       : { state: 'held', service: 'core', detail: 'Restoring this harness.' }
   }
   const work = async () => {
-    const created = new Map<MissingPane, { runtime: TmuxRuntimeRef; owns: () => boolean }>()
+    const created = new Map<MissingPane, { runtime: TerminalRuntimeRef; owns: () => boolean }>()
     let next = 0
     const worker = async () => {
       while (next < needed.length) {
@@ -390,8 +424,11 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
      continue
    }
    try {
-    const runtime = tmuxRuntime(entry)
+    const runtime = restoreRuntimeOf(entry, deps.restorable)
     if (entry.externalResume?.phase === 'cancelled') { summary.skipped.push({ agentId: entry.agentId, reason: 'external adoption cancelled' }); continue }
+    // A guest's harness ran as the guest's own OS user (core/agents/guestCreate.ts). Rebuilt here it would run
+    // as the owner, with the owner's keys: it is left stopped, and the guest starts a new one.
+    if (entry.guest) { summary.skipped.push({ agentId: entry.agentId, reason: 'a guest\'s harness' }); continue }
     if (!runtime) { summary.skipped.push({ agentId: entry.agentId, reason: 'no tmux pane' }); continue }
     if (entry.launch?.state === 'failed') { summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' }); continue }
     // Held: its pane, alive, runs no engine on purpose, so it is neither a stopped engine nor a terminal. Its
@@ -534,7 +571,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   /** The services this pass could not ask: every later agent that needs one is held without asking. */
   const unavailable = new Map<string, string | undefined>()
   /** Held in its waiting pane: the one it has, or a new one. False when no pane could be opened for it. */
-  const hold = async (entry: RegisteredSession, runtime: TmuxRuntimeRef, alive: boolean, current: () => boolean, service: string, detail?: string): Promise<boolean> => inPane(deps, entry, current, async owns => {
+  const hold = async (entry: RegisteredSession, runtime: TerminalRuntimeRef, alive: boolean, current: () => boolean, service: string, detail?: string): Promise<boolean> => inPane(deps, entry, current, async owns => {
     const launch = { ...heldLaunch(service), ...((entry.launch?.state === 'held' || entry.launch?.state === 'starting') && entry.launch.nativeToken ? { nativeToken: entry.launch.nativeToken } : {}), ...(detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
     let pane = runtime
     if (!alive) {
@@ -685,7 +722,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
 async function watchRestoredPane(
   deps: RestoreAgentsDeps,
   entry: RegisteredSession,
-  runtime: TmuxRuntimeRef,
+  runtime: TerminalRuntimeRef,
   resuming: boolean,
   budgetMs: number,
   current: () => boolean,

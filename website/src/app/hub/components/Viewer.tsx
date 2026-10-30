@@ -4,6 +4,7 @@ import { Maximize2, Minimize2 } from 'lucide-react';
 import { previewDocument } from '@/lib/community/preview';
 import type { OpenHarness } from '@/lib/community/types';
 import styles from '../community.module.css';
+import { countHub } from '@/lib/community/hubMeasure';
 
 const onFullscreenChange = (notify: () => void) => {
   document.addEventListener('fullscreenchange', notify);
@@ -32,7 +33,7 @@ export function Viewer({ harness }: { harness: OpenHarness }) {
     <iframe title={`${harness.title} output`} srcDoc={previewDocument(html)} sandbox={harness.example ? 'allow-scripts allow-downloads allow-modals' : 'allow-scripts'} referrerPolicy="no-referrer" />
     {/* Under the output, never over it: a corner control would cover the page's own controls. */}
     {fullscreen.supported && <div className={styles.viewerBar}>
-      <button type="button" onClick={fullscreen.toggle} aria-label={fullscreen.active ? 'Exit full screen' : 'View output full screen'}>
+      <button type="button" onClick={() => { if (!fullscreen.active) countHub('hub_fullscreen'); fullscreen.toggle(); }} aria-label={fullscreen.active ? 'Exit full screen' : 'View output full screen'}>
         {fullscreen.active ? <Minimize2 /> : <Maximize2 />}<span>{fullscreen.active ? 'Exit full screen' : 'Full screen'}</span>
       </button>
     </div>}

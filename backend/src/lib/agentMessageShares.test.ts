@@ -241,6 +241,20 @@ describe('agent message shares', () => {
     expect((await pendingWith('text'))[0].tabName).toBe('')
   })
 
+  it('asks for no share and no account when the person has no invitation', async () => {
+    p.agentMessageInvite.findMany.mockResolvedValue([])
+    expect(await pendingInvites('bob@x.io', 'prod')).toEqual([])
+    expect(p.agentMessageShare.findMany).not.toHaveBeenCalled()
+    expect(p.user.findMany).not.toHaveBeenCalled()
+  })
+
+  it('asks for no account when every invitation is of a stopped share', async () => {
+    p.agentMessageInvite.findMany.mockResolvedValue([{ id: 'i1', shareId: S, ownerUserId: 'alice', ownerMachineId: 'm1', expiresAt: new Date('2030-01-01T00:00:00Z') }])
+    p.agentMessageShare.findMany.mockResolvedValue([])
+    expect(await pendingInvites('bob@x.io', 'prod')).toEqual([])
+    expect(p.user.findMany).not.toHaveBeenCalled()
+  })
+
   it('hides the invitations of a stopped share', async () => {
     const expiresAt = new Date('2030-01-01T00:00:00Z')
     p.agentMessageInvite.findMany.mockResolvedValue([{ id: 'i1', shareId: S, ownerUserId: 'alice', ownerMachineId: 'm1', expiresAt }])
@@ -283,6 +297,26 @@ describe('agent message shares', () => {
     expect(p.agentMessageMember.upsert).not.toHaveBeenCalled()
   })
 
+  it('answers the invitation a racing identical invite just made, not a duplicate-key error', async () => {
+    p.agentMessageShare.findFirst.mockResolvedValue({ id: S, ownerMachineId: 'm1' })
+    p.agentMessageMember.count.mockResolvedValue(1); p.agentMessageInvite.count.mockResolvedValue(0)
+    p.agentMessageInvite.upsert.mockRejectedValueOnce(p2002()).mockResolvedValueOnce({ id: 'i-raced' })
+    expect(await inv()).toEqual({ id: 'i-raced' })
+    expect(p.agentMessageInvite.upsert).toHaveBeenCalledTimes(2)
+    p.agentMessageInvite.upsert.mockRejectedValue(new Error('down'))
+    await expect(inv()).rejects.toThrow('down')
+  })
+
+  it('answers the shared tab when a racing accept of the same invitation made the member first', async () => {
+    p.agentMessageShare.findFirst.mockResolvedValue({ id: S })
+    p.agentMessageInvite.findFirst.mockResolvedValue(row())
+    p.agentMessageMember.upsert.mockRejectedValueOnce(p2002()).mockResolvedValueOnce({})
+    expect(await accept({ sub: 'bob', email: 'bob@x.io', autonomousEnv: 'prod' }, 'i1', now)).toEqual({ sharedTabId: S })
+    expect(p.agentMessageMember.upsert).toHaveBeenCalledTimes(2)
+    p.agentMessageMember.upsert.mockRejectedValue(new Error('down'))
+    await expect(accept({ sub: 'bob', email: 'bob@x.io', autonomousEnv: 'prod' }, 'i1', now)).rejects.toThrow('down')
+  })
+
   it('accepts an invitation and (re)activates the member', async () => {
     p.agentMessageShare.findFirst.mockResolvedValue({ id: S })
     p.agentMessageInvite.findFirst.mockResolvedValue(row())
@@ -303,7 +337,52 @@ describe('agent message shares', () => {
     expect(await removeMember('bob', S, 'bob')).toBe(true)
     expect(p.agentMessageMember.updateMany).toHaveBeenCalledWith({ where: { shareId: S, userId: 'bob', removedAt: null }, data: { removedAt: expect.any(Date) } })
     expect(p.agentMessageShare.findUnique).toHaveBeenCalledWith({ where: { id: S }, select: { ownerUserId: true } })
-    expect(p.agentMessageInvite.updateMany).toHaveBeenCalledWith({ where: { shareId: S, acceptedBy: 'bob', revokedAt: null }, data: { revokedAt: expect.any(Date) } })
+    expect(p.agentMessageInvite.updateMany).toHaveBeenCalledWith({ where: { shareId: S, revokedAt: null, OR: [{ acceptedBy: 'bob' }] }, data: { revokedAt: expect.any(Date) } })
+  })
+
+  // #1376: accept, the owner invites again, the owner removes bob: the invitation the re-invite reset to waiting brought
+  // bob back with no new invitation, and counted toward the tab's 8 twice.
+  it('a removed member cannot accept an earlier re-invite', async () => {
+    const invites: Record<string, unknown>[] = [], members: Record<string, unknown>[] = []
+    const matches = (row: Record<string, unknown>, where: Record<string, unknown>): boolean => Object.entries(where).every(([key, want]) => {
+      if (key === 'OR') return (want as Record<string, unknown>[]).some(w => matches(row, w))
+      if (want && typeof want === 'object' && 'gt' in want) return (row[key] as Date) > (want as { gt: Date }).gt
+      return (row[key] ?? null) === want
+    })
+    p.agentMessageShare.findFirst.mockResolvedValue({ id: S, ownerMachineId: 'm1' })
+    p.agentMessageShare.findUnique.mockResolvedValue({ ownerUserId: 'alice' })
+    p.agentMessageInvite.count.mockImplementation(async ({ where }) => invites.filter(r => matches(r, where)).length)
+    p.agentMessageMember.count.mockImplementation(async ({ where }) => members.filter(r => matches(r, where)).length)
+    p.agentMessageInvite.findFirst.mockImplementation(async ({ where }) => invites.find(r => matches(r, where)) ?? null)
+    p.agentMessageMember.findFirst.mockImplementation(async ({ where }) => members.find(r => matches(r, where)) ?? null)
+    p.agentMessageInvite.upsert.mockImplementation(async ({ where, create, update }) => {
+      const found = invites.find(r => r.shareId === where.shareId_email.shareId && r.email === where.shareId_email.email)
+      if (found) return Object.assign(found, update)
+      invites.push({ ...create }); return create
+    })
+    p.agentMessageInvite.update.mockImplementation(async ({ where, data }) => Object.assign(invites.find(r => r.id === where.id)!, data))
+    p.agentMessageMember.upsert.mockImplementation(async ({ where, create, update }) => {
+      const found = members.find(r => r.id === where.id)
+      if (found) return Object.assign(found, update)
+      members.push({ ...create }); return create
+    })
+    const updateMany = (rows: Record<string, unknown>[]) => async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      const hit = rows.filter(r => matches(r, where)); hit.forEach(r => Object.assign(r, data)); return { count: hit.length }
+    }
+    p.agentMessageInvite.updateMany.mockImplementation(updateMany(invites))
+    p.agentMessageMember.updateMany.mockImplementation(updateMany(members))
+    const bob = { sub: 'bob', email: 'bob@x.io', autonomousEnv: 'prod' }
+    const first = await inv() as { id: string }
+    expect(await accept(bob, first.id, now)).toEqual({ sharedTabId: S })
+    // A member already: the owner's second invitation is refused, so it neither waits nor counts toward the 8.
+    expect(await inv()).toEqual({ error: 'ALREADY_MEMBER' })
+    expect(await removeMember('alice', S, 'bob')).toBe(true)
+    expect(await accept(bob, first.id, now)).toEqual({ error: 'NOT_FOUND' })
+    // An invitation still waiting for that address goes with the member too.
+    invites.push({ id: 'i2', shareId: S, email: 'bob@x.io', autonomousEnv: 'prod', expiresAt: new Date('2030-01-01T00:00:00Z'), acceptedAt: null, acceptedBy: null, revokedAt: null })
+    members[0]!.removedAt = null
+    expect(await removeMember('alice', S, 'bob')).toBe(true)
+    expect(await accept(bob, 'i2', now)).toEqual({ error: 'NOT_FOUND' })
   })
 
   it('reports no removal for a missing share or member', async () => {
@@ -378,6 +457,14 @@ describe('agent message shares', () => {
     expect(p.agentMessageMember.findMany).toHaveBeenNthCalledWith(2, { where: { shareId: S, removedAt: null }, select: { userId: true, email: true, acceptedAt: true } })
     expect(p.agentMessageInvite.findMany).toHaveBeenCalledWith({ where: { shareId: S, acceptedAt: null, revokedAt: null, expiresAt: { gt: expect.any(Date) } },
       select: { id: true, email: true, expiresAt: true } })
+  })
+
+  it('lists nothing for a person with no share, asking for no account and sending no empty id list', async () => {
+    p.agentMessageMember.findMany.mockResolvedValue([])
+    p.agentMessageShare.findMany.mockResolvedValue([])
+    expect(await listShares('bob', 'prod')).toEqual([])
+    expect(p.agentMessageShare.findMany).toHaveBeenCalledWith({ where: { autonomousEnv: 'prod', stoppedAt: null, OR: [{ ownerUserId: 'bob' }] } })
+    expect(p.user.findMany).not.toHaveBeenCalled()
   })
 
   it('falls back to an empty owner email in a listing', async () => {

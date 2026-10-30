@@ -1,0 +1,24 @@
+# preflight 2026-10-18 07:44:56 +07
+## staging install.ps1 manifest base
+$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/'
+  param([string]$Manifest, [string]$Platform, [string]$Base = $HarnessManifestBase)
+## staging cli manifest version
+    "version": "0.4.18-dev.win1",
+## listeners 1847x
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+## OS
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+
+Microsoft Windows [Version 10.0.26100.9711]
+win-testvm\admin
+WIN-TESTVM
+Microsoft Windows 11 Home
+8
+
+Friday, October 16, 2026 11:11:36 AM
+
+

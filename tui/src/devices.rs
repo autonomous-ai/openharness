@@ -35,14 +35,9 @@ use crate::theme::{self, fg};
 
 // ── what the app shows (desktop wording, kept word for word) ──────────────────
 
-/// Where Harness is downloaded (link_another_machine_dialog.dart).
-pub const DOWNLOAD_URL: &str = "https://www.autonomous.ai/harness";
-/// A server's three steps, run on THAT machine over SSH: copied, never run here.
-pub const INSTALL: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | bash";
-pub const LOGIN: &str = "harness login";
-pub const START: &str = "harness start && harness remote-password set";
 /// What sharing this computer gives (machine_sharing_form.dart's intro).
-const SHARE_ACCESS: &str = "People you share it with get full access: they can run harnesses, open terminals and read files on it.";
+/// What a guest gets (docs/plans/2026-10-19-guest-machine-sharing-plan.md): Guest is the only level.
+const SHARE_ACCESS: &str = "People you invite get their own private space here and use your Claude and ChatGPT plans. They can't see your files or harnesses.";
 
 /// Where the Add Phone QR points (add_phone_dialog.dart `phonePairLink`): the phone parses exactly
 /// this, so the TUI's code is the app's, byte for byte.
@@ -81,7 +76,7 @@ impl View {
         match self {
             View::Connect => "Search machines not linked yet",
             View::Phone => "Search paired devices",
-            View::Machines => "Search machines, links and steps",
+            View::Machines => "Search machines",
         }
     }
 }
@@ -91,6 +86,10 @@ impl View {
 /// A machine this computer has linked (`harness link list`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Linked { pub machine: String, pub fingerprint: String, pub at: String }
+
+/// Where Esc goes back to: a view, the level it was at, and the row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Back { pub view: View, pub sub: Option<String>, pub row: Option<String> }
 
 /// A `link connect` under way, or just over: the stage it last reported, and how it ended.
 pub struct Linking { pub machine: String, pub name: String, pub stage: String, pub result: Option<Result<String, String>> }
@@ -131,6 +130,8 @@ pub enum Entry {
     Rename { machine: String, name: String },
     /// An address to share this computer with (services/sharedMachines.ts).
     ShareEmail,
+    /// A folder of this computer's for guests to open in their harnesses; [write]: they may change it.
+    ShareFolder { write: bool },
 }
 
 /// What a yes does.
@@ -149,6 +150,8 @@ pub enum Act {
     Share { emails: Vec<String>, same_domain: bool, said: String },
     /// A machine shared with this account's domain added to its machines (an older backend lists one to add).
     AddShared { machine: String, name: String },
+    /// The folders guests may open here, each read only or editable (`set_folders`); [said] as for Share.
+    ShareFolders { folders: Vec<(String, bool)>, said: String },
 }
 
 /// The panel is asking, in a dialog over it: a line to type (a password shown as dots; the caret
@@ -187,6 +190,9 @@ pub struct Devices {
     unfit: std::cell::Cell<bool>,
     /// A level inside a view: a machine's actions (`m:<id>`).
     pub sub: Option<String>,
+    /// The view another one was opened from in this panel (Add a machine → Connect a computer):
+    /// Esc goes back to it, its level and its row.
+    pub back: Option<Back>,
     /// The footer's line: what happened, or (true) what went wrong — until the next thing does.
     pub footer: Option<(String, bool, Instant)>,
     pub loading: Vec<&'static str>,
@@ -197,7 +203,7 @@ pub struct Devices {
 impl Default for Devices {
     fn default() -> Devices {
         Devices {
-            password: None, sharing: None, links: None, account: HashMap::new(), link: None, phone: Phone::default(), ask: None, prompt_actions: Default::default(), back_at: Default::default(), prompt_row: Default::default(), prompt_focus: Default::default(), unfit: Default::default(), sub: None, footer: None, loading: Vec::new(), runner: default_runner(),
+            password: None, sharing: None, links: None, account: HashMap::new(), link: None, phone: Phone::default(), ask: None, prompt_actions: Default::default(), back_at: Default::default(), prompt_row: Default::default(), prompt_focus: Default::default(), unfit: Default::default(), sub: None, back: None, footer: None, loading: Vec::new(), runner: default_runner(),
         }
     }
 }
@@ -271,7 +277,9 @@ pub fn ask(app: &mut App, req: Req, line: Option<fn(&mut App, &str)>, then: impl
         Req::Rpc { ty, payload } => {
             let here = app.fleet.local_id.clone();
             let Some(link) = app.link(&here) else { return then(app, Reply::Rpc(Err(("DAEMON_DOWN".into(), "Harness is not running on this computer.".into())))) };
-            app.spawn(async move { Reply::Rpc(link.rpc(ty, payload, Duration::from_secs(30)).await.map_err(|e| (e.code, e.detail))) }, then)
+            // Turning guest access on waits on the person at this computer's admin prompt, which gives up after ten minutes.
+            let wait = Duration::from_secs(if payload.get("action").and_then(Value::as_str) == Some("enable_guests") { 660 } else { 30 });
+            app.spawn(async move { Reply::Rpc(link.rpc(ty, payload, wait).await.map_err(|e| (e.code, e.detail))) }, then)
         }
         Req::Copy(text) => { crate::clipboard::store(&text); then(app, Reply::Done) }
         Req::Wait(d) => app.spawn(async move { tokio::time::sleep(d).await; Reply::Done }, then),
@@ -483,6 +491,7 @@ fn enter(app: &mut App, view: View) {
     let d = &mut app.devices;
     d.ask = None;
     d.sub = None;
+    d.back = None;
     d.footer = None;
     if view == View::Phone {
         let generation = d.phone.generation + 1;
@@ -803,9 +812,36 @@ fn run_act(app: &mut App, act: Act) {
             });
         }
         Act::Share { emails, same_domain, said } => {
+            // The first share turns guest access on: each guest runs as their own account here, which takes one
+            // admin prompt on this computer. A CLI from before guests says nothing of it, and is not asked.
+            let access = app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("guestAccess")).and_then(Value::as_str).map(str::to_string);
+            if (!emails.is_empty() || same_domain) && access.as_deref().is_some_and(|a| a != "ready") {
+                note(app, "Enter your password on this computer to finish setting up.");
+                ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "enable_guests" }) }, None, move |app, reply| {
+                    match shared_answer(reply) {
+                        Ok(v) => {
+                            if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
+                            run_act(app, Act::Share { emails, same_domain, said })
+                        }
+                        Err(message) => { fail(app, message); again(app) }
+                    }
+                });
+                return;
+            }
             note(app, "Saving…");
             let payload = json!({ "action": "set", "emails": emails, "sameDomain": same_domain });
             ask(app, Req::Rpc { ty: "shared_machines", payload }, None, move |app, reply| {
+                match shared_answer(reply) {
+                    Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
+                    Err(message) => fail(app, message),
+                }
+                again(app);
+            });
+        }
+        Act::ShareFolders { folders, said } => {
+            note(app, "Saving…");
+            let folders: Vec<Value> = folders.into_iter().map(|(path, write)| json!({ "path": path, "write": write })).collect();
+            ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "set_folders", "folders": folders }) }, None, move |app, reply| {
                 match shared_answer(reply) {
                     Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
                     Err(message) => fail(app, message),
@@ -927,7 +963,7 @@ pub fn paste(app: &mut App, text: &str) -> bool {
 pub fn mouse(app: &mut App, mouse: MouseEvent) -> bool {
     let Some(view) = view_of(app) else { return false };
     if app.devices.ask.is_none() {
-        let back = app.devices.back_at.get().filter(|(size, _)| *size == app.size && app.devices.sub.is_some());
+        let back = app.devices.back_at.get().filter(|(size, _)| *size == app.size && (app.devices.sub.is_some() || app.devices.back.is_some()));
         let click = mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers.is_empty();
         if !(click && back.is_some_and(|(_, r)| r.contains(Position::new(mouse.column, mouse.row)))) { return false }
         step_back(app, view);
@@ -986,8 +1022,21 @@ fn submit(app: &mut App, what: Entry, value: String) {
             if new.is_empty() { return note(app, "Already shared with them") }
             emails.extend(new.iter().cloned());
             let here = app.fleet.local_machine_name();
-            confirm(app, format!("Share {here} with {}? They use it as their own: its harnesses, terminals and files.", new.join(", ")),
+            confirm(app, format!("Share {here} with {}? They get their own private space and use your Claude and ChatGPT plans.", new.join(", ")),
                 Act::Share { emails, same_domain, said: format!("Shared with {}", new.join(", ")) });
+        }
+        Entry::ShareFolder { write } => {
+            let typed = value.trim();
+            let path = if typed.len() > 1 { typed.trim_end_matches('/') } else { typed }.to_string();
+            if path.is_empty() { return note(app, "Nothing changed") }
+            let label = if write { "Share a folder they can edit" } else { "Share a folder they can view" };
+            if !path.starts_with('/') { entry(app, Entry::ShareFolder { write }, label, &value, false); return fail(app, "Enter the folder's full path, like /Users/you/project") }
+            let mut folders = sharing_folders(app);
+            if folders.iter().any(|(p, _)| *p == path) { return note(app, format!("{path} is already shared")) }
+            folders.push((path.clone(), write));
+            let what = if write { "view and edit" } else { "view" };
+            confirm(app, format!("Share {path} so people can {what} it? They see everything inside, even passwords and keys."),
+                Act::ShareFolders { folders, said: format!("Shared {path}") });
         }
         Entry::Rename { machine, name } => {
             let new = value.trim().to_string();
@@ -1093,6 +1142,7 @@ fn step_back(app: &mut App, view: View) {
         if let Some(p) = picker_mut(app) { p.clear_query(); p.select(&sub) }
         return;
     }
+    if go_back(app) { return }
     app.devices.phone.open = false;
     let Some(Modal::Picker { mut picker, .. }) = app.modal.take() else { return };
     if !picker.from_commands { return }
@@ -1143,18 +1193,14 @@ pub fn choose(app: &mut App, view: View, picker: Picker, enter: bool) {
         (_, "pw") => match rest.as_str() {
             "set" => entry(app, Entry::NewPassword, "New remote password", "", true),
             "clear" => confirm(app, "Prevent new links using this password? Existing links and sessions stay connected.", Act::ClearPassword),
-            _ => load_password(app),
+            // The row itself: a first password at once; Change and Clear once there is one.
+            _ => match password_set(app) {
+                Some(true) => sub(app, "pw:".into()),
+                Some(false) => entry(app, Entry::NewPassword, "New remote password", "", true),
+                None => load_password(app),
+            },
         },
-        (_, "ln") if rest.is_empty() => { note(app, "Loading linked machines…"); load_links(app) }
-        (_, "ln") => { let name = name_of(app, &rest); confirm(app, format!("Remove this computer’s saved link to {name}? A new connection will need that machine’s password."), Act::Unlink { machine: rest, name }) }
-        (_, "add") => match rest.as_str() {
-            "download" => copy(app, DOWNLOAD_URL),
-            "connect" => switch(app, View::Connect),
-            "install" => copy(app, INSTALL),
-            "login" => copy(app, LOGIN),
-            "start" => copy(app, START),
-            _ => copy(app, &format!("{INSTALL}\n{LOGIN}\n{START}")),
-        },
+        (_, "add") => switch(app, View::Connect),
         (_, "ph") => match rest.as_str() {
             "arm" => run_act(app, Act::ArmPhone),
             "new" => { app.devices.phone.code = new_code(); app.devices.phone.message = None; note(app, "A new code — the old one no longer pairs") }
@@ -1175,8 +1221,28 @@ fn sub(app: &mut App, level: String) {
     if let Some(p) = picker_mut(app) { p.clear_query(); p.scroll = 0; p.vset(0, 1) }
 }
 
-/// Over to another view in the same panel (Esc still goes back where the first one came from).
+/// Over to another view in the same panel: Esc comes back to this one, at the row it was on. Asked
+/// for the view it came from (Connect's Set up another computer, after Add a machine), it goes back
+/// there rather than opening a third.
 fn switch(app: &mut App, view: View) {
+    if app.devices.back.as_ref().is_some_and(|b| b.view == view) { go_back(app); return }
+    let from = view_of(app).map(|v| Back { view: v, sub: app.devices.sub.clone(), row: picker_mut(app).and_then(|p| p.current_id()) });
+    show(app, view);
+    app.devices.back = from;
+}
+
+/// Back to the view this one was opened from, if it was: false when there is none.
+fn go_back(app: &mut App) -> bool {
+    let Some(back) = app.devices.back.take() else { return false };
+    show(app, back.view);
+    app.devices.sub = back.sub;
+    again(app);
+    if let (Some(p), Some(row)) = (picker_mut(app), back.row) { p.select(&row) }
+    true
+}
+
+/// [view] in this panel, from its first row.
+fn show(app: &mut App, view: View) {
     enter(app, view);
     if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
         *kind = PickerKind::Devices(view);
@@ -1189,10 +1255,6 @@ fn switch(app: &mut App, view: View) {
     opened(app, view);
 }
 
-fn copy(app: &mut App, text: &str) {
-    let shown = text.lines().next().unwrap_or("").to_string();
-    ask(app, Req::Copy(text.to_string()), None, move |app, _| note(app, format!("Copied: {shown}")));
-}
 
 fn machine_action(app: &mut App, rest: &str) {
     let Some((verb, machine)) = rest.split_once(':') else { return };
@@ -1200,6 +1262,7 @@ fn machine_action(app: &mut App, rest: &str) {
     match verb {
         "rename" => entry(app, Entry::Rename { machine, name: name.clone() }, "Machine name", &name, false),
         "remove" => confirm(app, format!("Delete {name} from your account?"), Act::Remove { machine, name }),
+        "unlink" => confirm(app, format!("Remove this computer’s saved link to {name}? A new connection will need that machine’s password."), Act::Unlink { machine, name }),
         "connect" => { switch(app, View::Connect); if let Some(p) = picker_mut(app) { p.select(&format!("m:{machine}")) } start_link(app, machine, name) }
         "open" => {
             app.devices.sub = None;
@@ -1221,7 +1284,7 @@ fn share_action(app: &mut App, rest: &str) {
             if same_domain {
                 run_act(app, Act::Share { emails, same_domain: false, said: format!("No longer shared with everyone at @{domain}") })
             } else {
-                confirm(app, format!("Share {here} with everyone at @{domain}? They use it as their own: its harnesses, terminals and files."),
+                confirm(app, format!("Share {here} with everyone at @{domain}? They get their own private space and use your Claude and ChatGPT plans."),
                     Act::Share { emails, same_domain: true, said: format!("Shared with everyone at @{domain}") })
             }
         }
@@ -1229,8 +1292,38 @@ fn share_action(app: &mut App, rest: &str) {
             let rest: Vec<String> = emails.into_iter().filter(|e| e != email).collect();
             confirm(app, format!("Stop sharing {here} with {email}?"), Act::Share { emails: rest, same_domain, said: format!("No longer shared with {email}") })
         }
+        ("guests-on", _) => {
+            note(app, "Enter your password on this computer to finish setting up.");
+            ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "enable_guests" }) }, None, move |app, reply| {
+                match shared_answer(reply) {
+                    Ok(v) => {
+                        if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
+                        note(app, "Sharing is on")
+                    }
+                    Err(message) => fail(app, message),
+                }
+                again(app);
+            });
+        }
+        ("folder-read", _) => entry(app, Entry::ShareFolder { write: false }, "Share a folder they can view", "", false),
+        ("folder-write", _) => entry(app, Entry::ShareFolder { write: true }, "Share a folder they can edit", "", false),
+        ("folder", path) => {
+            let rest: Vec<(String, bool)> = sharing_folders(app).into_iter().filter(|(p, _)| p != path).collect();
+            confirm(app, format!("Stop sharing {path}?"), Act::ShareFolders { folders: rest, said: format!("Stopped sharing {path}") })
+        }
         _ => {}
     }
+}
+
+/// Whether guests may start harnesses here (`ready`), or what turning it on takes; None from a CLI before guests.
+fn guest_access(app: &App) -> Option<String> {
+    app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("guestAccess")).and_then(Value::as_str).map(str::to_string)
+}
+
+/// The folders guests may open here, as this computer last said: (path, whether they may change it).
+fn sharing_folders(app: &App) -> Vec<(String, bool)> {
+    app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("folders")).and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|f| Some((f.get("path")?.as_str()?.to_string(), f.get("write") == Some(&Value::Bool(true))))).collect()
 }
 
 /// Whether [text] is an address the backend takes (zod's `email()`, by hand: this regex has no
@@ -1303,6 +1396,7 @@ pub fn fill(app: &App, view: View, picker: &mut Picker) {
         View::Connect => connect_rows(app),
         View::Machines => match app.devices.sub.as_deref() {
             Some("share:") => share_rows(app),
+            Some("pw:") => password_rows(app),
             Some(sub) => match sub.strip_prefix("m:") { Some(id) => action_rows(app, id), None => machines_rows(app) },
             None => machines_rows(app),
         },
@@ -1325,16 +1419,19 @@ fn connect_rows(app: &App) -> Vec<Row> {
         let linking = app.devices.link.as_ref().is_some_and(|l| l.machine == m.id && l.result.is_none());
         // (One just linked stays in view, how it went beside it.)
         if app.devices.link.as_ref().is_some_and(|l| l.machine == m.id && matches!(l.result, Some(Ok(_)))) {
-            done.push(Row::new(format!("m:{}", m.id), m.name.clone()).group("Linked just now").extra(m.id.clone()).lead(dot("✓", theme::ONLINE)).detail(vec![span("linked", fg(theme::ONLINE))]).right("linked"));
+            done.push(Row::new(format!("m:{}", m.id), m.name.clone()).group("Linked just now").extra(m.id.clone()).lead(dot("✓", theme::ONLINE)).right("linked"));
         } else if linking || (m.reach == Reach::NeedsLink && m.online()) {
-            ready.push(Row::new(format!("m:{}", m.id), m.name.clone()).group("Not linked yet").extra(m.id.clone()).lead(dot(glyph, color)).detail(vec![span(word, fg(color))]).right("enter links it"));
+            // (Its group says what it is; the preview, what Enter does.)
+            ready.push(Row::new(format!("m:{}", m.id), m.name.clone()).group("Not linked yet").extra(format!("{} {word}", m.id)).lead(dot(glyph, color)).right(if linking { "connecting…" } else { "" }));
         } else if !m.online() {
-            let mut r = Row::new(format!("m:{}", m.id), m.name.clone()).group("Offline").extra(m.id.clone()).lead(dot(glyph, color)).detail(vec![span(format!("Open Harness on {} to bring it online.", m.name), fg(theme::MUTED))]).right("offline");
+            let mut r = Row::new(format!("m:{}", m.id), m.name.clone()).group("Offline").extra(m.id.clone()).lead(dot(glyph, color)).right("offline");
             r.disabled = true;
             away.push(r);
         }
     }
     if ready.is_empty() { ready.push(info("none", if app.daemon_down { "Harness is not running on this computer" } else { "No computers ready to connect" }, "Not linked yet")) }
+    // (An offline row is never chosen, so it has no preview: the way to bring one back is said once, under them.)
+    if !away.is_empty() { away.push(info("offline-how", "Open Harness there to bring it online.", "Offline")) }
     ready.extend(done);
     ready.extend(away);
     ready.push(setup());
@@ -1342,8 +1439,9 @@ fn connect_rows(app: &App) -> Vec<Row> {
 }
 
 fn account_row(app: &App) -> Row {
-    let detail = if app.account.status == crate::account::Status::SignedOut { "Connect computers, sync your workspace and use your phone" } else { "Your Harness account and connected computers" };
-    Row::new("account", crate::account::label(app)).group("Account").detail(vec![span(detail, fg(theme::MUTED))])
+    // Who is signed in, by name; what the account is for is in the preview.
+    let label = match account_email(app) { Some(e) if app.account.status != crate::account::Status::SignedOut => e, _ => crate::account::label(app).to_string() };
+    Row::new("account", label).group("Account").extra("account sign in")
 }
 
 fn machines_rows(app: &App) -> Vec<Row> {
@@ -1352,7 +1450,7 @@ fn machines_rows(app: &App) -> Vec<Row> {
     let here = app.fleet.local_machine_name();
     let here = here.as_str();
     let password = app.devices.password.as_ref();
-    let set = password.and_then(|p| p.as_ref().ok()).and_then(|v| v.get("hasPassword")).and_then(Value::as_bool);
+    let set = password_set(app);
     let state = match password {
         _ if is_loading(app, "password") && password.is_none() => "reading…".to_string(),
         None => "…".into(),
@@ -1360,10 +1458,8 @@ fn machines_rows(app: &App) -> Vec<Row> {
         Some(Ok(v)) => if set == Some(true) { v.get("setAt").and_then(Value::as_u64).map(|t| format!("set {}", crate::fleet::ago(t))).map(|s| if s == "set " { "set".into() } else { s }).unwrap_or_else(|| "set".into()) } else { "not set".into() },
     };
     let color = match set { Some(true) => theme::ONLINE, Some(false) => theme::MUTED, None => theme::WARN };
-    rows.push(Row::new("pw:set", if set == Some(true) { "Change password…" } else { "Set password…" }).group(here).extra("remote password")
-        .lead(dot(if set == Some(true) { "✓" } else { "·" }, color)).detail(vec![span("the remote password another machine links here with", fg(theme::MUTED))]).right(state));
-    if set == Some(true) { rows.push(Row::new("pw:clear", "Clear password…").group(here).extra("remote password").lead(dot(" ", theme::MUTED)).detail(vec![span("no new links by password", fg(theme::MUTED))])) }
-    if matches!(password, Some(Err(_))) { rows.push(Row::new("pw:status", "Retry").group(here).extra("password status").lead(dot("↻", theme::MUTED)).detail(vec![span("Password status is unavailable.", fg(theme::WARN))])) }
+    // One row: Enter sets a first password, opens Change and Clear once there is one, or reads it again.
+    rows.push(Row::new("pw:", "Remote password").group(here).extra("remote password set change clear").lead(dot(if set == Some(true) { "✓" } else { "·" }, color)).right(state));
     // Sharing this computer with other accounts: off until its owner shares it.
     if !app.devices.phone.signed_out && app.account.status != crate::account::Status::SignedOut {
         let state = match (&app.devices.sharing, sharing_now(app)) {
@@ -1377,86 +1473,98 @@ fn machines_rows(app: &App) -> Vec<Row> {
             _ if is_loading(app, "sharing") => "reading…".into(),
             _ => "…".into(),
         };
-        rows.push(Row::new("share:", "Share this computer…").group(here).extra("share sharing people team domain").lead(dot("⇆", theme::TEAL))
-            .detail(vec![span("with people you choose; they use it as their own", fg(theme::MUTED))]).right(state));
+        rows.push(Row::new("share:", "Share this computer").group(here).extra("share sharing people team domain").lead(dot("⇆", theme::TEAL)).right(state));
     }
 
+    // A row is its name and one word or count at the right; the rest is in the preview.
     let yours = "Your machines";
     for m in app.fleet.machines.iter().filter(|m| !m.shared && !app.fleet.shares.contains_key(&m.id)) {
         if crate::local::is_local(&m.id) { continue }
-        let (glyph, color, word) = reach(app, m);
-        let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
-        rows.push(Row::new(format!("m:{}", m.id), m.name.clone()).group(yours).extra(format!("{} {word}", m.id)).lead(dot(glyph, color)).detail(vec![span(word, fg(color))]).right(format!("{rtt}{}", counts(app, &m.id))));
+        let (_, _, word) = reach(app, m);
+        rows.push(machine_row(app, m, yours).extra(format!("{} {word}", m.id)));
     }
     if app.fleet.machines.iter().all(|m| crate::local::is_local(&m.id)) { rows.push(info("m-none", if app.daemon_down { "Harness is not running on this computer" } else { "Loading machines…" }, yours)) }
+
+    // Another computer, last of yours: its steps are in the preview; Enter lists the ones ready to link.
+    rows.push(Row::new("add:", "Add a machine").group(yours).extra("connect link new computer password").lead(dot("+", theme::TEAL)));
 
     // Other accounts' machines shared with this one: used as its own.
     let with_you = "Shared with you";
     for m in app.fleet.machines.iter() {
         let Some(share) = app.fleet.shares.get(&m.id) else { continue };
-        let (glyph, color, word) = reach(app, m);
-        let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
-        rows.push(Row::new(format!("m:{}", m.id), m.name.clone()).group(with_you).extra(format!("{} {} {}", m.id, share.owner, share.email)).lead(dot(glyph, color))
-            .detail(vec![span(format!("shared by {} · ", share.owner), fg(theme::MUTED)), span(word, fg(color))]).right(format!("{rtt}{}", counts(app, &m.id))));
+        let (_, _, word) = reach(app, m);
+        rows.push(machine_row(app, m, with_you).extra(format!("{} {} {} {word}", m.id, share.owner, share.email)));
     }
     // Shared with this account's domain: Enter adds one.
     let team = "Shared with your team";
     for (id, name, share) in &app.fleet.to_add {
-        rows.push(Row::new(format!("addshared:{id}"), format!("Add {name}")).group(team).extra(format!("{id} {} {}", share.owner, share.email)).lead(dot("+", theme::TEAL))
-            .detail(vec![span(format!("shared by {} with everyone at your company", share.owner), fg(theme::MUTED))]).right("add"));
+        rows.push(Row::new(format!("addshared:{id}"), format!("Add {name}")).group(team).extra(format!("{id} {} {}", share.owner, share.email)).lead(dot("+", theme::TEAL)));
     }
-
-    let linked = "Linked from here";
-    match &app.devices.links {
-        None => rows.push(info("ln-loading", "Loading linked machines…", linked)),
-        Some(Err(e)) => rows.push(info("ln-error", e.clone(), linked)),
-        Some(Ok(list)) if list.is_empty() => rows.push(info("ln-none", "No machines linked yet.", linked)),
-        Some(Ok(list)) => for l in list {
-            let name = name_of(app, &l.machine);
-            rows.push(Row::new(format!("ln:{}", l.machine), name).group(linked).extra(format!("{} {}", l.machine, l.fingerprint)).lead(dot("⇄", theme::TEAL)).detail(vec![span(l.fingerprint.clone(), fg(theme::MUTED))]).right(format!("linked {}", l.at)));
-        },
-    }
-    rows.push(Row::new("ln:", "Refresh links").group(linked).lead(dot("↻", theme::MUTED)).detail(vec![span("Machines this computer can connect to.", fg(theme::MUTED))]));
-
-    // The app's two steps, then a server's three — each Enter copies what it names.
-    let add = "Add a machine";
-    let email = app.devices.phone.email.clone();
-    let sign = email.as_ref().map(|e| format!("Sign in as {e}.")).unwrap_or_else(|| "Sign in with the same account.".into());
-    rows.push(Row::new("add:download", "1. Open Harness on your other computer.").group(add).extra("download").lead(dot("⧉", theme::TEAL)).detail(vec![span(sign, fg(theme::MUTED))]).right("copy"));
-    rows.push(Row::new("add:connect", "2. Open Machines and choose Set password.").group(add).extra("password connect").lead(dot("→", theme::TEAL)).detail(vec![span("Back here, click Connect and enter that password.", fg(theme::MUTED))]));
-    let server = "Set up a server";
-    rows.push(Row::new("add:install", "1. Install the CLI (skip if installed)").group(server).extra(INSTALL).lead(dot("⧉", theme::TEAL)).detail(vec![span(INSTALL, fg(theme::MUTED))]).right("copy"));
-    rows.push(Row::new("add:login", format!("2. Sign in as {}", email.as_deref().unwrap_or("your account"))).group(server).extra(LOGIN).lead(dot("⧉", theme::TEAL)).detail(vec![span(LOGIN, fg(theme::MUTED))]).right("copy"));
-    rows.push(Row::new("add:start", "3. Start Harness and set a remote password").group(server).extra(START).lead(dot("⧉", theme::TEAL)).detail(vec![span(START, fg(theme::MUTED))]).right("copy"));
-    rows.push(Row::new("add:all", "Copy commands").group(server).extra("all three").lead(dot("⧉", theme::TEAL)).detail(vec![span("Run these on your server over SSH:", fg(theme::MUTED))]).right("copy all"));
     rows
+}
+
+/// A machine's row: its mark and name, and at the right its state — in a narrow list only why it
+/// can't be used (its ✓ says the rest; its harnesses are in the preview).
+fn machine_row(app: &App, m: &crate::fleet::Machine, group: &str) -> Row {
+    let (glyph, color, _) = reach(app, m);
+    let state = machine_state(app, m);
+    let narrow = if m.usable() { String::new() } else { state.clone() };
+    Row::new(format!("m:{}", m.id), m.name.clone()).group(group).lead(dot(glyph, color)).right(state).right_narrow(narrow)
+}
+
+/// A machine's right column: how many harnesses it has, or why it can't be used.
+fn machine_state(app: &App, m: &crate::fleet::Machine) -> String {
+    if !m.usable() {
+        let (_, _, word) = reach(app, m);
+        return match word.as_str() { "online · not linked" => "not linked".into(), w @ ("offline" | "online" | "connecting…") => w.into(), _ => "error".into() };
+    }
+    let n = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").count();
+    match n { 0 => "no harnesses".into(), 1 => "1 harness".into(), n => format!("{n} harnesses") }
 }
 
 fn action_rows(app: &App, id: &str) -> Vec<Row> {
     let Some(m) = app.fleet.machine(id) else { return vec![info("gone", "That machine is gone", "")] };
     let group = m.name.clone();
     let mut rows = Vec::new();
-    let act = |verb: &str, label: &str, hint: &str, glyph: &str| Row::new(format!("act:{verb}:{id}"), label).group(group.clone()).lead(dot(glyph, theme::TEAL)).detail(vec![span(hint.to_string(), fg(theme::MUTED))]);
-    if m.usable() { rows.push(act("open", "Open its harnesses", "the harnesses list, on this machine", "→")) }
+    let act = |verb: &str, label: &str, glyph: &str| Row::new(format!("act:{verb}:{id}"), label).group(group.clone()).lead(dot(glyph, theme::TEAL));
+    if m.usable() { rows.push(act("open", "Open its harnesses", "→")) }
     // (A machine shared with this account links by its key once both daemons read the sharing: no password.)
-    if m.reach == Reach::NeedsLink && m.online() && !app.fleet.shares.contains_key(id) { rows.push(act("connect", "Connect…", "its remote password, then link", "⇄")) }
+    if m.reach == Reach::NeedsLink && m.online() && !app.fleet.shares.contains_key(id) { rows.push(act("connect", "Connect…", "⇄")) }
+    if link_of(app, id).is_some() { rows.push(act("unlink", "Unlink…", "⇄")) }
     match app.fleet.shares.get(id) {
         // Another account's: its owner renames, removes and shares it.
         Some(share) => {
             rows.push(info("shared-by", format!("Shared with you by {}", owner_of(share)), &group));
         }
         None => {
-            rows.push(act("rename", "Rename…", "the name every device on the account shows", "✎"));
-            if !m.local { rows.push(act("remove", "Remove from account…", "delete it from your account", "✗")) }
+            rows.push(act("rename", "Rename…", "✎"));
+            if !m.local { rows.push(act("remove", "Remove from account…", "✗")) }
         }
     }
     rows
 }
 
+/// This computer's saved link to [machine], if it has one.
+fn link_of<'a>(app: &'a App, machine: &str) -> Option<&'a Linked> {
+    app.devices.links.as_ref()?.as_ref().ok()?.iter().find(|l| l.machine == machine)
+}
+
+/// Whether this computer has a remote password, once that is known.
+fn password_set(app: &App) -> Option<bool> {
+    app.devices.password.as_ref()?.as_ref().ok()?.get("hasPassword").and_then(Value::as_bool)
+}
+
+/// The remote password's level: change or clear the one there is, or set a first one.
+fn password_rows(app: &App) -> Vec<Row> {
+    let group = "Remote password";
+    if password_set(app) != Some(true) { return vec![Row::new("pw:set", "Set password…").group(group).lead(dot("✎", theme::TEAL))] }
+    vec![Row::new("pw:set", "Change password…").group(group).lead(dot("✎", theme::TEAL)), Row::new("pw:clear", "Clear password…").group(group).lead(dot("✗", theme::TEAL))]
+}
+
 /// This computer's sharing: everyone at its domain, the addresses, and who uses it now.
 fn share_rows(app: &App) -> Vec<Row> {
     let here = format!("Share {}", app.fleet.local_machine_name());
-    let mut rows = vec![info("share-what", "People you share it with get full access.", &here)];
+    let mut rows = vec![info("share-what", "People you invite get a private space here.", &here)];
     let Some((emails, same_domain, domain)) = sharing_now(app) else {
         match &app.devices.sharing {
             Some(Err(message)) => {
@@ -1467,16 +1575,31 @@ fn share_rows(app: &App) -> Vec<Row> {
         }
         return rows;
     };
+    // Shared already, but guests start nothing until guest access is on (again, after an update).
+    let access = guest_access(app);
+    if (!emails.is_empty() || same_domain) && access.as_deref().is_some_and(|a| a != "ready") {
+        rows.push(Row::new("shr:guests-on", "Turn on sharing…").group(here.clone()).extra("sharing guest access admin").lead(dot("!", theme::WARN)).right("off"));
+    }
     if let Some(domain) = &domain {
         rows.push(Row::new("shr:domain", format!("Everyone at @{domain}")).group(here.clone()).extra("domain team company").lead(dot(if same_domain { "✓" } else { "·" }, if same_domain { theme::ONLINE } else { theme::MUTED }))
-            .detail(vec![span("they use it as their own", fg(theme::MUTED))]).right(if same_domain { "on" } else { "off" }));
+            .right(if same_domain { "on" } else { "off" }));
     }
-    rows.push(Row::new("shr:add", "Add an email…").group(here.clone()).extra("add email person").lead(dot("+", theme::TEAL)).detail(vec![span("they see it in their Machines", fg(theme::MUTED))]));
+    rows.push(Row::new("shr:add", "Add an email…").group(here.clone()).extra("add email person").lead(dot("+", theme::TEAL)));
+    let members = sharing_members(app);
     for email in &emails {
-        rows.push(Row::new(format!("shr:rm:{email}"), email.clone()).group(here.clone()).extra("remove").lead(dot("·", theme::MUTED)).right("remove"));
+        let joined = members.iter().any(|(e, _)| e == email);
+        rows.push(Row::new(format!("shr:rm:{email}"), email.clone()).group(here.clone()).extra("remove").lead(dot("·", theme::MUTED)).right(if joined { "joined" } else { "invited" }));
     }
     let using = using_by_email(app);
     if !using.is_empty() { rows.push(info("share-using", format!("Using it now: {}", using.join(", ")), &here)) }
+    // The folders guests may open in their harnesses (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    let folders = "Shared folders";
+    rows.push(Row::new("shr:folder-read", "Share a folder they can view…").group(folders).extra("folder share read").lead(dot("+", theme::TEAL)));
+    rows.push(Row::new("shr:folder-write", "Share a folder they can edit…").group(folders).extra("folder share edit write").lead(dot("+", theme::TEAL)));
+    for (path, write) in sharing_folders(app) {
+        rows.push(Row::new(format!("shr:folder:{path}"), path.clone()).group(folders).extra("folder remove").lead(dot("·", theme::MUTED))
+            .right(if write { "can edit" } else { "read only" }));
+    }
     rows
 }
 
@@ -1527,7 +1650,12 @@ fn phone_rows(app: &App) -> Vec<Row> {
 
 fn dim(text: impl Into<String>) -> Span<'static> { Span::styled(text.into(), Style::default().add_modifier(Modifier::DIM)) }
 fn bold(text: impl Into<String>) -> Span<'static> { Span::styled(text.into(), Style::default().add_modifier(Modifier::BOLD)) }
-fn kv(k: &str, v: impl Into<String>) -> Line<'static> { Line::from(vec![dim(format!("{k:<10}")), Span::raw(v.into())]) }
+/// How another computer uses this one's remote password, in the rows' own names.
+const LINK_HERE: &str = "On the other computer: Add a machine → choose this computer → enter this password.";
+
+/// A preview's label column: wide enough for its longest label (`fingerprint`) and a space.
+const KEY_W: usize = 12;
+fn kv(k: &str, v: impl Into<String>) -> Line<'static> { Line::from(vec![dim(format!("{k:<KEY_W$}")), Span::raw(v.into())]) }
 fn enter_does(text: impl Into<String>) -> Vec<Line<'static>> { vec![Line::raw(""), Line::from(vec![Span::styled("enter ", fg(theme::accent())), dim(text)])] }
 
 /// The right side for the row under the cursor: what it is, and what Enter does.
@@ -1535,17 +1663,21 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
     let (what, rest) = id.split_once(':').unwrap_or((id, ""));
     match what {
         _ if app.daemon_down && matches!(id, "none" | "m-none") => vec![Line::raw("Harness is not running on this computer."), Line::raw(""), dim("Start it with `harness start`, then come back.").into()],
-        "none" => vec![Line::raw("No computers are ready to connect."), Line::raw(""), dim("Open Harness on the other computer and sign in to the same account.").into()],
+        "none" => { let mut out = vec![Line::raw("No computers are ready to connect."), Line::raw("")]; out.extend(add_steps(app)); out }
         "here" if rest == "login" => vec![Line::raw("Sign in to see your other computers."), Line::raw(""),
             dim("Use the same Harness account on both. Your local agents work without signing in.").into(),
             Line::raw(""), dim("After signing in, open Connect a computer again.").into(),
             Line::raw(""), dim("Enter opens the normal Harness sign-in flow in a local terminal.").into()],
-        "here" => vec![Line::raw("Set up Harness on your other computer."), Line::raw(""),
-            dim("The setup guide covers sign-in, the remote password and servers.").into(),
-            Line::raw(""), dim("Enter opens Machines & devices.").into()],
-        "account" => match &app.account.status {
-            crate::account::Status::SignedIn { email, .. } => {
-                let mut out = vec![Line::raw(email.as_ref().map_or("Signed in.".into(), |e| format!("Signed in as {e}."))), Line::raw(""),
+        "here" => {
+            let mut out = vec![bold("Set up another computer").into(), Line::raw("")];
+            out.extend(add_steps(app));
+            out.extend(enter_does("opens Machines & devices"));
+            out
+        }
+        // (Signed in as the row says: by the account's status, or by the daemon's email while that loads.)
+        "account" => match (&app.account.status, account_email(app)) {
+            (crate::account::Status::SignedIn { .. }, email) | (crate::account::Status::Unknown, email @ Some(_)) => {
+                let mut out = vec![Line::raw(email.map_or("Signed in.".into(), |e| format!("Signed in as {e}."))), Line::raw(""),
                     dim("Your computers, workspace and phone use this account.").into()];
                 out.extend(enter_does("opens Account"));
                 out
@@ -1555,15 +1687,10 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
         "m" => {
             let mut out = machine_lines(app, rest);
             if view == View::Connect {
-                out.push(Line::raw(""));
-                out.push(dim("Enter the remote password set on this machine.").into());
                 out.extend(stage_lines(app, rest));
                 if app.devices.link.as_ref().is_none_or(|l| l.machine != rest) { out.extend(enter_does("type its remote password, then link")) }
             } else {
-                out.extend(enter_does(match app.fleet.shares.get(rest) {
-                    Some(_) => "its actions — open",
-                    None => "its actions — open, connect, rename, remove from account",
-                }));
+                out.extend(enter_does("opens its actions"));
             }
             out
         }
@@ -1575,6 +1702,7 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
                 "connect" => "asks for its remote password, then links it",
                 "rename" => "asks for its new name, then y/n",
                 "remove" => "asks y/n, then deletes it from your account",
+                "unlink" => "asks y/n, then removes this computer's saved link — a new connection will need its password",
                 _ => "",
             }));
             out
@@ -1589,7 +1717,7 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
         "addshared" => {
             let Some((_, name, share)) = app.fleet.to_add.iter().find(|(id, ..)| id == rest) else { return vec![] };
             let mut out = vec![bold(name.clone()).into(), Line::raw(""), kv("shared by", owner_of(share)), Line::raw(""),
-                Line::raw(format!("{} shared it with everyone at your company. Added, it is one of your machines: its harnesses, terminals and files.", share.owner))];
+                Line::raw(format!("{} shared it with everyone at your company. Added, you get your own space on it and use their Claude and ChatGPT plans.", share.owner))];
             out.extend(enter_does("adds it to your machines"));
             out
         }
@@ -1601,35 +1729,24 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
                     if let Some(f) = v.get("fingerprint").and_then(Value::as_str) { out.push(kv("fingerprint", f)) }
                     if let Some(t) = v.get("setAt").and_then(Value::as_u64) { out.push(kv("set", format!("{} ago", crate::fleet::ago(t)))) }
                     out.push(Line::raw(""));
-                    out.push(dim("On the other machine: Link machine → select this computer → enter its password.").into());
+                    out.push(dim(LINK_HERE).into());
                 }
-                Some(Ok(_)) => { out.push(bold("No remote password set.").into()); out.push(Line::raw("")); out.push(dim("Use this password on the other machine to link to this computer.").into()) }
+                Some(Ok(_)) => { out.push(bold("No remote password set.").into()); out.push(Line::raw("")); out.push(dim("Set one so another computer can link to this one.").into()); out.push(dim(LINK_HERE).into()) }
                 Some(Err(e)) => { out.push(Line::from(vec![Span::styled("Password status is unavailable.", fg(theme::WARN))])); if e != "Password status is unavailable." { out.push(dim(e.clone()).into()) } }
                 None => out.push(dim("Reading password status…").into()),
             }
-            out.extend(enter_does(match rest { "set" => "asks for the new password twice, then y/n", "clear" => "asks y/n, then clears it — existing links stay", _ => "reads its status again" }));
-            out
-        }
-        "ln" if rest.is_empty() => { let mut out = vec![Line::from(dim("Machines this computer can connect to."))]; out.extend(enter_does("reads `harness link list` again")); out }
-        "ln" => {
-            let Some(Ok(list)) = &app.devices.links else { return vec![] };
-            let Some(l) = list.iter().find(|l| l.machine == rest) else { return vec![] };
-            let mut out = vec![bold(name_of(app, rest)).into(), Line::raw(""), kv("machine", l.machine.clone()), kv("fingerprint", l.fingerprint.clone()), kv("linked", l.at.clone())];
-            out.extend(enter_does("asks y/n, then unlinks it — a new connection will need its password"));
+            out.extend(enter_does(match (rest, password_set(app)) {
+                ("set", _) | ("", Some(false)) => "asks for the new password twice, then y/n",
+                ("clear", _) => "asks y/n, then clears it — existing links stay",
+                ("", Some(true)) => "change or clear it",
+                _ => "reads its status again",
+            }));
             out
         }
         "add" => {
-            let (text, copies): (&str, String) = match rest {
-                "download" => ("Download Harness on your other computer and sign in with the same account.", DOWNLOAD_URL.into()),
-                "connect" => ("On the other computer: Machines → Set password. Back here, Connect a computer and enter that password.", String::new()),
-                "install" => ("Run these on your server over SSH:", INSTALL.into()),
-                "login" => ("Open the printed sign-in link in a browser on any device.", LOGIN.into()),
-                "start" => ("Start Harness and set a remote password.", START.into()),
-                _ => ("Run these on your server over SSH:", format!("{INSTALL}\n{LOGIN}\n{START}")),
-            };
-            let mut out = vec![Line::raw(text.to_string()), Line::raw("")];
-            for l in copies.lines() { out.push(Line::from(vec![Span::styled(l.to_string(), fg(theme::TEAL))])) }
-            out.extend(enter_does(if copies.is_empty() { "opens Connect a computer".to_string() } else { "copies it — to the clipboard of the computer you sit at".to_string() }));
+            let mut out = vec![bold("Add a machine").into(), Line::raw("")];
+            out.extend(add_steps(app));
+            out.extend(enter_does("lists the computers ready to link"));
             out
         }
         "ph" => {
@@ -1643,6 +1760,21 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
         }
         _ => vec![],
     }
+}
+
+/// The signed-in account's email: as the account read it, else as the daemon last said (`/api/auth/me`).
+fn account_email(app: &App) -> Option<String> {
+    match &app.account.status { crate::account::Status::SignedIn { email: Some(e), .. } => Some(e.clone()), _ => app.devices.phone.email.clone() }
+}
+
+/// How another computer joins: the same account, a remote password there, that password here.
+fn add_steps(app: &App) -> Vec<Line<'static>> {
+    let account = account_email(app).unwrap_or_else(|| "the same account".into());
+    vec![
+        Line::raw(format!("1. On the other computer, open Harness and sign in as {account}.")),
+        Line::raw("2. There, set a remote password in Machines & devices."),
+        Line::raw("3. Back here, choose that computer and enter the password."),
+    ]
 }
 
 /// Who this computer is shared with now, under its Share row.
@@ -1672,21 +1804,42 @@ fn share_preview(app: &App, rest: &str) -> Vec<Line<'static>> {
         ("domain", _) => {
             let Some(d) = domain else { return vec![] };
             let mut out = vec![bold(format!("Everyone at @{d}")).into(), Line::raw(""),
-                Line::raw(format!("Anyone with an @{d} address can use it as their own: its harnesses, terminals and files.")), Line::raw(""),
+                Line::raw(format!("Anyone with an @{d} email can use it, no invite needed. They get their own private space and use your Claude and ChatGPT plans.")), Line::raw(""),
                 kv("now", if same_domain { "on" } else { "off" })];
             out.extend(enter_does(if same_domain { format!("stops sharing with everyone at @{d}; people you added by email keep it") } else { "asks y/n, then shares it with them".into() }));
             out
         }
         ("add", _) => {
-            let mut out = vec![bold("Add people").into(), Line::raw(""), Line::raw("They see it in their Machines and use it as their own: its harnesses, terminals and files."),
+            let mut out = vec![bold("Add people").into(), Line::raw(""), Line::raw("They see it in their Machines. They get their own private space and use your Claude and ChatGPT plans."),
                 Line::raw(""), dim("Several at once: separate the addresses with commas or spaces.").into()];
             out.extend(enter_does("asks for their email addresses, then y/n"));
             out
         }
         ("rm", email) => {
             let using = members.iter().any(|(e, _)| e == email);
-            let mut out = vec![bold(email.to_string()).into(), Line::raw(""), kv("status", if using { "using it" } else { "invited · not using it yet" })];
+            let mut out = vec![bold(email.to_string()).into(), Line::raw(""), kv("status", if using { "joined" } else { "invited" })];
             out.extend(enter_does("asks y/n, then stops sharing with them — they lose access at once"));
+            out
+        }
+        ("guests-on", _) => {
+            let why = if guest_access(app).as_deref() == Some("outdated") { "People you added can't use it since the update." } else { "People you added can't use it yet." };
+            let mut out = vec![bold("Turn on sharing").into(), Line::raw(""), Line::styled(why, fg(theme::WARN)), Line::raw(""),
+                Line::raw("Each person you share with gets their own account on this computer, so they can't see your files. You enter your password once to set this up.")];
+            out.extend(enter_does("shows this computer's admin prompt"));
+            out
+        }
+        ("folder-read" | "folder-write", _) => {
+            let write = rest == "folder-write";
+            let mut out = vec![bold(if write { "Share a folder they can edit" } else { "Share a folder they can view" }).into(), Line::raw(""),
+                Line::raw(if write { "People you share with can open it and change, add or delete files." } else { "People you share with can open it and read the files." }),
+                Line::raw(""), Line::styled("They see everything inside, even passwords and keys.", fg(theme::WARN))];
+            out.extend(enter_does("asks for the folder's full path, then y/n"));
+            out
+        }
+        ("folder", path) => {
+            let write = sharing_folders(app).iter().any(|(p, w)| p == path && *w);
+            let mut out = vec![bold(path.to_string()).into(), Line::raw(""), kv("access", if write { "can edit" } else { "can view" })];
+            out.extend(enter_does("asks y/n, then stops sharing it"));
             out
         }
         _ => vec![],
@@ -1697,9 +1850,11 @@ fn machine_lines(app: &App, id: &str) -> Vec<Line<'static>> {
     let Some(m) = app.fleet.machine(id) else { return vec![dim("(gone)").into()] };
     let (glyph, color, word) = reach(app, m);
     let mut out = vec![Line::from(vec![bold(m.name.clone()), dim(if m.local { "  this computer" } else { "" })]), Line::raw("")];
-    out.push(Line::from(vec![dim(format!("{:<10}", "status")), Span::styled(format!("{glyph} {word}"), fg(color))]));
+    out.push(Line::from(vec![dim(format!("{:<KEY_W$}", "status")), Span::styled(format!("{glyph} {word}"), fg(color))]));
     if let Some(share) = app.fleet.shares.get(id) { out.push(kv("shared by", owner_of(share))) }
     if let Some(rtt) = app.rtt.get(id).filter(|_| m.usable()) { out.push(kv("rtt", format!("{}ms", rtt.as_millis()))) }
+    // (Saved, not live: a machine can still need linking again after it.)
+    if let Some(l) = link_of(app, id) { out.push(kv("saved link", l.at.clone())) }
     let row = app.devices.account.get(id);
     let seen = row.and_then(|r| ["lastSeenAt", "lastSeen", "lastActiveAt", "updatedAt"].iter().find_map(|k| r.get(*k)));
     match seen {
@@ -1745,15 +1900,23 @@ fn stage_lines(app: &App, machine: &str) -> Vec<Line<'static>> {
 
 /// A title, where you are inside it, and the way out.
 fn head(buf: &mut Buffer, app: &App, title: &str, x: u16, y: u16, right: u16, c: &Chrome) {
-    let mut at = x + settings::put(buf, x, y, right.saturating_sub(x), title, c.base.add_modifier(Modifier::BOLD));
     let level = match app.devices.sub.as_deref() {
         Some("share:") => Some(format!("Share {}", app.fleet.local_machine_name())),
+        Some("pw:") => Some("Remote password".to_string()),
         sub => sub.and_then(|s| s.strip_prefix("m:")).map(|id| name_of(app, id)),
     };
-    app.devices.back_at.set(level.as_ref().map(|_| (app.size, Rect::new(x, y, at - x, 1))));
-    if let Some(level) = level {
-        at += settings::put(buf, at, y, right.saturating_sub(at), "  ›  ", c.muted);
-        settings::put(buf, at, y, right.saturating_sub(at), &level, c.accent);
+    // The way here, the view it came from first: `Machines & devices  ›  Connect a computer`.
+    let path: Vec<String> = app.devices.back.as_ref().map(|b| b.view.title().to_string()).into_iter().chain(std::iter::once(title.to_string())).chain(level).collect();
+    // (It stops a column short of `esc`, however long.)
+    let end = right.saturating_sub(4);
+    let mut at = x;
+    for (i, part) in path.iter().enumerate() {
+        if i > 0 { at += settings::put(buf, at, y, end.saturating_sub(at), "  ›  ", c.muted) }
+        let style = if i == 0 { c.base.add_modifier(Modifier::BOLD) } else if i + 1 == path.len() { c.accent } else { c.base };
+        let w = settings::put(buf, at, y, end.saturating_sub(at), part, style);
+        // The first part is the way back, as Esc is.
+        if i == 0 { app.devices.back_at.set((path.len() > 1).then(|| (app.size, Rect::new(x, y, w, 1)))) }
+        at += w;
     }
     settings::put(buf, right.saturating_sub(3), y, 3, "esc", c.muted);
 }
@@ -1823,7 +1986,8 @@ fn ask_title(app: &App, ask: &Ask) -> String {
         Ask::Confirm { act: Act::Remove { name, .. }, .. } => format!("Remove from Account · {name}"),
         Ask::Confirm { act: Act::Unpair { name, .. }, .. } => format!("Remove Access · {name}"),
         Ask::Confirm { act: Act::ArmPhone, .. } => "Add Your Phone".into(),
-        Ask::Entry { what: Entry::ShareEmail, .. } | Ask::Confirm { act: Act::Share { .. }, .. } => format!("Share · {}", app.fleet.local_machine_name()),
+        Ask::Entry { what: Entry::ShareEmail | Entry::ShareFolder { .. }, .. } | Ask::Confirm { act: Act::Share { .. } | Act::ShareFolders { .. }, .. } =>
+            format!("Share · {}", app.fleet.local_machine_name()),
         Ask::Confirm { act: Act::AddShared { name, .. }, .. } => format!("Add to My Machines · {name}"),
     }
 }
@@ -1835,7 +1999,7 @@ fn action(ask: &Ask, room: u16) -> &'static str {
         Ask::Confirm { .. } => return "Yes",
         Ask::Entry { what: Entry::Link { .. }, .. } => "Connect",
         Ask::Entry { what: Entry::Rename { .. }, .. } => "Save",
-        Ask::Entry { what: Entry::ShareEmail, .. } => "Add",
+        Ask::Entry { what: Entry::ShareEmail | Entry::ShareFolder { .. }, .. } => "Add",
         Ask::Entry { .. } => "Continue",
     };
     if "[ Cancel ]  [  ]".width() + word.width() > room as usize { "Next" } else { word }
@@ -1883,7 +2047,7 @@ fn footer(buf: &mut Buffer, app: &App, picker: &Picker, x: u16, y: u16, w: u16, 
     if app.devices.ask.is_some() { return }
     let (line, style) = match app.devices.footer.as_ref().filter(|(_, err, at)| *err || at.elapsed() < Duration::from_secs(6)) {
         Some((t, err, _)) => (t.clone(), if *err { c.danger } else { c.accent }),
-        None => (format!("↑↓ move   enter choose   type to search   esc {}", if app.devices.sub.is_some() || picker.from_commands { "back" } else { "close" }), c.muted),
+        None => (format!("↑↓ move   enter choose   type to search   esc {}", if app.devices.sub.is_some() || app.devices.back.is_some() || picker.from_commands { "back" } else { "close" }), c.muted),
     };
     // (Too long for one line — a question beside the QR code — it takes the line above too.)
     if line.width() as u16 <= w || y == 0 { settings::put(buf, x, y, w, &line, style); return }
@@ -2052,6 +2216,15 @@ mod tests {
         p.select(id);
         assert_eq!(p.current_id().as_deref(), Some(id), "no row {id}");
     }
+    /// Onto a row of the remote password's level, in through its one row when not there already
+    /// (`pw:set` with no password yet is that row itself: Enter on it asks for one).
+    fn to_password(app: &mut App, id: &str) {
+        if ids(app).iter().any(|r| r == id) { return go_to(app, id) }
+        go_to(app, "pw:");
+        if id == "pw:set" && password_set(app) != Some(true) { return }
+        press(app, KeyCode::Enter);
+        go_to(app, id);
+    }
     fn ids(app: &App) -> Vec<String> { match &app.modal { Some(Modal::Picker { picker, .. }) => picker.rows.iter().map(|r| r.id.clone()).collect(), _ => vec![] } }
     fn clis(log: &Arc<Mutex<Vec<Req>>>, first: &str) -> Vec<Req> { log.lock().unwrap().iter().filter(|r| matches!(r, Req::Cli { args, .. } if args.first().map(String::as_str) == Some(first))).cloned().collect() }
     fn has(log: &Arc<Mutex<Vec<Req>>>, want: &Req) -> bool { log.lock().unwrap().contains(want) }
@@ -2079,7 +2252,34 @@ mod tests {
                     p["sameDomain"] = payload["sameDomain"].clone();
                     p.clone()
                 }
+                Some("set_folders") => {
+                    let mut p = policy.lock().unwrap();
+                    p["folders"] = payload["folders"].clone();
+                    p.clone()
+                }
                 _ => json!({ "ok": true }),
+            })))
+        }));
+        log
+    }
+    /// Guest access off at first: the first share turns it on behind this computer's admin prompt, unless the
+    /// person cancels it there ([cancel]).
+    fn guest_world(app: &mut App, cancel: bool) -> Arc<Mutex<Vec<Req>>> {
+        guest_world_from(app, cancel, json!({ "emails": [], "sameDomain": false, "domain": "acme.io", "members": [], "guestAccess": "missing" }))
+    }
+    fn guest_world_from(app: &mut App, cancel: bool, policy: Value) -> Arc<Mutex<Vec<Req>>> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let policy = Arc::new(Mutex::new(policy));
+        app.devices.runner = Some(Box::new(move |req: &Req| {
+            seen.lock().unwrap().push(req.clone());
+            let Req::Rpc { ty: "shared_machines", payload } = req else { return world(req) };
+            let mut p = policy.lock().unwrap();
+            Some(Reply::Rpc(Ok(match payload["action"].as_str() {
+                Some("enable_guests") if cancel => json!({ "error": "CANCELLED", "message": "Sharing was not turned on: the admin prompt was cancelled." }),
+                Some("enable_guests") => { p["guestAccess"] = json!("ready"); json!({ "ok": true, "guestAccess": "ready" }) }
+                Some("set") => { p["emails"] = payload["emails"].clone(); p["sameDomain"] = payload["sameDomain"].clone(); p.clone() }
+                _ => p.clone(),
             })))
         }));
         log
@@ -2106,7 +2306,9 @@ mod tests {
         app.rtt.insert(SHARED.into(), std::time::Duration::from_millis(42));
         open(&mut app, View::Machines);
         assert_eq!(row_of(&app, &format!("m:{SHARED}")).and_then(|r| r.group.as_deref()), Some("Shared with you"));
-        assert!(row_of(&app, &format!("m:{SHARED}")).is_some_and(|r| r.right.starts_with("42ms")), "its round trip, as your own machines show");
+        assert_eq!(row_of(&app, &format!("m:{SHARED}")).map(|r| r.right.as_str()), Some("no harnesses"), "one value at the right, as your own machines show");
+        let said = preview(&app, View::Machines, &format!("m:{SHARED}")).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(said.contains("42ms") && said.contains("Dee"), "its round trip and owner are in the preview: {said}");
         assert_eq!(row_of(&app, &format!("addshared:{TEAM}")).map(|r| (r.label.as_str(), r.group.as_deref())), Some(("Add gpu-box-2", Some("Shared with your team"))));
         assert_eq!(row_of(&app, &format!("m:{REMOTE}")).and_then(|r| r.group.as_deref()), Some("Your machines"));
 
@@ -2138,14 +2340,14 @@ mod tests {
         assert_eq!(row_of(&app, "share:").map(|r| r.right.clone()), Some("off".into()));
         go_to(&mut app, "share:");
         press(&mut app, KeyCode::Enter);
-        assert_eq!(ids(&app)[1..], ["shr:domain", "shr:add"]);
+        assert_eq!(ids(&app)[1..], ["shr:domain", "shr:add", "shr:folder-read", "shr:folder-write"]);
 
         go_to(&mut app, "shr:domain");
         press(&mut app, KeyCode::Enter);
         assert!(app.devices.ask.is_some(), "everyone at the domain is asked first");
         // They use it straight away, as people named by email do: nothing to add first.
         assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. })
-            if question.ends_with("with everyone at @acme.io? They use it as their own: its harnesses, terminals and files.")), "{:?}", app.devices.ask);
+            if question.ends_with("with everyone at @acme.io? They get their own private space and use your Claude and ChatGPT plans.")), "{:?}", app.devices.ask);
         press(&mut app, KeyCode::Char('Y'));
         assert!(has(&log, &rpc("set", json!({ "emails": [], "sameDomain": true }))));
         assert_eq!(row_of(&app, "shr:domain").map(|r| r.right.clone()), Some("on".into()));
@@ -2177,6 +2379,116 @@ mod tests {
         assert_eq!(match &app.modal { Some(Modal::Picker { picker, .. }) => picker.current_id(), _ => None }.as_deref(), Some("share:"));
     }
 
+    #[test]
+    fn the_first_share_turns_guest_access_on_behind_this_computers_admin_prompt_and_a_cancel_shares_nothing() {
+        let mut cancelled = app((150, 42));
+        let log = guest_world(&mut cancelled, true);
+        open(&mut cancelled, View::Machines);
+        go_to(&mut cancelled, "share:");
+        press(&mut cancelled, KeyCode::Enter);
+        go_to(&mut cancelled, "shr:domain");
+        press(&mut cancelled, KeyCode::Enter);
+        press(&mut cancelled, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("enable_guests", json!({}))));
+        assert!(!log.lock().unwrap().iter().any(|r| matches!(r, Req::Rpc { payload, .. } if payload["action"] == "set")), "nothing shared without it");
+        assert!(cancelled.devices.footer.as_ref().is_some_and(|(t, err, _)| *err && t.contains("admin prompt was cancelled")));
+
+        let mut app = app((150, 42));
+        let log = guest_world(&mut app, false);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, "shr:domain");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        let asked: Vec<String> = log.lock().unwrap().iter().filter_map(|r| match r { Req::Rpc { payload, .. } => payload["action"].as_str().map(str::to_string), _ => None }).collect();
+        assert_eq!(asked.iter().filter(|a| *a != "get").cloned().collect::<Vec<_>>(), ["enable_guests", "set"]);
+        assert_eq!(row_of(&app, "shr:domain").map(|r| r.right.clone()), Some("on".into()));
+        // On now: the next share asks nothing more of the person.
+        go_to(&mut app, "shr:add");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "ann@gmail.com");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert_eq!(log.lock().unwrap().iter().filter(|r| matches!(r, Req::Rpc { payload, .. } if payload["action"] == "enable_guests")).count(), 1);
+        assert!(has(&log, &rpc("set", json!({ "emails": ["ann@gmail.com"], "sameDomain": true }))));
+    }
+
+    #[test]
+    fn shared_already_it_says_guests_wait_on_guest_access_and_turns_it_on() {
+        // Not shared yet: nothing to say.
+        let mut app = app((150, 42));
+        guest_world(&mut app, false);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        assert!(row_of(&app, "shr:guests-on").is_none());
+
+        let mut app = self::app((150, 42));
+        let log = guest_world_from(&mut app, false, json!({ "emails": ["kim@acme.io"], "sameDomain": false, "domain": "acme.io", "members": [], "guestAccess": "outdated" }));
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        assert!(row_of(&app, "shr:guests-on").is_some_and(|r| r.detail.is_empty() && r.right == "off"));
+        assert!(preview(&app, View::Machines, "shr:guests-on").iter().any(|l| l.to_string().contains("since the update")), "why is in the preview");
+        go_to(&mut app, "shr:guests-on");
+        press(&mut app, KeyCode::Enter);
+        assert!(has(&log, &rpc("enable_guests", json!({}))));
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| !err && t == "Sharing is on"));
+        assert!(row_of(&app, "shr:guests-on").is_none());
+    }
+
+    #[test]
+    fn folders_are_shared_with_guests_read_only_or_editable_each_after_a_yes_and_taken_back_the_same_way() {
+        let mut app = app((150, 42));
+        let log = sharing_world(&mut app);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+
+        // A path that is not a full one is refused, by name, and nothing is sent.
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "code/app");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| *err && t.contains("full path")));
+        press(&mut app, KeyCode::Esc);
+
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/docs/");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. }) if question.contains("even passwords and keys")), "{:?}", app.devices.ask);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }] }))));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/docs").map(|r| r.right.clone()), Some("read only".into()));
+
+        go_to(&mut app, "shr:folder-write");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/code/app");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }, { "path": "/Users/dee/code/app", "write": true }] }))));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/code/app").map(|r| r.right.clone()), Some("can edit".into()));
+
+        // Once is enough.
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| !err && t.contains("already")));
+
+        // Taken back after a yes.
+        go_to(&mut app, "shr:folder:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/code/app", "write": true }] }))));
+        assert!(row_of(&app, "shr:folder:/Users/dee/docs").is_none());
+        let text = |id: &str| preview(&app, View::Machines, id).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text("shr:folder-write").contains("even passwords and keys"));
+        assert!(text("shr:folder:/Users/dee/code/app").contains("can edit"));
+    }
+
     // Seen 2026-10-16: the list is about fifty columns, so the sharing rows were cut short, and
     // the side beside them, where a row says the rest, was empty.
     #[test]
@@ -2197,14 +2509,14 @@ mod tests {
 
         assert!(text("account").starts_with("Signed in as ann@acme.io."), "{}", text("account"));
         let share = text("share:");
-        for said in ["get full access", "everyone at @acme.io · on", "kim@x.io", "lee@y.io", "using it  kim@x.io"] { assert!(share.contains(said), "{said}: {share}") }
+        for said in ["People you invite get their own private space", "everyone at @acme.io · on", "kim@x.io", "lee@y.io", "using it    kim@x.io"] { assert!(share.contains(said), "{said}: {share}") }
         // Everyone at the domain may use it, and is the domain row: nobody at it is named one by one.
         assert!(!share.contains("bo@acme.io"), "{share}");
         let domain = text("shr:domain");
-        assert!(domain.contains("Anyone with an @acme.io address can use it as their own: its harnesses, terminals and files."), "{domain}");
+        assert!(domain.contains("Anyone with an @acme.io email can use it, no invite needed. They get their own private space and use your Claude and ChatGPT plans."), "{domain}");
         assert!(!domain.contains("bo@acme.io") && !domain.contains("add it from"), "{domain}");
         assert!(domain.contains("people you added by email keep it"));
-        assert!(text("shr:rm:kim@x.io").contains("using it") && text("shr:rm:lee@y.io").contains("invited · not using it yet"));
+        assert!(text("shr:rm:kim@x.io").contains("joined") && text("shr:rm:lee@y.io").contains("invited"));
         assert!(text(&format!("m:{SHARED}")).contains("Dee (dee@acme.io)") && !text(&format!("m:{SHARED}")).contains("remove from your machines"));
         assert!(text(&format!("addshared:{TEAM}")).contains("Dee (dee@acme.io)"));
         for id in ["share:", "shr:domain", "shr:add", "shr:rm:kim@x.io", "shr:reload", &format!("addshared:{TEAM}"), &format!("act:open:{SHARED}")] {
@@ -2215,7 +2527,9 @@ mod tests {
         go_to(&mut app, "share:");
         press(&mut app, KeyCode::Enter);
         assert!(row_of(&app, "share-what").is_some_and(|r| r.label.chars().count() <= 44));
-        assert!(row_of(&app, "shr:domain").is_some_and(|r| r.detail.iter().any(|s| s.content == "they use it as their own")));
+        assert!(row_of(&app, "shr:domain").is_some_and(|r| r.detail.is_empty()));
+        assert!(preview(&app, View::Machines, "shr:domain").iter().any(|l| l.to_string().contains("no invite needed")), "what it means is in the preview");
+        assert_eq!(row_of(&app, "shr:rm:kim@x.io").map(|r| r.right.as_str()), Some("joined"), "the right column is its state, not a verb");
         assert_eq!(row_of(&app, "share-using").map(|r| r.label.as_str()), Some("Using it now: kim@x.io"));
     }
 
@@ -2281,22 +2595,33 @@ mod tests {
         let _log = fake(&mut app);
         crate::input::run(&mut app, "devices");
         let rows = ids(&app);
-        for id in ["pw:set", "pw:clear", &format!("m:{LOCAL}"), &format!("m:{REMOTE}"), &format!("m:{OFF}"), &format!("ln:{REMOTE}"), "ln:", "add:download", "add:connect", "add:install", "add:login", "add:start", "add:all"] {
-            assert!(rows.iter().any(|r| r == id), "{id} missing from {rows:?}");
-        }
+        assert_eq!(rows, vec!["account".to_string(), "pw:".into(), "share:".into(), format!("m:{LOCAL}"), format!("m:{REMOTE}"), format!("m:{OFF}"), "add:".into()]);
         let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!() };
         let groups: Vec<&str> = picker.rows.iter().filter_map(|r| r.group.as_deref()).collect::<Vec<_>>();
         let mut seen: Vec<&str> = Vec::new();
         for g in groups { if seen.last() != Some(&g) { seen.push(g) } }
         // This computer's section is under its name once it has one ("studio" here), not "This computer".
-        assert_eq!(seen, vec!["Account", app.fleet.local_machine_name().as_str(), "Your machines", "Linked from here", "Add a machine", "Set up a server"], "each group once, in order");
-        assert!(!seen.contains(&"This computer"));
-        assert!(picker.rows.iter().any(|r| r.id == "add:login" && r.label == "2. Sign in as dev+hn@example.com"), "the server steps name the account");
-        // A machine opens its actions: no Remove for this computer, Connect for one not linked.
+        assert_eq!(seen, vec!["Account", app.fleet.local_machine_name().as_str(), "Your machines"], "each group once, in order; Add a machine is the last of yours");
+        let account = preview(&app, View::Machines, "account").iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(account.contains("Signed in as dev+hn@example.com"), "the preview says what the row does: {account}");
+        // A row is its name and one value at the right: what it means is in the preview.
+        for r in &picker.rows {
+            assert!(r.detail.is_empty(), "{} has text after its name", r.id);
+            assert!(!r.right.contains("  ") && !r.right.contains('·'), "{} has two values at the right: {:?}", r.id, r.right);
+        }
+        assert_eq!(row_of(&app, "account").map(|r| r.label.clone()), Some("dev+hn@example.com".into()), "the account row names who is signed in");
+        assert_eq!(row_of(&app, &format!("m:{OFF}")).map(|r| r.right.clone()), Some("offline".into()));
+        // Narrow, only why one can't be used: a connected one's ✓ says the rest.
+        let narrow = |id: &str| row_of(&app, id).map(|r| r.right_at(30).to_string());
+        assert_eq!((narrow(&format!("m:{LOCAL}")), narrow(&format!("m:{OFF}"))), (Some(String::new()), Some("offline".into())));
+        let add = preview(&app, View::Machines, "add:").iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(add.contains("sign in as dev+hn@example.com") && !add.contains("curl") && !add.contains("http"), "the steps, no download or install: {add}");
+        // A machine opens its actions: no Remove for this computer, Connect for one not linked, Unlink for one linked.
         go_to(&mut app, &format!("m:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
         let acts = ids(&app);
         assert!(acts.contains(&format!("act:connect:{REMOTE}")) && acts.contains(&format!("act:remove:{REMOTE}")) && acts.contains(&format!("act:rename:{REMOTE}")), "{acts:?}");
+        assert!(acts.contains(&format!("act:unlink:{REMOTE}")), "its saved link is removed from its actions: {acts:?}");
         press(&mut app, KeyCode::Esc);
         assert_eq!(picker_mut(&mut app).and_then(|p| p.current_id()), Some(format!("m:{REMOTE}")), "back on the machine");
         go_to(&mut app, &format!("m:{LOCAL}"));
@@ -2313,6 +2638,8 @@ mod tests {
         let usable: Vec<&str> = picker.rows.iter().filter(|r| !r.disabled).map(|r| r.id.as_str()).collect();
         assert_eq!(usable, vec![format!("m:{REMOTE}").as_str(), "here:setup"]);
         assert!(picker.rows.iter().any(|r| r.id == format!("m:{OFF}") && r.disabled), "an offline one is shown, not chosen");
+        assert!(picker.rows.iter().all(|r| r.detail.is_empty()), "a row is its name and state, as in Machines & devices");
+        assert!(picker.rows.iter().any(|r| r.id == "offline-how"), "how to bring one back is said once, under them");
     }
 
     #[test]
@@ -2452,7 +2779,7 @@ mod tests {
         // (27 wide at the least: `[ Cancel ]  [ Yes ]` is 19 columns and the panel is 4 narrower
         // than the screen, with 2 columns of inset each side; the old buttons fit in 24.)
         for (w, h) in [(150, 42), (80, 24), (40, 12), (27, 10)] {
-            go_to(&mut app, "pw:clear");
+            to_password(&mut app, "pw:clear");
             press(&mut app, KeyCode::Enter);
             crate::input::handle(&mut app, crossterm::event::Event::Resize(w, h));
             let (visible, _) = screen(&mut app, w, h);
@@ -2461,7 +2788,7 @@ mod tests {
             assert!(app.devices.ask.is_none());
             assert!(!has(&log, &clear));
         }
-        go_to(&mut app, "pw:clear"); press(&mut app, KeyCode::Enter);
+        to_password(&mut app, "pw:clear"); press(&mut app, KeyCode::Enter);
         crate::input::handle(&mut app, crossterm::event::Event::Resize(80, 24));
         screen(&mut app, 80, 24);
         // Too small to draw: the question is cancelled, never kept invisible to answer keys.
@@ -2498,7 +2825,7 @@ mod tests {
         assert_eq!(title(&mut app), "Connect · gpu-box");
         press(&mut app, KeyCode::Esc);
         crate::input::run(&mut app, "devices");
-        go_to(&mut app, "pw:set");
+        to_password(&mut app, "pw:set");
         press(&mut app, KeyCode::Enter);
         assert_eq!(title(&mut app), "Set Remote Password");
         typed(&mut app, "a"); press(&mut app, KeyCode::Enter);
@@ -2506,10 +2833,12 @@ mod tests {
         typed(&mut app, "a"); press(&mut app, KeyCode::Enter);
         assert_eq!(title(&mut app), "Set Remote Password", "and its question");
         press(&mut app, KeyCode::Esc);
-        go_to(&mut app, "pw:clear");
+        to_password(&mut app, "pw:clear");
         press(&mut app, KeyCode::Enter);
         assert_eq!(title(&mut app), "Clear Remote Password");
         press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(picker_mut(&mut app).and_then(|p| p.current_id()).as_deref(), Some("pw:"), "out of its level, back on its row");
         go_to(&mut app, &format!("m:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
         go_to(&mut app, &format!("act:rename:{REMOTE}"));
@@ -2553,7 +2882,7 @@ mod tests {
             buf[(x, y as u16)].bg
         };
         let selected = settings::chrome().selected.bg;
-        go_to(&mut app, "pw:clear");
+        to_password(&mut app, "pw:clear");
         press(&mut app, KeyCode::Enter);
         let (s, buf) = screen(&mut app, 150, 42);
         assert!(s.contains("[ Cancel ]  [ Yes ]") && s.contains(buttons::KEYS), "the one keys hint every question shows: {s}");
@@ -2564,7 +2893,7 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.devices.ask.is_none(), "Enter on Cancel closes");
         assert!(!has(&log, &clear));
-        go_to(&mut app, "pw:clear");
+        to_password(&mut app, "pw:clear");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Right);
         assert!(matches!(app.devices.ask, Some(Ask::Confirm { .. })), "an arrow keeps the prompt");
@@ -2727,7 +3056,7 @@ mod tests {
         crate::input::run(&mut app, "devices");
         for (w, h, label) in [(28, 12, "[ Next ]"), (31, 12, "[ Next ]"), (32, 12, "[ Continue ]"), (80, 24, "[ Continue ]")] {
             crate::input::handle(&mut app, crossterm::event::Event::Resize(150, 42));
-            go_to(&mut app, "pw:set");
+            to_password(&mut app, "pw:set");
             press(&mut app, KeyCode::Enter);
             typed(&mut app, "pw");
             crate::input::handle(&mut app, crossterm::event::Event::Resize(w, h));
@@ -2784,18 +3113,21 @@ mod tests {
         let log = fake(&mut app);
         crate::input::run(&mut app, "devices");
         // Unlink: y/n first; n changes nothing, y runs it.
-        go_to(&mut app, &format!("ln:{REMOTE}"));
+        go_to(&mut app, &format!("m:{REMOTE}"));
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, &format!("act:unlink:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
         assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. }) if question.contains("gpu-box")));
         press(&mut app, KeyCode::Char('n'));
         let unlink = cli(&["link", "unlink", REMOTE], None);
         assert!(!has(&log, &unlink), "n: nothing ran");
-        go_to(&mut app, &format!("ln:{REMOTE}"));
+        go_to(&mut app, &format!("act:unlink:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('y'));
         assert!(has(&log, &unlink), "y: unlinked");
+        press(&mut app, KeyCode::Esc);
         // Set password: twice, a mismatch caught, then y/n.
-        go_to(&mut app, "pw:set");
+        to_password(&mut app, "pw:set");
         press(&mut app, KeyCode::Enter);
         typed(&mut app, "abc");
         press(&mut app, KeyCode::Enter);
@@ -2811,10 +3143,11 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         assert!(has(&log, &set), "the password went on stdin");
         // Clear.
-        go_to(&mut app, "pw:clear");
+        to_password(&mut app, "pw:clear");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Esc);
         assert!(!has(&log, &cli(&["remote-password", "clear", "--json"], None)));
+        press(&mut app, KeyCode::Esc);
         // Rename, then remove from the account.
         go_to(&mut app, &format!("m:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
@@ -2943,10 +3276,60 @@ mod tests {
         assert_eq!(picker.current_id().as_deref(), Some("cmd:devices"));
     }
 
+    // Seen 2026-10-21: Add a machine opened Connect a computer, and Esc there closed the whole panel;
+    // its Set up another computer opened Machines again on top.
+    #[test]
+    fn add_a_machine_opens_connect_and_esc_comes_back_to_it() {
+        let mut app = app((150, 42));
+        app.mouse = true;
+        let _log = fake(&mut app);
+        let view = |app: &App| match &app.modal { Some(Modal::Picker { kind: PickerKind::Devices(v), picker }) => Some((*v, picker.current_id())), _ => None };
+        crate::input::run(&mut app, "devices");
+        go_to(&mut app, "add:");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(view(&app).map(|v| v.0), Some(View::Connect));
+        let (s, _) = screen(&mut app, 150, 42);
+        assert!(s.contains("Machines & devices  ›  Connect a computer") && s.contains("esc back"), "the way here, and back:\n{s}");
+        // Esc: back on Add a machine, not closed.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(view(&app), Some((View::Machines, Some("add:".into()))));
+        assert!(app.devices.back.is_none());
+        // Set up another computer goes back too, rather than a third view on top.
+        go_to(&mut app, "add:");
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, "here:setup");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(view(&app), Some((View::Machines, Some("add:".into()))));
+        // And a click on where it came from, as Esc.
+        go_to(&mut app, "add:");
+        press(&mut app, KeyCode::Enter);
+        let (s, _) = screen(&mut app, 150, 42);
+        let (y, line) = s.lines().enumerate().find(|(_, l)| l.contains("Machines & devices  ›")).unwrap();
+        let x = line[..line.find("Machines & devices").unwrap()].chars().count() as u16;
+        assert!(mouse(&mut app, MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x + 2, row: y as u16, modifiers: KeyModifiers::NONE }));
+        assert_eq!(view(&app), Some((View::Machines, Some("add:".into()))));
+        // Esc again closes it, as it did.
+        press(&mut app, KeyCode::Esc);
+        assert!(view(&app).is_none());
+    }
+
     #[test]
     fn nothing_real_runs_under_test() {
         let mut app = app((150, 42));
         crate::input::run(&mut app, "devices");
         assert!(matches!(app.devices.password, Some(Err(_))), "the CLI is not there in tests");
+    }
+
+    // Seen 2026-10-21: `mach` in Commands listed Open harness and New pane above the machine ones.
+    #[test]
+    fn searching_commands_for_machines_lists_the_machine_ones_first() {
+        let app = app((150, 42));
+        let mut c = crate::picker::Picker::new("Commands", "");
+        (c.live, c.search_extra) = (true, true); // as the panel opens it
+        c.set_rows(crate::modal::command_rows_for(&app, true, false));
+        c.set_query("mach");
+        let labels: Vec<String> = c.visible.iter().map(|(i, _)| c.rows[*i].label.to_lowercase()).collect();
+        let named = labels.iter().take_while(|l| l.contains("mach")).count();
+        assert!(named >= 2 && labels[named..].iter().all(|l| !l.contains("mach")), "{labels:?}");
     }
 }

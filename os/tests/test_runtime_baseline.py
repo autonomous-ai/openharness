@@ -35,7 +35,19 @@ class RuntimeBaseline(unittest.TestCase):
                 'cli': {'version': '0.3.57', 'commit': published},
                 'hn': {'version': '0.1.12', 'commit': published},
             })
+            # The CLI built for the OS calls itself the newest published one it contains.
+            self.assertEqual(baseline.cli_version(root), '0.3.57')
             # An incomplete checkout must fail instead of silently allowing a downgrade.
             (root / '.git/shallow').write_text(git('rev-parse', 'HEAD') + '\n')
             with self.assertRaisesRegex(ValueError, 'full Git history'):
                 baseline.baselines(root)
+
+    def test_with_no_published_cli_the_development_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(['git', '-C', str(root), 'init', '-b', 'main'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Fixture', '-c', 'user.email=f@example.test',
+                            'commit', '--allow-empty', '-m', 'first'], check=True, capture_output=True)
+            (root / 'cli').mkdir()
+            (root / 'cli/package.json').write_text(json.dumps({'version': '0.0.1'}))
+            self.assertEqual(baseline.cli_version(root), '0.0.1')

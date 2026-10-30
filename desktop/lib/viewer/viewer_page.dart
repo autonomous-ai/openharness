@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
+import '../shared/widgets/empty_state.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
-import '../terminal/terminal_text.dart';
 import '../widgets/link_machine_screen.dart';
-import '../widgets/terminal_text_action.dart';
 import '../widgets/web_pane_panel.dart';
 import '../core/models.dart';
 import 'viewer_location.dart';
@@ -22,23 +22,23 @@ class ViewerPage extends StatefulWidget {
 class _ViewerPageState extends State<ViewerPage> {
   TerminalPane? _pane;
 
-  Widget _message(String text, {VoidCallback? retry}) => Center(
-    child: Padding(
-      padding: EdgeInsets.all(terminalCellSizeOf(context).height),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            text,
-            style: terminalContentStyle(),
-            textAlign: TextAlign.center,
-          ),
-          if (retry != null) ...[
-            SizedBox(height: terminalCellSizeOf(context).height),
-            TerminalTextAction(label: 'Retry', onPressed: retry),
-          ],
-        ],
-      ),
+  /// A state of the viewer in words: on the theme's page, in the app's empty-state style, with
+  /// Retry where trying again can help.
+  Widget _message(String text, {VoidCallback? retry}) => Material(
+    color: Theme.of(context).scaffoldBackgroundColor,
+    child: EmptyState(
+      icon: AppIcons.monitor,
+      title: text,
+      action: retry == null
+          ? null
+          : OutlinedButton(
+              // A thumb's target on a phone.
+              style: const ButtonStyle(
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
+              onPressed: retry,
+              child: const Text('Retry'),
+            ),
     ),
   );
 

@@ -125,6 +125,23 @@ void main() {
       null,
       'This engine cannot be opened with a first message on Test host.',
     ),
+    // Windows: the terminal service did not answer. Its own reason is for the
+    // log; the person gets the one thing to do.
+    (
+      'PTY_HOST_UNAVAILABLE',
+      'harness-pty is not installed',
+      'Harness could not open a terminal on Test host. Run harness start on that computer, then try again.',
+    ),
+    (
+      'ENGINE_LAUNCH_REFUSED',
+      'OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.',
+      'OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.',
+    ),
+    (
+      'ENGINE_LAUNCH_REFUSED',
+      '',
+      'This engine cannot start on Test host. Nothing was started.',
+    ),
     (
       'SPAWN_FAILED',
       'The machine could not allocate an agent process.',
@@ -279,6 +296,7 @@ void main() {
           1,
           reason: 'quit must commit the pending debug tail',
         );
+        expect(log.durableFlushes, 1, reason: 'and fsync the day so far');
         await app.flushPaneLayout();
         expect(storage.values['swarm_layout_v1'], contains('Before quit'));
         await tester.pumpWidget(const SizedBox());
@@ -310,6 +328,8 @@ void main() {
       expect(log.flushes, 1);
       await tester.pumpWidget(const SizedBox());
       expect(log.flushes, 2);
+      // A desktop goes inactive on every focus change: write, never fsync.
+      expect(log.durableFlushes, 0);
       app.dispose();
     },
   );
@@ -413,9 +433,12 @@ void main() {
 }
 
 class _FlushLog implements FlushableAppLog {
-  var flushes = 0;
+  var flushes = 0, durableFlushes = 0;
   @override
-  void flush() => flushes++;
+  void flush({bool durable = false}) {
+    flushes++;
+    if (durable) durableFlushes++;
+  }
   @override
   void record(
     AppLogLevel level,

@@ -82,3 +82,26 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # over the cable (last_words.c). 10 s, so a full-face redraw is never mistaken for a hang.
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# --- Crashes must be diagnosable and must reboot ---
+# OCDAWARE makes the panic handler HALT instead of rebooting whenever the JTAG block looks attached, which the
+# USB-Serial-JTAG port can look like to it; a halted unit then falls to the hardware watchdog with no trace. Off:
+# a panic always prints, records itself in RTC memory (last_words.c) and reboots.
+CONFIG_ESP_DEBUG_OCDAWARE=n
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
+# The unwinder last_words.c's backtrace hook rides on (esp_fp_generated_step): a few percent of code size and speed.
+CONFIG_ESP_SYSTEM_USE_FRAME_POINTER=y
+# Both watchdogs are the IDF defaults, stated so a changed default cannot switch them off. The task watchdog (above)
+# watches the idle tasks, the render task and the cable reader task; the interrupt watchdog catches a task that
+# keeps interrupts off or an ISR that never returns, as a panic with a backtrace instead of a hardware reset.
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+CONFIG_ESP_INT_WDT_CHECK_CPU1=y
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+# A hang the panic handler never sees ends in a hardware watchdog reset. The CPUs' PC recorder (assist_debug) is
+# what bootloader_components/wdt_pc saves for that case; off, the app gates its clock and the record goes stale.
+CONFIG_ESP_SYSTEM_HW_PC_RECORD=y

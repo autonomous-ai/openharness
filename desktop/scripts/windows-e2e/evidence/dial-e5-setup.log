@@ -1,0 +1,26 @@
+# E5 setup only; eleven acceptance scenarios NOT RUN.
+source: 4c3def3cccaf0e820de63aeeb742a9852c6ce95a
+native run: https://github.com/autonomous-ai/openharness/actions/runs/39390890060
+native x64 job: SUCCESS; ARM64/install matrix still pending.
+native artifact: 12250700212 (harness-pty-windows-x64)
+native artifact digest: sha256:ac3a85be12c52ad234a28ea00f41114bc952f1d929a9d3a64b615d32ae23bd1b
+owned standard user: hxdial; Administrators member: False
+install.ps1 exited 0; installed CLI version: 0.9.0-dev.dial1
+installer did not start a daemon over SSH; desktop sign-in task only.
+installed selected PTY version: 0.1.0
+installed helper hash matched expected: d6e881453d4215ba404804c05ab1f5714b96c5ab716a3c073b6fed6b1f2af11c
+watch: console=False, ports=COM3, states=1, stderr empty=True
+watch: stdin closed after 2 s, exit=0 within 5 s; no open/probe command.
+baseline process identities preserved: 5/5 (PID + name + creation date); additional processes: 0
+desktop switch: NOT RUN; app install/login: NOT RUN; dial screen/heartbeat: NOT RUN
+COM open/flash/cable pull: NOT RUN in E5; no acceptance scenario marked PASS.
+cleanup: PENDING, owned profile/installation retained for the current E5 run.
+setup command start/end timestamps: not captured for these initial commands; no invented duration.
+setup evidence curated: 2026-10-20T08:19:12.446341+00:00
+raw inventory/access configuration/ownership receipts remain private outside the repository.
+
+owned loopback assets: exact flasher SHA matched source; Windows PowerShell5.1 parsed2; Node --check passed.
+loopback server started: False; global hosts/certificate changes: False.
+asset preparation start: 2026-10-20T08:20:36.322150+00:00
+asset preparation end: 2026-10-20T08:20:38.315139+00:00
+asset preparation elapsed seconds: 1.993; exit=0.

@@ -93,15 +93,17 @@ int main(void) {
     }
     reset();open_fail=true;play_beep();assert(!held&&opens==1&&!closes&&!writes);
     reset();write_fail=true;play_beep();assert(!held&&opens==1&&closes==1&&writes==1);
+    // One beep per 30 s: a burst of finishes beeps once. The very first one always sounds.
     reset();clock_us=1000000;audio_notify_done();assert(notifications==1);
-    clock_us=1999000;audio_notify_done();assert(notifications==1);
-    clock_us=2000000;audio_notify_done();assert(notifications==2);
-    clock_us=3000000;reenter=true;audio_notify_done();assert(notifications==3);
+    clock_us=30999000;audio_notify_done();assert(notifications==1);
+    clock_us=31000000;audio_notify_done();assert(notifications==2);
+    clock_us=70000000;reenter=true;audio_notify_done();assert(notifications==3);
     clock_us=(int64_t)(UINT32_MAX-500u)*1000;audio_notify_done();assert(notifications==4);
     clock_us=((INT64_C(1)<<32)+498)*1000;audio_notify_done();assert(notifications==4);
-    clock_us+=1000;audio_notify_done();assert(notifications==5);
-    muted=true;clock_us+=1000000;audio_notify_done();assert(notifications==5);
-    puts("Notification: exact 5760-sample waveform with 640B buffer; mute/mic/error release, concurrent debounce and wrap PASS (offline)");
+    clock_us=((INT64_C(1)<<32)+29498)*1000;audio_notify_done();assert(notifications==4);
+    clock_us=((INT64_C(1)<<32)+29499)*1000;audio_notify_done();assert(notifications==5);
+    muted=true;clock_us+=100000000;audio_notify_done();assert(notifications==5);
+    puts("Notification: exact 5760-sample waveform with 640B buffer; mute/mic/error release, 30 s coalescing, concurrency and wrap PASS (offline)");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-notify-') as folder:

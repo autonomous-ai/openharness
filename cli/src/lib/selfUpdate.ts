@@ -16,10 +16,13 @@
 import { createHash } from 'crypto'
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { patientDeadline } from './patientExec.js'
+import { PTY_PROTOCOL } from './ptyHost/protocol.js'
+import { currentCli } from './windows/installLayout.js'
+import { isVersionFolder, retireUnused, switchTo, versionsOnDisk, writeVersionFolder, type RetireDeps } from './windows/cliVersions.js'
 
 export interface FileRef {
   url: string
@@ -65,16 +68,32 @@ function writeWhole(file: string, bytes: string | Buffer): void {
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
-/** The update a stage left to be kept or rolled back: its version, and the sha256 of the cli.js it put in place. */
-interface Pending { version: string; sha256: string | null }
+/** The update a stage left to be kept or rolled back: its version, the sha256 of the cli.js it put in place, and
+ *  (Windows) the version to roll back to. */
+interface Pending { version: string; sha256: string | null; previous: string | null }
 
 function readPending(dir: string): Pending | null {
-  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown } | null
+  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown; previous?: unknown } | null
   if (typeof pending?.version !== 'string') return null
-  return { version: pending.version, sha256: typeof pending.sha256 === 'string' ? pending.sha256 : null }
+  return {
+    version: pending.version,
+    sha256: typeof pending.sha256 === 'string' ? pending.sha256 : null,
+    previous: typeof pending.previous === 'string' ? pending.previous : null,
+  }
 }
 
-function pendingVersion(dir: string): string | null {
+/** The cli.js the daemon starts from now: here on macOS and Linux; on Windows the build `cli\current` names. */
+function liveCli(dir: string, platform: NodeJS.Platform): string | null {
+  return platform === 'win32' ? currentCli(dirname(dir))?.cliJs ?? null : join(dir, CLI)
+}
+
+const liveSha256 = (dir: string, platform: NodeJS.Platform): string | null => {
+  const file = liveCli(dir, platform)
+  return file === null ? null : fileSha256(file)
+}
+
+/** The version of a staged build not yet kept or rolled back (its pending note), or null when there is none. */
+export function pendingVersion(dir: string): string | null {
   return readPending(dir)?.version ?? null
 }
 
@@ -130,8 +149,8 @@ export function isLocalDevBuild(version: string): boolean {
  * worth that — a developer who wants the release can ask for it (`harness update --force`) and a
  * release install, which is every user's, still updates exactly as before.
  */
-export function shouldAutoUpdate(candidate: string, current: string): boolean {
-  if (isLocalDevBuild(current)) return false
+export function shouldAutoUpdate(candidate: string, current: string, followReleases = false): boolean {
+  if (isLocalDevBuild(current) && !followReleases) return false
   return semverGt(candidate, current)
 }
 
@@ -169,7 +188,7 @@ export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadli
 export class TransferStalledError extends Error {}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
-async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
+export async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
   const controller = new AbortController()
   let stalled!: (error: TransferStalledError) => void
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
@@ -255,9 +274,26 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
 /**
  * What the canary found. `unwritable`: it could not be set up (a full disk, a folder it may not write),
  * which says nothing about the build; `failed`: the build ran and failed; `wrong-version`: it ran and
- * said it is another version than the manifest names.
+ * said it is another version than the manifest names. A build that ran says which terminal host protocol it
+ * needs (`ptyProtocol`, its `PTY_PROTOCOL`): the updater's protocol rule (`installedPtyProtocol`).
  */
-export type CanaryResult = { ok: true } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+
+/** The protocol a build that prints only its version speaks: every build from before `version --json`. */
+const PLAIN_VERSION_PTY_PROTOCOL = 2
+
+/** What a build's last `version --json` line says: a G build's `{"version","ptyProtocol"}`, or, for any other line (a
+ *  build from before, which ignores the flag and prints its version alone), that line as its version, at protocol 2. */
+function readVersionAnswer(line: string): { version: string; ptyProtocol: number } {
+  try {
+    const parsed: unknown = JSON.parse(line)
+    const { version, ptyProtocol } = (parsed ?? {}) as { version?: unknown; ptyProtocol?: unknown }
+    if (typeof version === 'string' && Number.isSafeInteger(ptyProtocol) && (ptyProtocol as number) >= 1) {
+      return { version, ptyProtocol: ptyProtocol as number }
+    }
+  } catch { /* plain output */ }
+  return { version: line, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
+}
 
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
@@ -265,7 +301,8 @@ export const CANARY_TIMEOUT_MS = 15_000
 export const CANARY_KILL_GRACE_MS = 2_000
 
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
- *  `node cli.js version`. This catches broken ESM/CJS packaging before the live install is touched.
+ *  `node cli.js version --json`. This catches broken ESM/CJS packaging before the live install is touched,
+ *  and learns the terminal host protocol the build needs without staging it (spec §5, the protocol rule).
  *
  *  Given the version the manifest names, the build must also say it is that version. A manifest that
  *  named an older build's bytes under a newer version (published by mistake, e2e/updateHostile.e2e.ts)
@@ -296,7 +333,7 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
       let timedOut = false
       let grace: ReturnType<typeof setTimeout> | undefined
       let cancel = (): void => {}
-      const child = execFile(managedNodePath(), [tmpCli, 'version'], { encoding: 'utf8' }, (error, stdout) => {
+      const child = execFile(managedNodePath(), [tmpCli, 'version', '--json'], { encoding: 'utf8' }, (error, stdout) => {
         cancel()
         clearTimeout(grace)
         // An answer is an answer, even one that raced the kill.
@@ -318,9 +355,9 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
     })
     if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
     const lines = r.stdout.trim().split('\n')
-    const said = lines[lines.length - 1]
-    if (version !== undefined && said !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said || 'nothing'}` }
-    return { ok: true }
+    const said = readVersionAnswer(lines[lines.length - 1].trim())
+    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said.version || 'nothing'}` }
+    return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
   }
@@ -347,7 +384,8 @@ export async function canary(cliBuf: Buffer, dir: string, version?: string): Pro
  * newer build staged during its probation), the backups already hold the last build that was kept,
  * and stay: a rollback goes back to a build that proved itself, not to one that never did.
  */
-export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
+export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version); return }
   mkdirSync(dir, { recursive: true })
   const path = (name: string): string => join(dir, name)
   const temporary = (name: string): string => `${path(name)}.tmp`
@@ -397,6 +435,34 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
   for (const [from, to] of renames) renameSync(from, to) // atomic within the same filesystem
 }
 
+/**
+ * Windows: the build goes into its own folder and `cli\current` moves to it (./windows/cliVersions.ts); nothing that
+ * runs is touched. The pending note names the build to roll back to, as `.prev` holds it on a Mac: the build in use,
+ * or, while that build is itself an update still being judged, the last one kept — a rollback goes back to a build
+ * that proved itself, not to one that never did. The note is written before the pointer moves, as on a Mac before the
+ * swap; if the pointer cannot be moved, the note goes back to what it was.
+ */
+function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
+  if (!version) throw new Error('a Windows install stages a build into its own version folder, which needs its version')
+  const live = currentCli(dirname(dir))
+  const pending = readPending(dir)
+  const judged = live !== null && !!pending?.sha256 && pending.sha256 === fileSha256(live.cliJs)
+  const previous = judged ? pending!.previous : live?.version ?? null
+  writeVersionFolder(dir, version, cliBuf, notifyBuf)
+  const note = join(dir, PENDING)
+  const before = readText(note)
+  writeJson(note, { version, sha256: sha256(cliBuf), at: Date.now(), ...(previous && previous !== version ? { previous } : {}) })
+  try {
+    switchTo(dir, version)
+  } catch (error) {
+    try {
+      if (before === null) rmSync(note, { force: true })
+      else writeWhole(note, before)
+    } catch { /* the pointer did not move: the build in use is unchanged either way */ }
+    throw error
+  }
+}
+
 function readText(file: string): string | null {
   try { return readFileSync(file, 'utf8') } catch { return null }
 }
@@ -411,16 +477,35 @@ function fileSha256(file: string): string | null {
  * build in the manifest a minute later and staged it again: a release that passed its canary but
  * crashed the daemon restarted every machine once a minute until a fix was published.
  */
-export function restore(dir: string): void {
-  for (const name of [CLI, NOTIFY]) {
-    const prev = join(dir, `${name}.prev`)
-    if (existsSync(prev)) { try { renameSync(prev, join(dir, name)) } catch { /* ignore */ } }
+export function restore(dir: string, platform: NodeJS.Platform = process.platform): void {
+  let movedBack = true
+  if (platform === 'win32') movedBack = restoreVersion(dir)
+  else {
+    for (const name of [CLI, NOTIFY]) {
+      const prev = join(dir, `${name}.prev`)
+      if (existsSync(prev)) { try { renameSync(prev, join(dir, name)) } catch { /* ignore */ } }
+    }
   }
   const failed = pendingVersion(dir)
   try {
     if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
-    rmSync(join(dir, PENDING), { force: true })
+    // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
+    // judges it again (`unjudgedUpdate`) and rolls it back once more.
+    if (movedBack) rmSync(join(dir, PENDING), { force: true })
   } catch { /* the rollback itself is what matters */ }
+}
+
+/** Windows: `cli\current` back to the build the pending note names. False when the pointer could not be moved there;
+ *  true once it is, and when there is no such build to go back to. */
+function restoreVersion(dir: string): boolean {
+  const previous = readPending(dir)?.previous
+  if (!previous || !isVersionFolder(dir, previous)) return true
+  try {
+    switchTo(dir, previous)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -430,9 +515,9 @@ export function restore(dir: string): void {
  * was staged again once there was room, and crashed the daemon once more (e2e/updateHostile.e2e.ts).
  * Null when there is no such note.
  */
-export function settleRolledBack(dir: string): string | null {
+export function settleRolledBack(dir: string, platform: NodeJS.Platform = process.platform): string | null {
   const pending = readPending(dir)
-  if (!pending?.sha256 || pending.sha256 === fileSha256(join(dir, CLI))) return null
+  if (!pending?.sha256 || pending.sha256 === liveSha256(dir, platform)) return null
   try {
     const listed = rejectedVersions(dir)
     if (!listed.includes(pending.version)) writeJson(join(dir, REJECTED), [...listed, pending.version].slice(-REJECTED_KEPT))
@@ -451,6 +536,27 @@ export function confirm(dir: string): void {
     if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* the new build runs either way */ }
+}
+
+/**
+ * Windows: remove the builds no longer needed (./windows/cliVersions.ts `retireUnused`). Kept: the build in use, and
+ * the one a rollback would go back to — the pending note's while an update is on probation, otherwise the newest
+ * other build that was not rolled back. Without a pointer, nothing: nothing proves which build is in use. Both are
+ * read again after the process table is, as a stage may have moved them meanwhile.
+ */
+export function retireCliVersions(dir: string, deps: RetireDeps): Promise<string[]> {
+  return retireUnused(dir, () => buildsToKeep(dir), deps)
+}
+
+function buildsToKeep(dir: string): Set<string> | null {
+  const current = currentCli(dirname(dir))
+  if (!current) return null
+  const rejected = new Set(rejectedVersions(dir))
+  const others = versionsOnDisk(dir).filter((version) => version !== current.version && !rejected.has(version))
+    .sort((a, b) => (semverGt(a, b) ? -1 : semverGt(b, a) ? 1 : 0))
+  const pending = readPending(dir)
+  const previous = pending?.previous && pending.previous !== current.version ? pending.previous : others[0]
+  return new Set([current.version, ...(previous ? [previous] : [])])
 }
 
 export interface Poller { stop(): void }
@@ -475,7 +581,7 @@ export function msUntilSlot(nowMs: number, slotSecond: number | undefined, inter
 
 /**
  * Poll on an interval; on the first build {@link shouldAutoUpdate} allows that also verifies and
- * passes its canary, STAGE it and call `onStaged(version)` exactly once, then stop polling (the
+ * passes its canary, STAGE it and call `onStaged(version, ptyVersion)` exactly once, then stop polling (the
  * caller restarts immediately). Every failure
  * (fetch/parse/sha/canary/disk) is swallowed and simply retried next tick — the daemon never crashes
  * on a bad update.
@@ -504,8 +610,14 @@ export function startSelfUpdater(opts: {
   /** The clock (tests). */
   now?: () => number
   /** Awaited: the section from the byte swap through whatever `onStaged` does (the daemon's restart
-   *  handoff) is ONE critical section, and the lock `withLock` takes must outlive all of it. */
-  onStaged: (version: string) => void | Promise<void>
+   *  handoff) is ONE critical section, and the lock `withLock` takes must outlive all of it. `ptyVersion`: the
+   *  terminal host `beforeStage` installed into the same handover, or null. */
+  onStaged: (version: string, ptyVersion: string | null) => void | Promise<void>
+  /** Called under the lock right before `stage`: what else goes into this handover, first (Windows: a terminal host
+   *  payload already prepared, ./windows/ptyUpdate.ts `readyToStage`). Its version reaches `onStaged`. It hears the
+   *  host protocol the build needs, so a paired host goes in only with the build that needs it, and says the protocol
+   *  of a host it installed (from that host's canary), which the rule then trusts. */
+  beforeStage?: (ptyProtocol: number) => Promise<{ version: string; protocol: number } | null>
   /** Wrap the swap + `onStaged` in a mutual exclusion with every other process that writes the
    *  bundle or spawns the daemon. Default: none (tests, and callers that hold their own). */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
@@ -520,6 +632,26 @@ export function startSelfUpdater(opts: {
    * itself (HARNESSD_JUDGES_SUPERSEDED).
    */
   stageWhileJudged?: boolean
+  /**
+   * Take releases over a local build too. The Harness Team account's daemon: setup copies its owner's CLI into it, and
+   * an owner on a local build left it on that build for good, without what came after it (2026-10-27: no subscription
+   * relay, so its engines read signed out and the Lead routed nothing there). Nobody develops in the team account.
+   */
+  followReleases?: boolean
+  /** Whose layout `dir` has; this process's when left out. */
+  platform?: NodeJS.Platform
+  /**
+   * Windows: the protocol of the terminal host `current-pty` names (lib/windows/ptyUpdate.ts `installedPtyProtocol`).
+   * A build whose canary says it needs a higher one is not staged: it would come up with no host it can open a pane
+   * on. It waits, verified, until a payload of that protocol is installed (install.ps1), or is ready to go in first
+   * (`readyPtyProtocol`). On Windows a host that cannot be read (no pointer, a `version` that failed or timed out)
+   * counts as this CLI's own `PTY_PROTOCOL`: unknown must not let a build that raises it through. Left out (macOS and
+   * Linux), nothing is held back.
+   */
+  installedPtyProtocol?: () => number | null
+  /** The protocol of a terminal host payload prepared and waiting to go into this handover first (`beforeStage`), or
+   *  null. A build that needs exactly that protocol goes ahead with it, as one pair. */
+  readyPtyProtocol?: () => number | null
 }): Poller {
   let checking = false
   let done = false
@@ -529,14 +661,29 @@ export function startSelfUpdater(opts: {
   // they passed their canary: when the lock was busy (a `harness start` or `harness update`
   // mid-flight), or the canary could not be written, the next tick should try again from there, not
   // from the whole download.
-  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean } | null = null
+  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean; ptyProtocol: number } | null = null
   // The manifest's build, when it failed in a way it would fail again, and when it may be tried again.
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
   let toldRejected: string | null = null
   let toldWaiting: string | null = null
+  let toldProtocol: string | null = null
+  /** What the protocol rule says of a build that needs host protocol [needs]: null when it may be staged, else the
+   *  protocol the installed host speaks. */
+  const hostShortOf = (needs: number): number | null => {
+    if (!opts.installedPtyProtocol) return null
+    const host = opts.installedPtyProtocol() ?? (platform === 'win32' ? PTY_PROTOCOL : null)
+    return host !== null && needs > host ? host : null
+  }
+  const waitForHost = (version: string, needs: number, host: number): void => {
+    if (toldProtocol !== version) console.log(`[update] ${version} needs pty protocol ${needs}; this machine's host speaks ${host} — waiting for its payload`)
+    toldProtocol = version
+  }
 
   const now = opts.now ?? Date.now
+  const platform = opts.platform ?? process.platform
+  /** Windows: the version `cli\current` names now. Null on macOS and Linux, and when the pointer cannot be read. */
+  const pointed = (): string | null => platform === 'win32' ? currentCli(dirname(opts.dir))?.version ?? null : null
   const download = opts.limits ?? DOWNLOAD_LIMITS
   const manifest: TransferLimits = {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
@@ -563,8 +710,15 @@ export function startSelfUpdater(opts: {
     checking = true
     try {
       const entry = await fetchManifest(opts.url, opts.key, manifest)
-      if (halted || !entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
-      const unremembered = settleRolledBack(opts.dir)
+      if (halted || !entry) return
+      // On Windows a master superseded by a newer build (one another process staged, or the installer put in)
+      // still runs from its own version folder, and its own version is older than what is installed: judged
+      // against it, it would stage an older build over the newer one and move the pointer back (found in
+      // review). What is installed is the build `cli\current` names; this process's own version only when the
+      // pointer cannot be read. The dev-build rule then applies to that build, the one a developer installed.
+      const installed = pointed() ?? opts.currentVersion
+      if (!shouldAutoUpdate(entry.version, installed, opts.followReleases)) return
+      const unremembered = settleRolledBack(opts.dir, platform)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
         if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
         toldRejected = entry.version
@@ -580,7 +734,7 @@ export function startSelfUpdater(opts: {
         console.error(`[update] ${entry.version} ${why} — not trying it again for ${wait >= 1000 ? `${Math.round(wait / 1000)} s` : `${wait} ms`}`)
       }
       if (verified?.entry !== key) {
-        console.log(`[update] newer build available: ${opts.currentVersion} → ${entry.version}`)
+        console.log(`[update] newer build available: ${installed} → ${entry.version}`)
         verified = null
         let cliBuf: Buffer
         let notifyBuf: Buffer
@@ -592,7 +746,7 @@ export function startSelfUpdater(opts: {
           refuse(`does not match its manifest (${error.message})`)
           return
         }
-        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false }
+        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
       }
       if (halted) return
       if (!verified.canaried) {
@@ -604,9 +758,15 @@ export function startSelfUpdater(opts: {
         }
         if (!result.ok) { refuse(`failed its canary (${result.detail})`); return }
         verified.canaried = true
+        verified.ptyProtocol = result.ptyProtocol
       }
       const ready = verified
-      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, fileSha256(join(opts.dir, CLI)))) {
+      // The protocol rule: no CLI that no installed host can serve. Asked at every check, with the bytes kept, so the
+      // build goes ahead at the first check after its payload is installed, or once one of that protocol is ready to go
+      // in first, in this handover (the pairing rule).
+      const short = hostShortOf(ready.ptyProtocol)
+      if (short !== null && opts.readyPtyProtocol?.() !== ready.ptyProtocol) { waitForHost(ready.version, ready.ptyProtocol, short); return }
+      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, liveSha256(opts.dir, platform))) {
         if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
         toldWaiting = ready.version
         return
@@ -615,11 +775,27 @@ export function startSelfUpdater(opts: {
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
         if (halted) return
-        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version)
+        // Asked again under the lock: the download and the canary took seconds or minutes since the check
+        // above, and the installer or another process may have put a newer build in meanwhile. The next
+        // check's gate then refuses it, so this is said once.
+        const pointedNow = pointed()
+        if (pointedNow !== null && !shouldAutoUpdate(ready.version, pointedNow, opts.followReleases)) {
+          console.log(`[update] ${ready.version} is no longer an update: the installed build is now ${pointedNow}. Nothing was staged.`)
+          return
+        }
+        // The terminal host first, in this same lock hold and handover (spec §5): one restart for both.
+        const host = opts.beforeStage ? await opts.beforeStage(ready.ptyProtocol) : null
+        const ptyVersion = host?.version ?? null
+        // Asked again with the host this build would come up on: the paired one may have failed to go in, or a rollback
+        // may have moved the pointer since the check. A host that just went in is known from its canary: its binary,
+        // read again now, could fail and count as this CLI's protocol. One that went in is the caller's (`withLock`).
+        const shortNow = host ? (ready.ptyProtocol > host.protocol ? host.protocol : null) : hostShortOf(ready.ptyProtocol)
+        if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
+        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)
-        await opts.onStaged(ready.version)
+        await opts.onStaged(ready.version, ptyVersion)
       }).catch((err: unknown) => {
         // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
         // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.

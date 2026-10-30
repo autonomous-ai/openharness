@@ -21,7 +21,7 @@ import {
   processTreePids,
   resumeSessionId,
   type ProcessRow,
-} from './tmux.js'
+} from './processTable.js'
 import { processIdentityKey, processIdentityOf, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type {
   ProcessIdentity,
@@ -30,7 +30,7 @@ import type {
   TerminalRuntimeRef,
 } from './terminalTypes.js'
 
-export { processRows } from './tmux.js'
+export { processRows } from './processTable.js'
 
 export interface DiscoveredTerminalAgent {
   engine: AgentEngine
@@ -108,14 +108,21 @@ function childrenByParent(rows: readonly ProcessRow[]): Map<number, ProcessRow[]
   return children
 }
 
-function daemonDescendants(children: ReadonlyMap<number, readonly ProcessRow[]>, daemonPid: number): Set<number> {
+/**
+ * The daemon's own processes (its one-shot engines, a daemon run inside a pane), never agents. A pane's root is never
+ * one of them, even below the daemon: on Windows the PTY host the daemon started keeps the daemon as its parent
+ * (Windows does not reparent), so every engine in every pane read as the daemon's and none was found, after a host
+ * crash or on the first start of a machine, until the daemon restarted (the Windows VM E2E, 2026-10-15). A tmux server
+ * daemonizes, so on Unix no pane root is ever below the daemon.
+ */
+function daemonDescendants(children: ReadonlyMap<number, readonly ProcessRow[]>, daemonPid: number, paneRoots: ReadonlySet<number>): Set<number> {
   const excluded = new Set<number>()
   const queue = [daemonPid]
   while (queue.length) {
     const pid = queue.shift()!
     if (excluded.has(pid)) continue
     excluded.add(pid)
-    for (const child of children.get(pid) ?? []) queue.push(child.pid)
+    for (const child of children.get(pid) ?? []) if (!paneRoots.has(child.pid)) queue.push(child.pid)
   }
   return excluded
 }
@@ -194,7 +201,7 @@ export function discoverTerminalAgentsFromSnapshot(
   // the next scan must see exits, execs and PID reuse without retaining stale process identities.
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const children = childrenByParent(rows)
-  const excluded = daemonDescendants(children, daemonPid)
+  const excluded = daemonDescendants(children, daemonPid, new Set(roots.map((root) => root.rootPid)))
   const grouped = new Map<string, {
     agent: Omit<DiscoveredTerminalAgent, 'runtimes' | 'primaryRuntimeKey'>
     observations: Array<{ runtime: TerminalRuntimeRef; depth: number; cwd: string }>

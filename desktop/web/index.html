@@ -13,12 +13,56 @@
   <link rel="icon" href="favicon.ico?v=5" sizes="16x16 32x32 48x48">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=5">
   <title>Harness</title>
+  <!-- The app's script, first and at high priority: the loader in flutter_bootstrap.js waits for
+       it, so it runs while the engine downloads instead of after. The website moves the href into
+       the release's folder, where the loader asks for it (website/scripts/harness-web-assets.mjs).
+       It marks itself done: from the cache it can finish before the loader's script is parsed,
+       and a load event fired before anyone listened would leave the loader waiting forever. -->
+  <link rel="preload" href="main.dart.js" as="script" fetchpriority="high" id="harness-main-preload"
+        onload="this.dataset.done = 'loaded'" onerror="this.dataset.done = 'failed'">
+  <!-- The page the visitor sees until Flutter's first frame: the app is megabytes of script
+       and WebAssembly, so on a phone this is all there is for seconds. Plain HTML and CSS,
+       nothing to fetch. It follows the palette the app will open in (Graphite, or the light
+       Paper/Mist the visitor chose), not the system theme, which the app does not read. -->
   <style>
     html, body { margin: 0; height: 100%; background: #141414; color: #dedede; }
+    html[data-theme="light"], html[data-theme="light"] body { background: #fafaf9; color: #1f1f1d; }
+    #harness-splash {
+      position: fixed; inset: 0; z-index: 1;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 20px; background: inherit;
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    #harness-splash img { width: 72px; height: 72px; border-radius: 16px; }
+    #harness-splash p { margin: 0; opacity: 0.72; animation: harness-splash-breath 1.8s ease-in-out infinite; }
+    @keyframes harness-splash-breath { 50% { opacity: 0.38; } }
+    @media (prefers-reduced-motion: reduce) { #harness-splash p { animation: none; } }
   </style>
+  <noscript><style>#harness-splash { display: none; }</style></noscript>
+  <script>
+    (function () {
+      // Same key and ids as AppearancePrefsStore on this origin (appearance_prefs_store.dart,
+      // HarnessFileStore web prefix); the light palettes are Paper and Mist (color_palette.dart).
+      try {
+        var palette = localStorage.getItem('harness.web.v1.app_color_palette');
+        if (palette === 'paper' || palette === 'mist') document.documentElement.dataset.theme = 'light';
+      } catch (e) { /* storage blocked: the app opens in Graphite too */ }
+    })();
+  </script>
 </head>
 <body>
   <noscript>Enable JavaScript to open your Harness workspace.</noscript>
+  <div id="harness-splash" role="status">
+    <img alt="" width="72" height="72" src="data:image/webp;base64,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">
+    <p>Opening Harness…</p>
+  </div>
+  <script>
+    // Flutter fires this on window when its first frame is on screen.
+    window.addEventListener('flutter-first-frame', function () {
+      var splash = document.getElementById('harness-splash');
+      if (splash) splash.remove();
+    }, { once: true });
+  </script>
   <!-- iOS Safari zooms the page when an input under 16px takes focus, and
        Flutter's hidden editing input takes the terminal's smaller font: a tap
        on the tab menu zoomed the whole app. maximum-scale=1 stops that

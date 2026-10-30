@@ -1,6 +1,7 @@
 // How the app finds Claude Code's OAuth token in the macOS Keychain — the same lookup Claude Code
 // itself performs, or it reads a different item than the CLI that is signed in.
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/usage/usage_credentials.dart';
@@ -36,6 +37,46 @@ class _Keychain {
 }
 
 void main() {
+  test(
+    'unavailable or malformed account emails do not break credential reads',
+    () async {
+      final home = Directory.systemTemp.createTempSync('usage-email-');
+      addTearDown(() => home.deleteSync(recursive: true));
+      final credentials = UsageCredentials(
+        home: home.path,
+        environment: const {},
+      );
+      expect(await credentials.claudeAccountEmail(), isNull);
+      expect(await credentials.codexAccountEmail(), isNull);
+      Directory('${home.path}/.codex').createSync();
+      for (final value in [
+        null,
+        '',
+        '  ',
+        42,
+        'not-a-jwt',
+        'a.%%%.b',
+        'a.bnVsbA.b',
+      ]) {
+        File('${home.path}/.claude.json').writeAsStringSync(
+          jsonEncode({
+            'oauthAccount': {'accountUuid': 'account', 'emailAddress': value},
+          }),
+        );
+        File('${home.path}/.codex/auth.json').writeAsStringSync(
+          jsonEncode({
+            'tokens': {'access_token': 'test-token', 'id_token': value},
+          }),
+        );
+        if (value is! String || value.trim().isEmpty) {
+          expect(await credentials.claudeAccountEmail(), isNull);
+        }
+        expect(await credentials.codexAccountEmail(), isNull);
+        expect((await credentials.codex())?.accessToken, 'test-token');
+      }
+    },
+  );
+
   test(
     'reads the item Claude Code itself reads: service AND this user\'s account',
     () async {

@@ -17,6 +17,21 @@ Typst revision. [How document review works](../../viewers/doc-viewer/README.md#c
   the pane header.
 - `template/` — a fresh workspace: `main.typ`, `assets/`, `out/`.
 
+## Windows setup
+
+Windows x64 is supported through Git Bash (MINGW/MSYS), with `curl`, `sha256sum`
+and `unzip` on PATH. Setup installs the official ZIP's
+`typst-x86_64-pc-windows-msvc/typst.exe` as `bin/typst.exe`; Git Bash and native
+Windows Python also resolve the manifest's `bin/typst` path. A working `python3`
+is required for the verdict (the Microsoft Store alias alone is insufficient).
+Linux and macOS continue to use their pinned `.tar.xz` releases.
+
+The Windows v0.15.1 ZIP's SHA-256 is
+`19ce3551153c2fe7ee9fa2f95208310c8f4d3209fedb699e0333faf8913f6736`,
+verified against the `digest` field in the
+[official release API](https://api.github.com/repos/typst/typst/releases/tags/v0.15.1)
+and the downloaded archive.
+
 ## Credit and stewardship
 
 Typst is Typst GmbH's — Laurenz Mädje and Martin Haug — [typst/typst](https://github.com/typst/typst),

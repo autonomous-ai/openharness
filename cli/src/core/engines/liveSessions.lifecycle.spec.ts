@@ -215,6 +215,38 @@ describe('live session lifecycle', () => {
     await p.live.stop(); p.live.retry(s)
   })
 
+  it('reattaches a retry with a copy of the live row, not the snapshot it was scheduled with', async () => {
+    // 2026-10-19: a snapshot taken before the runtime learned the CLI version made every retry stale, once a second.
+    vi.useFakeTimers()
+    const p = setup(), s = p.session()
+    p.deps.reattach.mockRejectedValueOnce(new Error('stale'))
+    p.rows.set(s.sessionId, { ...s, cliVersion: '2.1.303' })
+    p.live.retry({ ...s })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(p.deps.reattach).toHaveBeenLastCalledWith(p.rows.get(s.sessionId))
+    expect((p.deps.reattach.mock.lastCall as unknown as unknown[])[0]).not.toBe(p.rows.get(s.sessionId))
+    const replacement = { ...s, cliVersion: '2.1.304' }
+    p.rows.set(s.sessionId, replacement)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(p.deps.reattach).toHaveBeenCalledTimes(2)
+    expect(p.deps.reattach).toHaveBeenLastCalledWith(replacement)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(p.deps.reattach).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops retrying when the row changes identity in place while a reattach is pending', async () => {
+    vi.useFakeTimers()
+    const p = setup(), s = p.session(), pending = deferred<void>()
+    p.deps.reattach.mockReturnValueOnce(pending.promise)
+    p.live.retry({ ...s })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(p.deps.reattach).toHaveBeenCalledTimes(1)
+    s.boundAt = 2
+    pending.reject(new Error('stale')); await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(p.deps.reattach).toHaveBeenCalledTimes(1)
+  })
+
   it('does not resurrect a removed binding when a pending read detects a rewrite', async () => {
     const p = setup(), s = p.session(); await p.attach(s)
     const pending = deferred<LivePage>()

@@ -28,7 +28,7 @@ import 'package:harness/store/store_exploration.dart';
 import 'package:harness/store/store_featured_art.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
-import 'package:webview_all/webview_all.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'support/real_fonts.dart';
 

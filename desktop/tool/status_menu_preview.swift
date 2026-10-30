@@ -26,10 +26,21 @@ let bindings: [[String: Any]] = [
   ["keys": ["cmd+n"], "command": "agent.new", "hint": "⌘N", "repeatable": false, "menuAction": "newAgent"],
   ["keys": ["cmd+p"], "command": "harnesses.list", "hint": "⌘P", "repeatable": false, "menuAction": "sessions"],
 ]
-let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
+let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": [], "swarmChat": []]])!
+
+let swarm: [[String: Any]] = [
+  ["swarmTabId": "pilot", "kind": "decision", "id": "d1", "title": "Wren asks you",
+   "message": "Ship the sidebar cleanup behind a flag first?", "unread": true, "tabName": "Pilot",
+   "detail": "openharness · Desktop sidebar cleanup", "receivedAt": timestamp - 90_000,
+   "activity": ["mark": "?", "label": "Needs input", "working": false]],
+  ["swarmTabId": "pilot", "kind": "mention", "id": "m1", "title": "River tagged you",
+   "message": "Screenshots of the new sidebar are in the PR. Can you check the dark ones?", "unread": true,
+   "tabName": "Pilot", "detail": "openharness · Lead", "receivedAt": timestamp - 600_000,
+   "activity": ["mark": "?", "label": "Needs input", "working": false]],
+]
 
 func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]],
-            highlight: Bool = false) {
+            swarmEntries: [[String: Any]] = [], highlight: Bool = false) {
   app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
   let status = HarnessStatusMenu(installStatusItem: false, showWindow: {}, emit: { _, _ in })
   status.menu.appearance = app.appearance
@@ -46,7 +57,8 @@ func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String
     return row
   }
   status.update(["enabled": true, "statusMenuEntries": entries.map { styled($0) },
-                 "statusMenuWorkingEntries": work.map { styled($0, working: true) }])
+                 "statusMenuWorkingEntries": work.map { styled($0, working: true) },
+                 "statusMenuSwarmEntries": swarmEntries.map { styled($0) }])
   var captured = false
   let timer = Timer(timeInterval: 0.2, repeats: false) { _ in
     if highlight {
@@ -100,3 +112,20 @@ let long = news("long", String(repeating: "Long session title ", count: 6),
 var offline = notifications[1]
 offline["unavailable"] = "Offline"
 render("notification-overview-long", dark: false, entries: [long, offline], work: working, highlight: true)
+render("notification-swarm-light", dark: false, entries: notifications, work: working, swarmEntries: swarm)
+render("notification-swarm-dark", dark: true, entries: notifications, work: working, swarmEntries: swarm)
+// Two Swarms, the first with more than five: each its own heading and View all.
+let pilot = (1...6).map { index -> [String: Any] in
+  var row = swarm[index % 2]
+  row["id"] = "p\(index)"
+  row["receivedAt"] = timestamp - Double(index) * 120_000
+  return row
+}
+var atlas = swarm[0]
+atlas["swarmTabId"] = "atlas"
+atlas["tabName"] = "Atlas"
+atlas["id"] = "a1"
+atlas["title"] = "Juno asks you"
+atlas["message"] = "Keep the old Linux build for one more release?"
+render("notification-swarms-light", dark: false, entries: [], work: [], swarmEntries: pilot + [atlas])
+render("notification-swarms-dark", dark: true, entries: [], work: [], swarmEntries: pilot + [atlas])

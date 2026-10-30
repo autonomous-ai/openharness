@@ -1,0 +1,77 @@
+#!/bin/sh
+# Runs in the computer's startup (initramfs), while the disk waits for its password: the same open
+# setup hotspot os/setup.py hosts later, `Harness-XXXX` after the Wi-Fi card's own address, and on
+# it http://10.42.0.1/setup, where a phone (mobile/lib/phone/add_device/) sends the computer's
+# password (`http`). The screen still asks too: whichever answers first opens the disk. Then the
+# system proper starts, and this goes (harness-unlock.service): its setup.py takes over the hotspot
+# when the computer is not signed in yet, or it joins its own Wi-Fi.
+#
+# busybox sh, wpa_supplicant (an access point, as NetworkManager's hotspot is), dnsmasq for the
+# phone's address, and busybox tcpsvd for the page. Only Wi-Fi: a computer with none, or a card whose
+# driver is not here, is unlocked at its screen as before.
+set -u
+STATE=${HARNESS_UNLOCK_STATE:-/run/harness-unlock}
+ADDRESS=10.42.0.1
+HERE=$(dirname "$0")
+
+stop() {
+    for name in tcpsvd dnsmasq wpa; do
+        [ -f "$STATE/$name.pid" ] && kill "$(cat "$STATE/$name.pid")" 2>/dev/null
+    done
+    if [ -f "$STATE/device" ]; then
+        device=$(cat "$STATE/device")
+        ip addr flush dev "$device" 2>/dev/null
+        ip link set "$device" down 2>/dev/null
+    fi
+    return 0
+}
+
+[ "${1:-}" = stop ] && { stop; exit 0; }
+
+mkdir -p "$STATE"
+# The Wi-Fi card, once its driver has loaded.
+device=
+for _ in $(seq 30); do
+    for path in /sys/class/net/*; do
+        [ -d "$path/wireless" ] && { device=${path##*/}; break; }
+    done
+    [ -n "$device" ] && break
+    sleep 1
+done
+if [ -z "$device" ]; then
+    echo 'harness-unlock: no Wi-Fi here; the screen unlocks this computer'
+    while :; do sleep 3600; done
+fi
+echo "$device" > "$STATE/device"
+# Its own address, as setup.py names the hotspot: nothing has randomized it yet this early.
+tail=$(sed 's/://g; s/.*\(....\)$/\1/; y/abcdef/ABCDEF/' "/sys/class/net/$device/address")
+name="Harness-$tail"
+echo "$name" > "$STATE/name"
+
+ip link set "$device" up
+# A scan first: some cards (Intel's) host no access point until they have heard others nearby. It is
+# also the Wi-Fi list the phone chooses from while the disk is locked (`http`, /setup/networks).
+iw dev "$device" scan 2>/dev/null | "$HERE/networks" - "$name" > "$STATE/networks.json" 2>/dev/null ||
+    echo '{"networks":[]}' > "$STATE/networks.json"
+cat > "$STATE/wpa.conf" <<EOF
+ap_scan=2
+network={
+    ssid="$name"
+    mode=2
+    frequency=2437
+    key_mgmt=NONE
+}
+EOF
+wpa_supplicant -B -i "$device" -D nl80211 -c "$STATE/wpa.conf" -P "$STATE/wpa.pid" -s || {
+    echo "harness-unlock: $device hosts no access point; the screen unlocks this computer"
+    while :; do sleep 3600; done
+}
+ip addr add "$ADDRESS/24" dev "$device"
+dnsmasq --interface="$device" --bind-interfaces --except-interface=lo --port=0 --user=root \
+    --dhcp-range=10.42.0.10,10.42.0.100,255.255.255.0,1h --dhcp-leasefile="$STATE/leases" \
+    --pid-file="$STATE/dnsmasq.pid"
+echo "harness-unlock: hotspot \"$name\" is up on $device"
+# The screen's password page says so (the theme `harness`, its message): another way in.
+command -v plymouth >/dev/null 2>&1 && plymouth display-message --text="hotspot:$name" 2>/dev/null
+echo $$ > "$STATE/tcpsvd.pid"
+exec tcpsvd -E "$ADDRESS" 80 "$HERE/http"

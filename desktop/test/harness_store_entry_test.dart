@@ -40,7 +40,7 @@ void main() {
           if (native) {
             await configured.native(tester, 'store');
           } else {
-            await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+            await key(tester, LogicalKeyboardKey.keyS, cmd: true, ctrl: true);
           }
           await tester.pump();
         }

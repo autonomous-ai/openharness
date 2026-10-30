@@ -88,12 +88,21 @@ describe('agents held until a service is ready', () => {
   })
 
   it("its pane says why, survives an interrupt, and idles: the agent's launch takes it over", () => {
-    const argv = heldPaneArgv('Waiting for the models service.')
+    const argv = heldPaneArgv('Waiting for the models service.', undefined, 'linux')
     expect(argv.slice(0, 2)).toEqual(['/bin/sh', '-c'])
+    if (process.platform === 'win32') return
     expect(argv[2]).toContain('trap "" INT QUIT TSTP')
     // The script itself, run with its loop cut short: it prints the reason as given, and nothing else.
     const once = argv[2]!.replace('while :; do sleep 3600; done', 'exit 0')
     expect(execFileSync('/bin/sh', ['-c', once, argv[3]!, argv[4]!], { encoding: 'utf8' })).toBe('Waiting for the models service.\n')
+  })
+
+  it('waits in the daemon\'s Node on Windows, which has no /bin/sh, still told by its start command', () => {
+    const argv = heldPaneArgv('Waiting for the Store.', 'tok-1', 'win32')
+    expect(argv.slice(1, 2)).toEqual(['-e'])
+    expect(argv.slice(3)).toEqual(['harness-held', 'Waiting for the Store.', 'tok-1'])
+    expect(argv).not.toContain('/bin/sh')
+    expect(heldPaneArgv('Waiting for the Store.', undefined, 'linux').slice(0, 2)).toEqual(['/bin/sh', '-c'])
   })
 
   it('runs no pass before the boot has restored, whatever it asked meanwhile', async () => {

@@ -24,6 +24,17 @@ export function peekIdentityPub(): string | null {
   } catch { return null }
 }
 
+/** This computer's identity keypair as already on disk, or null. Like `peekIdentityPub` it never creates one: a key
+ *  made by a command that only needs to sign with the existing one would be on no device key log. */
+export function peekIdentity(): Identity | null {
+  try {
+    const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { priv?: unknown; pub?: unknown }
+    if (typeof raw.priv !== 'string' || typeof raw.pub !== 'string' || !raw.priv || !raw.pub) return null
+    const identity = { priv: b64d(raw.priv), pub: b64d(raw.pub) }
+    return identity.priv.length === 32 && identity.pub.length === 32 ? identity : null
+  } catch { return null }
+}
+
 /** Whether an identity was retired here (`identity.json.removed-*`, left by signing this device out of
  *  the account), so "no identity" can be told apart from "never had one". */
 export function identitySpent(): boolean {
@@ -61,6 +72,9 @@ export interface PairedClient {
   /** A machine of another account this machine is shared with (gateway/sharedTrust.ts): trusted like the
    *  account's own, but never a member of the trust group, and taken back when the sharing ends. */
   shared?: true
+  /** With `shared`: the account (email) the machine is shared with. Its sessions are that account's guest
+   *  (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
+  sharedWith?: string
 }
 
 /** What a password-linked peer is: another harness machine (which also serves, so it can be dialed back)
@@ -159,12 +173,13 @@ export class E2eeStore {
     return this.paired.get(identityPubB64) ?? null
   }
 
-  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind; shared?: boolean }): void {
+  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind; shared?: boolean; sharedWith?: string }): void {
     this.paired.set(identityPubB64, {
       identityPub: identityPubB64, label, pairedAt: at, role,
       ...(peer?.machineId ? { machineId: peer.machineId } : {}),
       ...(peer?.kind ? { kind: peer.kind } : {}),
       ...(peer?.shared ? { shared: true as const } : {}),
+      ...(peer?.shared && peer.sharedWith ? { sharedWith: peer.sharedWith } : {}),
     })
     writeSecure(PAIRED_FILE, [...this.paired.values()])
   }

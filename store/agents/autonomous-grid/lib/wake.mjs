@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { bridgeUrl, discoverMachines } from './harness.mjs';
+import { bridgeUrl, CREDENTIAL_REFUSED, credentialRefused, discoverMachines, localCredentialHeaders } from './harness.mjs';
 
 /**
  * The viewer's "Wake now": the one thing in this package that may start a sleeping grid, and only on a
@@ -69,8 +69,8 @@ export async function daemonWake({ controller, grid, signal, discover = discover
   try { machineId = await controllerMachineId(controller, discover); } catch { return failed(UNREACHABLE); }
   if (!machineId) return failed(controller?.transport === 'local' ? UNREACHABLE : WAKE_FAILED);
   if (!WebSocketImpl || signal?.aborted) return failed(UNREACHABLE);
-  let socket;
-  try { socket = new WebSocketImpl(bridgeUrl(env)); } catch { return failed(UNREACHABLE); }
+  let socket, url, headers;
+  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers }); } catch { return failed(UNREACHABLE); }
   return await new Promise(resolve => {
     // The section that answered `waking`: who every later sentence is about.
     let done = false, waking = null, requestId = null, next;
@@ -91,9 +91,14 @@ export async function daemonWake({ controller, grid, signal, discover = discover
     };
     const giveUp = setTimeout(() => (waking ? ended('not_started') : lost()), giveUpMs);
     signal?.addEventListener('abort', abort, { once: true });
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true } })));
-    socket.addEventListener('error', lost);
-    socket.addEventListener('close', lost);
+    // A socket that never opened may have been refused the local credential, which only HTTP can tell.
+    let opened = false, refusal = null;
+    socket.addEventListener('open', () => { opened = true; socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true } })); });
+    socket.addEventListener('error', () => {
+      if (opened) { lost(); return; }
+      refusal = credentialRefused(url, headers).then(refused => (refused ? settle(failed(CREDENTIAL_REFUSED)) : lost()));
+    });
+    socket.addEventListener('close', () => { if (!refusal) lost(); });
     socket.addEventListener('message', event => {
       if (done || typeof event.data !== 'string' || event.data.length > 2 * 1024 * 1024) return;
       let frame; try { frame = JSON.parse(event.data); } catch { return; }

@@ -22,6 +22,8 @@ import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
+import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/terminal/terminal_prompt_zone.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -33,19 +35,27 @@ import 'package:harness_mobile/terminal/elicitation_press.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
+import 'package:harness_mobile/terminal/terminal_find.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
+import 'package:harness_mobile/core/agent_handoff.dart'
+    show supportsAgentHandoff;
 import 'package:harness_mobile/widgets/engine_identity.dart'
     show engineIdentity;
+import 'package:harness_mobile/widgets/fork_agent_dialog.dart';
 import 'package:harness_mobile/widgets/rename_agent_dialog.dart';
 import 'package:harness_mobile/widgets/terminal_panel.dart';
 
 import 'agent_model_sections.dart';
+import 'first_task_suggestion.dart';
+import 'welcome/onboarding_copy.dart';
 import 'agent_model_sheet.dart';
 import 'daemon_chip.dart';
 import 'daemon_scope.dart';
 import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
+import 'new_agent_chooser.dart';
+import 'out_of_sight.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
@@ -54,6 +64,8 @@ import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_copy.dart';
+import 'terminal_file_send.dart';
+import 'terminal_find_bar.dart';
 import 'terminal_paste.dart';
 import 'terminal_search.dart';
 import 'tty.dart';
@@ -62,6 +74,7 @@ import 'question_keys.dart';
 import 'voice_bar_line.dart';
 import 'voice_mic_button.dart';
 import 'phone_navigation.dart';
+import 'phone_shell_scope.dart';
 import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_index.dart';
 import 'terminal_title.dart';
@@ -69,6 +82,7 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
+import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
 
@@ -149,6 +163,21 @@ bool _keyboardIsUp = false;
 /// the platform confirming the keyboard is gone. From that tick on, the flag
 /// tracks the truth again as it always did.
 bool _keyboardDismissing = false;
+
+/// The onboarding hand-over whose first session has had its keyboard raised — once, across every page
+/// a wrapping pager mounts for that agent: each would otherwise raise it again when swiped to.
+({String machineId, String agentId, String text})? _firstSessionRaisedFor;
+
+/// Desktop's starter as the first session's OpenCode box was first read, and the hand-over it was
+/// read under — see `_TerminalPageState._firstTask`.
+({String machineId, String agentId, String text})? _starterFor;
+String? _starter;
+
+/// A keyboard asked for again: whatever was putting one away is over, and the inset's ticks are the
+/// truth again. Asked for while the last one still slid down, the inset turns back before reaching
+/// zero, the hold-off of [dismissKeyboardForSwipe] never ended, and [_keyboardIsUp] read false
+/// under a keyboard that was up.
+void _keyboardWanted() => _keyboardDismissing = false;
 
 /// Forgets what the keyboard did during the last run of terminal pages.
 ///
@@ -373,6 +402,13 @@ class _TerminalPageState extends State<TerminalPage>
   Timer? _searchHoldTimer;
   static const _searchHoldLimit = Duration(milliseconds: 800);
 
+  /// Find in terminal while its bar is up — see [_openFind]. Null while it is not.
+  TerminalFindController? _find;
+
+  /// Whether the terminal had the keyboard when Find opened: closing gives it back, or puts away
+  /// the one Find's field raised — as [_keyboardBeforeSearch] does for search.
+  bool _keyboardBeforeFind = false;
+
   /// The header getting out of the way as the terminal is scrolled. See
   /// [TerminalChromeScroll].
   late final TerminalChromeScroll _chrome = TerminalChromeScroll(vsync: this);
@@ -473,6 +509,7 @@ class _TerminalPageState extends State<TerminalPage>
     // The keyboard has stopped moving, so whether it is up is now a fact: a
     // question read while it moved is decided here. See [_raiseForQuestion].
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// What the last build read from the notifier — the baseline [_onNotifier]
@@ -578,6 +615,7 @@ class _TerminalPageState extends State<TerminalPage>
     });
     if (_questionWatcher?.queued == null) _queueRaisedFor = null;
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// The daemon on this phone, cached so a page going can take its report back
@@ -657,7 +695,8 @@ class _TerminalPageState extends State<TerminalPage>
     _raiseKeyboardForQuestion();
   }
 
-  /// Open the keyboard because an agent is waiting on an answer.
+  /// Open the keyboard because an agent is waiting on an answer — or because the first session has
+  /// just opened over its task ([_raiseForFirstSession]).
   ///
   /// ⚠️ **Not [_raiseKeyboard], and synchronous where that one is not.** That
   /// one belongs to a TAP on the terminal, and awaits the mic's transcript to
@@ -681,6 +720,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (_keyboardRequested || _ownsInput) return;
     // The controls somebody reaches for next are in the header.
     _chrome.reveal();
+    _keyboardWanted();
     setState(() {
       _keyboardRequested = true;
       // ⚠️ **The claim is asked for outright, not left to `focused` turning
@@ -771,7 +811,10 @@ class _TerminalPageState extends State<TerminalPage>
     final accepts = facts.session?.acceptsInput ?? false;
     if (accepts != _acceptedInput) {
       _acceptedInput = accepts;
-      if (accepts) _raiseForQuestion();
+      if (accepts) {
+        _raiseForQuestion();
+        _raiseForFirstSession();
+      }
     }
     if (facts == _facts) return;
     if (kTypingTrace) typingCount('page.rebuild(facts)');
@@ -785,7 +828,10 @@ class _TerminalPageState extends State<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
-    widget.notifier.addListener(_onNotifier);
+    // A session already taking input when the page comes ticks nothing to raise from.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _raiseForFirstSession();
+    });
   }
 
   @override
@@ -794,6 +840,25 @@ class _TerminalPageState extends State<TerminalPage>
     // Which of the page's rebuilds an inherited widget asked for — against
     // `page.update` (its parent) and `page.build` (all of them).
     if (kTypingTrace) typingCount('page.deps');
+    _listenToApp(!OutOfSight.of(context));
+  }
+
+  /// Whether [_onNotifier] is listening.
+  bool _listeningToApp = false;
+
+  /// Listens to the app only while this page can be seen. Out of sight
+  /// (Harness under Swarm Home, [OutOfSight]) every tick of the app was a
+  /// read of the facts, and a rebuild whenever one moved, for a page nobody
+  /// is looking at. Shown again, the rebuild that brings it back reads the
+  /// facts afresh in [build], so nothing is missed.
+  void _listenToApp(bool on) {
+    if (on == _listeningToApp) return;
+    _listeningToApp = on;
+    if (on) {
+      widget.notifier.addListener(_onNotifier);
+    } else {
+      widget.notifier.removeListener(_onNotifier);
+    }
   }
 
   /// Releases the resize hold when this page is parked mid-animation.
@@ -804,7 +869,7 @@ class _TerminalPageState extends State<TerminalPage>
   void didUpdateWidget(TerminalPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (kTypingTrace) typingCount('page.update');
-    if (!identical(oldWidget.notifier, widget.notifier)) {
+    if (_listeningToApp && !identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.removeListener(_onNotifier);
       widget.notifier.addListener(_onNotifier);
     }
@@ -819,6 +884,18 @@ class _TerminalPageState extends State<TerminalPage>
       _keyboardRequested = false;
       _cancelSettle();
       if (_keyboardSettling) setState(() => _keyboardSettling = false);
+      // Find belongs to the terminal being read: swiped away, it goes, keyboard and all.
+      if (_find != null) _closeFind(giveKeyboardBack: false, rebuild: false);
+      // A pretend take is this session's task: carried across the swipe, the next page's mic would
+      // send it there.
+      if (widget.voice.pretending && _firstSessionLine() != null) {
+        widget.voice.clear();
+      }
+    }
+    if (!oldWidget.isActive && widget.isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _raiseForFirstSession();
+      });
     }
   }
 
@@ -831,17 +908,21 @@ class _TerminalPageState extends State<TerminalPage>
         ?.session;
     if (session?.voiceDeliver == _deliverVoice) session?.voiceDeliver = null;
     if (session?.onLineSent == _onLineSent) session?.onLineSent = null;
-    // Said once: leaving the session spends the onboarding's line too.
-    if (_spendFirstSessionLine()) {
-      widget.notifier.onboardingMeasurement.end(
-        ProductFlow.firstMessage,
-        ProductOutcome.cancelled,
-      );
+    if (session?.voicePretend == _heardInFirstSession) {
+      session?.voicePretend = null;
     }
+    _stopPromptWait();
+    _stopSentWait();
+    // Said once: leaving the session spends the onboarding's line too. Not the onboarding's first
+    // message: a line sent in any other session still answers it ([_onLineSent]), and a sign-out
+    // ends it cancelled.
+    _spendFirstSessionLine();
     _barMessageTimer?.cancel();
     _barMessage.dispose();
     _scrollback.dispose();
-    widget.notifier.removeListener(_onNotifier);
+    _dropFindBack();
+    _find?.dispose();
+    _listenToApp(false);
     _daemon?.noteQuestion(
       this,
       machineId: widget.machineId,
@@ -961,12 +1042,56 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Says what went wrong, above the mic for two seconds, the way tmux's `display-message` does.
   /// Nothing that went right is said: its effect is on screen, and a tap is felt.
+  ///
+  /// Over a [_hold], which comes back once the two seconds are up.
   void _flash(String text, {bool error = false}) {
     _barMessageTimer?.cancel();
     _barMessage.value = (text: text, error: error);
     _barMessageTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) _barMessage.value = null;
+      if (mounted) _barMessage.value = _held;
     });
+  }
+
+  /// What the line above the mic says for as long as something is on its way, rather than for a
+  /// [_flash]'s two seconds — a Change agent, which is several round trips to the computer. Null
+  /// when nothing is.
+  ///
+  /// ⚠️ **Two seconds were not enough to say it.** The first switch tried waited half a minute on
+  /// the computer, and "switching to Claude…" had gone after two seconds: the terminal looked as if
+  /// nothing had been asked, and the only sign left was a menu row nobody had open.
+  String? _barHold;
+
+  ({String text, bool error})? get _held =>
+      _barHold == null ? null : (text: _barHold!, error: false);
+
+  /// Says [text] above the mic until it is held no more (null). A flash showing now keeps its two
+  /// seconds and hands back to this.
+  void _hold(String? text) {
+    _barHold = text;
+    if (_barMessageTimer?.isActive ?? false) return;
+    _barMessage.value = _held;
+  }
+
+  /// This page's `⋯` menu while it is up — see [_putMenuAway].
+  Route<void>? _menu;
+
+  /// Takes the `⋯` menu down, when something it describes has just ended under it.
+  ///
+  /// ⚠️ **The menu's rows are read once, as it opens.** Opened mid-switch, Change agent said
+  /// `switching…` — true then — and went on saying it after the switch had ended, with the answer in
+  /// a snackbar the menu itself covered. A menu on a harness the switch has just stopped would also
+  /// still offer its Restart. So the menu goes, and what happened is said where it can be seen.
+  void _putMenuAway() {
+    final menu = _menu;
+    _menu = null;
+    if (menu == null || !menu.isActive) return;
+    final navigator = menu.navigator;
+    if (navigator == null) return;
+    if (menu.isCurrent) {
+      navigator.pop();
+    } else {
+      navigator.removeRoute(menu);
+    }
   }
 
   /// Whether [view]'s answers are each one tap: not a question that takes several answers, nor one
@@ -1042,9 +1167,227 @@ class _TerminalPageState extends State<TerminalPage>
     }
     // The onboarding's one line, until the first send — see [AppNotifier.firstSessionLine].
     if (_firstSessionLine() case final line?) {
+      final session = _facts?.session;
+      final task = session == null ? null : _firstTask(session);
+      if (session != null && task != null) {
+        // A take is on: the mic's own face speaks, and the suggestion waits with its line — a line
+        // left over an empty row would point at nothing. Both are back if the take is dropped.
+        if (VoiceLine.shows(widget.voice)) return null;
+        return _FirstSessionSuggestion(
+          line: line,
+          suggestion: task,
+          onSend: session.acceptsInput
+              ? () {
+                  // Read at the tap, not at the last frame: a send that landed since has spent the
+                  // line, and the button is still on screen until the next frame draws that. The
+                  // task too: the prompt as it stands, with whatever was changed in it since.
+                  if (_firstSessionLine() == null) return;
+                  final now = _firstTask(session);
+                  if (now == null) return;
+                  unawaited(
+                    widget.voice.submitText(
+                      now,
+                      (text) => _sendFirstTask(session, text),
+                    ),
+                  );
+                }
+              : null,
+        );
+      }
       return _StatusLine(key: const ValueKey('first-session-line'), text: line);
     }
     return null;
+  }
+
+  /// Whether [session] is the first session handing its task over, on the page the onboarding
+  /// opened: a fresh Claude Code or Codex ("Say what to build, or send this:"), or OpenCode with
+  /// Desktop's starter ("Send it, or say anything."). The engines whose prompt the phone can clear
+  /// before it sends ([TerminalSession.sendFirstTask]).
+  bool _firstTaskSession(TerminalSession session) {
+    final line = _firstSessionLine();
+    return (line == OnboardingCopy.micSayWhat ||
+            line == OnboardingCopy.micSendIt) &&
+        const ['claude', 'codex', 'opencode'].contains(session.engineId);
+  }
+
+  /// The first session's task as it stands — what its Send sends, and what its mic is heard as
+  /// ([_heardInFirstSession]): what the prompt holds now — Desktop's starter in OpenCode's box, the
+  /// task [_raiseForFirstSession] typed into Claude Code or Codex, or whatever it was changed to —
+  /// and with an empty prompt the task it opened on. Null outside the first session, and for an
+  /// OpenCode box that has shown no starter.
+  String? _firstTask(TerminalSession session) {
+    if (!_firstTaskSession(session)) return null;
+    final line = widget.notifier.firstSessionLine;
+    final typed = typedPromptText(session.terminal.buffer, session.engineId);
+    if (_firstSessionLine() == OnboardingCopy.micSayWhat) {
+      return typed ?? firstTaskIdeas.first;
+    }
+    // OpenCode's box as first read is Desktop's starter: kept, so a box emptied on the keyboard
+    // still offers it, never a task the screen did not show.
+    if (typed != null && line != _starterFor) {
+      _starterFor = line;
+      _starter = typed;
+    }
+    return typed ?? (line == _starterFor ? _starter : null);
+  }
+
+  /// Sends the first session's task, replacing what its prompt holds — never joined to it
+  /// ([TerminalSession.sendFirstTask]). A prompt holding a paste marker ([holdsPasteMarker]) goes
+  /// by Return as it stands instead: what was pasted is only in the program, and read off the screen
+  /// and typed again it would be the marker, with the paste cleared away.
+  Future<bool> _sendFirstTask(TerminalSession session, String text) async {
+    if (!holdsPasteMarker(text)) return session.sendFirstTask(text);
+    if (!session.acceptsInput) return false;
+    session.terminal.keyInput(TerminalKey.enter);
+    return true;
+  }
+
+  /// What a take in the first session is heard as, read as it starts and as it ends: the task in
+  /// the prompt ([_firstTask]; empty when there is none to send, which is heard as nothing). Null —
+  /// an ordinary recording — once the first send has gone, or while a question is on screen that a
+  /// spoken answer is for ([_deliverVoice] answers it).
+  String? _heardInFirstSession() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session == null || !_firstTaskSession(session)) return null;
+    if (_questionOnScreen(session)) return null;
+    return _firstTask(session) ?? '';
+  }
+
+  /// Whether [session]'s screen shows a question its engine asks — read off its terminal now, not
+  /// through [_questionWatcher], which follows a new terminal only on the next build and settles a
+  /// beat after it.
+  static bool _questionOnScreen(TerminalSession session) {
+    final engine = questionEngineOf(session.engineId);
+    return engine != null && readQuestionPane(session.terminal, engine) != null;
+  }
+
+  /// The first session's mic pretends (owner, 2026-10-23) — see [TerminalSession.voicePretend]. Set
+  /// while this page shows that session; [_heardInFirstSession] itself says when a take records after
+  /// all.
+  void _syncPretendVoice(TerminalSession? session) {
+    if (session == null) return;
+    if (_firstTaskSession(session)) {
+      session.voicePretend = _heardInFirstSession;
+    } else if (session.voicePretend == _heardInFirstSession) {
+      session.voicePretend = null;
+    }
+  }
+
+  /// The pane [_raiseForFirstSession] waits on for its prompt, and the listener it waits with.
+  TerminalSession? _promptWaitOn;
+  VoidCallback? _promptWait;
+
+  /// The first session opens with the keyboard up over its task (owner, 2026-10-23): Return sends it
+  /// as it stands, and the words are there to change. A fresh Claude Code or Codex gets the first
+  /// New Harness idea typed into its empty prompt, unsent; OpenCode's starter is Desktop's. Once per
+  /// hand-over ([_firstSessionRaisedFor]): put away, the keyboard stays away, and Send and the mic
+  /// send the same task.
+  ///
+  /// ⚠️ **Not before the cursor is in the prompt** ([cursorInPrompt]). A pane still starting has no
+  /// prompt to type into, and a dialog drawn first — Claude Code's trust prompt, its cursor on an
+  /// answer — is answered where it is drawn, under no keyboard. So the pane is watched until then,
+  /// each change read after it is written: [TerminalSession.outputTicks] moves before the write,
+  /// and a keyframe moves only the session.
+  ///
+  /// Asked as the page first draws, when its session starts taking input ([_onNotifier]), when it
+  /// becomes the page on screen ([didUpdateWidget]), when a question goes ([_onQuestionPane]) and
+  /// when the keyboard stops moving ([_endSettle]).
+  void _raiseForFirstSession() {
+    if (_firstSessionLine() == null || !widget.isActive) return;
+    if (widget.notifier.firstSessionLine == _firstSessionRaisedFor) return;
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session == null || !_firstTaskSession(session)) return;
+    if (!identical(_promptWaitOn, session)) {
+      _stopPromptWait();
+      void soon() => scheduleMicrotask(_tryRaiseForFirstSession);
+      _promptWaitOn = session;
+      _promptWait = soon;
+      session.outputTicks.addListener(soon);
+      session.addListener(soon);
+    }
+    _tryRaiseForFirstSession();
+  }
+
+  void _tryRaiseForFirstSession() {
+    final session = _promptWaitOn;
+    if (!mounted || session == null) return;
+    final line = widget.notifier.firstSessionLine;
+    if (_firstSessionLine() == null ||
+        line == _firstSessionRaisedFor ||
+        !_firstTaskSession(session)) {
+      _stopPromptWait();
+      return;
+    }
+    // Parked, reconnecting, or the keyboard still moving: wait on — the next change asks again.
+    if (!widget.isActive || !session.acceptsInput || _keyboardSettling) return;
+    final buffer = session.terminal.buffer;
+    if (!cursorInPrompt(buffer, session.engineId)) return;
+    _stopPromptWait();
+    _firstSessionRaisedFor = line;
+    if (_firstSessionLine() == OnboardingCopy.micSayWhat &&
+        const ['claude', 'codex'].contains(session.engineId) &&
+        emptyPromptAtCursor(buffer)) {
+      session.terminal.textInput(firstTaskIdeas.first);
+      session.resetInputBuffer();
+    }
+    _raiseKeyboardForQuestion();
+  }
+
+  void _stopPromptWait() {
+    final session = _promptWaitOn;
+    final wait = _promptWait;
+    if (session != null && wait != null) {
+      session.outputTicks.removeListener(wait);
+      session.removeListener(wait);
+    }
+    _promptWaitOn = null;
+    _promptWait = null;
+  }
+
+  /// The pane [_dismissOnceSent] watches, its listener, and how long it watches.
+  TerminalSession? _sentWaitOn;
+  VoidCallback? _sentWait;
+  Timer? _sentDeadline;
+  static const _sentWatch = Duration(seconds: 3);
+
+  /// The first session's task went: the keyboard goes once the prompt has emptied — the task is
+  /// with the harness, and what it does with it is on screen (owner, 2026-10-23). A Return that sent
+  /// nothing — a file picked after `@`, a line broken with `\` — leaves the prompt holding its text
+  /// and the keyboard up. Watched as [_raiseForFirstSession] watches, for [_sentWatch].
+  void _dismissOnceSent(TerminalSession session) {
+    _stopSentWait();
+    void check() {
+      if (!mounted) return _stopSentWait();
+      if (typedPromptText(session.terminal.buffer, session.engineId) != null) {
+        return;
+      }
+      _stopSentWait();
+      _dismissInput();
+    }
+
+    void soon() => scheduleMicrotask(check);
+    _sentWaitOn = session;
+    _sentWait = soon;
+    session.outputTicks.addListener(soon);
+    session.addListener(soon);
+    _sentDeadline = Timer(_sentWatch, _stopSentWait);
+  }
+
+  void _stopSentWait() {
+    final session = _sentWaitOn;
+    final wait = _sentWait;
+    if (session != null && wait != null) {
+      session.outputTicks.removeListener(wait);
+      session.removeListener(wait);
+    }
+    _sentDeadline?.cancel();
+    _sentDeadline = null;
+    _sentWaitOn = null;
+    _sentWait = null;
   }
 
   /// The onboarding's line by the mic, when this page is the session it opened on: "Send it, or say
@@ -1063,6 +1406,16 @@ class _TerminalPageState extends State<TerminalPage>
   bool _spendFirstSessionLine() {
     if (_firstSessionLine() == null) return false;
     widget.notifier.firstSessionLine = null;
+    // Kept for this hand-over only: a later one for the same agent reads the same.
+    _firstSessionRaisedFor = null;
+    _starterFor = null;
+    _starter = null;
+    // From here a take is a recording again — see [_syncPretendVoice].
+    widget.notifier
+            .paneOfAgent(widget.machineId, widget.agentId)
+            ?.session
+            ?.voicePretend =
+        null;
     return true;
   }
 
@@ -1081,8 +1434,16 @@ class _TerminalPageState extends State<TerminalPage>
         ),
       ),
     );
-    if (!_spendFirstSessionLine()) return;
+    // The onboarding's first message is the first line sent after the hand-over in ANY session, not
+    // only the one it opened: a person signing in again may go straight to a session of their own,
+    // which read as no first message (1 in 3 on 2026-10-19). Nothing once it has ended.
     onboarding.end(ProductFlow.firstMessage, ProductOutcome.ok);
+    final session = _readFacts().session;
+    final firstTask = session != null && _firstTaskSession(session);
+    if (!_spendFirstSessionLine()) return;
+    // The first session's task is on its way: the keyboard goes once it has gone (owner,
+    // 2026-10-23). Only this once — Return in a session at work keeps it up.
+    if (firstTask) _dismissOnceSent(session);
     setState(() {});
   }
 
@@ -1264,7 +1625,10 @@ class _TerminalPageState extends State<TerminalPage>
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
-    final sent = await session.sendComposerText(text);
+    // The first session's task replaces what its prompt holds, as Send does: never joined to it.
+    final sent = _firstTaskSession(session)
+        ? await _sendFirstTask(session, text)
+        : await session.sendComposerText(text);
     // After the send is acknowledged, never before: a tap felt first would be a promise.
     if (sent && mounted) HapticFeedback.lightImpact();
     return sent;
@@ -1502,6 +1866,87 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
+  /// Find in terminal: its bar where the key bar is, the terminal searched and its match lit —
+  /// the desktop's ⌘F, from the `⋯` menu.
+  ///
+  /// The terminal is not held still for it, unlike search: the field's keyboard shrinks the page as
+  /// typing into the terminal does, and the panel carries the search across the keyframe that
+  /// follows (`TerminalPanel._syncTerminal`), so the match is read in the space the keyboard
+  /// leaves. What the field must not do is hand the keyboard to the terminal — see [_shouldFocus].
+  void _openFind() {
+    if (_find != null || !mounted) return;
+    _keyboardBeforeFind = _keyboardIsUp;
+    // Let go of the terminal's input before the field mounts and asks for the keyboard — the race
+    // [_openSearch] closes the same way.
+    FocusManager.instance.primaryFocus?.unfocus();
+    _chrome.reveal();
+    final route = ModalRoute.of(context);
+    final back = _FindBack(() => _closeFind());
+    route?.registerPopEntry(back);
+    _findBack = (route: route, entry: back);
+    setState(() {
+      _find = TerminalFindController();
+      _keyboardRequested = false;
+    });
+  }
+
+  /// Back while Find is up closes Find, not the page — registered on the route for as long as the
+  /// bar is up, which is what a [PopScope] would do, without wrapping the page in one.
+  ({ModalRoute<Object?>? route, _FindBack entry})? _findBack;
+
+  void _dropFindBack() {
+    final back = _findBack;
+    _findBack = null;
+    if (back == null) return;
+    back.route?.unregisterPopEntry(back.entry);
+    back.entry.dispose();
+  }
+
+  /// Puts Find away: the panel goes back to where the reader was, and the keyboard goes back to
+  /// whoever had it — the terminal, if it had one when Find opened, else nobody.
+  ///
+  /// ⚠️ **Find's keyboard falls for half a second after the bar has gone**, and the terminal would
+  /// take the falling inset for its own (see [_heldForSearch]). So unless the terminal is getting
+  /// a keyboard back, it is held off the keyboard until that one is gone — search's own close.
+  ///
+  /// [rebuild] false for a page being parked ([didUpdateWidget]): it rebuilds anyway, and a parked
+  /// page claims no keyboard to be held off.
+  void _closeFind({bool giveKeyboardBack = true, bool rebuild = true}) {
+    final find = _find;
+    if (find == null) return;
+    _dropFindBack();
+    final back = giveKeyboardBack && _keyboardBeforeFind && widget.isActive;
+    if (!back) dismissKeyboardForSwipe();
+    void apply() {
+      _find = null;
+      if (!rebuild) return;
+      if (back) {
+        _keyboardWanted();
+        _keyboardRequested = true;
+        _focusRequest++;
+      } else {
+        _heldForSearch = true;
+        _keyboardUpAtSearch = false;
+      }
+    }
+
+    if (rebuild) {
+      setState(apply);
+      if (back) {
+        _armSettle();
+      } else if (_lastInset == 0) {
+        _releaseSearchHold();
+      } else {
+        _searchHoldTimer?.cancel();
+        _searchHoldTimer = Timer(_searchHoldLimit, _releaseSearchHold);
+      }
+    } else {
+      apply();
+    }
+    // After the bar and the panel have let go of it.
+    WidgetsBinding.instance.addPostFrameCallback((_) => find.dispose());
+  }
+
   /// Hands the terminal back its own reading of the keyboard.
   void _releaseSearchHold() {
     _searchHoldTimer?.cancel();
@@ -1636,7 +2081,9 @@ class _TerminalPageState extends State<TerminalPage>
         // The search field's keyboard is not this page's to put back, and a
         // page with something stacked over it is not the page being returned to.
         _keyboardHeldForBackground =
-            !_heldForSearch && (_ownsInput || _keyboardRequested);
+            _find == null &&
+            !_heldForSearch &&
+            (_ownsInput || _keyboardRequested);
       }
       return;
     }
@@ -1653,6 +2100,7 @@ class _TerminalPageState extends State<TerminalPage>
     // would be a keyboard that does nothing. See [_raiseKeyboardForQuestion].
     final session = _readFacts().session;
     if (session == null || !session.acceptsInput) return;
+    _keyboardWanted();
     setState(() {
       _keyboardRequested = true;
       _focusRequest++;
@@ -1681,6 +2129,11 @@ class _TerminalPageState extends State<TerminalPage>
   /// would be sent to the shell instead.
   bool get _shouldFocus =>
       widget.isActive &&
+      // ⚠️ Find's field owns the keyboard while its bar is up, for the reason search's does (see
+      // [_heldForSearch]): read as the terminal's, the panel would take the input connection back
+      // on the next keyframe — and the field's own keyboard rising ends in one — so the second
+      // letter of a search would go to the shell.
+      _find == null &&
       !_heldForSearch &&
       !_heldForCover &&
       (_keyboardIsUp || _keyboardRequested);
@@ -1706,6 +2159,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (heard.isNotEmpty && session.acceptsInput) {
       session.terminal.textInput(heard);
     }
+    _keyboardWanted();
     setState(() => _keyboardRequested = true);
     // The keyboard is on its way and the key bar opens with it. Held from here
     // rather than from the first metrics tick, which is a frame too late: see
@@ -1715,8 +2169,13 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Puts the keyboard away without leaving the page — the `⌄` key on
   /// [TerminalKeyBar]. Dropping focus is what closes the input connection.
+  ///
+  /// ⚠️ **Through [dismissKeyboardForSwipe], not a bare `unfocus()`.** The inset is still falling
+  /// for ~250ms after it, [_keyboardIsUp] stays true, and [_shouldFocus] with it: a keyframe that
+  /// lands meanwhile — the harness answering the very line that put the keyboard away — had the
+  /// panel claim it straight back, and the keyboard never went.
   void _dismissInput() {
-    FocusManager.instance.primaryFocus?.unfocus();
+    dismissKeyboardForSwipe();
     if (_keyboardRequested) setState(() => _keyboardRequested = false);
     // The same move as [_raiseKeyboard], run backwards. See [_armSettle].
     _armSettle();
@@ -1898,6 +2357,36 @@ class _TerminalPageState extends State<TerminalPage>
     }
   }
 
+  /// The key bar's "Choose a file": the system's document picker, then the file to the machine,
+  /// which pastes its path there — see [sendFileToTerminal]. One picker at a time, shared with the
+  /// image picker ([_picking]): two system sheets stacked would be one too many.
+  Future<void> _sendFile(TerminalSession session) async {
+    if (_picking || !session.acceptsInput) return;
+    _picking = true;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await sendFileToTerminal(
+        session: session,
+        stillShowing: () =>
+            mounted &&
+            widget.isActive &&
+            identical(
+              widget.notifier
+                  .paneOfAgent(widget.machineId, widget.agentId)
+                  ?.session,
+              session,
+            ),
+        report: (message) {
+          if (mounted) {
+            messenger?.showSnackBar(SnackBar(content: Text(message)));
+          }
+        },
+      );
+    } finally {
+      _picking = false;
+    }
+  }
+
   /// The composer starts OPEN here, and the phone owns that answer rather than the pane.
   ///
   @override
@@ -2025,6 +2514,7 @@ class _TerminalPageState extends State<TerminalPage>
     // While the agent's question is open, a voice take answers it — never a paste and a blind
     // Return into the dialog. See [_answerByVoice].
     session?.voiceDeliver = _deliverVoice;
+    _syncPretendVoice(session);
     // What this page sends: the first send on the phone asks for notifications, and answers the
     // onboarding's line by the mic. See [_onLineSent].
     session?.onLineSent = _onLineSent;
@@ -2220,6 +2710,8 @@ class _TerminalPageState extends State<TerminalPage>
                                                   // up is a separate question, and the pager asks
                                                   // it on every swipe — see [_shouldFocus].
                                                   focused: _shouldFocus,
+                                                  // What the bar is finding — see [_openFind].
+                                                  find: _find,
                                                   // Asks again when `focused` did
                                                   // not move — coming back from
                                                   // another app. See
@@ -2294,7 +2786,9 @@ class _TerminalPageState extends State<TerminalPage>
                                                       : null,
                                                   onBandTap: _onAnswerBand,
                                                   // A long press on the prompt offers Paste, as
-                                                  // a text field's does — see [_paste].
+                                                  // a text field's does; a hardware ⌘V (Ctrl+V
+                                                  // on Android) and a right- or middle-click
+                                                  // paste through it too — see [_paste].
                                                   onPaste: () =>
                                                       _paste(session),
                                                   // Where the reader is in the history —
@@ -2391,7 +2885,11 @@ class _TerminalPageState extends State<TerminalPage>
                           // `PhoneShell`'s Scaffold has already resized for it —
                           // the same resize that empties this page's MediaQuery
                           // insets (see [didChangeMetrics]).
-                          if (session != null)
+                          // Find in terminal takes the key bar's place: on the keyboard while
+                          // its field has one, at the terminal's foot while not.
+                          if (session != null && _find != null)
+                            TerminalFindBar(find: _find!, onClose: _closeFind)
+                          else if (session != null)
                             TerminalInputDock(
                               session: session,
                               keyboardUp: _keyBarUp,
@@ -2422,6 +2920,12 @@ class _TerminalPageState extends State<TerminalPage>
                                   ? () => unawaited(
                                       _sendImage(session, ImageSource.camera),
                                     )
+                                  : null,
+                              // The same rule for any other file: only a CLI that advertises
+                              // `pasteFile` writes it out there.
+                              onPickFile:
+                                  machine?.terminalPasteFileAvailable == true
+                                  ? () => unawaited(_sendFile(session))
                                   : null,
                             ),
                         ],
@@ -2456,19 +2960,35 @@ class _TerminalPageState extends State<TerminalPage>
                               // The paired daemon at the title's right end: its
                               // sprite, a tap from its sheet. Nothing outside the
                               // signed-in shell (the sample). See `daemon_chip.dart`.
-                              daemon: const DaemonChip(
-                                margin: EdgeInsets.only(left: 12),
+                              // Before it, while Swarm is on: what the Swarms ask of
+                              // the person, a tap from them. See `swarm_mark.dart`.
+                              daemon: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SwarmMark(margin: EdgeInsets.only(left: 12)),
+                                  DaemonChip(margin: EdgeInsets.only(left: 12)),
+                                ],
                               ),
                               // Only over a screen: with none, [_MachineAway] says it
                               // in the terminal's place, and saying it twice is noise.
                               away:
                                   machineAway && (session?.hasScreen ?? false),
                               onTap: () {
-                                if (agent == null) return;
+                                // The agent as it is NOW, not as this build read it: a fact the
+                                // page does not rebuild for (a Stop queued for after it finishes)
+                                // still has to be right in the menu that opens.
+                                final current =
+                                    widget.notifier
+                                        .stateOf(widget.machineId)
+                                        ?.agents
+                                        .where((a) => a.id == widget.agentId)
+                                        .firstOrNull ??
+                                    agent;
+                                if (current == null) return;
                                 _showActions(
                                   machineName:
                                       machine?.machine.displayName ?? '',
-                                  agent: agent,
+                                  agent: current,
                                   session: session,
                                 );
                               },
@@ -2483,25 +3003,31 @@ class _TerminalPageState extends State<TerminalPage>
                     // call (2026-09-27): "we don't need the scrolling indicator". The history
                     // scrolls like any list; scrolling down is the way back to the stream.
                     // The line above the mic: what is going on, in a few words — see [_statusLine].
-                    if (!_ownsInput)
+                    if (!_ownsInput && _find == null)
                       Positioned(
                         left: 0,
                         right: 0,
                         bottom: _statusBottom - _StatusLine.below,
-                        child: IgnorePointer(
-                          child: ListenableBuilder(
-                            listenable: Listenable.merge([
-                              widget.voice,
-                              _barMessage,
-                              _scrollback,
-                            ]),
-                            builder: (context, _) =>
-                                _statusLine() ?? const SizedBox.shrink(),
-                          ),
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([
+                            widget.voice,
+                            _barMessage,
+                            _scrollback,
+                            ?session,
+                          ]),
+                          builder: (context, _) {
+                            final line = _statusLine();
+                            if (line == null) return const SizedBox.shrink();
+                            // Only the first session's suggestion takes taps; every other line
+                            // lies over the terminal and lets them through.
+                            return line is _FirstSessionSuggestion
+                                ? line
+                                : IgnorePointer(child: line);
+                          },
                         ),
                       ),
                     // How loud the take is: a glow behind the mic that swells with the voice.
-                    if (!_ownsInput)
+                    if (!_ownsInput && _find == null)
                       ListenableBuilder(
                         listenable: widget.voice,
                         builder: (context, _) =>
@@ -2527,7 +3053,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // way the home screen stays whole under Siri. Laid over the
                     // whole page so its capsule, rising as it talks, still takes
                     // taps.
-                    if (!_ownsInput)
+                    if (!_ownsInput && _find == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -2658,8 +3184,10 @@ class _TerminalPageState extends State<TerminalPage>
     TerminalSession? session,
   }) {
     final agentName = agent.displayName;
-    showPhoneSheet(
+    Route<void>? shown;
+    final closed = showPhoneSheet(
       context,
+      onShown: (route) => _menu = shown = route,
       // Where it runs, written as everywhere else: `hn` over `M2:autonomous-harness ⑂ main`.
       title: [
         '$agentName · $machineName',
@@ -2687,6 +3215,13 @@ class _TerminalPageState extends State<TerminalPage>
             // terminal only being watched too — but only while there is a reply on it to copy.
             if (session != null && hasLastReply(session))
               _copyReplyAction(session),
+            // The desktop's ⌘F. Only with a terminal on screen to search.
+            if (session != null)
+              PhoneSheetAction(
+                icon: LucideIcons.textSearch300,
+                label: 'Find in terminal',
+                onTap: _openFind,
+              ),
             ..._agentActions(agent),
           ],
         ),
@@ -2721,8 +3256,25 @@ class _TerminalPageState extends State<TerminalPage>
             ),
           ],
         ),
-        PhoneSheetSection(actions: [_stopAction(agent)]),
+        PhoneSheetSection(
+          actions: [
+            // Above Stop while it works: stopping once it is done, rather than mid-task — and,
+            // once queued, the way to call it off.
+            if (AppNotifier.canStopAfterTask(agent) &&
+                (agent.closePlanState == 'waiting' || _agentWorking))
+              _stopAfterAction(agent),
+            _stopAction(agent),
+            // Stop's harder sibling, under it: the conversation goes too. Not for a terminal,
+            // which keeps none.
+            if (agent.engine != 'terminal') _purgeAction(agent),
+          ],
+        ),
       ],
+    );
+    unawaited(
+      closed.whenComplete(() {
+        if (identical(_menu, shown)) _menu = null;
+      }),
     );
   }
 
@@ -2738,8 +3290,9 @@ class _TerminalPageState extends State<TerminalPage>
     onTap: () => _paste(session),
   );
 
-  /// The clipboard into [session] — the sheet's Paste row, and the Paste of a long press on the
-  /// prompt (`TerminalPanel.onPaste`). One path for both, so both read the image as well as the
+  /// The clipboard into [session] — the sheet's Paste row, the key bar's paste, and the panel's
+  /// own pastes (`TerminalPanel.onPaste`): a long press on the prompt, a hardware ⌘V (Ctrl+V on
+  /// Android), a right- or middle-click. One path for all, so all read the image as well as the
   /// text, ask iOS once, and send only into the terminal still on screen.
   void _paste(TerminalSession session) {
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -2855,9 +3408,46 @@ class _TerminalPageState extends State<TerminalPage>
           ),
         ),
       ),
+    // Another engine on the same project — what to reach for when a subscription runs out. The
+    // desktop's pane agent selector. Named by the agent it is on now, as the Model row is.
+    if (AppNotifier.canChangeAgent(agent))
+      PhoneSheetAction(
+        icon: LucideIcons.arrowLeftRight300,
+        label: 'Change agent',
+        value: _changing
+            ? 'switching…'
+            : engineIdentity(
+                agent.engine,
+                displayName: agent.engineDisplayName,
+              ).label,
+        enabled: !_changing,
+        chevron: !_changing,
+        onTap: () => unawaited(_changeAgent(agent)),
+      ),
+    // A second harness that starts with this one's conversation, in the same folder — the
+    // desktop's Fork Harness. Only where the machine can fork it, and not on saved work: a stopped
+    // harness is reopened, not forked.
+    if (agent.canFork && !agent.isStopped)
+      PhoneSheetAction(
+        icon: LucideIcons.gitFork300,
+        label: 'Fork',
+        value: _forking ? 'forking…' : null,
+        onTap: () => unawaited(_fork()),
+      ),
+    // Another of this one beside it — same folder and settings, a fresh conversation. The desktop's
+    // Clone Harness (⌘⇧N): no form, every answer is already on the agent. Not on a grid agent,
+    // whose launch key the frame never carries.
+    if (agent.canClone && !agent.isStopped)
+      PhoneSheetAction(
+        icon: LucideIcons.copyPlus300,
+        label: 'Clone',
+        value: _cloning ? 'cloning…' : null,
+        enabled: !_cloning,
+        onTap: () => unawaited(_clone()),
+      ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
-      label: 'Rename…',
+      label: 'Rename',
       onTap: () => showAgentRenameDialog(
         context,
         widget.notifier,
@@ -2866,12 +3456,174 @@ class _TerminalPageState extends State<TerminalPage>
         agent.name,
       ),
     ),
+    // Still immediate, no question first — the desktop's rule too ("Restart is an immediate
+    // action"). While one runs it says so and takes no tap, the way Settings ▸ Computers' Try again
+    // reads `trying…`: a second press is a second restart (see `AppNotifier._agentRestarts`).
     PhoneSheetAction(
       icon: LucideIcons.refreshCw300,
       label: 'Restart',
-      onTap: () => unawaited(_restart()),
+      value: _restarting ? 'restarting…' : null,
+      enabled: !_restarting,
+      onTap: () => unawaited(_restart(agent)),
     ),
   ];
+
+  /// Whether this agent has a restart on its way — from this menu, or from Connectors. Read as the
+  /// menu opens, like the rest of its rows: a menu left open while the restart finishes still says
+  /// it, until it is opened again.
+  bool get _restarting =>
+      widget.notifier.agentRestarting(widget.machineId, widget.agentId);
+
+  /// Whether this agent has a switch on its way — see [AppNotifier.agentChanging].
+  bool get _changing =>
+      widget.notifier.agentChanging(widget.machineId, widget.agentId);
+
+  /// Whether a fork of this agent is on its way — see [AppNotifier.agentForking].
+  bool get _forking =>
+      widget.notifier.agentForking(widget.machineId, widget.agentId);
+
+  /// Whether a Clone of this agent is on its way — see [AppNotifier.agentCloning].
+  bool get _cloning =>
+      widget.notifier.agentCloning(widget.machineId, widget.agentId);
+
+  /// Clone: the new harness opens once its machine confirms it, the source left as it is in the
+  /// same tab. What opens it is captured before the wait, as Change agent's is: the page can leave
+  /// on its own while the answer is out.
+  Future<void> _clone() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final shell = PhoneShellScope.maybeOf(context);
+    final notifier = widget.notifier;
+    final machineId = widget.machineId;
+    final error = await notifier.cloneAgent(machineId, widget.agentId);
+    if (mounted) _putMenuAway();
+    if (error != null) {
+      messenger?.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    final next = notifier.cloneAttempt(machineId, widget.agentId)?.agentId;
+    if (next == null) return;
+    if (mounted) {
+      openAgent(context, notifier, machineId, next);
+    } else {
+      shell?.onOpenAgent(machineId, next);
+    }
+  }
+
+  /// Fork: the form, then the fork opens — the source stays as it is, in the same tab.
+  ///
+  /// ⚠️ **A fork outlives its form.** Closed while the fork is still out, the form says it carries
+  /// on, so its answer is still said here when it lands — and the fork offered to open rather
+  /// than opened over whatever the person went on to.
+  Future<void> _fork() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final shell = PhoneShellScope.maybeOf(context);
+    final notifier = widget.notifier;
+    final machineId = widget.machineId;
+    final result = await showForkAgentDialog(
+      context,
+      notifier,
+      machineId,
+      widget.agentId,
+    );
+    if (result == null) {
+      final pending = notifier.forkPending(machineId, widget.agentId);
+      if (pending == null) return;
+      final landed = await pending;
+      final opened = landed.agentId;
+      // A menu opened in the wait would cover the answer — see [_putMenuAway].
+      if (mounted) _putMenuAway();
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(landed.error ?? landed.notice ?? 'Fork created.'),
+          action: landed.error != null || opened == null
+              ? null
+              : SnackBarAction(
+                  label: 'Open',
+                  onPressed: () => mounted
+                      ? openAgent(context, notifier, machineId, opened)
+                      : shell?.onOpenAgent(machineId, opened),
+                ),
+        ),
+      );
+      return;
+    }
+    final said =
+        result.notice ??
+        (result.level == 'handoff'
+            ? 'Fork opened with a handoff summary of the source conversation.'
+            : null);
+    if (said != null) messenger?.showSnackBar(SnackBar(content: Text(said)));
+    final next = result.agentId;
+    if (next == null) return;
+    if (mounted) {
+      openAgent(context, notifier, machineId, next);
+    } else {
+      shell?.onOpenAgent(machineId, next);
+    }
+  }
+
+  /// Change agent: pick the engine, and the harness goes on there with the conversation handed
+  /// over — then the new one opens in place of this one. See [AppNotifier.changeAgent].
+  ///
+  /// The choices are the desktop picker's rows in its words: the agent it is on now, and for each
+  /// other whether the conversation goes with it or it starts a new one in the same project.
+  ///
+  /// ⚠️ **What opens the new agent is captured before the wait.** The switch stops this agent, and
+  /// this page can leave on its own while the answer is still out (its pane goes — see
+  /// `_hadPane`); the shell, which puts an agent on the home screen, is still there to open it.
+  Future<void> _changeAgent(Agent agent) async {
+    final current = agent.engine;
+    final picked = await showNewAgentChooser<String>(
+      context,
+      title: 'Change agent',
+      hint: 'Search agents',
+      items: [
+        for (final id in AppNotifier.agentChangeEngines())
+          ChooserItem(
+            value: id,
+            title: id == 'claude' ? 'Claude Code' : engineIdentity(id).label,
+            subtitle: id == current
+                ? 'Current agent'
+                : id == 'opencode'
+                ? 'Muse Spark 1.3 · continue with recent context'
+                : supportsAgentHandoff(id)
+                ? 'Continue this project with recent context'
+                : 'New conversation in the same project',
+            selected: id == current,
+          ),
+      ],
+    );
+    if (picked == null || picked == current || !mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final shell = PhoneShellScope.maybeOf(context);
+    // Held for the whole switch — see [_barHold].
+    _hold('switching to ${engineIdentity(picked).label}…');
+    final result = await widget.notifier.changeAgent(
+      widget.machineId,
+      widget.agentId,
+      picked,
+    );
+    if (mounted) {
+      _hold(null);
+      // Before the answer is said: a menu opened in the wait would cover it — see [_putMenuAway].
+      _putMenuAway();
+    }
+    final said = result.error ?? result.notice;
+    if (said != null) messenger?.showSnackBar(SnackBar(content: Text(said)));
+    final next = result.agentId;
+    if (result.error != null || next == null || next == widget.agentId) return;
+    if (mounted) {
+      openAgent(
+        context,
+        widget.notifier,
+        widget.machineId,
+        next,
+        replacingCurrentPage: true,
+      );
+    } else {
+      shell?.onOpenAgent(widget.machineId, next);
+    }
+  }
 
   /// Stopping the agent: the last card of its sheet, alone.
   ///
@@ -2887,7 +3639,7 @@ class _TerminalPageState extends State<TerminalPage>
   PhoneSheetAction _stopAction(Agent agent) => PhoneSheetAction(
     icon: LucideIcons.trash2300,
     // The least used thing here: small at the foot, not a full red row (it still confirms).
-    label: 'Stop this harness…',
+    label: 'Stop this harness',
     destructive: true,
     quiet: true,
     onTap: () => unawaited(
@@ -2900,6 +3652,70 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     ),
   );
+
+  /// Stop after it finishes, or — with one queued — Keep running. See [AppNotifier.stopAfterTask].
+  /// Quiet at the foot like Stop; a queued Stop is said in the row itself, the desktop's words
+  /// for it, since a quiet row draws no value.
+  PhoneSheetAction _stopAfterAction(Agent agent) {
+    final queued = agent.closePlanState == 'waiting';
+    final pending = widget.notifier.agentClosePlanPending(
+      widget.machineId,
+      widget.agentId,
+    );
+    return PhoneSheetAction(
+      icon: queued ? LucideIcons.play300 : LucideIcons.timerOff300,
+      label: queued
+          ? 'Stops after finishing · Keep running'
+          : 'Stop after it finishes',
+      enabled: !pending,
+      destructive: !queued,
+      quiet: true,
+      onTap: () => unawaited(_stopAfter(queued: queued)),
+    );
+  }
+
+  /// What the queued Stop came to, said once its machine has answered — on the snackbar, as
+  /// Restart's answer is.
+  Future<void> _stopAfter({required bool queued}) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final error = queued
+        ? await widget.notifier.keepRunning(widget.machineId, widget.agentId)
+        : await widget.notifier.stopAfterTask(widget.machineId, widget.agentId);
+    if (mounted) _putMenuAway();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          error ?? (queued ? 'Keeps running.' : 'Stops after it finishes.'),
+        ),
+      ),
+    );
+  }
+
+  /// Delete Harness — see [confirmPurgeAgent]. Small at the foot beside Stop, and saying so while a
+  /// delete is out, as Restart does: the review and the delete can take a while. In its label, in
+  /// the desktop's word for it — a quiet row draws no value.
+  PhoneSheetAction _purgeAction(Agent agent) {
+    final deleting = widget.notifier.agentPurging(
+      widget.machineId,
+      widget.agentId,
+    );
+    return PhoneSheetAction(
+      icon: LucideIcons.trash300,
+      label: deleting ? 'Deleting…' : 'Delete this harness',
+      enabled: !deleting,
+      destructive: true,
+      quiet: true,
+      onTap: () => unawaited(
+        confirmPurgeAgent(
+          context,
+          widget.notifier,
+          widget.machineId,
+          widget.agentId,
+          agent.name,
+        ),
+      ),
+    );
+  }
 
   /// Asks for the terminal this pane is only watching, or reopens the stream it lost — a tap or a
   /// scroll on a terminal held elsewhere.
@@ -2945,15 +3761,26 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Restarting is a round trip that can fail, and the phone has no status rail to fail into — so
   /// the answer lands as a snackbar, which is the one surface a pushed page here always has.
-  Future<void> _restart() async {
+  ///
+  /// Said only when there is something to say. A restart that came back on its own conversation
+  /// says nothing: the terminal shows it. One that came back on a NEW conversation says so, in the
+  /// desktop's words — the engine could not reopen the old one, which is kept as a stopped harness
+  /// (`cli/src/core/agents/restart.ts`), and an empty prompt is easily taken for the conversation
+  /// it replaced. Except on a terminal, which always restarts as a fresh shell (the desktop does not
+  /// say it there either). Anything else is [RestartAgentResult.error], already a sentence.
+  Future<void> _restart(Agent agent) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
     final result = await widget.notifier.restartAgent(
       widget.machineId,
       widget.agentId,
     );
-    final error = result.error;
-    if (error == null || messenger == null || !mounted) return;
-    messenger.showSnackBar(SnackBar(content: Text(error)));
+    final said =
+        result.error ??
+        (result.resumed || agent.engine == 'terminal'
+            ? null
+            : 'Restarted with a new conversation.');
+    if (said == null || messenger == null || !mounted) return;
+    messenger.showSnackBar(SnackBar(content: Text(said)));
   }
 }
 
@@ -3849,15 +4676,37 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   @override
   void initState() {
     super.initState();
-    widget.terminal?.addListener(_output);
     widget.reading.addListener(_toggled);
     terminalFontStore.addListener(_changed);
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _listenToOutput(!OutOfSight.of(context));
+  }
+
+  /// Whether [_output] is listening.
+  bool _listeningToOutput = false;
+
+  /// Follows the output only while the terminal can be seen. Out of sight
+  /// (Harness under Swarm Home, [OutOfSight]) the output stays in the buffer,
+  /// and the rebuild that shows the terminal again places it by what is there
+  /// then.
+  void _listenToOutput(bool on) {
+    if (on == _listeningToOutput) return;
+    _listeningToOutput = on;
+    if (on) {
+      widget.terminal?.addListener(_output);
+    } else {
+      widget.terminal?.removeListener(_output);
+    }
+  }
+
+  @override
   void didUpdateWidget(_AnchoredTerminal old) {
     super.didUpdateWidget(old);
-    if (!identical(old.terminal, widget.terminal)) {
+    if (_listeningToOutput && !identical(old.terminal, widget.terminal)) {
       old.terminal?.removeListener(_output);
       widget.terminal?.addListener(_output);
     }
@@ -3871,7 +4720,7 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   @override
   void dispose() {
-    widget.terminal?.removeListener(_output);
+    _listenToOutput(false);
     widget.reading.removeListener(_toggled);
     terminalFontStore.removeListener(_changed);
     super.dispose();
@@ -3980,6 +4829,43 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
       );
     },
   );
+}
+
+/// The first session's line with one suggestion and its Send under it (owner, 2026-10-22). The only
+/// status line that takes taps: [TerminalPage] lets the others through to the terminal.
+class _FirstSessionSuggestion extends StatelessWidget {
+  const _FirstSessionSuggestion({
+    required this.line,
+    required this.suggestion,
+    required this.onSend,
+  });
+
+  final String line;
+  final String suggestion;
+
+  /// Null while the terminal is not taking input: Send shows disabled, and waits.
+  final VoidCallback? onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return ColoredBox(
+      color: tty.ground,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: _StatusLine.below),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _StatusLine(key: const ValueKey('first-session-line'), text: line),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+              child: FirstSessionSuggestion(text: suggestion, onSend: onSend),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// The line above the mic, centred over it with an opaque ground.
@@ -4144,4 +5030,24 @@ class _SampleEndCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Find's hold on the back gesture — see `_TerminalPageState._findBack`.
+class _FindBack extends PopEntry<Object?> {
+  _FindBack(this.onBack);
+
+  final VoidCallback onBack;
+
+  @override
+  final ValueNotifier<bool> canPopNotifier = ValueNotifier(false);
+
+  /// ⚠️ **After the route is done asking, not while it asks.** The route walks its entries to tell
+  /// each of them, and closing Find takes this one off the route — taken off mid-walk, the walk
+  /// threw (`ConcurrentModificationError`) and Back did nothing.
+  @override
+  void onPopInvokedWithResult(bool didPop, Object? result) {
+    if (!didPop) scheduleMicrotask(onBack);
+  }
+
+  void dispose() => canPopNotifier.dispose();
 }

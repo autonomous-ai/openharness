@@ -1,4 +1,4 @@
-import '../core/host_platform.dart';
+import '../core/home_dir.dart';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 
@@ -7,7 +7,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
+
 import '../core/harness_cli_runner.dart';
+import '../core/hidden_process.dart';
+import '../core/staging_build.dart';
+import '../core/windows_layout.dart';
 import '../update/desktop_updater.dart' show semverGt;
 
 /// The CLI-only installer contract for callers that already own host setup.
@@ -34,6 +39,87 @@ const int _linuxAptUpdateFailureExitCode = 32;
 /// starts its daemon for this computer without a sign-in, which the app's
 /// first run relies on. Raise it when the app starts needing a newer daemon.
 const kMinimumHarnessCliVersion = '0.2.48';
+
+/// The oldest Harness CLI this app runs against on Windows: the first release
+/// with Windows support (sub-project B). Every CLI `install.ps1` can lay down
+/// is at least this, so on Windows the check only turns down a stale
+/// development build. Raise it alongside [kMinimumHarnessCliVersion].
+const kMinimumWindowsHarnessCliVersion = '0.4.20';
+
+/// `--dart-define=HARNESS_INSTALL_PS1_URL=…` replaces the whole installer
+/// address, for tests against a fake CDN.
+const String _installScriptOverride = String.fromEnvironment(
+  'HARNESS_INSTALL_PS1_URL',
+);
+
+/// Where Windows setup downloads `install.ps1` from (spec §1.4).
+String harnessInstallScriptUrl({
+  String override = _installScriptOverride,
+  bool staging = kHarnessStagingBuild,
+}) {
+  if (override.isNotEmpty) return override;
+  return staging
+      ? 'https://cdn.autonomous.ai/harness/staging/cli/install.ps1'
+      : 'https://cdn.autonomous.ai/harness/cli/install.ps1';
+}
+
+/// Whether [url] may go into the installer's PowerShell command: `https`, or
+/// `http` to this computer (a test's fake CDN), with none of the characters
+/// PowerShell would read as code inside the single quotes it is put in.
+bool isTrustedInstallScriptUrl(String url) {
+  if (!RegExp(r"^[A-Za-z0-9._~:/?#\[\]@!&()*+,;=%-]+$").hasMatch(url)) {
+    return false;
+  }
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) return false;
+  return uri.scheme == 'https' ||
+      (uri.scheme == 'http' &&
+          (uri.host == '127.0.0.1' || uri.host == 'localhost'));
+}
+
+/// The `-Command` text: B's `install.ps1 -Desktop` line, plus what a hidden
+/// run needs.
+/// - PowerShell writes UTF-8, so a profile such as `C:\Users\Nguyễn Văn A'`
+///   reaches the setup log intact (it would write the OEM code page).
+/// - `-ErrorAction Stop` makes a failed download fail the command, where
+///   `iex` of nothing would succeed.
+/// - `exit $LASTEXITCODE`: under `iex` the script sets `$LASTEXITCODE` rather
+///   than exiting, and `-Command` alone would exit 0 either way.
+/// The address is in single quotes, and [isTrustedInstallScriptUrl] keeps
+/// quotes out of it. No profile path is here: install.ps1 reads
+/// `$env:USERPROFILE` itself.
+String windowsInstallCommand(String url) =>
+    r'[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); '
+    'iex "& { \$(irm \'$url\' -ErrorAction Stop) } -Desktop"; '
+    r'exit $LASTEXITCODE';
+
+/// `powershell.exe`'s arguments for [windowsInstallCommand]. Dart quotes each
+/// one for `CreateProcessW`; no shell re-parses them.
+List<String> windowsInstallArguments(String url) => [
+  '-NoProfile',
+  '-NonInteractive',
+  '-ExecutionPolicy',
+  'Bypass',
+  '-Command',
+  windowsInstallCommand(url),
+];
+
+/// What a person pastes into PowerShell to install by hand. Quote the trusted
+/// address as in [windowsInstallCommand], so URL punctuation stays literal.
+String windowsManualInstallCommand(String url) =>
+    'iex "& { \$(irm \'$url\') } -Desktop"';
+
+/// Windows PowerShell by its full path. A bare `powershell.exe` is looked for
+/// in the working folder before System32.
+String windowsPowerShellPath(Map<String, String> environment) {
+  var root = '';
+  for (final entry in environment.entries) {
+    if (entry.key.toUpperCase() == 'SYSTEMROOT') root = entry.value;
+  }
+  if (root.isEmpty) root = r'C:\Windows';
+  return '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+}
+
 const int _linuxAptInstallFailureExitCode = 33;
 const String _linuxClockRepairCommand =
     'if command -v chronyc >/dev/null 2>&1; then '
@@ -53,7 +139,8 @@ enum EnvironmentStep {
   harness,
 
   /// The terminal backend: `tmux`, and on Linux the `ps` the CLI's process
-  /// liveness and agent discovery run beside it.
+  /// liveness and agent discovery run beside it. On Windows this step is B's
+  /// terminal host, harness-pty.exe, and there is no ps.
   tmux;
 
   /// Harness Desktop is only ready when every command in this list works.
@@ -94,6 +181,53 @@ class EnvironmentFailure {
     this.command,
     this.exitCode,
   });
+}
+
+/// install.ps1's failure in its own words (B §1: "Errors are printed as a
+/// sentence a first-time user understands, with the step that failed"):
+/// `Harness could not be installed. The step that failed: <step>.`, with the
+/// reason on the next line. Null when the installer succeeded.
+EnvironmentFailure? windowsInstallFailure(
+  ProcessResult result, {
+  required String manualCommand,
+}) {
+  final lines = const LineSplitter().convert(
+    '${result.stdout}\n${result.stderr}',
+  );
+  final sentence = RegExp(
+    r'^Harness could not be installed\. The step that failed: (.+)\.$',
+  );
+  for (var i = 0; i < lines.length; i++) {
+    final match = sentence.firstMatch(lines[i].trim());
+    if (match == null) continue;
+    final step = match.group(1)!;
+    final reason = lines
+        .skip(i + 1)
+        .map((line) => line.trim())
+        .firstWhere((line) => line.isNotEmpty, orElse: () => '');
+    return EnvironmentFailure(
+      step: step == 'Installing the terminal host'
+          ? EnvironmentStep.tmux
+          : EnvironmentStep.harness,
+      title: 'Harness could not be installed',
+      detail: reason.isEmpty
+          ? 'The step that failed: $step.'
+          : 'The step that failed: $step. $reason',
+      command: manualCommand,
+      exitCode: result.exitCode,
+    );
+  }
+  if (result.exitCode == 0) return null;
+  final output = '${result.stderr}\n${result.stdout}'.trim();
+  return EnvironmentFailure(
+    step: EnvironmentStep.harness,
+    title: 'Harness could not be installed',
+    detail:
+        'The installer exited ${result.exitCode}: '
+        '${output.length <= 700 ? output : output.substring(output.length - 700)}',
+    command: manualCommand,
+    exitCode: result.exitCode,
+  );
 }
 
 enum EnvironmentStepStatus {
@@ -162,6 +296,23 @@ class EnvironmentPlanItem {
     title: 'Managed Node 20+ & Harness CLI',
     detail: '~/.harness only',
     command: kHarnessDesktopInstallCommand,
+  );
+
+  /// Windows: one `install.ps1 -Desktop` run lays down both the CLI and the
+  /// terminal host, so either item alone runs the same command.
+  static final windowsHarnessCli = EnvironmentPlanItem(
+    step: EnvironmentStep.harness,
+    title: 'Managed Node 20+ & Harness CLI',
+    detail: r'%USERPROFILE%\.harness only',
+    command: windowsManualInstallCommand(harnessInstallScriptUrl()),
+  );
+
+  /// The terminal step on Windows: B's terminal host, `harness-pty.exe`.
+  static final windowsTerminalHost = EnvironmentPlanItem(
+    step: EnvironmentStep.tmux,
+    title: 'Terminal host',
+    detail: r'harness-pty.exe, into %USERPROFILE%\.harness\runtime\pty',
+    command: windowsManualInstallCommand(harnessInstallScriptUrl()),
   );
 }
 
@@ -289,26 +440,17 @@ class _EnvironmentProbeTimeout implements Exception {
   String toString() => 'The check for $label did not finish.';
 }
 
-/// The progress callback `ensureReady` builds for itself, named so the per-host paths below can be
-/// separate methods rather than one very long function.
-typedef EmitStep = void Function({
-  EnvironmentStep? step,
-  EnvironmentStepStatus? status,
-  String? message,
-  String? output,
-});
-
 Future<ProcessResult> _defaultRun(
   String executable,
   List<String> arguments, {
   Map<String, String>? environment,
-}) => Process.run(executable, arguments, environment: environment);
+}) => runHidden(executable, arguments, environment: environment);
 
 Future<Process> _defaultStart(
   String executable,
   List<String> arguments, {
   Map<String, String>? environment,
-}) => Process.start(executable, arguments, environment: environment);
+}) => startHidden(executable, arguments, environment: environment);
 
 /// macOS opens a real Terminal.app window. Linux has no single canonical
 /// terminal, so this tries the Debian/Ubuntu `update-alternatives` target
@@ -352,6 +494,7 @@ class EnvironmentProvisioner {
   final bool _isLinux;
   final bool _isWindows;
   final Map<String, String> _platformEnvironment;
+  final String _windowsInstallScriptUrl;
   final Duration probeTimeout;
 
   EnvironmentProvisioner({
@@ -363,6 +506,7 @@ class EnvironmentProvisioner {
     bool? isLinux,
     bool? isWindows,
     Map<String, String>? platformEnvironment,
+    String? windowsInstallScriptUrl,
     this.probeTimeout = const Duration(seconds: 10),
   }) : harnessHome = harnessHome ?? Directory(_defaultHarnessHome()),
        _run = run ?? _defaultRun,
@@ -371,17 +515,13 @@ class EnvironmentProvisioner {
        _isMacOS = isMacOS ?? Platform.isMacOS,
        _isLinux = isLinux ?? Platform.isLinux,
        _isWindows = isWindows ?? Platform.isWindows,
-       _platformEnvironment = platformEnvironment ?? Platform.environment;
+       _platformEnvironment = platformEnvironment ?? Platform.environment,
+       _windowsInstallScriptUrl =
+           windowsInstallScriptUrl ?? harnessInstallScriptUrl();
 
-  /// HOME, then USERPROFILE. Windows sets only the latter, so a launch from Explorer used to throw
-  /// out of this constructor before a single frame could render.
-  static String? userHome() {
-    final home = Platform.environment['HOME'];
-    if (home != null && home.isNotEmpty) return home;
-    final profile = Platform.environment['USERPROFILE'];
-    if (profile != null && profile.isNotEmpty) return profile;
-    return containerHome;
-  }
+  /// The current user's home: USERPROFILE on Windows, HOME elsewhere.
+  /// A launch from Explorer has no HOME at all.
+  static String? userHome() => maybeHomeDir();
 
   static String _defaultHarnessHome() {
     final home = userHome();
@@ -491,12 +631,12 @@ class EnvironmentProvisioner {
             ? 'Harness CLI and managed Node are ready.'
             : _harnessOutdated != null
             ? 'Harness CLI $_harnessOutdated is out of date; this app needs '
-                  '$kMinimumHarnessCliVersion or newer.'
+                  '$_minimumCliVersion or newer.'
             : 'Harness CLI or its managed Node runtime is missing.',
         output: probe.harnessRuns
             ? '✓ managed Node >= 20 · harness version'
             : _harnessOutdated != null
-            ? '✗ harness $_harnessOutdated < $kMinimumHarnessCliVersion'
+            ? '✗ harness $_harnessOutdated < $_minimumCliVersion'
             : '✗ managed Node >= 20 · harness version',
         plan: probe.plan,
       );
@@ -604,11 +744,7 @@ class EnvironmentProvisioner {
       }
       onProgress(state);
 
-      if (!_isMacOS && !_isLinux) {
-        if (_isWindows) {
-          await _verifyWindows(emit);
-          return state;
-        }
+      if (!_isMacOS && !_isLinux && !_isWindows) {
         emit(
           step: EnvironmentStep.harness,
           status: EnvironmentStepStatus.failed,
@@ -620,9 +756,11 @@ class EnvironmentProvisioner {
 
       // The one thing every step needs and no plan can install.
       if (!await _hasWritableHome()) {
-        const failure = EnvironmentFailure(
+        final failure = EnvironmentFailure(
           title: 'Home directory is not writable',
-          detail: 'Harness needs to write ~/.harness and ~/.local/bin.',
+          detail: _isWindows
+              ? r'Harness needs to write %USERPROFILE%\.harness.'
+              : 'Harness needs to write ~/.harness and ~/.local/bin.',
         );
         emit(
           message: failure.detail,
@@ -828,7 +966,38 @@ class EnvironmentProvisioner {
         }
       }
 
-      if (!probe.harnessRuns) {
+      if (_isWindows) {
+        if (probe.plan.isNotEmpty) {
+          // One hidden install.ps1 -Desktop run lays down whatever the plan lists.
+          final planned = {for (final item in probe.plan) item.step};
+          for (final step in planned) {
+            emit(step: step, status: EnvironmentStepStatus.running);
+          }
+          emit(message: 'Installing the Harness CLI and terminal host…');
+          final failure = await _installWindows((line) => emit(output: line));
+          if (failure != null) {
+            final failedStep = failure.step ?? EnvironmentStep.harness;
+            for (final step in {...planned, failedStep}) {
+              emit(
+                step: step,
+                status: step == failedStep
+                    ? EnvironmentStepStatus.failed
+                    : EnvironmentStepStatus.pending,
+              );
+            }
+            emit(
+              message: failure.detail,
+              phase: EnvironmentSetupPhase.failed,
+              failure: failure,
+            );
+            return state;
+          }
+          for (final step in planned) {
+            emit(step: step, status: EnvironmentStepStatus.ready);
+          }
+          emit(output: '✓ Harness CLI and terminal host installed');
+        }
+      } else if (!probe.harnessRuns) {
         emit(
           step: EnvironmentStep.harness,
           status: EnvironmentStepStatus.running,
@@ -937,6 +1106,23 @@ class EnvironmentProvisioner {
   /// does not — each rung probed only when the one above it is missing.
   Future<_HostProbe> _probe() async {
     final plan = <EnvironmentPlanItem>[];
+    if (_isWindows) {
+      // What install.ps1 -Desktop lays down, and nothing else: there is no
+      // shell, tmux, ps or clipboard helper to ask about here.
+      final harnessRuns = await _hasHarness();
+      final host = await installedTerminalHost(harnessHome);
+      if (!harnessRuns) plan.add(EnvironmentPlanItem.windowsHarnessCli);
+      if (host == null) plan.add(EnvironmentPlanItem.windowsTerminalHost);
+      return _HostProbe(
+        tmuxRuns: host != null,
+        clipboardApplicable: false,
+        clipboardRuns: true,
+        harnessRuns: harnessRuns,
+        windows: true,
+        terminalHostVersion: host?.version,
+        plan: plan,
+      );
+    }
     if (_isMacOS) {
       final tmuxRuns = await _hasTmux();
       var homebrewInstallsTmux = false;
@@ -1012,68 +1198,26 @@ class EnvironmentProvisioner {
     );
   }
 
-  /// Windows gets a VERIFY pass rather than the install pass above.
-  ///
-  /// Every installer this class drives is a POSIX shell script — `install.sh` piped into `/bin/sh`,
-  /// a `zsh`/`bash` login shell for each probe, `brew`, `apt-get` — and none of it exists here. So
-  /// instead of refusing to boot a Windows box that is in fact provisioned, this checks what is
-  /// actually on it and names the command for whatever is missing. Windows packaging remains out
-  /// of scope for this release.
-  Future<void> _verifyWindows(EmitStep emit) async {
-    emit(
-      step: EnvironmentStep.clipboard,
-      status: EnvironmentStepStatus.notApplicable,
-    );
-    emit(
-      step: EnvironmentStep.harness,
-      status: EnvironmentStepStatus.running,
-      message: 'Checking the Harness CLI…',
-    );
-    var harnessReady = false;
-    try {
-      final runner = HarnessCliRunner(
-        harnessHome: harnessHome,
-        runProcess: _probeHarnessCommand,
-      );
-      final status = await runner.run(['auth', 'status', '--json']);
-      harnessReady =
-          status.exitCode == 0 && (status.stdout as String).trim().isNotEmpty;
-    } on ProcessException {
-      harnessReady = false;
-    } on StateError {
-      // No managed node/cli.js pair recorded under ~/.harness yet.
-      harnessReady = false;
-    }
-    if (!harnessReady) {
-      emit(
-        step: EnvironmentStep.harness,
-        status: EnvironmentStepStatus.failed,
-        message:
-            'The Harness CLI is not installed for this user. There is no Windows installer yet — '
-            'from a checkout of the CLI run: npm install && npm run bundle && '
-            'bash scripts/install-cli.sh — then click Recheck.',
-      );
-      return;
-    }
-    emit(
-      step: EnvironmentStep.harness,
-      status: EnvironmentStepStatus.ready,
-      output: 'Harness CLI ready',
-    );
-
-    emit(
-      step: EnvironmentStep.tmux,
-      status: EnvironmentStepStatus.unavailable,
-      output: 'tmux does not exist on Windows.',
-    );
-  }
-
   Future<bool> _hasWritableHome() async {
+    if (_isWindows) return _canCreateFileIn(harnessHome.parent);
     final writable = await _probeShell(
       'test -w "\$HOME"',
       'your home directory',
     );
     return writable.exitCode == 0;
+  }
+
+  /// `test -w` for Windows, which has no shell to ask: create a file in
+  /// [folder], the profile, and delete it again.
+  static Future<bool> _canCreateFileIn(Directory folder) async {
+    final probe = File(p.join(folder.path, '.harness-write-check-$pid'));
+    try {
+      await probe.writeAsString('', flush: true);
+      await probe.delete();
+      return true;
+    } on FileSystemException {
+      return false;
+    }
   }
 
   Future<bool> _hasCommand(String command) async {
@@ -1291,8 +1435,13 @@ fi''';
   /// than [kMinimumHarnessCliVersion]; null otherwise.
   String? _harnessOutdated;
 
+  /// [kMinimumHarnessCliVersion], or [kMinimumWindowsHarnessCliVersion] on Windows.
+  String get _minimumCliVersion =>
+      _isWindows ? kMinimumWindowsHarnessCliVersion : kMinimumHarnessCliVersion;
+
   Future<bool> _hasHarness() async {
     _harnessOutdated = null;
+    if (_isWindows) return _hasWindowsHarness();
     final currentNode = File('${harnessHome.path}/runtime/current-node');
     if (!await currentNode.exists()) return false;
     final nodePath = (await currentNode.readAsString()).trim();
@@ -1305,41 +1454,114 @@ fi''';
       label: 'the managed Node runtime',
       step: EnvironmentStep.harness,
     );
-    if (node.exitCode != 0) return false;
-    final match = RegExp(r'^v?(\d+)').firstMatch('${node.stdout}'.trim());
-    if (match == null || int.parse(match.group(1)!) < 20) return false;
+    if (!_nodeRuns(node)) return false;
     try {
       final cli = File('${harnessHome.path}/cli/cli.js');
       if (!await cli.exists()) return false;
-      final version = await _probeHarnessCommand(nodePath, [
-        cli.path,
-        'version',
-      ]);
-      if (version.exitCode != 0) return false;
-      // A CLI that runs is not enough: one from before the app's minimum
-      // refuses `harness start` without a sign-in, and it only self-updates
-      // from a running daemon — so it would never get past that on its own.
-      // Treated as missing, the installer lays the current one over it. An
-      // unparseable version (a local development build) is left alone.
-      final installed = '${version.stdout}'.trim().replaceFirst(
-        RegExp('^v'),
-        '',
+      return _versionAccepted(
+        await _probeHarnessCommand(nodePath, [cli.path, 'version']),
       );
-      // Local CLI builds intentionally use 0.0.1-dev.<revision>. A debug
-      // desktop must not mistake these for an obsolete release and offer to
-      // overwrite the developer's CLI. Release builds retain the minimum.
-      final localDevelopmentBuild =
-          kDebugMode && installed.startsWith('0.0.1-dev.');
-      _harnessOutdated =
-          !localDevelopmentBuild &&
-              semverGt(kMinimumHarnessCliVersion, installed)
-          ? installed
-          : null;
-      return _harnessOutdated == null;
     } on ProcessException {
       return false;
     } on StateError {
       return false;
+    }
+  }
+
+  /// [_hasHarness] on Windows: B's pointers ([managedWindowsCli]), the Node
+  /// they name, and the CLI's own version.
+  Future<bool> _hasWindowsHarness() async {
+    final cli = await managedWindowsCli(harnessHome);
+    if (cli == null) return false;
+    try {
+      final node = await _runProbe(
+        cli.node,
+        ['--version'],
+        label: 'the managed Node runtime',
+        step: EnvironmentStep.harness,
+      );
+      if (!_nodeRuns(node)) return false;
+      return _versionAccepted(
+        await _probeHarnessCommand(cli.node, [cli.cliJs, 'version']),
+      );
+    } on ProcessException {
+      return false;
+    }
+  }
+
+  /// Node 20 or newer answered `--version`.
+  static bool _nodeRuns(ProcessResult node) {
+    if (node.exitCode != 0) return false;
+    final match = RegExp(r'^v?(\d+)').firstMatch('${node.stdout}'.trim());
+    return match != null && int.parse(match.group(1)!) >= 20;
+  }
+
+  /// `harness version` answered with a version this app runs against, and
+  /// [_harnessOutdated] says which when it did not.
+  bool _versionAccepted(ProcessResult version) {
+    if (version.exitCode != 0) return false;
+    // A CLI that runs is not enough: one from before the app's minimum
+    // refuses `harness start` without a sign-in, and it only self-updates
+    // from a running daemon — so it would never get past that on its own.
+    // Treated as missing, the installer lays the current one over it. An
+    // unparseable version (a local development build) is left alone.
+    final installed = '${version.stdout}'.trim().replaceFirst(RegExp('^v'), '');
+    // Local CLI builds intentionally use 0.0.1-dev.<revision>. A debug
+    // desktop must not mistake these for an obsolete release and offer to
+    // overwrite the developer's CLI. Release builds retain the minimum.
+    final localDevelopmentBuild =
+        kDebugMode && installed.startsWith('0.0.1-dev.');
+    _harnessOutdated =
+        !localDevelopmentBuild && semverGt(_minimumCliVersion, installed)
+        ? installed
+        : null;
+    return _harnessOutdated == null;
+  }
+
+  /// `install.ps1 -Desktop` (spec §1.4): Windows PowerShell by its full path,
+  /// hidden, no shell, the output streamed into the setup log the screen
+  /// shows, and install.ps1's own sentence kept as the failure. Null when it
+  /// installed; the final probe then checks what it laid down.
+  Future<EnvironmentFailure?> _installWindows(
+    void Function(String line) onOutput,
+  ) async {
+    final url = _windowsInstallScriptUrl;
+    final manual = windowsManualInstallCommand(url);
+    if (!isTrustedInstallScriptUrl(url)) {
+      return EnvironmentFailure(
+        step: EnvironmentStep.harness,
+        title: 'Harness could not be installed',
+        detail:
+            'This build names an installer address Harness does not trust: $url',
+        command: windowsManualInstallCommand(
+          harnessInstallScriptUrl(override: ''),
+        ),
+      );
+    }
+    final executable = windowsPowerShellPath(_platformEnvironment);
+    final arguments = windowsInstallArguments(url);
+    try {
+      final start = _start;
+      final install = start == null
+          ? await _replayed(
+              _run(executable, arguments, environment: _platformEnvironment),
+              onOutput,
+            )
+          : await _streamed(
+              start,
+              executable,
+              arguments,
+              environment: _platformEnvironment,
+              onOutput: onOutput,
+            );
+      return windowsInstallFailure(install, manualCommand: manual);
+    } on ProcessException catch (error) {
+      return EnvironmentFailure(
+        step: EnvironmentStep.harness,
+        title: 'Harness could not be installed',
+        detail: 'Windows PowerShell could not be started: ${error.message}',
+        command: manual,
+      );
     }
   }
 
@@ -1677,28 +1899,64 @@ fi
     String command, {
     required void Function(String line) onOutput,
     Duration? timeout,
-  }) async {
-    final shell = _isMacOS ? '/bin/zsh' : '/bin/bash';
-    if (_start == null) {
-      final result = await _shell(command, timeout: timeout);
-      for (final line in '${result.stdout}\n${result.stderr}'.split('\n')) {
-        if (line.trim().isNotEmpty) onOutput(line);
-      }
-      return result;
+  }) {
+    final start = _start;
+    if (start == null) {
+      return _replayed(_shell(command, timeout: timeout), onOutput);
     }
+    return _streamed(
+      start,
+      _isMacOS ? '/bin/zsh' : '/bin/bash',
+      _shellArguments(command),
+      onOutput: onOutput,
+      timeout: timeout,
+    );
+  }
 
-    final process = await _start(shell, _shellArguments(command));
+  /// A finished run's output, handed to [onOutput] line by line, for the
+  /// run-only test doubles that own no process.
+  static Future<ProcessResult> _replayed(
+    Future<ProcessResult> run,
+    void Function(String line) onOutput,
+  ) async {
+    final result = await run;
+    for (final line in '${result.stdout}\n${result.stderr}'.split('\n')) {
+      if (line.trim().isNotEmpty) onOutput(line);
+    }
+    return result;
+  }
+
+  /// Runs [executable] with its output handed to [onOutput] as each line
+  /// arrives.
+  Future<ProcessResult> _streamed(
+    ProcessStarter start,
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onOutput,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) async {
+    final process = await start(
+      executable,
+      arguments,
+      environment: environment,
+    );
+    // A Windows installer whose output encoding could not be set must not
+    // end the stream on its first OEM byte.
+    final Converter<List<int>, String> decoder = _isWindows
+        ? const Utf8Decoder(allowMalformed: true)
+        : utf8.decoder;
     final stdoutLines = <String>[];
     final stderrLines = <String>[];
     final stdoutSubscription = process.stdout
-        .transform(utf8.decoder)
+        .transform(decoder)
         .transform(const LineSplitter())
         .listen((line) {
           stdoutLines.add(line);
           onOutput(line);
         });
     final stderrSubscription = process.stderr
-        .transform(utf8.decoder)
+        .transform(decoder)
         .transform(const LineSplitter())
         .listen((line) {
           stderrLines.add(line);
@@ -1732,6 +1990,7 @@ fi
   }
 
   String _manualCommandFor(EnvironmentStep step) => switch (step) {
+    _ when _isWindows => windowsManualInstallCommand(_windowsInstallScriptUrl),
     EnvironmentStep.clipboard =>
       'sudo apt-get install -y ${_linuxClipboardPackage() ?? 'xclip or wl-clipboard'}',
     EnvironmentStep.tmux =>
@@ -1766,6 +2025,11 @@ class _HostProbe {
   /// macOS: Homebrew is present, so tmux installs in-app without a password.
   final bool homebrewInstallsTmux;
 
+  /// Windows: the terminal step is B's terminal host, and this is the version
+  /// `runtime\pty\current-pty` names (null when it is not installed).
+  final bool windows;
+  final String? terminalHostVersion;
+
   /// Linux: the one apt transaction, in install order. Empty when nothing
   /// needs apt.
   final List<String> aptPackages;
@@ -1780,6 +2044,8 @@ class _HostProbe {
     this.clipboardPackage,
     required this.harnessRuns,
     this.homebrewInstallsTmux = false,
+    this.windows = false,
+    this.terminalHostVersion,
     this.aptPackages = const [],
     required this.plan,
   });
@@ -1804,6 +2070,11 @@ class _HostProbe {
   ];
 
   String get tmuxMessage {
+    if (windows) {
+      return terminalReady
+          ? 'The terminal host is ready.'
+          : 'The terminal host installs with the Harness CLI.';
+    }
     if (terminalReady) return 'tmux is ready.';
     if (aptPackages.isNotEmpty) {
       return '${psRuns ? 'tmux' : 'tmux and ps'} will be installed with apt.';
@@ -1814,6 +2085,11 @@ class _HostProbe {
   }
 
   String get tmuxOutput {
+    if (windows) {
+      return terminalReady
+          ? '✓ terminal host $terminalHostVersion'
+          : r'✗ terminal host · runtime\pty\current-pty';
+    }
     if (terminalReady) return '✓ tmux --version';
     final lines = <String>[tmuxRuns ? '✓ tmux --version' : '✗ tmux --version'];
     if (!psRuns) lines.add('✗ ps');

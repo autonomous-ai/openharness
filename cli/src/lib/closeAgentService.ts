@@ -16,7 +16,9 @@ export type AgentClosePlan = {
   state: 'waiting' | 'failed'
   detail?: string
 }
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean }
+/** Why the Lead of an active Swarm project is not closed (owner, 2026-10-23: it is never stopped, in any case). */
+export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
@@ -37,7 +39,7 @@ export const CLOSE_STARTING_MS = 60_000
 
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
-function unusedChat(session: CloseSession): boolean {
+export function unusedChat(session: CloseSession): boolean {
   return (session.engine === 'claude' || session.engine === 'codex')
     && !session.sessionId && !session.transcriptPath && session.boundAt == null && !session.resumeOnly
     && (session.launch == null || session.launch.state === 'ready')
@@ -90,10 +92,10 @@ function stillStarting(s: RegisteredSession, at: number): boolean {
 /** What makes two requests the same one: the agent, the mode, and whether it holds only while no tab
  *  shows the agent. A cleanup that finds the agent on screen again must not answer the person's own close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
-  if (!s || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
+  if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
   // Asked of a harness still starting, which has bound its first conversation since the list the request was made
   // from: the same harness, and the close keeps that conversation. Refused as changed, a close sent in the seconds a
   // Codex binds was answered "changed while closing".
@@ -101,7 +103,7 @@ function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, a
 }
 
 export interface CloseAgentServiceDeps {
-  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan'>
+  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan' | 'afterTransaction'>
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
@@ -111,6 +113,11 @@ export interface CloseAgentServiceDeps {
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   /** Whether the conversation [request] names is closed already: no longer live, and kept as stopped. */
   closedAlready?(request: AgentCloseRequest): boolean
+  /** Whether the agent may be the Lead of an active Swarm project (superTabs/retention.ts `mayBeLead`): never closed. */
+  leadProtected?(agentId: string): boolean
+  /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
+   *  folder brings (`trust_open`). */
+  atStartupQuestion?(s: RegisteredSession): Promise<boolean>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
@@ -156,6 +163,10 @@ export class CloseAgentService {
     const current = this.deps.registry.byAgent(request.agentId)
     if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
     if (request.mode === 'cancel') { this.cancel(request.agentId); return Promise.resolve({ cancelled: true }) }
+    // Refused before anything is read or saved: a Close after task once answered a Lead "deferred" (the review of #1635).
+    if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId)) {
+      return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+    }
     // A job answers only a request of its own kind. When any job running for the agent answered every
     // request, a close asked for while another window (or the cleanup preview) was inspecting the agent
     // was answered with that inspect's `{ activity }` and never carried out, and an inspect beside a
@@ -182,10 +193,13 @@ export class CloseAgentService {
    * The answer to a close of an agent that is not the one asked about. One already closed, the same conversation, is
    * closed: a window closing a tab after a pane in it, its starter, was closed takes the harnesses that starter started
    * with it (services/agentCleanup.ts), and the window's own close of them, asked a moment later, was answered
-   * AGENT_CHANGED and shown as "Could not confirm that it stopped". Anything else is AGENT_CHANGED.
+   * AGENT_CHANGED and shown as "Could not confirm that it stopped". An inspect of one is closed too: the terminal client
+   * inspects before every close, and its close again of one it had closed was answered "Stop not confirmed:
+   * AGENT_CHANGED". Anything else is AGENT_CHANGED.
    */
   private changed(request: AgentCloseRequest): AgentCloseResult {
-    return (request.mode === 'idle' || request.mode === 'now') && this.deps.closedAlready?.(request) ? { closed: true } : { error: 'AGENT_CHANGED' }
+    return (request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect') && this.deps.closedAlready?.(request)
+      ? { closed: true } : { error: 'AGENT_CHANGED' }
   }
 
   private async execute(request: AgentCloseRequest, target: string, revision: number): Promise<AgentCloseResult> {
@@ -194,6 +208,15 @@ export class CloseAgentService {
     const asked = this.deps.registry.byAgent(request.agentId)
     const starting = !!asked && identity(asked) === target && stillStarting(asked, askedAt) ? harnessIdentity(asked) : null
     const result = await this.attempt(request, target, revision)
+    // Closed now at a question its engine asks before any conversation, never answered: it has none to keep, and none can
+    // be read, so every close was refused "cannot tell which conversation it is in", for good, once it was past starting
+    // (a Claude Code harness at "New MCP server found in this project", 18 minutes on, 2026-10-26). Deleting one took
+    // this exception already (purgeAgentService.ts `unstartedChat`).
+    if (!result.closed && request.mode === 'now' && result.error === 'IDENTITY_UNAVAILABLE' && asked && identity(asked) === target
+      && unusedChat(asked) && await this.deps.atStartupQuestion?.(asked) === true) {
+      const latest = this.deps.registry.byAgent(request.agentId)
+      if (latest && identity(latest) === target && unusedChat(latest)) return this.attempt(request, target, revision, true)
+    }
     if (result.closed || (request.mode !== 'now' && request.mode !== 'idle') || !starting) return result
     return this.whileStarting(request, starting, target, revision, askedAt + CLOSE_BIND_WAIT_MS, result)
   }
@@ -208,7 +231,9 @@ export class CloseAgentService {
     first: AgentCloseResult): Promise<AgentCloseResult> {
     const same = () => {
       const s = this.deps.registry.byAgent(request.agentId)
-      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness ? s : undefined
+      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness
+        && (request.expiresAt === undefined || request.expiresAt > this.now())
+        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent') ? s : undefined
     }
     let tried = target, result = first, waiting = false
     for (;;) {
@@ -242,6 +267,8 @@ export class CloseAgentService {
       const s = this.deps.registry.byAgent(request.agentId)
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision
         && s && identity(s) === target
+        && (request.expiresAt === undefined || request.expiresAt > this.now())
+        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent')
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {
@@ -262,9 +289,18 @@ export class CloseAgentService {
       if (request.mode === 'inspect') return { activity }
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
-        const updated = this.deps.registry.setClosePlan(s.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+        let created = false
+        const updated = await this.deps.registry.afterTransaction(() => {
+          const latest = current()
+          if (!latest) return null
+          if (latest.closePlan?.identity === target && latest.closePlan.state === 'waiting') return latest
+          const saved = this.deps.registry.setClosePlan(latest.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+          created = !!saved
+          return saved
+        })
+        if (!updated) return { error: 'AGENT_CHANGED' }
         this.idleSince.delete(s.agentId)
-        if (updated) this.deps.changed(updated)
+        if (created) this.deps.changed(updated)
         this.schedule()
         return { deferred: true }
       }

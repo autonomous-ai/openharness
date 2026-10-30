@@ -64,6 +64,31 @@ describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
+  it('reads linked PR URLs without an agent and keeps one inaccessible PR apart', async () => {
+    daemon = await IsolatedDaemon.create({ env: { VITEST: '' } })
+    // The fake binary is in this fixture's private PATH and home. No developer login or GitHub network is used.
+    writeFileSync(join(daemon.root, 'bin', 'gh'), `#!/bin/sh
+case "$3" in
+  */2) echo 'HTTP 404: Not Found' >&2; exit 1 ;;
+esac
+printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-10-22T06:00:00Z","additions":32,"deletions":6,"statusCheckRollup":[{"conclusion":"SUCCESS"}]}'
+`, { mode: 0o755 })
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    const urls = ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2']
+    const answer = await until('the projects service to be ready', async () => {
+      const result = await client.request('git_pull_requests_status', { urls })
+      return result.error === 'SERVICE_UNAVAILABLE' && result.retryable ? null : result
+    }, 15_000, 100)
+    expect(answer).toMatchObject({ rows: [
+      { url: urls[0], status: 'found', title: 'A merged pull request', state: 'Merged', checks: { passed: 1, total: 1 } },
+      { url: urls[1], status: 'no_access' },
+    ] })
+    expect(await client.request('git_pull_requests_status', { urls: ['https://example.com/pull/1'] })).toMatchObject({ error: 'INVALID_URLS' })
+    expect(daemon.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...QUICK_TO_PARK } })
     const d = daemon
@@ -176,7 +201,7 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('usage_read', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'usage', retryable: false })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: false })
     expect(await client.request('shell_capabilities', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'shell', retryable: false })
-    for (const type of ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
+    for (const type of ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
       expect(await client.request(type, { agentId, path: daemon.projectsDir }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: false })
     }
     // A window's name off: the apps keep the names they have.

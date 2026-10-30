@@ -34,6 +34,15 @@ export const hooks: HookContract = {
       ],
     },
     commandNamesHome: true,
+    // Windows: the session's shell runs the line, and on Windows that shell is PowerShell: `powershell.exe -NoProfile
+    // -Command <line>` (rust-v0.162.1: core/src/session/mod.rs `build_hooks_config`, shell-command/src/shell_detect.rs
+    // `default_user_shell`). Seen on the Windows VM (B4.15): a line quoted for cmd.exe made every hook exit 1.
+    // `%COMSPEC% /C "<line>"` (hooks/src/engine/command_runner.rs `build_command`) runs it only in two fallbacks: no one
+    // local session shell (several environments, a remote one, or one still starting), or no PowerShell found. There
+    // the leading `&` is a cmd.exe syntax error ("& was unexpected at this time.", checked on the VM): the hook fails
+    // closed, and nothing else runs. `commandWindows` would override `command` there; Harness writes `command`, quoted
+    // for PowerShell.
+    win32Runner: 'powershell',
     upToDate: { command: 'first', matcher: true },
     messages: {
       current: '[hooks] Codex SessionStart/UserPromptSubmit hooks already installed → {file}',

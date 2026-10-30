@@ -1,0 +1,42 @@
+# s2 the 5-minute trigger: end the master as admin (taskkill /PID, no /T)
+master 7356
+killed at VM 18:23:26
+SUCCESS: The process with PID 7356 has been terminated.
+   status     ○ stopped
+   pid        7356
+running again at VM 18:25:10 (Mac 08:25:10)
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        7892
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+Last Run Time:                        10/17/2026 6:25:01 PM
+Last Result:                          0
+Last Run Time:                        10/17/2026 6:25:01 PM
+Last Result:                          0
+2026-10-17 18:25:03.191 [harnessd] core started (pid 2420)
+2026-10-17 18:25:03.204 [harnessd] service updater started (pid 10212)
+2026-10-17 18:25:03.993 [harnessd] core bound (pid 2420, protocol 6)
+2026-10-17 18:25:04.048 [harnessd] core ready (pid 2420)
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     9672            9404 harness-pty.exe 18:22:54 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe" serve --home C:\Users\hxe2e\.harness\pty --histor
+     7892            7440 node.exe        18:25:02 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.18-dev.wi
+     2420            7892 node.exe        18:25:03 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+    10212            7892 node.exe        18:25:03 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+
+
+

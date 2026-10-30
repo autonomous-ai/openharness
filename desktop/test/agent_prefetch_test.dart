@@ -207,6 +207,62 @@ void main() {
       ]);
     });
 
+    test('tells each engine\'s download start and how it settled, by name only', () async {
+      final opencode = _Install();
+      final npm = _Install();
+      final inPlace = <String>{};
+      final told = <String>[];
+      final prefetch = prefetchWith(installs: [opencode, npm], inPlace: inPlace)
+        ..onDownload = (engine, {ok, took}) => told.add(
+          ok == null ? '$engine started' : '$engine ${ok ? 'ok' : 'failed'}',
+        );
+      prefetch.start();
+      await pumpEventQueue();
+      inPlace.add('opencode');
+      opencode.finish(0);
+      // npm exits 0 but put only Codex in place: Claude Code did not download.
+      inPlace.add('codex');
+      npm.finish(0);
+      await prefetch.everything;
+      expect(told, [
+        'opencode started',
+        'codex started',
+        'claude started',
+        'opencode ok',
+        'codex ok',
+        'claude failed',
+      ]);
+    });
+
+    test(
+      'a download whose Node never arrives counts as started and failed',
+      () async {
+        final told = <String>[];
+        final prefetch =
+            AgentPrefetch(
+                start: (_, _) async => _Install()..finish(0),
+                skip: () => false,
+                installed: (_) => false,
+                managedNode: () => null,
+                nodePoll: const Duration(milliseconds: 1),
+                nodeWait: Duration.zero,
+              )
+              ..onDownload = (engine, {ok, took}) =>
+                  told.add(ok == null ? '$engine started' : '$engine $ok');
+        prefetch.start();
+        await prefetch.everything;
+        expect(
+          told,
+          containsAll([
+            'codex started',
+            'codex false',
+            'claude started',
+            'claude false',
+          ]),
+        );
+      },
+    );
+
     test(
       'waits for Harness\'s Node before npm, and gives up on it after a while',
       () async {
@@ -842,5 +898,17 @@ void main() {
       await app.createAgent('m', engine: 'opencode', folder: '/work');
       expect(connection.creates.single['engine'], 'opencode');
     });
+  });
+  test('Windows downloads nothing beside setup: the recipes are POSIX shell scripts', () {
+    final prefetch = AgentPrefetch(
+      isWindows: true,
+      start: (executable, arguments) => fail('started $executable on Windows'),
+      installed: (_) => false,
+      managedNode: () => null,
+      curl: () => true,
+    );
+    prefetch.start();
+    expect(prefetch.started, isFalse);
+    expect(prefetch.everything, isNull);
   });
 }

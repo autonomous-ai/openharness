@@ -4,6 +4,7 @@ import { CommunityError, communityRequest } from '@/lib/community/client';
 import { onSessionChange } from '@/lib/community/session';
 import { putFollow } from '@/lib/community/social';
 import type { Creator } from '@/lib/community/types';
+import { countHub } from '@/lib/community/hubMeasure';
 
 /**
  * A creator's page: who they are, read again with the reader's sign-in (the server read it as a
@@ -27,6 +28,7 @@ export function useCreator(id: string, initial: Creator | null) {
   async function follow() {
     if (!creator || busy) return;
     if (!creator.signedIn) { setSignIn(true); return; }
+    countHub('hub_follow');
     const next = !creator.following;
     setBusy(true); setError('');
     try {

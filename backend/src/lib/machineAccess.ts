@@ -14,26 +14,18 @@ import type { Machine, MachineShare } from '@prisma/client'
 import { prisma, machineAlive } from './prisma.js'
 import { getAgentPresenceMany } from './bus.js'
 import { machineBillingAllowsDataPlane } from './billingState.js'
-import { activeMachineKeys } from './deviceKeyLog.js'
+import { activeMachineKeys, activeMachineKeysOf } from './deviceKeyLog.js'
 import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 import { storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import type { AuthUser } from './ssoAuth.js'
+import { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
-export type ShareVia = 'email' | 'domain'
+export { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
 /** The most machines one account is shown as shared with it, and the most a machine lists as using it. */
 export const SHARED_LIST_MAX = 200
 
 const normalized = (email: string): string => email.trim().toLowerCase()
-
-/** How `share` reaches `email`: named, at the owner's domain, or not at all. */
-export function sharedVia(share: Pick<MachineShare, 'emails' | 'domain'>, email: string): ShareVia | null {
-  const address = normalized(email)
-  if (share.emails.includes(address)) return 'email'
-  const domain = emailDomain(address)
-  if (share.domain && domain === share.domain && !isPublicEmailDomain(domain)) return 'domain'
-  return null
-}
 
 /** Whether `user` may use `machine`, which another account owns: how it was shared with them, or null. */
 export async function sharedMachineAccess(user: AuthUser, machine: Pick<Machine, 'machineId' | 'userId' | 'autonomousEnv'>): Promise<ShareVia | null> {
@@ -128,8 +120,10 @@ export async function shareMembers(share: MachineShare): Promise<ShareMember[]> 
     const via = sharedVia(share, user.email)
     return via ? [{ user, via }] : []
   })
-  return Promise.all(members.map(async ({ user, via }) => ({
+  // Every member's keys in one read (deviceKeyLog.ts activeMachineKeysOf), not one log replay each.
+  const keys = await activeMachineKeysOf(members.map(({ user }) => user.id))
+  return members.map(({ user, via }) => ({
     email: normalized(user.email), name: user.name ?? null, via,
-    machines: (await activeMachineKeys(user.id)).map(k => ({ machineId: k.machineId, name: k.label, pub: k.pub })),
-  })))
+    machines: (keys.get(user.id) ?? []).map(k => ({ machineId: k.machineId, name: k.label, pub: k.pub })),
+  }))
 }

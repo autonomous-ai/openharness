@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
 import type { Bridge } from './bridge.js'
-import { nameFor, repositoryOf, startCloudService } from './service.js'
+import { repositoryOf } from '../lib/cloudAgents.js'
+import { nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
 
 const owner = { local: true, owner: true }
@@ -104,12 +105,21 @@ describe('a cloud harness', () => {
     expect(saved.harnesses[0]).toMatchObject({ remote: { id: 'devin-1' }, harness: { agentId: harness.agentId } })
   })
 
+  it('starts Devin Cloud with no repository, as Devin\'s API allows (#1444)', async () => {
+    const devin = maker()
+    const service = start({ 'devin-cloud': devin })
+    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'reply to the release thread' })).toMatchObject({ ok: true })
+    expect(devin.start).toHaveBeenCalledWith({ task: 'reply to the release thread', repository: null, options: { acuLimit: undefined, model: undefined } })
+  })
+
   it('refuses what it cannot start, in words a person reads', async () => {
     const devin = maker({ start: vi.fn(async () => { throw new CloudError('NOT_CONNECTED', 'Add your Devin API key') }) })
     const service = start({ 'devin-cloud': devin, fo: maker({ id: 'fo', start: vi.fn(async () => { throw new Error('boom') }) }) })
     expect(await service.port.create({ engine: 'claude', prompt: 'x' })).toMatchObject({ ok: false, error: 'INVALID_ENGINE' })
     expect(await service.port.create({ engine: 'devin-cloud', prompt: '  ' })).toMatchObject({ ok: false, error: 'INVALID_REQUEST' })
-    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x' })).toMatchObject({ ok: false, detail: expect.stringContaining('GitHub repository') })
+    expect(await service.port.create({ engine: 'cursor-cloud', prompt: 'x' })).toMatchObject({ ok: false, detail: expect.stringContaining('GitHub repository') })
+    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x', repositoryUrl: 'https://gitlab.com/acme/api' })).toMatchObject({ ok: false, error: 'INVALID_REQUEST', detail: expect.stringContaining('not a GitHub repository') })
+    expect(devin.start).not.toHaveBeenCalled()
     expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x', repository: 'acme/api' })).toEqual({ ok: false, error: 'NOT_CONNECTED', detail: 'Add your Devin API key' })
     expect(await service.port.create({ engine: 'fo', prompt: 'x' })).toEqual({ ok: false, error: 'CLOUD_FAILED', detail: 'Fo could not be reached. Try again.' })
     expect(doors.publish).not.toHaveBeenCalled()
@@ -280,6 +290,59 @@ describe('a cloud harness', () => {
     service.stop()
   })
 
+  it('keeps the maker\'s status beside its own, and drops it when the person writes or stops', async () => {
+    const devin = maker({ start: vi.fn(async () => ({ remote: { id: 'devin-1' }, links: [], update: { messages: [], state: 'starting' as const, providerStatus: { status: 'new', detail: null } } })) })
+    const service = start({ 'devin-cloud': devin })
+    await service.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
+    const agentId = published()[0].agentId
+    const file = join(dataDir, 'cloud', 'harnesses.json')
+    expect(published()[0].providerStatus).toEqual({ status: 'new', detail: null })
+    expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].harness.providerStatus).toEqual({ status: 'new', detail: null })
+    // No new messages: the status still moves, and a detail that went away does not stay.
+    devin.looks.push({ messages: [], providerStatus: { status: 'running', detail: 'working' } })
+    devin.looks.push({ messages: [], providerStatus: { status: 'running', detail: null } })
+    await tick()
+    expect(published()[0]).toMatchObject({ state: 'starting', providerStatus: { status: 'running', detail: null } })
+    devin.looks.push({ messages: [{ id: 'm1', text: 'Done.', at: 'x' }], state: 'idle', providerStatus: { status: 'running', detail: 'finished' } })
+    await tick()
+    expect(published()[0]).toMatchObject({ state: 'idle', providerStatus: { status: 'running', detail: 'finished' } })
+    service.stop()
+    doors.publish.mockClear()
+    const again = start({ 'devin-cloud': devin })
+    again.republish()
+    expect(published()[0].providerStatus).toEqual({ status: 'running', detail: 'finished' })
+    // A harness saved before this field existed is still a harness.
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    delete saved.harnesses[0].harness.providerStatus
+    writeFileSync(file, JSON.stringify(saved))
+    again.stop()
+    const restarted = start({ 'devin-cloud': devin })
+    restarted.republish()
+    expect(published()[0].providerStatus).toBeUndefined()
+    expect(published()[0]).toMatchObject({ agentId, state: 'idle' })
+    devin.looks.push({ messages: [], state: 'working', providerStatus: { status: 'running', detail: 'working' } })
+    expect(await restarted.port.deliver(agentId, 'go on')).toEqual({ ok: true })
+    await tick()
+    expect(published()[0].providerStatus).toEqual({ status: 'running', detail: 'working' })
+    doors.ask.mockClear()
+    expect(await restarted.port.deliver(agentId, 'and more')).toEqual({ ok: true })
+    expect(published()[0].providerStatus).toBeUndefined()
+    // The wait just answered is not asked again. The status on that look still replaces the one the send cleared.
+    devin.looks.push({ messages: [], state: 'needs_input', question: { text: 'Which branch?', choices: [] }, providerStatus: { status: 'running', detail: 'waiting_for_user' } })
+    await tick()
+    expect(doors.ask).not.toHaveBeenCalled()
+    expect(published()[0]).toMatchObject({ state: 'working', providerStatus: { status: 'running', detail: 'waiting_for_user' } })
+    devin.looks.push({ messages: [{ id: 'm2', text: 'I drafted a plan.', at: 'x' }], state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    await tick()
+    expect(published()[0]).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect(restarted.transcript(agentId).some((message) => message.text === 'I drafted a plan.')).toBe(true)
+    await restarted.port.stopHarness(agentId)
+    expect(published()[0]).toMatchObject({ state: 'stopped' })
+    expect(published()[0].providerStatus).toBeUndefined()
+    expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].harness.providerStatus).toBeUndefined()
+    restarted.stop()
+  })
+
   it('stops looking at one unchanged for a day', async () => {
     const devin = maker()
     const service = start({ 'devin-cloud': devin })
@@ -327,7 +390,7 @@ describe('what the review found', () => {
     const devin = maker()
     const service = start({ 'devin-cloud': devin })
     await service.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
-    devin.looks.push({ messages: [{ id: 'm1', text: 'Done.', at: 'x' }], state: 'idle', activity: null })
+    devin.looks.push({ messages: [{ id: 'm1', text: 'Done.', at: 'x' }], state: 'idle', activity: null, providerStatus: { status: 'running', detail: 'finished' } })
     await tick()
     const agentId = published()[0].agentId
     expect(published()[0].state).toBe('idle')
@@ -336,14 +399,15 @@ describe('what the review found', () => {
     const sent = service.port.deliver(agentId, 'and the docs')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(published()[0]).toMatchObject({ state: 'working', activity: null })
+    expect(published()[0].providerStatus).toBeUndefined()
     release()
     expect(await sent).toEqual({ ok: true })
     expect([...timers.values()].map((timer) => timer.ms)).toEqual([2_000])
-    devin.looks.push({ messages: [{ id: 'm2', text: 'Docs too.', at: 'x' }], state: 'idle', activity: 'Finished' })
+    devin.looks.push({ messages: [{ id: 'm2', text: 'Docs too.', at: 'x' }], state: 'idle', activity: 'Finished', providerStatus: { status: 'running', detail: 'finished' } })
     await tick()
     devin.send = vi.fn(async () => { throw new CloudError('BUSY', 'Devin Cloud is still working.') })
     expect(await service.port.deliver(agentId, 'more')).toMatchObject({ ok: false, error: 'BUSY' })
-    expect(published()[0]).toMatchObject({ state: 'idle', activity: 'Finished' })
+    expect(published()[0]).toMatchObject({ state: 'idle', activity: 'Finished', providerStatus: { status: 'running', detail: 'finished' } })
     // Not saved while it was only told.
     expect(JSON.parse(readFileSync(join(dataDir, 'cloud', 'harnesses.json'), 'utf8')).harnesses[0].harness.state).toBe('idle')
     service.stop()

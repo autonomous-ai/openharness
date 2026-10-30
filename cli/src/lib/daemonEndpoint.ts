@@ -1,36 +1,43 @@
 import { request } from 'node:http'
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { lstatSync } from 'node:fs'
+import { localCredentialHeaders } from './localCredential.js'
 import { localSocketPath } from './localSocket.js'
+import { readDaemonRecord, writeDaemonRecord, type DaemonPipeRecord } from './daemonRecord.js'
+import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
+import { pipeAbsent, pipeRequest } from './windows/pipeClient.js'
 
 // The configured port names the private socket. TCP may use another port when a different OS
-// user's daemon already holds that number; remember it in THIS user's data directory.
-function portFile(dataDir: string, configuredPort: number): string {
-  return join(dataDir, `daemon-${configuredPort}.json`)
-}
-
+// user's daemon already holds that number; remember it in THIS user's data directory (lib/daemonRecord.ts).
 export function savedDaemonPort(dataDir: string, configuredPort: number): number {
-  try {
-    const { port } = JSON.parse(readFileSync(portFile(dataDir, configuredPort), 'utf8'))
-    if (Number.isInteger(port) && port > 0 && port <= 65535) return port
-  } catch { /* a first start, or an unreadable old record */ }
-  return configuredPort
+  return readDaemonRecord(dataDir, configuredPort)?.port ?? configuredPort
 }
 
-export function saveDaemonPort(dataDir: string, configuredPort: number, port: number): void {
-  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
-  const target = portFile(dataDir, configuredPort)
-  const temporary = `${target}.${process.pid}.tmp`
+/** [pipe]: on Windows, the daemon's pipe and the core's pid, which a client cannot derive. */
+export function saveDaemonPort(dataDir: string, configuredPort: number, port: number, pipe?: DaemonPipeRecord): void {
+  writeDaemonRecord(dataDir, configuredPort, port, pipe)
+}
+
+function statusObject(statusCode: number | undefined, text: string): Record<string, unknown> | null {
   try {
-    writeFileSync(temporary, JSON.stringify({ port }) + '\n', { mode: 0o600 })
-    renameSync(temporary, target)
-  } finally {
-    rmSync(temporary, { force: true })
+    const value: unknown = JSON.parse(text)
+    return statusCode === 200 && value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : null
+  } catch { return null }
+}
+
+/**
+ * A native client must reach this OS user's socket, never whoever happens to hold a TCP port. On Windows that is
+ * the daemon's pipe, and only an answer that proves the token is taken.
+ */
+export async function localDaemonStatus(dataDir: string, configuredPort: number, options: LocalDaemonOptions = {}): Promise<Record<string, unknown> | null> {
+  if ((options.platform ?? process.platform) === 'win32') {
+    const target = await (options.pipe ?? daemonPipe)(dataDir, configuredPort)
+    if (!target) return null
+    try {
+      const reply = await pipeRequest(target, { method: 'GET', path: '/api/status', timeoutMs: 2_000, maxBytes: 4 * 1024 * 1024 })
+      return statusObject(reply.status, reply.body)
+    } catch { return null }
   }
-}
-
-/** A native client must reach this OS user's socket, never whoever happens to hold a TCP port. */
-export async function localDaemonStatus(dataDir: string, configuredPort: number): Promise<Record<string, unknown> | null> {
   const socketPath = localSocketPath(dataDir, configuredPort)
   if (!socketPath) return null
   try {
@@ -46,26 +53,64 @@ export async function localDaemonStatus(dataDir: string, configuredPort: number)
         if (text.length > 4 * 1024 * 1024) req.destroy(new Error('status response too large'))
       })
       res.on('error', () => resolve(null))
-      res.on('end', () => {
-        try {
-          const value: unknown = JSON.parse(text)
-          resolve(res.statusCode === 200 && value !== null && typeof value === 'object' && !Array.isArray(value)
-            ? value as Record<string, unknown> : null)
-        } catch { resolve(null) }
-      })
+      res.on('end', () => resolve(statusObject(res.statusCode, text)))
     })
     req.on('error', () => resolve(null))
     req.end()
   })
 }
 
-/** Read-only compatibility for CLI status on Windows and older daemons without a Unix socket.
+export interface DaemonCallOptions extends LocalDaemonOptions {
+  /** The TCP port a call falls back to: the daemon's actual one (`savedDaemonPort`). */
+  tcpPort: number
+  fetch?: typeof fetch
+}
+
+/** Statuses a `Response` may not have a body with. */
+const NULL_BODY = new Set([204, 205, 304])
+
+/**
+ * A control call to the running daemon (cli.ts `daemonCall`: `harness pair`, `harness devices`, …). On Windows it
+ * goes over the daemon's pipe when there is one, and only an answer that proves the token is taken. It falls back
+ * to loopback TCP, as on every other OS, when there is nothing to reach: no record, a daemon proven gone, or
+ * nothing listening. A pipe that answers without the proof is not retried over TCP: whatever answered took the
+ * daemon's name, and the caller is told so.
+ */
+export async function localDaemonCall(
+  dataDir: string, configuredPort: number, method: 'GET' | 'POST', path: string, body: unknown, options: DaemonCallOptions,
+): Promise<Response> {
+  const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the local API's CSRF gate
+  if (body) headers['content-type'] = 'application/json'
+  const text = body ? JSON.stringify(body) : undefined
+  if ((options.platform ?? process.platform) === 'win32') {
+    const target = await (options.pipe ?? daemonPipe)(dataDir, configuredPort)
+    if (target) {
+      try {
+        const reply = await pipeRequest(target, { method, path, headers, body: text, timeoutMs: 60_000 })
+        const type = reply.headers['content-type']
+        return new Response(NULL_BODY.has(reply.status) ? null : reply.body,
+          { status: reply.status, headers: typeof type === 'string' ? { 'content-type': type } : {} })
+      } catch (error) {
+        if (!pipeAbsent(error)) throw error
+      }
+    }
+  }
+  return (options.fetch ?? fetch)(`http://127.0.0.1:${options.tcpPort}${path}`, {
+    method,
+    headers: { ...headers, ...localCredentialHeaders(dataDir) },
+    body: text,
+  })
+}
+
+/** Read-only compatibility for CLI status with daemons that have neither a Unix socket nor a Windows pipe.
  * Native hn connections must use localDaemonStatus instead. Never accept another daemon's status.
  */
-export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string): Promise<Record<string, unknown> | null> {
+export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string, dataDir?: string): Promise<Record<string, unknown> | null> {
   if (!pid || !computerId) return null
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1_500) })
+    // With the daemon's local credential, the whole status; without it, only who the daemon is.
+    const headers = dataDir ? localCredentialHeaders(dataDir) : {}
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { headers, signal: AbortSignal.timeout(1_500) })
     if (!response.ok) return null
     const value: unknown = await response.json()
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null

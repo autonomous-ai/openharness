@@ -9,6 +9,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/task_route.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/widgets/task_palette.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -456,6 +457,62 @@ void main() {
     expect(app.paneLanding.value?.machineId, 'm');
     expect(await result(), isNull);
   });
+
+  for (final (folder, projectId) in [
+    ('/work/analytics', 'm\n/work/analytics'),
+    (r'C:\work\analytics', 'm\nC:\\work\\analytics'),
+    (r'\\server\share\analytics', 'm\n\\\\server\\share\\analytics'),
+  ]) {
+    test('remote project $folder keeps its own path in the router choices', () {
+      final app = _App();
+      addTearDown(app.dispose);
+      app.machineStates['m']!.localProjects = {
+        'a0': AgentProject(name: 'analytics', cwd: folder),
+      };
+
+      final choices = taskRouteChoices(app);
+      expect(choices.projects, {
+        projectId: (machineId: 'm', folder: folder, name: 'analytics'),
+      });
+      final decision = TaskRouteDecision.fromJson({
+        'decided': 'new',
+        'project': projectId,
+        'agent': 'codex',
+        'via': 'jev',
+      }, choices);
+      expect(decision?.project?.machineId, 'm');
+      expect(decision?.project?.folder, folder);
+      expect(decision?.engine, 'codex');
+
+      app.panes
+        ..clear()
+        ..add(TerminalPane(id: 100, machineId: 'm', agentId: 'a0'));
+      app.activeSwarm.focusedPaneId = 100;
+      expect(
+        taskRouteDefault(app),
+        (machineId: 'm', engine: 'codex', folder: folder),
+      );
+    });
+  }
+
+  for (final folder in [
+    'work/analytics',
+    r'work\analytics',
+    r'C:work\analytics',
+    r'\work\analytics',
+    '/work/.harness/projects/analytics',
+    r'C:\work\.harness\projects\analytics',
+    r'\\server\share\harnesses\worktrees\analytics',
+  ]) {
+    test('router does not offer relative or internal project $folder', () {
+      final app = _App();
+      addTearDown(app.dispose);
+      app.machineStates['m']!.localProjects = {
+        'a0': AgentProject(name: 'analytics', cwd: folder),
+      };
+      expect(taskRouteChoices(app).projects, isEmpty);
+    });
+  }
 
   testWidgets('new work closes the card with the setup the models chose', (
     tester,

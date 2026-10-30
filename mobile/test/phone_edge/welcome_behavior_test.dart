@@ -316,10 +316,9 @@ void main() {
     );
 
     // ⚠️ The OS's notification prompt follows them, so they say what a notice is for — and only what
-    // reaches a phone: a question never does (`commander_question` goes to the dial and the
-    // computer's own window only).
+    // reaches a phone: a question does since 2026-10-21 (`commander_question` over the relay).
     testWidgets(
-      'before the notification prompt: a harness finishing, a new device — never "needs you"',
+      'before the notification prompt: a harness finishing or needing you, a new device',
       (tester) async {
         setPhone(tester, largePhone);
         Widget hints({VoidCallback? onDone}) => phoneApp(
@@ -337,11 +336,11 @@ void main() {
         expect(find.text('→ swipe right'), findsOneWidget);
         expect(
           find.text(
-            'Notifications tell you when a harness finishes, or a new device joins your account.',
+            'Notifications tell you when a harness finishes or needs you, or a new device joins your account.',
           ),
           findsOneWidget,
         );
-        expect(find.textContaining('needs you'), findsNothing);
+        expect(find.textContaining('needs you'), findsOneWidget);
 
         // No prompt after them: no line about notices either.
         await tester.pumpWidget(const SizedBox());

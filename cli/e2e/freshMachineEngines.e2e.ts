@@ -10,6 +10,8 @@
  *    unconfirmed after a minute.
  *  - A Codex that is not there at all is installed by Harness for a new project (2026-10-12): `harness new` waits for
  *    the install and then starts it, or says why it could not be installed, and leaves no folder behind either way.
+ *  - A Codex the Desktop is still downloading as a brand-new Mac sets up (2026-10-16) is waited for: neither installed
+ *    a second time beside it nor refused for the executable npm has linked and not yet finished.
  *
  * An agent starts harnesses only once the account lets it (Settings ▸ Experimental, off by default): the MCP case signs
  * in to the fake backend, whose account has that on.
@@ -47,8 +49,8 @@ async function agentsMayStart(): Promise<{ env: Record<string, string>; signIn: 
   }
 }
 
-/** `harness <args>` from a terminal, not a pane. */
-function harness(d: IsolatedDaemon, args: string[]): Promise<{ code: number; out: string; err: string; ms: number }> {
+/** `harness <args>` from a terminal, not a pane; `said` hears its standard error as it comes. */
+function harness(d: IsolatedDaemon, args: string[], said: (err: string) => void = () => {}): Promise<{ code: number; out: string; err: string; ms: number }> {
   const began = Date.now()
   return new Promise((done) => {
     const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
@@ -56,7 +58,7 @@ function harness(d: IsolatedDaemon, args: string[]): Promise<{ code: number; out
     })
     let out = '', err = ''
     child.stdout.on('data', (chunk) => { out += chunk })
-    child.stderr.on('data', (chunk) => { err += chunk })
+    child.stderr.on('data', (chunk) => { err += chunk; said(err) })
     child.on('close', (code) => done({ code: code ?? -1, out, err, ms: Date.now() - began }))
   })
 }
@@ -228,6 +230,48 @@ it('installs a missing Codex for a new project and starts it there, or says why 
   expect(started.err.trim()).toBe('Installing Codex. The harness starts once it is installed.')
   expect(started.out).toContain(`Created cx on this computer in ${folder}.`)
   expect(existsSync(join(home, '.local', 'bin', 'codex'))).toBe(true)
+  const client = await LocalClient.connect(d)
+  try {
+    const agents = await until('Codex to bind its conversation in its new project', async () => {
+      const rows = (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents
+      return rows.length === 1 && rows[0]!.sessionId && rows[0]!.status === 'active' ? rows : null
+    }, 60_000, 500)
+    expect(agents[0]).toMatchObject({ name: 'cx' })
+  } finally { client.close() }
+}, 180_000)
+
+it('waits for the Desktop\'s own download of Codex, rather than installing it beside it or refusing what it has written so far', async (context) => {
+  if (notBare()) context.skip()
+  const d = await boot((d) => {
+    withoutCodex(d)
+    // Every npm the daemon or a pane runs, said where the test can read it.
+    const npm = join(d.root, 'bin', 'npm'), script = readFileSync(npm, 'utf8').split('\n')
+    writeFileSync(npm, [script[0], `printf '%s\\n' "$*" >> ${JSON.stringify(join(d.root, 'npm-calls'))}`, ...script.slice(1)].join('\n'), { mode: 0o755 })
+  })
+  const home = d.env.HOME!, bin = join(home, '.local', 'bin'), run = join(home, '.harness', 'run')
+  mkdirSync(bin, { recursive: true }); mkdirSync(run, { recursive: true })
+  // What npm has linked before it has written the package the launcher needs (a brand-new Mac, 2026-10-16).
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nconsole.error("Error: Cannot find module '@openai/codex-darwin-arm64'");\nprocess.exit(1)\n`, { mode: 0o755 })
+  // The Desktop's download as it runs it (desktop/lib/bootstrap/agent_prefetch.dart): a shell named harness-download,
+  // its pid in the marker, which it removes once done. It finishes once the launch has been seen held for it, however
+  // long the CLI and the daemon took to get there.
+  const marker = join(run, 'downloading-codex'), release = join(d.root, 'download-may-finish')
+  const download = spawn('/bin/sh', ['-c', `while [ ! -f ${JSON.stringify(release)} ]; do sleep 0.2; done; `
+    + `cp ${JSON.stringify(join(d.root, 'codex-package'))} ${JSON.stringify(join(bin, 'codex'))}; rm -f ${JSON.stringify(marker)}; exit $?`,
+  'harness-download'], { stdio: 'ignore' })
+  try {
+    writeFileSync(marker, String(download.pid))
+    const started = await harness(d, ['new', 'codex', 'scratch1', '--name', 'cx', '--', 'Reply with pong'],
+      (err) => { if (err.includes('Downloading Codex.')) writeFileSync(release, '') })
+    expect(started.code, started.out + started.err).toBe(0)
+    // Said first, as the hold it is; the download's last write may leave the next look a moment to settle.
+    expect(started.err.trim().split('\n')[0]).toBe('Downloading Codex. The harness starts once it is downloaded.')
+    expect(started.err).not.toContain('cannot run')
+    expect(started.out).toContain(`Created cx on this computer in ${join(home, 'harnesses', 'scratch1')}.`)
+  } finally { download.kill('SIGKILL') }
+  // Nothing installed it a second time.
+  const npmCalls = existsSync(join(d.root, 'npm-calls')) ? readFileSync(join(d.root, 'npm-calls'), 'utf8') : ''
+  expect(npmCalls).not.toMatch(/^install/m)
   const client = await LocalClient.connect(d)
   try {
     const agents = await until('Codex to bind its conversation in its new project', async () => {

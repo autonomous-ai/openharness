@@ -33,10 +33,28 @@ describe('Agent Messages\' saved state', () => {
     expect(again.state.outbox).toEqual([{ messageId: 'm0000001', machineId: 'm2', nextTryAt: 0, tries: 0 },
       { messageId: 'm0000001', machineId: 'bob-mini', nextTryAt: 0, tries: 0, sharedTabId: 'a'.repeat(24) }])
     expect(again.state.noted).toEqual({ b: 'sig' })
-    expect(again.state.notes).toEqual({ b: { pane: '%1', key: '0note-sig', signature: 'sig' } })
+    // A bare `%1`, as every state written before other backends holds it, is read as the tmux pane it was.
+    expect(again.state.local[0].pane).toBe('tmux\u0000%1')
+    expect(again.state.notes).toEqual({ b: { pane: 'tmux\u0000%1', key: '0note-sig', signature: 'sig' } })
     writeFileSync(join(dir, 'state', 'state.json'), JSON.stringify({ history: [{ message: { id: 'bad' } }, { message: message(2) }], local: [null, { key: 1 }], outbox: [null, { messageId: 'm0000002', machineId: 'm2', sharedTabId: 7 }], noted: 'x', notes: [] }))
     const partial = new MessageStore(join(dir, 'state'))
     expect(partial.state).toEqual({ history: [{ message: message(2), statuses: [] }], local: [], outbox: [], noted: {}, notes: {} })
+  })
+
+  it('reads a pane already keyed by its backend as it is, and a stopped harness\'s empty pane as none', () => {
+    const pty = 'ptyhost\u0000p1\u0000%3'
+    mkdirSync(join(dir, 'state'))
+    writeFileSync(join(dir, 'state', 'state.json'), JSON.stringify({
+      local: [
+        { key: 'k1', messageId: 'm0000001', agentId: 'b', pane: pty, state: 'queued', tries: 0, nextTryAt: 0, at: 0 },
+        { key: 'k2', messageId: 'm0000001', agentId: 'c', pane: '', state: 'queued', tries: 0, nextTryAt: 0, at: 0 },
+        { key: 'k3', messageId: 'm0000001', agentId: 'd', pane: 'tmux\u0000%4', state: 'queued', tries: 0, nextTryAt: 0, at: 0 },
+      ],
+      notes: { b: { pane: pty, key: '0note-s', signature: 's' }, c: null },
+    }))
+    const store = new MessageStore(join(dir, 'state'))
+    expect(store.state.local.map((d) => d.pane)).toEqual([pty, '', 'tmux\u0000%4'])
+    expect(store.state.notes).toEqual({ b: { pane: pty, key: '0note-s', signature: 's' }, c: null })
   })
 
   it('keeps an unreadable file for a person to inspect, never reading it as empty', () => {

@@ -14,6 +14,8 @@
  * an offline machine is listed but cannot be taken: there is nothing there to open a shell on.
  */
 import { randomUUID } from 'node:crypto'
+import { localCredentialHeaders } from './lib/localCredential.js'
+import { env } from './config/env.js'
 import { emitKeypressEvents } from 'node:readline'
 import { WebSocket } from 'ws'
 import { TMUX_PANE_RE } from './lib/terminalHandoff.js'
@@ -146,7 +148,8 @@ export class LoopbackClient {
   private readonly socket: LoopbackSocket
   private readonly opened: Promise<void>
 
-  constructor(url: string, connect: (url: string) => LoopbackSocket = (target) => new WebSocket(target) as unknown as LoopbackSocket) {
+  constructor(url: string, connect: (url: string) => LoopbackSocket = (target) =>
+    new WebSocket(target, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }) as unknown as LoopbackSocket) {
     this.socket = connect(url)
     this.opened = new Promise((resolve, reject) => {
       this.socket.on('open', () => resolve())

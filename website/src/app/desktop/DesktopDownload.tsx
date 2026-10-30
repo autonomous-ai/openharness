@@ -1,9 +1,10 @@
 "use client";
 
 import { Fragment } from "react";
-import { Download } from "lucide-react";
+import { Download, Terminal } from "lucide-react";
 import styles from "./page.module.css";
 import { DESKTOP_BUILD, DESKTOP_BUILDS, type DesktopBuild, type VisitorPlatform } from "@/lib/desktopPlatform";
+import { DESKTOP_WINDOWS_INSTALL_COMMAND } from "@/lib/installCommand";
 import { useVisitorPlatform } from "@/lib/useVisitorPlatform";
 
 type Offer = {
@@ -15,6 +16,8 @@ type Offer = {
   othersLabel: string;
   description: string;
   note?: string;
+  /** A command to install from a terminal instead, shown on its own so a copy takes exactly it. */
+  command?: { label: string; value: string };
 };
 
 /** Every listed build except `primary`. */
@@ -26,6 +29,10 @@ const MAC_DESCRIPTION = "Download the app for macOS, then drag Harness into your
 const MAC_TRUST = "Signed and notarized by Apple, so it opens without a security warning. Requires macOS 12 or later.";
 const LINUX_DESCRIPTION = "Download the AppImage, make it executable (chmod +x), then open it.";
 const LINUX_NOTE = "Built for Ubuntu 22.04 or later.";
+// The build is unsigned until code signing lands, so the person meets SmartScreen once and needs the way past it.
+const WINDOWS_NOTE =
+  "Harness for Windows isn't code-signed yet, so Windows may say it protected your PC. Choose More info, then Run anyway. " +
+  "Requires Windows 10 or 11.";
 
 const MAC_OFFER: Offer = {
   primary: [DESKTOP_BUILD.macos],
@@ -67,10 +74,12 @@ function offerFor(platform: VisitorPlatform | null): Offer {
     }
     case "windows":
       return {
-        primary: [],
-        others: DESKTOP_BUILDS,
-        othersLabel: "Downloading for another computer?",
-        description: "The Harness desktop app runs on macOS and Linux. There is no Windows version yet.",
+        primary: [DESKTOP_BUILD.windows],
+        others: othersThan([DESKTOP_BUILD.windows]),
+        othersLabel: "Other downloads:",
+        description: "Download the installer and open it. It sets up Harness and opens the app.",
+        note: WINDOWS_NOTE,
+        command: { label: "Prefer PowerShell? Run this instead:", value: DESKTOP_WINDOWS_INSTALL_COMMAND },
       };
     case "mobile":
       return {
@@ -78,7 +87,7 @@ function offerFor(platform: VisitorPlatform | null): Offer {
         others: DESKTOP_BUILDS,
         othersLabel: "Downloading for another computer?",
         description:
-          "The Harness desktop app runs on a Mac or a Linux computer. Open this page on that computer to download it.",
+          "The Harness desktop app runs on a Mac, a Windows PC or a Linux computer. Open this page on that computer to download it.",
       };
     default:
       // Not answered yet, a Mac of unknown CPU, or nothing recognizable: exactly what the server rendered.
@@ -104,6 +113,15 @@ export function DesktopDownload() {
         </div>
       )}
       {offer.note && <p className={styles.note}>{offer.note}</p>}
+      {offer.command && (
+        <>
+          <p className={styles.note}>{offer.command.label}</p>
+          <div className={styles.command}>
+            <Terminal size={18} aria-hidden="true" />
+            <code>{offer.command.value}</code>
+          </div>
+        </>
+      )}
       <p className={styles.others}>
         {offer.othersLabel}{" "}
         {offer.others.map((build, index) => (

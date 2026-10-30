@@ -57,12 +57,10 @@ String listAge(int seconds) {
   return '${seconds ~/ 86400}d ago';
 }
 
-/// The asleep section's subtitle. The age is left off when the daemon did not send one — a list
-/// with no known age is still a resting section, and "from ? ago" would be a guess.
-String restingSubtitle(int? lastKnownAge) => [
-  'Asleep',
-  if (lastKnownAge != null) listAge(lastKnownAge),
-].join(' ');
+/// The asleep section's subtitle: how old its list is. No state word — [kRestingTooltip] says why
+/// it rests. Null when the daemon sent no age: "from ? ago" would be a guess.
+String? restingSubtitle(int? lastKnownAge) =>
+    lastKnownAge == null ? null : listAge(lastKnownAge);
 
 /// A wake that could not start [section]. The account's own section is "your models" — its name is
 /// an internal id nobody chose — and a shared one goes by the name it is listed under.

@@ -1,0 +1,33 @@
+{
+  "format": 2, "reload": false,
+  "cursor": "eyJ2IjoyLCJ0IjoxNzkzMDEwMDc3Mzc1LCJlIjozfQ",
+  "serverTime": 1793010107375, "lastChangedAt": 1793010106120, "epoch": 3,
+  "head": null,
+  "members": [], "agents": [],
+  "groups": [
+    { "key": "aeef", "version": 214033, "changedAt": 1793010106120,
+      "data": { "id": "aeef", "projectId": "5701", "number": 204, "title": "1726 G1: design doc",
+                "leadId": "0fcb", "agentIds": ["0fcb", "0540"], "archived": false,
+                "brief": "Goal: design", "checks": [], "assignment": null,
+                "lastMessageSequence": 219810, "messageSeq": 219810, "pullRequestUrls": [] } },
+    { "key": "9c1d", "version": 214040, "changedAt": 1793010105000, "dormant": true },
+    { "key": "77ab", "version": 214041, "changedAt": 1793010105500, "deleted": true }
+  ],
+  "machines": [
+    { "key": "7835", "version": 214050, "changedAt": 1793010105900,
+      "data": { "machineId": "7835", "name": "MacBookPro2021", "contributorId": "6a91", "scope": "swarm",
+                "engines": ["claude", "codex"], "maxAgents": 4, "paused": true, "cwd": "/Users/ken",
+                "generation": "g1", "membershipGeneration": "m1",
+                "observation": { "receivedAt": 1793010105000, "resources": {}, "quotas": [],
+                                 "runningHarnessIds": ["2973"], "stoppedHarnessIds": [] } } }
+  ],
+  "starts": [], "progress": [],
+  "derived": {
+    "agents": {
+      "0fcb": { "downSince": null, "limitedUntil": null, "workDecision": null, "roleId": null },
+      "0540": { "downSince": null, "limitedUntil": null, "workDecision": null, "roleId": null }
+    },
+    "machines": { "7835": { "availableSlots": 2, "teamWork": { "allowed": true } } },
+    "mentionsWaiting": 1
+  }
+}

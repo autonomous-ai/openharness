@@ -16,6 +16,9 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'core/crash_log.dart';
 import 'core/desktop_window.dart';
 import 'core/linux_app_image.dart';
+import 'core/runtime_platform.dart';
+import 'core/test_run.dart';
+import 'core/windows_status_tray.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
@@ -31,10 +34,10 @@ import 'widgets/layout_palette.dart';
 import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
-import 'widgets/flash_firmware_dialog.dart';
-import 'widgets/linux_menu_bar.dart';
+import 'widgets/in_window_menu_bar.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
+import 'widgets/transient_menus.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
@@ -47,6 +50,7 @@ import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
+import 'viewer/viewer_link_incomplete.dart';
 import 'viewer/viewer_location.dart';
 import 'viewer/viewer_page.dart';
 
@@ -224,6 +228,8 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // Available from startup, including sign-in and setup.
+    if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
 
   @override
@@ -254,7 +260,7 @@ class _RootShellState extends ConsumerState<RootShell>
         onTimeout: () {},
       );
     } finally {
-      flushAppLog();
+      flushAppLog(durable: true);
     }
     return AppExitResponse.exit;
   }
@@ -265,9 +271,9 @@ class _RootShellState extends ConsumerState<RootShell>
 
   /// Runs one app-menu action.
   ///
-  /// The macOS native menu reports over `harness/app_menu`; the Linux menu bar
-  /// ([LinuxMenuBar]) fires the same strings directly, so one switch serves
-  /// both platforms.
+  /// The macOS native menu reports over `harness/app_menu`; the in-window menu bar
+  /// ([InWindowMenuBar]) fires the same strings directly, so one switch serves
+  /// every platform.
   Future<void> runAppMenuAction(String action) async {
     if (!mounted) return;
     switch (action) {
@@ -286,8 +292,6 @@ class _RootShellState extends ConsumerState<RootShell>
       case 'checkForUpdates':
         final app = ref.read(appStateProvider);
         await _menuDialog(() => checkForUpdatesAndShowResult(context, app));
-      case 'flashFirmware':
-        await _menuDialog(() => showFlashFirmwareDialog(context));
       case 'exportLogs':
         await _menuDialog(() => showExportLogsDialog(context));
       case 'showLayout':
@@ -329,6 +333,9 @@ class _RootShellState extends ConsumerState<RootShell>
     // Reserve before the first frame too: held menu shortcuts can arrive
     // before the new dialog has changed the route's current state.
     _menuDialogOpen = true;
+    // An open dropdown is an overlay above every route: close it, or its rows
+    // stay live over the dialog (Sign out behind Check for Updates).
+    dismissTransientMenus();
     try {
       await action();
     } finally {
@@ -376,11 +383,7 @@ class _RootShellState extends ConsumerState<RootShell>
             screen = viewerLocation != null
                 ? ViewerPage(app: app, location: viewerLocation)
                 : kIsWeb && ViewerLocation.isRoute(Uri.base)
-                ? const Center(
-                    child: Text(
-                      'This viewer link is incomplete. Run hn view again.',
-                    ),
-                  )
+                ? ViewerLinkIncomplete(location: Uri.base)
                 : widget.authenticatedScreen(app);
         }
         // A fresh computer's unattended install runs under the welcome tour,
@@ -415,9 +418,10 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux only; macOS carries
-            // them in its native menu bar, and this renders nothing there).
-            LinuxMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip (Linux and Windows; macOS
+            // carries them in its native menu bar, and this renders nothing
+            // there).
+            InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

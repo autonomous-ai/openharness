@@ -34,7 +34,7 @@ async function cover(path: string): Promise<Response> {
 
 async function forward(request: Request, context: Context): Promise<Response> {
   const path = (await context.params).path.join('/');
-  if (request.method === 'GET' && coverPath.test(path)) return cover(path);
+  if ((request.method === 'GET' || request.method === 'HEAD') && coverPath.test(path)) return cover(path);
   const sessionPath = path === 'session' && request.method === 'GET' ? 'me'
     : path === 'session/refresh' && request.method === 'POST' ? 'refresh' : null;
   if (!sessionPath && !allowed.test(path)) return Response.json({ success: false, error: { message: 'Not found.' } }, { status: 404 });
@@ -58,6 +58,8 @@ async function forward(request: Request, context: Context): Promise<Response> {
   }
 }
 export const GET = forward;
+/** A link preview's crawler may ask for a cover's headers before its bytes. */
+export const HEAD = forward;
 export const POST = forward;
 export const PUT = forward;
 export const DELETE = forward;

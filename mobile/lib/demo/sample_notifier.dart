@@ -72,6 +72,13 @@ class SampleApiClient extends ApiClient {
   @override
   Future<Map<String, dynamic>?> me() async => null;
 
+  /// Set up Intern 3, in the sample: a ticket no backend ever sees (the device is a stand-in too).
+  @override
+  Future<Map<String, dynamic>> boxTicket() async => {
+    'ticket': 'sample-ticket',
+    'expiresIn': 600,
+  };
+
   @override
   Future<List<Machine>> machines() async => machinesOnFile();
 

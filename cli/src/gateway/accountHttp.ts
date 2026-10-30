@@ -15,11 +15,24 @@ interface AccountHttpDeps {
   base?: () => string
   changed?(state: GatewayMachines): void
   reachable?(machineIds: string[] | null): void
+  /** Every machine list the backend answered (its body), and null on a sign-out: the trust group reads which of the
+   *  account's machines are team machines from it (lib/e2ee/machineKinds.ts). */
+  listed?(body: Record<string, unknown> | null): void
   log?(line: string): void
 }
 
 const failure = (status: number, code: string, message: string): HttpAnswer =>
   ({ status, body: { success: false, error: { code, message } } })
+const timedOut = (error: Error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
+
+/** A Retry-After header as milliseconds from [now]: delta-seconds or an HTTP date; null when absent or unreadable. */
+export function retryAfterMs(header: string | null, now = Date.now()): number | null {
+  const value = header?.trim()
+  if (!value) return null
+  if (/^\d{1,9}$/.test(value)) return Number(value) * 1000
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
+}
 
 export function createAccountHttp(deps: AccountHttpDeps) {
   const request = deps.request ?? fetch
@@ -27,7 +40,9 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     const account = deps.account()
     return [account.machineId, account.autonomousEnv, account.signIn?.epoch, account.signIn?.acct]
   }
-  async function backend(method: string, path: string, body?: unknown, timeoutMs = PROXY_BACKEND_TIMEOUT_MS): Promise<HttpAnswer> {
+  /** `retryAfterMs` comes with a busy or failing answer (429, 5xx) that says when to try again: the usage
+   *  reports' backoff honours it (gateway/productUsage.ts). */
+  async function backend(method: string, path: string, body?: unknown, timeoutMs = PROXY_BACKEND_TIMEOUT_MS): Promise<HttpAnswer & { retryAfterMs?: number }> {
     const owner = accountFence()
     let accessToken: string
     try { accessToken = await deps.tokens.accessToken() } catch (error) {
@@ -50,12 +65,28 @@ export function createAccountHttp(deps: AccountHttpDeps) {
       })
     } catch (error) {
       const e = error as Error & { cause?: { message?: string } }
-      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-        return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
-      }
-      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
+      if (timedOut(e)) return timeout()
+      // An empty reason is no reason: no parentheses then (Scholes 10-29).
+      const reason = [e.cause?.message, e.message].map(text => text?.trim()).find(Boolean)
+      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend${reason ? ` (${reason})` : ''}. Check the connection and try again.`)
     }
-    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> }
+    // The timeout also covers the body: a success that stalls after the headers, or a proxy's HTML page, is not an empty
+    // success (Diego 10-29). A refusal keeps its status whatever its body does: 401/403 sign out, 426 asks for an update.
+    let answer: Record<string, unknown> = {}
+    if (res.body !== null && res.headers?.get?.('content-length') !== '0') {
+      try { answer = await res.json() as Record<string, unknown> } catch (error) {
+        if (res.status >= 200 && res.status < 300) {
+          return timedOut(error as Error) ? timeout()
+            : failure(502, 'BACKEND_BAD_RESPONSE', `The Harness backend answered ${method} ${path} with an unreadable reply. Try again in a moment.`)
+        }
+      }
+    }
+    const retry = res.status === 429 || res.status >= 500 ? retryAfterMs(res.headers?.get?.('retry-after') ?? null) : null
+    return { status: res.status, body: answer, ...(retry !== null ? { retryAfterMs: retry } : {}) }
+
+    function timeout(): HttpAnswer {
+      return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
+    }
   }
 
   const cache = new MachineListCache(() => backend('GET', '/api/machines'), () => deps.computer.id,
@@ -63,6 +94,7 @@ export function createAccountHttp(deps: AccountHttpDeps) {
   cache.listen((body) => {
     const { machines, source } = cache.list()
     deps.reachable?.(source !== 'backend' ? null : machines.filter(m => m.state !== 'offline').map(m => m.machineId))
+    deps.listed?.(source === 'backend' ? body : null)
     deps.changed?.({ owner: deps.account().machineId, body, fetchedAt: cache.lastResponse()?.fetchedAt ?? Date.now() })
   })
   const restored = cache.lastResponse()

@@ -8,7 +8,7 @@ import { readDescriptorEvidence, descriptorPaths, descriptorKey, type Descriptor
 import { NativePaths, nativeFileKey } from '../engines/kit/nativePaths.js'
 import { descriptorHeader } from '../engines/kit/nativeHeader.js'
 import { readProcessEvidence } from './processEvidence.js'
-import { argvTokens, engineProcessMatchScore } from './tmux.js'
+import { argvTokens, engineProcessMatchScore } from './processTable.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 import type { RepairedSession } from './sessionRepair.js'
 

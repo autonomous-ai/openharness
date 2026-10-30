@@ -84,10 +84,11 @@ void main() {
         Focus.of(tester.element(find.byKey(ValueKey('web-menu:$id'))))
             .hasPrimaryFocus;
     // Opened by a click: the pointer picks the row, so none starts lit.
-    expect(lit('machines.list'), isFalse);
+    expect(lit('super_tab.new'), isFalse);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
-    expect(lit('machines.list'), isTrue);
+    // The first row: New Swarm.
+    expect(lit('super_tab.new'), isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byKey(const ValueKey('web-menu:machines.list')), findsNothing);
@@ -115,26 +116,6 @@ void main() {
     // A new harness takes files: 📎 and drops on its box.
     expect(find.byKey(const ValueKey('new-harness-attach')), findsOneWidget);
     expect(find.byKey(const ValueKey('new-harness-drop')), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-    app.dispose();
-  });
-
-  testWidgets('New harness with nothing connected opens Machines', (
-    tester,
-  ) async {
-    final app = await _mount(tester);
-    // New work starts where a new tab opens: its "Start an agent" row.
-    await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(NewHarnessForm), findsNothing);
-    expect(
-      tester
-          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
-          .search
-          .scopePrefix,
-      '@',
-    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();

@@ -20,6 +20,7 @@ export const HARNESS_ADAPTERS = {
   cursor: { instructionFiles: ['AGENTS.md'] },
   opencode: { instructionFiles: ['AGENTS.md', 'CLAUDE.md'] },
   pi: { instructionFiles: ['AGENTS.md', 'CLAUDE.md'], contextArgs: (file: string) => ['--append-system-prompt', file] },
+  omp: { instructionFiles: ['AGENTS.md', 'CLAUDE.md'], contextArgs: (file: string) => ['--append-system-prompt', file] },
   hermes: { instructionFiles: ['.hermes.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules'] },
   commandcode: { instructionFiles: ['AGENTS.md'] },
   devin: { instructionFiles: ['AGENTS.md'] },

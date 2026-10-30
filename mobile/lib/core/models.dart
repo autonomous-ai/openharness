@@ -15,11 +15,16 @@ class CurrentUserProfile {
   final String email;
   final String? avatarUrl;
 
+  /// When the account's record was made: its first Harness sign-in anywhere. Null from a backend that
+  /// does not say, or says something unreadable.
+  final DateTime? createdAt;
+
   const CurrentUserProfile({
     this.id,
     this.name,
     required this.email,
     this.avatarUrl,
+    this.createdAt,
   });
 
   factory CurrentUserProfile.fromMe(Map<String, dynamic> response) {
@@ -34,6 +39,7 @@ class CurrentUserProfile {
     }
     final rawName = user['name'];
     final rawAvatar = response['avatarUrl'];
+    final rawCreated = user['createdAt'];
     return CurrentUserProfile(
       id: user['id'] is String ? user['id'] as String : null,
       name: rawName is String && rawName.trim().isNotEmpty
@@ -43,6 +49,7 @@ class CurrentUserProfile {
       avatarUrl: rawAvatar is String && rawAvatar.trim().isNotEmpty
           ? rawAvatar.trim()
           : null,
+      createdAt: rawCreated is String ? DateTime.tryParse(rawCreated) : null,
     );
   }
 
@@ -70,6 +77,14 @@ class Machine {
   final String? hostname;
   final String? status;
 
+  /// Another account's machine shared with this one (the list's `shared` or
+  /// `share`): never where this person's Buddy runs.
+  final bool shared;
+
+  /// How its computer signed in on its last connect: `team` for a Harness
+  /// Team account, which is never a person's own machine for a Buddy.
+  final String? sessionKind;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -79,6 +94,8 @@ class Machine {
     this.name,
     this.hostname,
     this.status,
+    this.shared = false,
+    this.sessionKind,
   });
 
   String get displayName => (name != null && name!.isNotEmpty)
@@ -97,6 +114,8 @@ class Machine {
     name: j['name'] as String?,
     hostname: j['hostname'] as String?,
     status: j['status'] as String?,
+    shared: j['shared'] == true || j['share'] is Map,
+    sessionKind: j['sessionKind'] as String?,
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -108,6 +127,8 @@ class Machine {
     name: name ?? this.name,
     hostname: hostname,
     status: status,
+    shared: shared,
+    sessionKind: sessionKind,
   );
 }
 
@@ -212,6 +233,41 @@ class Agent {
   /// the field.
   final String? resumeMode;
 
+  /// When the machine registered this harness — the desktop's `Agent.createdAt`. With [sessionId]
+  /// it names one harness exactly: `agent_close` takes both, so a close meant for a harness that has
+  /// since been replaced under the same id is refused rather than closing the replacement.
+  final DateTime? createdAt;
+
+  /// Whether its machine can save and stop it on request (`agent_close`) — false from a daemon
+  /// older than the request, which Change agent then asks to be updated rather than guess at.
+  final bool closeSupported;
+
+  /// The permission mode it was launched in (`plan`, `readOnly`, …), as its machine recorded it;
+  /// null from a daemon older than the field, or an agent Harness did not launch. Read by Change
+  /// agent, so the new agent is given the same freedom when its engine has that mode.
+  final String? permissionMode;
+
+  /// Whether its machine can fork it (`agent_fork`), as the frame says; null from a daemon older
+  /// than the field — then [forkableEngines] decides. The desktop's `Agent.forkable`.
+  final bool? forkable;
+
+  /// Whether its permission prompts were bypassed at launch; null when unrecorded (see
+  /// [permissionMode]) — then a Clone uses the default. The desktop's `Agent.bypassPermission`.
+  final bool? bypassPermission;
+
+  /// The engine's own named agent it was opened as (`agent_create`'s `agent`, `namedAgent` on the
+  /// frame), or null for a general session. Read by Clone, so another opens as the same one.
+  final String? namedAgent;
+
+  /// A Stop its machine holds until the agent finishes what it is doing (`agent_close` with
+  /// `after_task`): `waiting` while it waits, `failed` when the close it then tried did not go
+  /// through. Null with no Stop queued, or from a daemon older than the field. The desktop's
+  /// `Agent.closePlanState`; opening the agent again calls the queued Stop off (CLI agents/update.ts).
+  final String? closePlanState;
+
+  /// What the machine said about a queued Stop that failed — already a sentence.
+  final String? closePlanDetail;
+
   const Agent({
     required this.id,
     this.sessionId,
@@ -241,6 +297,14 @@ class Agent {
     this.tokensUpdatedAt,
     this.outputStats,
     this.resumeMode,
+    this.createdAt,
+    this.closeSupported = false,
+    this.permissionMode,
+    this.forkable,
+    this.bypassPermission,
+    this.namedAgent,
+    this.closePlanState,
+    this.closePlanDetail,
   });
 
   factory Agent.fromJson(Map<String, dynamic> j) {
@@ -310,10 +374,31 @@ class Agent {
           : null,
       outputStats: AgentOutputStats.fromJson(j['outputStats']),
       resumeMode: _safeResumeMode(j['resumeMode']),
+      createdAt: _safeTime(j['createdAt']),
+      closeSupported: j['closeSupported'] == true,
+      permissionMode: _safePermissionMode(j['permissionMode']),
+      forkable: j['forkable'] is bool ? j['forkable'] as bool : null,
+      bypassPermission: j['bypassPermission'] is bool
+          ? j['bypassPermission'] as bool
+          : null,
+      namedAgent: _safeNamedAgent(j['namedAgent']),
+      closePlanState:
+          j['closePlan'] is Map &&
+              const {'waiting', 'failed'}.contains(j['closePlan']['state'])
+          ? j['closePlan']['state'] as String
+          : null,
+      closePlanDetail: j['closePlan'] is Map
+          ? _safeDetail(j['closePlan']['detail'])
+          : null,
     );
   }
 
-  Agent copyWith({String? name, AgentGitContext? gitContext}) => Agent(
+  Agent copyWith({
+    String? name,
+    AgentGitContext? gitContext,
+    String? closePlanState,
+    bool clearClosePlan = false,
+  }) => Agent(
     id: id,
     sessionId: sessionId,
     name: name ?? this.name,
@@ -342,7 +427,34 @@ class Agent {
     tokensUpdatedAt: tokensUpdatedAt,
     outputStats: outputStats,
     resumeMode: resumeMode,
+    createdAt: createdAt,
+    closeSupported: closeSupported,
+    permissionMode: permissionMode,
+    forkable: forkable,
+    bypassPermission: bypassPermission,
+    namedAgent: namedAgent,
+    closePlanState: clearClosePlan
+        ? null
+        : closePlanState ?? this.closePlanState,
+    closePlanDetail: clearClosePlan || closePlanState != null
+        ? null
+        : closePlanDetail,
   );
+
+  /// The engines whose sessions can be forked — natively (Claude Code's `--fork-session`,
+  /// `codex fork`) or by a handoff message (OpenCode takes a first prompt). The answer for a
+  /// daemon that does not say ([forkable]); the desktop's list.
+  static const forkableEngines = {'claude', 'codex', 'opencode'};
+
+  /// Whether to offer Fork for this agent at all — the desktop's rule. Devin, Cursor, a terminal
+  /// and the rest can neither fork nor open with a message, so the row is not drawn rather than
+  /// drawn and refused.
+  bool get canFork => forkable ?? forkableEngines.contains(engine);
+
+  /// Whether Clone can open another of this one — any engine, but not one on a grid: the frame
+  /// carries the grid's model and never its launch key, so a clone would land on the engine's own
+  /// login instead. The desktop's `Agent.canClone`.
+  bool get canClone => engine != null && gridModel == null;
 
   /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
   /// it. Its conversation is on disk; `agent_resume` brings it back.
@@ -406,6 +518,26 @@ class Agent {
 
   static String? _safeResumeMode(Object? raw) =>
       raw is String && _resumeModes.contains(raw) ? raw : null;
+
+  /// A named agent's id as the CLI accepts one (`AGENT_NAME_RE`) — the desktop's `_safeNamedAgent`.
+  static String? _safeNamedAgent(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(raw)
+      ? raw
+      : null;
+
+  /// A mode id as the CLI writes one — the desktop's `_safePermissionMode`, character for character.
+  static String? _safePermissionMode(Object? raw) =>
+      raw is String && RegExp(r'^[A-Za-z]{1,32}$').hasMatch(raw) ? raw : null;
+
+  /// Whether this listing is [reviewed] still: the same registration in the same conversation, or
+  /// one that had no conversation when it was reviewed and has bound its first since — the
+  /// desktop's `continuesSession`. Codex binds none for its first seconds, so a harness looked at
+  /// then is still the same one a moment later; the machine is the judge of the close itself
+  /// (cli `closeAgentService.ts` `matches`). Another conversation once one was bound is a change.
+  bool continuesSession(Agent reviewed) =>
+      createdAt == reviewed.createdAt &&
+      (sessionId == reviewed.sessionId ||
+          (reviewed.sessionId?.isEmpty ?? true));
 
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;

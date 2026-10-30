@@ -103,8 +103,15 @@ const json = (value: unknown): string => JSON.stringify(value)
 const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
+  /** Optional Super Tab control-plane fixture. Native creation, input and relay
+   * still go through the real daemon; database policy has its own integration suite. */
+  superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
+    status?: number; data?: unknown; error?: { code: string; message: string }
+  }>) | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
   productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
+  /** `POST /api/route/jev`, Harness's hosted Jev. Unset answers 503 JEV_BUSY, which callers treat as unavailable. */
+  jev: ((body: Record<string, any>) => Record<string, unknown>) | null = null
   readonly seen: string[] = []
   /** What `GET /api/agent-messages` answers: the account's tabs and who is in each; null, a 404. */
   agentMessages: Record<string, unknown> | null = null
@@ -156,6 +163,18 @@ export class FakeBackend {
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
+      if (backend.superTabs && req.url?.startsWith('/api/super-tabs')) {
+        const handler = backend.superTabs
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          void Promise.resolve().then(() => handler(req.method!, req.url!, JSON.parse(raw || '{}'), machine)).then(result => {
+            res.statusCode = result.status ?? 200
+            res.end(json({ success: !result.error, data: result.data, error: result.error }))
+          }, error => { res.statusCode = 500; res.end(json({ success: false, error: { code: 'FIXTURE', message: String(error) } })) })
+        })
+        return
+      }
       const usage = backend.productUsage
       if (usage && req.url === '/api/product-usage/settings' && req.method === 'GET') {
         res.end(json({ success: true, data: { enabled: usage.enabled, revision: usage.revision } })); return
@@ -198,6 +217,23 @@ export class FakeBackend {
           if (!tab || typeof enabled !== 'boolean') { res.statusCode = 404; res.end(json({ success: false, error: { code: 'NOT_FOUND' } })); return }
           tab.enabled = enabled
           res.end(json({ success: true, data: { tabId: tab.id, enabled } }))
+        })
+        return
+      }
+      if (req.url?.split('?')[0] === '/api/route/jev' && req.method === 'POST') {
+        let raw = ''
+        req.on('data', (chunk) => { raw += chunk })
+        req.on('end', () => {
+          if (!backend.jev) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'JEV_BUSY', message: 'Fixture Jev is off.' } })); return }
+          const body = JSON.parse(raw || '{}') as Record<string, any>
+          // As the real route validates it (backend routes/jevRoute.ts): `state` is a record of strings, four keys
+          // at most. A fixture that took anything let a state of numbers and objects through for two days, while
+          // the real route answered every one of them with a 400 (2026-10-21).
+          const state = body.state
+          const valid = !!state && typeof state === 'object' && !Array.isArray(state) && Object.keys(state).length <= 4
+            && Object.values(state).every((value) => typeof value === 'string')
+          if (!valid) { res.statusCode = 400; res.end(json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid input: state is a record of at most four strings' } })); return }
+          res.end(json({ success: true, data: { answers: backend.jev(body) } }))
         })
         return
       }
@@ -609,6 +645,13 @@ export class FakeBackend {
     this.experiments[feature] = enabled
     this.experimentsRevision++
     for (const machineId of this.nodes.keys()) this.sendNode(machineId, '', { type: 'desk_changed', payload: { revision: 0 } })
+  }
+
+  /** Renames one of the account's machines, as the Machines list on any computer does: every node hears `machines_changed`. */
+  renameMachine(machineId: string, name: string): void {
+    const machine = this.machines.get(machineId)
+    if (machine) machine.name = name
+    for (const node of this.nodes.keys()) this.sendNode(node, '', { type: 'machines_changed', payload: { reason: 'renamed' } })
   }
 
   private sendNode(machineId: string, connId: string, frame: Frame): boolean {

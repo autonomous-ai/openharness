@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
-import { bypassPermissionActive, permissionModeFromArgv, tmuxPaneState } from '../../lib/tmux.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
+import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
 
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), tmuxPaneState: vi.fn(async () => 'gone') }))
+// The pane's backend, asked what became of an unconfirmed start's pane.
+const paneState = vi.fn<TerminalBackend['paneState']>(async () => 'gone')
+const paneBackend = { paneState } as unknown as TerminalBackend
 
 const row = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', active: true, ...over }) as RegisteredSession
@@ -53,6 +56,7 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     retainExitedSession: vi.fn(),
     stoppedAgents: { finishResume: vi.fn() },
     restoreDegraded: (agentId) => restoreDegraded(agentId),
+    terminals: { backendFor: vi.fn(() => paneBackend) },
     ...over,
   }
   return { deps, rows, handlers: createDiscoveryHandlers(deps), degrade: (only?: string) => { restoreDegraded = (agentId) => only === undefined || agentId === only } }
@@ -64,7 +68,7 @@ const grid = (name: string) => ({ grid: name, baseUrl: `http://${name}.local`, m
 describe('discovery', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue('gone')
+    paneState.mockReset().mockResolvedValue('gone')
   })
   afterEach(() => vi.restoreAllMocks())
 
@@ -133,6 +137,12 @@ describe('discovery', () => {
       const mode = permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox')
       expect(vi.mocked(run.deps.registry.setPermissionMode).mock.calls).toEqual(mode ? [['a1', mode]] : [])
       expect(mode, 'this fixture must name a mode').not.toBeNull()
+    })
+
+    it('tells a Codex Buddy\'s read-only asking mode from plain read only, so a relaunch keeps it asking', () => {
+      expect(permissionModeFromArgv('codex', 'codex --ask-for-approval on-request --sandbox read-only -c approvals_reviewer="user" -c tui.fullscreen_transcript=false'))
+        .toBe('readOnlyAsk')
+      expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
     })
 
     it('adopts the engine someone typed into a terminal, and announces it', async () => {
@@ -245,19 +255,37 @@ describe('discovery', () => {
 
     it('holds a failed resume while its pane may still be about to launch the engine', async () => {
       const run = setup()
-      const failed = row({ resumeOnly: true, tmuxPane: '%0', launch: { state: 'failed' } } as Partial<RegisteredSession>)
+      const failed = row({ resumeOnly: true, tmuxPane: '%0', runtimes: [{ backend: 'tmux', paneId: '%0' }], launch: { state: 'failed' } } as Partial<RegisteredSession>)
       await run.handlers.onDormant(failed, 'x') // the pane is gone: the reconciler's to remove
       // tmux could not be asked, as when the daemon's event loop was held: no news either way.
-      vi.mocked(tmuxPaneState).mockResolvedValueOnce('unknown')
+      paneState.mockResolvedValueOnce('unknown')
       await run.handlers.onDormant(failed, 'x')
-      vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: null } as never)
+      paneState.mockResolvedValueOnce({ dead: false, engineExit: null } as never)
       await run.handlers.onDormant(failed, 'x') // a live shell, no engine exit
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
-      vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: true, engineExit: null } as never)
+      paneState.mockResolvedValueOnce({ dead: true, engineExit: null } as never)
       await run.handlers.onDormant(failed, 'pane died')
-      vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: 1 } as never)
+      paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as never)
       await run.handlers.onDormant(failed, 'engine exited 1')
       expect(run.deps.retainExitedSession).toHaveBeenCalledTimes(2)
+      expect(run.deps.terminals.backendFor).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
+      expect(paneState).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
+    })
+
+    it('asks a failed resume\'s own backend about its pane, never tmux about a ptyhost pane\'s id', async () => {
+      const run = setup({ terminals: { backendFor: vi.fn(() => undefined) } })
+      const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%0' }
+      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [pty], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'x')
+      expect(run.deps.terminals.backendFor).toHaveBeenCalledExactlyOnceWith(pty)
+      expect(paneState).not.toHaveBeenCalled()
+      expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
+    })
+
+    it('holds a failed resume whose pane no configured backend can read', async () => {
+      const run = setup({ terminals: { backendFor: vi.fn(() => undefined) } })
+      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [{ backend: 'tmux', paneId: '%0' }], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'x')
+      expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
+      expect(paneState).not.toHaveBeenCalled()
     })
   })
 
@@ -304,6 +332,41 @@ describe('discovery', () => {
     run.handlers.onTerminalAvailability(row(), true)
     run.handlers.onTerminalAvailability(row(), false)
     expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+  })
+
+  describe('a shell row whose pane is live', () => {
+    const shell = (over: Partial<RegisteredSession> = {}) => row({ engine: 'terminal', active: false, ...over } as Partial<RegisteredSession>)
+
+    // A shell has no engine process, so no observation ever reactivates it after the core's start marks every row dormant:
+    // its live pane, on whichever pty host serves it, is the only evidence there is.
+    it('is active again, and announced as such', () => {
+      const run = setup()
+      const dormant = shell()
+      run.rows.set(dormant.agentId, dormant)
+      vi.mocked(run.deps.registry.terminalAvailable).mockReturnValue(true)
+      run.handlers.onTerminalAvailability(dormant, true)
+      expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('is left alone when already active, held or failed, or when its pane is not live', () => {
+      const run = setup()
+      for (const over of [{ active: true }, { launch: { state: 'held' } }, { launch: { state: 'failed' } }]) {
+        const r = shell(over as Partial<RegisteredSession>)
+        run.rows.set(r.agentId, r)
+        run.handlers.onTerminalAvailability(r, true)
+      }
+      run.handlers.onTerminalAvailability(shell(), false)
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+    })
+
+    it('is not reactivated for an engine row, which its process observation owns', () => {
+      const run = setup()
+      const engine = row({ active: false })
+      run.rows.set(engine.agentId, engine)
+      run.handlers.onTerminalAvailability(engine, true)
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+    })
   })
 })
 

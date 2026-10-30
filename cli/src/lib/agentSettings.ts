@@ -30,15 +30,53 @@ export interface AgentSettings {
    *  inverted, as the account's experiment is (backend lib/experimentalSettings.ts): every one of them is "off unless
    *  true", and sharing the summary is the default. */
   agentMessagesHideSummary: boolean
+  /** An agent may give more work to a harness it started (`harness tell`, messages/tell.ts), with no tab and whether
+   *  Agent Messages are on or not. A switch of its own, off by default: the owner ruled that a harness another started
+   *  gets no exception from Agent Messages (2026-10-11), so this one-way order from the starter is the person's to
+   *  allow, not a side effect of starting. */
+  agentsTellAgents: boolean
+  /** A program acting for the person (the lamp's `lamp-tasks`, not an agent) may give more work to an idle harness of
+   *  theirs in a pane (`harness reply`, messages/replyLocal.ts), as the person could by typing in Harness. Off by
+   *  default, and not `agents-tell-agents`, which is about agents (#1628). */
+  programsReply: boolean
 }
 
-export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
 
 /** Each setting's name in `harness settings`, and its key. */
-export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' }
+export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary', 'programs-reply': 'programsReply' }
 
 /** Each setting's account experiment, as the backend names it (lib/experimentalSettings.ts `experimentalFeatures`). */
-export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary' }
+export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply' }
+
+/** The flag an agent adds to `harness settings <name> on` once the person said yes to it (agentClient/settings.ts). */
+export const PERSON_SAID_YES = '--person-said-yes'
+
+/** What an agent asks the person before it turns each setting on: one question they can answer yes or no. */
+export const AGENT_SETTING_QUESTIONS: Record<keyof AgentSettings, string> = {
+  agentsStartAgents: 'May I start other agents (Claude Code, Codex) in harnesses of their own, for work that can run beside mine?',
+  agentsTellAgents: 'May I give more work to the harnesses I started, in the conversations they already have?',
+  pullRequestLine: 'May a harness another agent started say so in the pull requests it opens?',
+  agentMessages: 'May agents in the same tab message each other?',
+  agentMessagesHideSummary: 'May Harness share a one-line summary of what your harnesses do with the people in your shared tabs?',
+  programsReply: 'May programs that act for you, like your lamp, give more work to a harness of yours that is idle, as you could by typing to it?',
+}
+
+/**
+ * What an agent refused by a setting that is off is told to do: ask the person with its own tool for questions, and turn
+ * the setting on only after their yes. People do not run `harness settings` themselves: they ask their agent for the work,
+ * and a refusal that sent them to a terminal, or to a Settings switch the app does not show, left the work undone
+ * (2026-10-26). Harness takes the agent's word for the yes (the `--person-said-yes` flag), so the words say plainly that
+ * the person answers it, never the agent. [otherwise] is what to do if they say no. [value] is the one that grants:
+ * `off` for the summary switch, which is stored inverted.
+ */
+export function askThePersonFirst(name: string, otherwise: string, value: 'on' | 'off' = 'on'): string {
+  const key = AGENT_SETTING_NAMES[name]
+  const question = key ? AGENT_SETTING_QUESTIONS[key] : `May I turn ${value} ${name}?`
+  return `${name} is ${value === 'on' ? 'off' : 'on'}. Ask the person, with your tool for asking them (Claude Code: AskUserQuestion; Codex: request_user_input), `
+    + `or in your reply, and wait for their answer: "${question}" Only if they say yes, run \`harness settings ${name} ${value} ${PERSON_SAID_YES}\` `
+    + `(through MCP: harness_settings with person_said_yes), then try again. Never answer it for them. If they say no: ${otherwise}`
+}
 
 /** Whom a copy is for: the account, and this computer's machine in it. A machine is one account's, so a sign-in to
  *  another account on this computer has another. */

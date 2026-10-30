@@ -53,7 +53,7 @@ def main() -> int:
     exe = out / "pod_render"
     cmd = ["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
            "-DHT_FACE_PX=720",
-           f"-I{disp}", f"-I{fw / 'main'}", f"-I{here / 'host_stubs'}",
+           f"-I{disp}", f"-I{fw / 'main'}",
            "-o", str(exe), str(here / "pod_render.c"), *sorted(str(p) for p in (fw / "main" / "pod").glob("**/*.c")),
            str(disp / "pro_canvas.c"), str(disp / "terminal.c"), str(fonts)]
     subprocess.run(cmd, check=True)

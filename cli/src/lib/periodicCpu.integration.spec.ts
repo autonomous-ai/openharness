@@ -25,7 +25,7 @@ vi.mock('child_process', async original => {
 
 const { env } = await import('../config/env.js')
 const { nativeProcessImages } = await import('./nativeProcessImages.js')
-const { enrichProcessRows, processRows } = await import('./tmux.js')
+const { enrichProcessRows, processRows } = await import('./processTable.js')
 const { createDarwinDialFinder } = await import('../cable/serial.js')
 const { executableFileIdentity } = await import('./engineBin.js')
 

@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join, sep, win32 } from 'node:path'
 
 import { env } from '../config/env.js'
-import { gridChildEnv, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { gridAvailable, gridChildEnv, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { installGrid } from './gridInstall.js'
+import { followWindowsGridPin } from './gridWindowsPin.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 
@@ -21,11 +23,36 @@ import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
  * again next start.
  */
 
-/** `darwin-arm64` | `darwin-x64` | `linux-arm64` | `linux-x64`, or null off those platforms. */
-function platformKey(): string | null {
-  const os = process.platform === 'darwin' ? 'darwin' : process.platform === 'linux' ? 'linux' : null
-  const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : null
-  return os && arch ? `${os}-${arch}` : null
+/** `darwin-*` | `linux-*` | `win32-*` for arm64 and x64: the keys every runtime manifest uses. Null elsewhere. */
+export function platformKey(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string | null {
+  const os = platform === 'darwin' || platform === 'linux' || platform === 'win32' ? platform : null
+  const cpu = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'x64' : null
+  return os && cpu ? `${os}-${cpu}` : null
+}
+
+/**
+ * How a runtime's archive is unpacked. On Unix it is nodejs.org's `.tar.gz` with /usr/bin/tar. On Windows it is
+ * the `.zip`, unpacked by the bsdtar that Windows has shipped in System32 since 1803, which reads zip. It is never
+ * a `tar` found on PATH: Git for Windows puts GNU tar there, which cannot read a zip.
+ */
+export function unpackCommand(
+  archive: string,
+  into: string,
+  platform: NodeJS.Platform = process.platform,
+  systemRoot: string | undefined = process.env.SystemRoot,
+): { file: string; args: string[] } {
+  if (platform === 'win32') return { file: win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe'), args: ['-xf', archive, '-C', into] }
+  return { file: '/usr/bin/tar', args: ['-xzf', archive, '-C', into] }
+}
+
+/**
+ * What differs on Windows: nodejs.org's archive is a zip with `node.exe` at its root folder, not `bin/node`. The
+ * pointer line ends in CRLF there, as install.ps1 writes it (installLayout.ts writePointer).
+ */
+export function runtimeLayout(platform: NodeJS.Platform = process.platform): { archiveSuffix: '.zip' | '.tar.gz'; nodeBinary: string; eol: string } {
+  return platform === 'win32'
+    ? { archiveSuffix: '.zip', nodeBinary: 'node.exe', eol: '\r\n' }
+    : { archiveSuffix: '.tar.gz', nodeBinary: join('bin', 'node'), eol: '\n' }
 }
 
 interface RuntimeArtifact {
@@ -167,6 +194,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
   if (installed && !spec.followsPin) return installed
   const key = platformKey()
   if (!key) return installed
+  const layout = runtimeLayout()
 
   try {
     const response = await fetch(spec.manifestUrl)
@@ -191,9 +219,10 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
       const staging = join(env.ADAPTER_RUNTIME_DIR, `.${spec.name}-staging-${process.pid}-${Date.now()}`)
       try {
         mkdirSync(staging, { recursive: true, mode: 0o700 })
-        const archive = join(staging, `${spec.name}.tar.gz`)
+        const archive = join(staging, `${spec.name}${layout.archiveSuffix}`)
         writeFileSync(archive, bytes)
-        if (!await finishesCleanly('/usr/bin/tar', ['-xzf', archive, '-C', staging], 120_000)) return installed
+        const unpack = unpackCommand(archive, staging)
+        if (!await finishesCleanly(unpack.file, unpack.args, 120_000)) return installed
         const unpacked = join(staging, artifact.archiveRoot)
         if (!existsSync(join(unpacked, spec.binary))) return installed
         // Another start may have won the race; theirs is as good as ours.
@@ -204,7 +233,8 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
     }
     // After the rename, never in staging: a read-only directory cannot be emptied, and staging must
     // always be.
-    if (spec.readOnly) {
+    // Never on Windows: a read-only folder there cannot be removed by retireSuperseded, and nothing updates grid in place there (it is not installed).
+    if (spec.readOnly && process.platform !== 'win32') {
       chmodSync(binary, 0o555)
       chmodSync(dirname(binary), 0o555)
     }
@@ -222,7 +252,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
     }
     // Written last, and only once the binary has answered: Desktop Harness and the hook installer
     // both read this file to decide what to execute, so it must never name something that cannot run.
-    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}\n`, { mode: 0o600 })
+    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
     spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
     if (spec.followsPin) retireSuperseded(spec.name, key, target, installed)
     return binary
@@ -268,7 +298,7 @@ export async function ensureManagedRuntime(log: (message: string) => void = () =
     name: 'node',
     label: 'Node',
     manifestUrl: env.ADAPTER_RUNTIME_METADATA_URL,
-    binary: join('bin', 'node'),
+    binary: runtimeLayout().nodeBinary,
     installed: () => {
       const existing = managedNodePath()
       return existing.startsWith(env.ADAPTER_RUNTIME_DIR + sep) ? existing : null
@@ -292,6 +322,22 @@ export async function ensureManagedRuntime(log: (message: string) => void = () =
  */
 export async function ensureManagedGrid(log: (message: string) => void = () => {}): Promise<string | null> {
   if (process.env.HARNESS_GRID_BIN?.trim()) return null
+  // No managed grid build on Windows: grid's own installer lays the pinned release down there, and there is no
+  // managed binary to return (gridWindowsPin.ts).
+  if (process.platform === 'win32') {
+    await followWindowsGridPin({
+      key: platformKey(),
+      manifest: async () => {
+        const response = await fetch(env.ADAPTER_GRID_RUNTIME_METADATA_URL)
+        if (!response.ok) throw new Error(`manifest answered ${response.status}`)
+        return response.json()
+      },
+      installedVersion: () => gridAvailable() ? gridVersion() : Promise.resolve(null),
+      install: (version) => installGrid(version),
+      log,
+    })
+    return null
+  }
   return ensureManagedArchive({
     name: 'grid',
     label: 'grid',

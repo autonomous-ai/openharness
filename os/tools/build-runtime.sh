@@ -14,14 +14,18 @@ runtime_output=${HARNESS_OS_RUNTIME_DIR:-os/work/runtime}
 # Check ancestry before the expensive build. A source bundle can contain fixes
 # newer than the public CLI even while package.json retains its development version.
 python3 os/tools/runtime-baseline.py >/dev/null
+# The CLI calls itself the newest published CLI this source contains, not package.json's
+# development 0.0.1 (runtime-baseline.py cli_version): what the phone, `harness version` and the
+# account show. Updates still take only a CLI newer than that.
+cli_version=$(python3 os/tools/runtime-baseline.py --cli-version)
 npm ci --prefix cli --no-audit --no-fund
-(cd cli && node build-bundle.mjs)
+(cd cli && ADAPTER_VERSION="$cli_version" node build-bundle.mjs)
 cargo build --manifest-path tui/Cargo.toml --locked --release --target "$runtime_target"
 runtime_stage=$(mktemp -d "${TMPDIR:-/tmp}/harness-runtime.XXXXXX")
 trap 'rm -rf -- "$runtime_stage"' EXIT
 cp "tui/target/$runtime_target/release/harness-tui" "$runtime_stage/"
 cp cli/dist/cli.js cli/dist/notify.mjs "$runtime_stage/"
-HARNESS_RUNTIME_STAGE="$runtime_stage" HARNESS_RUNTIME_ARCH="$runtime_arch" python3 - <<'PY'
+HARNESS_RUNTIME_STAGE="$runtime_stage" HARNESS_RUNTIME_ARCH="$runtime_arch" HARNESS_CLI_VERSION="$cli_version" python3 - <<'PY'
 import hashlib, json, os, pathlib, subprocess, tomllib
 def output(*args):
     return subprocess.check_output(args, text=True).strip()
@@ -38,7 +42,7 @@ data = {'source_commit': output('git', 'rev-parse', 'HEAD'),
         'architecture': architecture, 'target': architecture + '-unknown-linux-musl'}
 assert not data['dirty'], 'Commit source changes before building a traceable runtime'
 expected_hn = tomllib.loads(pathlib.Path('tui/Cargo.toml').read_text())['package']['version']
-expected_cli = json.loads(pathlib.Path('cli/package.json').read_text())['version']
+expected_cli = os.environ['HARNESS_CLI_VERSION']
 assert output(str(folder / 'harness-tui'), '--version').startswith('hn ' + expected_hn + ' ')
 assert output('node', str(folder / 'cli.js'), 'version') == expected_cli
 data['versions'] = {'hn': expected_hn, 'cli': expected_cli}
@@ -47,7 +51,16 @@ data['files'] = {path.name: {'sha256': hashlib.sha256(path.read_bytes()).hexdige
                  for path in sorted(folder.iterdir())}
 (folder / 'source.json').write_text(json.dumps(data, indent=2) + '\n')
 PY
+# Playwright's MCP server, from its lock and without install scripts, for `harness computer-use` (cli
+# agentClient/computerUse.ts): in the package only, never in a fast runtime update.
+playwright_stage=$(mktemp -d "${TMPDIR:-/tmp}/harness-playwright-mcp.XXXXXX")
+trap 'rm -rf -- "$runtime_stage" "$playwright_stage"' EXIT
+cp os/packaging/playwright-mcp/package.json os/packaging/playwright-mcp/package-lock.json "$playwright_stage/"
+npm ci --prefix "$playwright_stage" --omit=dev --ignore-scripts --no-audit --no-fund
+node "$playwright_stage/node_modules/@playwright/mcp/cli.js" --version >/dev/null
 mkdir -p -- "$(dirname -- "$runtime_output")"
 mkdir -- "$runtime_output"
 cp "$runtime_stage/harness-tui" "$runtime_stage/cli.js" "$runtime_stage/notify.mjs" "$runtime_output/"
 cp "$runtime_stage/source.json" "$runtime_output/"
+mkdir -- "$runtime_output/playwright-mcp"
+cp -R "$playwright_stage/package.json" "$playwright_stage/node_modules" "$runtime_output/playwright-mcp/"

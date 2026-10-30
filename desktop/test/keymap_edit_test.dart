@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/shortcuts/keymap_edit.dart';
 
 KeyBinding binding(
@@ -121,6 +123,210 @@ void main() {
   });
 
   group('rebindBindings', () {
+    for (final (prefix, command) in [
+      ('ctrl+t', 'swarm.new'),
+      ('ctrl+k', 'pane.focus_above'),
+    ]) {
+      for (final scope
+          in prefix == 'ctrl+k'
+              ? [KeymapContext.terminal]
+              : KeymapContext.values) {
+        test('legacy custom $prefix prefix survives in ${scope.name}', () {
+          debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          final map = ResolvedKeymap(
+            harnessDefaultBindings,
+            KeymapConfig([
+              binding(
+                '$prefix ctrl+x',
+                'pane.zoom',
+                context: scope,
+                custom: true,
+              ),
+            ]),
+          );
+          for (final context in KeymapContext.values) {
+            final inherits =
+                scope == KeymapContext.workspace ||
+                context == scope ||
+                (scope == KeymapContext.picker &&
+                    context == KeymapContext.project);
+            expect(
+              map.match(context, [KeyStroke.parse(prefix)]).command,
+              inherits
+                  ? null
+                  : prefix == 'ctrl+k' && context == KeymapContext.swarmChat
+                  ? 'swarm.quick_switcher'
+                  : prefix == 'ctrl+k' && context.isPicker
+                  ? 'picker.previous'
+                  : command,
+            );
+            if (inherits) {
+              expect(
+                map
+                    .match(
+                      context,
+                      '$prefix ctrl+x'.split(' ').map(KeyStroke.parse),
+                    )
+                    .command,
+                'pane.zoom',
+              );
+            }
+          }
+        });
+      }
+    }
+
+    test(
+      'existing picker Ctrl+K still rejects an ambiguous workspace sequence',
+      () {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final config = KeymapConfig([
+          binding('ctrl+k ctrl+x', 'pane.zoom', custom: true),
+        ]);
+        expect(
+          () => ResolvedKeymap(
+            harnessDefaultBindings.where((row) => !row.outsideTerminal),
+            config,
+          ),
+          throwsFormatException,
+        );
+        expect(
+          () => ResolvedKeymap(harnessDefaultBindings, config),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'old recorder null rows suppress new aliases but explicit rows win',
+      () {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final upgradedDefaults = harnessDefaultBindings;
+        final oldDefaults = upgradedDefaults
+            .where((row) => !row.outsideTerminal)
+            .toList();
+        final saved = rebindBindings(
+          const [],
+          oldDefaults,
+          command: 'swarm.new',
+          context: KeymapContext.workspace,
+          stroke: KeyStroke.parse('f6'),
+        );
+        for (final explicit in [false, true]) {
+          final map = ResolvedKeymap(
+            upgradedDefaults,
+            KeymapConfig([
+              if (explicit) binding('ctrl+t', 'pane.zoom', custom: true),
+              ...saved,
+            ]),
+          );
+          for (final context in KeymapContext.values) {
+            expect(
+              map.match(context, [KeyStroke.parse('ctrl+t')]).command,
+              explicit ? 'pane.zoom' : null,
+            );
+            expect(
+              map.match(context, [KeyStroke.parse('f6')]).command,
+              'swarm.new',
+            );
+          }
+        }
+      },
+    );
+
+    test('additive custom command rows retain aliases', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final map = ResolvedKeymap(
+        harnessDefaultBindings,
+        KeymapConfig([binding('f6', 'swarm.new', custom: true)]),
+      );
+      expect(
+        map.match(KeymapContext.workspace, [KeyStroke.parse('ctrl+t')]).command,
+        'swarm.new',
+      );
+      expect(
+        map.match(KeymapContext.workspace, [
+          KeyStroke.parse('ctrl+shift+t'),
+        ]).command,
+        'swarm.new',
+      );
+    });
+
+    test('terminal null row retires its alias only in that context', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final map = ResolvedKeymap(
+        harnessDefaultBindings,
+        KeymapConfig([
+          binding(
+            'ctrl+shift+t',
+            null,
+            context: KeymapContext.terminal,
+            custom: true,
+          ),
+        ]),
+      );
+      expect(
+        map.match(KeymapContext.terminal, [KeyStroke.parse('ctrl+t')]).command,
+        isNull,
+      );
+      expect(
+        map.match(KeymapContext.workspace, [KeyStroke.parse('ctrl+t')]).command,
+        'swarm.new',
+      );
+    });
+
+    test('ordinary defaults still reject custom prefix ambiguity', () {
+      expect(
+        () => ResolvedKeymap([
+          binding('ctrl+t', 'swarm.new'),
+        ], KeymapConfig([binding('ctrl+t ctrl+x', 'pane.zoom', custom: true)])),
+        throwsFormatException,
+      );
+    });
+
+    test('rebinding a Windows command drops its Ctrl alias', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final next = rebindBindings(
+        const [],
+        harnessDefaultBindings,
+        command: 'swarm.new',
+        context: KeymapContext.workspace,
+        stroke: KeyStroke.parse('ctrl+shift+y'),
+      );
+      expect(
+        next.where((b) => b.sequence == 'ctrl+t' && b.command == null),
+        hasLength(1),
+      );
+      final map = ResolvedKeymap(harnessDefaultBindings, KeymapConfig(next));
+      expect(
+        map.match(KeymapContext.workspace, [KeyStroke.parse('ctrl+t')]).matched,
+        isFalse,
+      );
+    });
+
+    test('a user row wins over a Windows alias in workspace and terminal', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final map = ResolvedKeymap(
+        harnessDefaultBindings,
+        KeymapConfig.parse(
+          '{"bindings":[{"keys":"ctrl+t","command":"pane.zoom"}]}',
+          commands: harnessCommandById.keys.toSet(),
+        ),
+      );
+      for (final context in [KeymapContext.workspace, KeymapContext.terminal]) {
+        final match = map.match(context, [KeyStroke.parse('ctrl+t')]);
+        expect(match.command, 'pane.zoom');
+        expect(match.outsideTerminal, isFalse);
+      }
+    });
+
     test('moves a command to a new key and unbinds its default', () {
       final next = rebindBindings(
         const [],

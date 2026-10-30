@@ -29,12 +29,15 @@ NOW = datetime.now(timezone.utc)
 
 
 def tree_entry(path, number, kind='tree'):
+    # number is one character, repeated into the 40-character object id.
     return dict(path=path, sha=str(number) * 40, type=kind, mode='040000' if kind == 'tree' else '100644')
 
 
 TREES = {
     TREE: dict(sha=TREE, truncated=False, tree=[tree_entry('desktop', 1), tree_entry('scripts', 2),
-        tree_entry('.github', 3), tree_entry('mobile', 4)]),
+        tree_entry('.github', 3), tree_entry('mobile', 4), tree_entry('installer', 9), tree_entry('pty', 'd'),
+        tree_entry('term', 'e'), tree_entry('tui', 'f')]),
+    'f' * 40: dict(sha='f' * 40, truncated=False, tree=[tree_entry('vendor', 0), tree_entry('src', 'c')]),
     '3' * 40: dict(sha='3' * 40, truncated=False, tree=[tree_entry('actions', 5), tree_entry('workflows', 6)]),
     '6' * 40: dict(sha='6' * 40, truncated=False, tree=[tree_entry('release-desktop.yml', 7, 'blob')]),
     '4' * 40: dict(sha='4' * 40, truncated=False, tree=[tree_entry('pubspec.lock', 8, 'blob')]),
@@ -73,7 +76,8 @@ def make_jobs():
     return [dict(name=name, id=index, run_id=123, run_attempt=1, head_sha=SHA, status='completed', conclusion='success',
                  steps=[dict(conclusion='success')]) for index, name in enumerate(
                      ['version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
-                      'build-linux (ubuntu-22.04-arm, arm64)', 'candidate', 'cleanup'])]
+                      'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
+                      'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'])]
 
 
 class FakeGithub:
@@ -148,7 +152,7 @@ class CandidateIdentityTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 self.read(**{field: value})
 
-    def test_receipt_requires_all_six_verified_objects_with_exact_paths(self):
+    def test_receipt_requires_every_verified_object_with_exact_paths(self):
         mutations = [
             lambda r: r.update(status='failed'), lambda r: r.update(schema=1),
             lambda r: r.update(run_attempt=2), lambda r: r.update(source_sha='e' * 40),
@@ -188,7 +192,7 @@ class CandidateIdentityTests(unittest.TestCase):
         client = FakeGithub()
         candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
         paths = [path for path in client.calls if path.startswith('git/trees/')]
-        self.assertEqual(len(paths), 4)
+        self.assertEqual(len(paths), 5)
         self.assertEqual(len(paths), len(set(paths)))
         self.assertTrue(all('?' not in path for path in paths))
 
@@ -331,6 +335,9 @@ class BuildInputTests(unittest.TestCase):
             'mobile/pubspec.lock': 'shared cache identity', '.gitattributes': '*.png binary\n',
             '.gitignore': 'build/\n', 'cli/main.ts': 'CLI', 'devices/firmware.c': 'firmware',
             'docs/guide.md': 'documentation',
+            'installer/src/main.rs': 'Windows installer', 'pty/src/bin/desktop-launcher.rs': 'Windows launcher',
+            'term/src/lib.rs': 'launcher dependency', 'tui/vendor/vte/src/lib.rs': 'patched dependency',
+            'tui/src/main.rs': 'terminal interface',
         }
         for path, content in self.files.items():
             file = self.root / path
@@ -354,7 +361,7 @@ class BuildInputTests(unittest.TestCase):
                                       lambda sha: candidate.local_tree(sha, cwd=self.root))
 
     def test_unrelated_components_change_the_tree_without_invalidating_inputs(self):
-        for path in ['cli/main.ts', 'devices/firmware.c', 'docs/guide.md']:
+        for path in ['cli/main.ts', 'devices/firmware.c', 'docs/guide.md', 'tui/src/main.rs']:
             (self.root / path).write_text('unrelated new behavior')
         self.commit()
         self.assertNotEqual(self.git('rev-parse', 'HEAD^{tree}'), self.original_tree)
@@ -362,7 +369,7 @@ class BuildInputTests(unittest.TestCase):
 
     def test_every_source_dependency_toolchain_and_packaging_scope_invalidates(self):
         for path in self.files:
-            if path.startswith(('cli/', 'devices/', 'docs/')):
+            if path.startswith(('cli/', 'devices/', 'docs/', 'tui/src/')):
                 continue
             with self.subTest(path=path):
                 before = self.inputs()
@@ -392,8 +399,27 @@ class BuildInputTests(unittest.TestCase):
         self.assertEqual(self.inputs(), self.original)
         self.assertEqual(self.git('status', '--porcelain'), '')
 
+    # GitHub names a matrix job "<job> (<every matrix value, in order>)" unless the job sets `name:`. A restated
+    # name that GitHub never gives makes check_jobs refuse every candidate, so this reads the names from the workflow.
+    def test_required_matrix_jobs_are_named_as_github_names_them(self):
+        workflow = (ROOT / '.github/workflows/release-desktop.yml').read_text()
+        names = ['version', 'preflight', 'build-macos', 'upload-windows', 'candidate', 'cleanup']
+        for job in ['build-linux', 'build-windows']:
+            body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
+            template = re.search(r'^    name: (.+)$', body, re.M)
+            for row in re.findall(r'^\s+- \{ (.+) \}$', body, re.M):
+                matrix = dict(pair.split(': ', 1) for pair in row.split(', '))
+                if template:
+                    names.append(re.sub(r'\$\{\{ matrix\.(\w+) \}\}', lambda m: matrix[m[1]], template[1]))
+                else:
+                    names.append(f'{job} ({", ".join(matrix.values())})')
+        self.assertEqual(sum(name.startswith('build-windows (') for name in names), 2)
+        jobs = [dict(name=name, run_id=123, run_attempt=1, head_sha=SHA, status='completed', conclusion='success', steps=[])
+                for name in names]
+        candidate.check_jobs(make_run(), jobs)
+
     def test_native_checkout_inputs_are_all_covered_by_the_reuse_contract(self):
-        for filename, jobs in [('release-desktop.yml', ['build-macos', 'build-linux']),
+        for filename, jobs in [('release-desktop.yml', ['build-macos', 'build-linux', 'build-windows']),
                                ('desktop-internal-build.yml', ['build-macos'])]:
             workflow = (ROOT / '.github/workflows' / filename).read_text()
             for job in jobs:
@@ -475,7 +501,7 @@ class CandidatePromotionTests(unittest.TestCase):
                     candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
                 gcloud.assert_not_called()
                 (path / 'linux-arm64.json').unlink()
-                with self.assertRaisesRegex(ValueError, 'four platform manifests'):
+                with self.assertRaisesRegex(ValueError, 'expected 6 platform manifests'):
                     candidate.seal(VERSION, BUCKET, PREFIX, path, identity)
 
     def test_cleanup_never_selects_production_recent_unknown_or_unpinned_objects(self):

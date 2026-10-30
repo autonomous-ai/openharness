@@ -36,6 +36,4 @@ bool power_init(void)
 }
 
 // No cell, charger polling or battery ADC allocation in the dock-only build.
-int power_battery_pct(void) { return -1; }
 bool power_is_charging(void) { return false; }
-bool power_is_on_external(void) { return true; }

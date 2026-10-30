@@ -136,6 +136,14 @@ class OpenCodeLedgerScanner implements LedgerScanner {
       }
     } on FileSystemException catch (error) {
       if (error.osError?.errorCode == 2) return const [];
+      // Windows uses ERROR_PATH_NOT_FOUND for a missing directory and for
+      // enumerating a file. Only the former means no local usage is present.
+      if (Platform.isWindows &&
+          error.osError?.errorCode == 3 &&
+          await FileSystemEntity.type(directory, followLinks: false) ==
+              FileSystemEntityType.notFound) {
+        return const [];
+      }
       rethrow;
     }
     files.sort((a, b) {

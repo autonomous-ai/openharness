@@ -565,7 +565,7 @@ pub struct Target { pub machine: String, pub agent: String, pub engine: String, 
 /// still manages local models.
 pub fn pane_supports(app: &App, pane: u64) -> bool {
     let Some(p) = app.panes.get(&pane) else { return false };
-    app.fleet.machine(&p.machine_id).is_some_and(|m| !m.shared)
+    app.fleet.machine(&p.machine_id).is_some() && !app.fleet.belongs_to_other_account(&p.machine_id)
         && app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status != "stopped" && ["codex", "claude", "opencode", "pi"].contains(&a.engine.as_str()))
 }
 
@@ -581,7 +581,7 @@ pub fn pane_label(app: &App, pane: u64) -> String {
 
 pub fn target(app: &App) -> Option<Target> {
     let of = |machine: String, agent: String| -> Option<Target> {
-        if app.fleet.machine(&machine).is_some_and(|m| m.shared) { return None }
+        if app.fleet.belongs_to_other_account(&machine) { return None }
         let a = app.fleet.agent(&machine, &agent)?;
         let a = if app.models_view.selection_fixed { if a.status == "stopped" { return None } a } else { live_in_pane(app, a) };
         (a.engine != "terminal").then(|| Target { engine: a.engine.clone(), grid_model: a.grid_model.clone(), base_url: a.grid_base_url.clone(), machine, agent: a.id.clone() })
@@ -961,18 +961,21 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
     }
 
     // Your models: this computer's — being started, running, downloaded, in the daemon's order
-    // within each — then the own grid's models the account's other machines serve.
+    // within each. The own grid's models another machine serves are shared with you, below, as on
+    // the desktop (owner, 2026-10-18: Muse-Glimmer, served by another machine, read as this one's).
     if let Some(t) = t.filter(|t| v.grids.contains_key(&machine) && !can_run(app, &t.engine)) {
         out.push(note("engine", &format!("{} can only run on its own login.", engine_label(&t.engine)), YOUR_MODELS));
     }
     let own = |g: &Grids| -> Vec<(Section, GridModel)> {
         g.sections.iter().filter(|s| s.own).flat_map(|s| s.models.iter().map(move |x| (s.clone(), x.clone()))).collect()
     };
+    // The own grid's models another machine serves: the first of Shared with you.
+    let mut theirs: Vec<(Section, GridModel)> = Vec::new();
     match snap {
         None => {
             out.push(note("local", if !up(app, &machine) { "Connect this computer to see its models." } else { v.local_error.get(&machine).map(String::as_str).unwrap_or("Finding models that fit…") }, YOUR_MODELS));
             // (Without this computer's list yet, the own grid's models as they come.)
-            if let Some(g) = v.grids.get(&machine) { for (s, x) in own(g) { out.push(grid_row(app, &s, &x, t, YOUR_MODELS)) } }
+            if let Some(g) = v.grids.get(&machine) { theirs = own(g) }
         }
         Some(s) => {
             if let Some(n) = &s.notice { out.push(note("notice", n, YOUR_MODELS)) }
@@ -982,14 +985,12 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
             mine.sort_by_key(|(r, i, _)| (*r, *i));
             // (This computer's running ones are listed by their local names, above.)
             let here: Vec<&LocalModel> = s.models.iter().filter(|m| m.running()).collect();
-            let theirs: Vec<Row> = v.grids.get(&machine).map(own).unwrap_or_default().into_iter()
-                .filter(|(_, x)| !here.iter().any(|m| m.answers_to(&x.id)))
-                .map(|(s, x)| grid_row(app, &s, &x, t, YOUR_MODELS)).collect();
+            theirs = v.grids.get(&machine).map(own).unwrap_or_default().into_iter()
+                .filter(|(_, x)| !here.iter().any(|m| m.answers_to(&x.id))).collect();
             // (Only with something below to get: Enter goes to it.)
             let to_get = s.models.iter().any(|m| !m.downloaded() && !m.can_stop);
-            if mine.is_empty() && theirs.is_empty() && !searching && to_get { out.push(note("none", "No models here yet — get one below", YOUR_MODELS)) }
+            if mine.is_empty() && !searching && to_get { out.push(note("none", "No models here yet — get one below", YOUR_MODELS)) }
             out.extend(mine.into_iter().map(|(_, _, r)| r));
-            out.extend(theirs);
         }
     }
 
@@ -1009,6 +1010,11 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
 
     // Shared with you: every grid shared with this account, one section as on the desktop — each
     // row naming the machine and the grid it is on, and a resting grid saying so.
+    // Your own grid's first: what your other machines serve, each under its machine and grid.
+    for (s, x) in &theirs {
+        let detail = [x.node.as_str(), s.name.as_str()].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" · ");
+        out.push(grid_row(app, s, x, t, SHARED).detail(vec![span(detail, fg(theme::MUTED))]));
+    }
     if let Some(g) = v.grids.get(&machine) {
         for s in g.sections.iter().filter(|s| !s.own) {
             let words = section_words(s, v.asking.contains(&s.name));
@@ -2065,6 +2071,9 @@ pub fn open(app: &mut App) {
     app.models_view.selection_pane = app.focused();
     select(app);
     app.models_view.panel_generation = app.models_view.panel_generation.wrapping_add(1);
+    // Each machine's subscriptions as it says them now (at most once a minute each, read_usage).
+    let usable: Vec<String> = app.fleet.machines.iter().filter(|m| m.usable() && !crate::local::is_local(&m.id)).map(|m| m.id.clone()).collect();
+    for id in usable { app.read_usage(&id); }
     let machine = app.fleet.local_id.clone();
     if machine.is_empty() || app.link(&machine).is_none() { return }
     if !app.models_view.reading.contains(&machine) { read_local(app, &machine) }
@@ -2677,17 +2686,23 @@ mod tests {
         app.fleet.agents.insert(key, a);
     }
 
-    /// Your models, as the desktop's: this computer's — running, then downloaded — then the own
-    /// grid's models the account's other machines serve, in the grid's order.
+    /// Your models, as the desktop's: this computer's — running, then downloaded. What the account's
+    /// other machines serve on its own grid is shared with you, first there, under its machine and
+    /// grid (owner, 2026-10-18: Muse-Glimmer, served by another machine, read as this one's).
     #[test]
-    fn your_models_are_this_computer_s_then_the_own_grid_s() {
+    fn your_models_are_this_computer_s_and_the_own_grid_s_other_machines_are_shared() {
         let mut app = app();
         on_local(&mut app, "local", Ok(local_reply(qwen("running", Value::Null), false)));
         let mut g = grids_reply(&["box-model"]);
         g["grids"][0]["models"].as_array_mut().unwrap().push(json!({ "id": "away-model", "node": "lap", "unavailable": { "reason": "offline", "machine": "lap" } }));
         on_grids(&mut app, "local", Ok(g));
-        let mine: Vec<String> = super::rows(&app, "").into_iter().filter(|r| r.group.as_deref() == Some("Your models") && is_row(&r.id)).map(|r| r.id).collect();
-        assert_eq!(mine, vec!["mv:local:qwen-35b".to_string(), "mv:local:gemma-12b".into(), "mv:grid:own-grid\tstudio\tbox-model".into(), "mv:grid:own-grid\tlap\taway-model".into()]);
+        let rows = super::rows(&app, "");
+        let in_group = |group: &str| -> Vec<String> { rows.iter().filter(|r| r.group.as_deref() == Some(group) && is_row(&r.id)).map(|r| r.id.clone()).collect() };
+        assert_eq!(in_group("Your models"), vec!["mv:local:qwen-35b".to_string(), "mv:local:gemma-12b".into()]);
+        let shared = in_group("Shared with you");
+        assert_eq!(shared[..2], ["mv:grid:own-grid\tstudio\tbox-model".to_string(), "mv:grid:own-grid\tlap\taway-model".into()]);
+        let line = |id: &str| rows.iter().find(|r| r.id == id).map(|r| r.detail.iter().map(|s| s.content.to_string()).collect::<String>()).unwrap_or_default();
+        assert_eq!(line("mv:grid:own-grid\tstudio\tbox-model"), "studio · own-grid");
     }
 
     /// A harness just opened reads as its terminal until the daemon sees the engine in it (OpenCode:
@@ -2702,6 +2717,20 @@ mod tests {
             app.fleet.agents.insert(("local".into(), "t1".into()), crate::fleet::agent_from("local", &json!({ "id": "t1", "name": "a", "engine": engine }), None));
             assert_eq!(pane_supports(&app, 1), offered, "{engine}");
         }
+    }
+
+    /// A harness on a machine shared with this account by email runs on its owner's plans, which its
+    /// daemon alone moves: no "Change model…", and no Use moves it (desktop's isSharedMachine).
+    #[test]
+    fn a_harness_on_a_machine_shared_with_you_is_not_moved_from_here() {
+        let mut app = app();
+        app.fleet.machines.push(Machine { shared: false, id: "dee".into(), name: "Dee's Mac".into(), local: false, status: "online".into(), reach: Reach::Ready });
+        app.fleet.agents.insert(("dee".into(), "g1".into()), crate::fleet::agent_from("dee", &json!({ "id": "g1", "name": "guest", "engine": "claude" }), None));
+        app.panes.insert(1, crate::pane::Pane::new(1, "dee", "g1", 150, 40));
+        assert!(pane_supports(&app, 1) && target(&app).is_some(), "an own machine's harness moves");
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        assert!(!pane_supports(&app, 1));
+        assert!(target(&app).is_none());
     }
 
     #[test]

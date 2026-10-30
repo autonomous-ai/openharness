@@ -97,75 +97,44 @@ void main() {
     server.readOverride = () async => {
       ...server.snapshot,
       'revision': 1,
-      'features': {...server.features, ExperimentalFeature.agentMessages.id: 'on'},
+      'features': {
+        ...server.features,
+        ExperimentalFeature.agentMessages.id: 'on',
+      },
     };
     await store.refresh();
     expect(store.error, isNotNull);
     expect(store.enabled(ExperimentalFeature.agentMessages), isFalse);
   });
 
-  testWidgets('what agents may do: three account switches, each off until turned on', (
-    tester,
-  ) async {
-    final server = AccountSettings('a');
-    final store = await open(server);
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: ExperimentalSection(store: store))),
-    );
-    await tester.pumpAndSettle();
-    final copy = {
-      'Agents can start other agents':
-          'Turn on to let Claude Code and Codex start, wait for and close harnesses of their own; '
-          'their instructions say how. Off, each agent works alone.',
-      'Mark pull requests from agent-started harnesses':
-          'Turn on to have a harness another agent started add one line to the pull requests it '
-          'opens: 🤝 Started by another agent in Harness.',
-      'Agents in the same tab can message each other':
-          'Turn on to let Claude Code and Codex in one tab send each other messages with harness send. Invite people to a tab and their harnesses join it from their own computers.',
-    };
-    for (final MapEntry(key: label, value: detail) in copy.entries) {
-      expect(find.text(label), findsOneWidget);
-      expect(find.text(detail), findsOneWidget);
-    }
-    for (final id in ['agents_start_agents', 'agent_pull_request_line', 'agent_messages']) {
-      final toggle = find.byKey(ValueKey('experimental-$id'));
-      await tester.ensureVisible(toggle);
-      expect(tester.widget<Switch>(toggle).value, isFalse);
-      await tester.tap(toggle);
+  testWidgets(
+    'Super Tab coordination no longer needs account experiment switches',
+    (tester) async {
+      final server = AccountSettings('a');
+      final store = await open(server);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ExperimentalSection(store: store)),
+        ),
+      );
       await tester.pumpAndSettle();
-      expect(tester.widget<Switch>(toggle).value, isTrue);
-    }
-    expect(server.writes.map((w) => (w.$2.id, w.$3)), [
-      ('agents_start_agents', true),
-      ('agent_pull_request_line', true),
-      ('agent_messages', true),
-    ]);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('the summary switch is stored inverted: checked when agent_messages_hide_summary is off', (tester) async {
-    final server = AccountSettings('a');
-    final store = await open(server);
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: ExperimentalSection(store: store))),
-    );
-    await tester.pumpAndSettle();
-    const title = 'Share a one-line summary of what your harnesses are doing with people in your shared tabs';
-    expect(find.text(title), findsOneWidget);
-    final toggle = find.byKey(const ValueKey('experimental-agent_messages_hide_summary'));
-    await tester.ensureVisible(toggle);
-    expect(tester.widget<Switch>(toggle).value, isTrue);
-    await tester.tap(toggle);
-    await tester.pumpAndSettle();
-    expect(server.writes.last.$2.id, 'agent_messages_hide_summary');
-    expect(server.writes.last.$3, isTrue);
-    expect(tester.widget<Switch>(toggle).value, isFalse);
-    await tester.tap(toggle);
-    await tester.pumpAndSettle();
-    expect(server.writes.last.$3, isFalse);
-    expect(tester.widget<Switch>(toggle).value, isTrue);
-    await tester.pumpWidget(const SizedBox());
-  });
+      expect(find.text('Focus-bar creature'), findsOneWidget);
+      expect(find.text('Share button'), findsOneWidget);
+      for (final feature in ExperimentalFeature.values.where(
+        (f) => !f.visibleInSettings,
+      )) {
+        expect(find.text(feature.label), findsNothing);
+        expect(
+          find.byKey(ValueKey('experimental-${feature.id}')),
+          findsNothing,
+        );
+      }
+      // Opening the simplified settings must not enable account-wide execution or
+      // change an older tab's saved sharing choices.
+      expect(server.writes, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   test('a pending save is not presented as saved, and a failed save can be retried', () async {
     final server = AccountSettings('a');
@@ -274,6 +243,39 @@ void main() {
     expect(server.writes, isEmpty);
   });
 
+  testWidgets(
+    'with no push the account is read every five minutes, and a failed read again after 30 s',
+    (tester) async {
+      // Every write is pushed (`desk_changed`), so the 30 s poll was a read
+      // from every open app that almost always found nothing new.
+      final server = AccountSettings('a');
+      final store = ExperimentalFeaturesStore();
+      store.bind('a', transport: server);
+      await tester.pump();
+      final first = server.reads;
+      await tester.pump(const Duration(seconds: 30));
+      expect(server.reads, first);
+      await tester.pump(const Duration(minutes: 4, seconds: 29));
+      expect(server.reads, first);
+      await tester.pump(const Duration(seconds: 31));
+      expect(server.reads, first + 1);
+      // A read the push asked for holds the safety net off again.
+      await tester.pump(const Duration(minutes: 4));
+      await store.refresh();
+      await tester.pump(const Duration(minutes: 1));
+      expect(server.reads, first + 2);
+      server.readOverride = () => Future.error(StateError('offline'));
+      await store.refresh();
+      expect(server.reads, first + 3);
+      expect(store.error, isNotNull);
+      server.readOverride = null;
+      await tester.pump(const Duration(seconds: 30));
+      expect(server.reads, first + 4);
+      expect(store.error, isNull);
+      store.dispose();
+    },
+  );
+
   testWidgets('missed push notifications reconcile through the account poll', (
     tester,
   ) async {
@@ -283,12 +285,55 @@ void main() {
     await tester.pump();
     server.features[share.id] = true;
     server.revision++;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(store.enabled(share), isTrue);
     store.dispose();
     final reads = server.reads;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(server.reads, reads);
+  });
+
+  testWidgets('the safety-net read notifies only when what it shows changes', (
+    tester,
+  ) async {
+    // Every read used to notify, rebuilding each pane header and the
+    // workspace twice a minute while nothing had changed.
+    final server = AccountSettings('a');
+    final store = ExperimentalFeaturesStore();
+    store.bind('a', transport: server);
+    await tester.pump();
+    var notified = 0;
+    store.addListener(() => notified++);
+    for (var i = 0; i < 3; i++) {
+      await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    }
+    // A newer revision that changes no choice is nothing new either.
+    server.revision++;
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect(server.reads, 5);
+    expect(notified, 0);
+    server.features[share.id] = true;
+    server.revision++;
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect((notified, store.enabled(share)), (1, true));
+    // An older backend that no longer names one: unavailable is news.
+    server.features.remove(ExperimentalFeature.agentMessages.id);
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect(notified, 2);
+    expect(store.isAvailable(ExperimentalFeature.agentMessages), isFalse);
+    server.readOverride = () => Future.error(StateError('offline'));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect(notified, 3);
+    expect(store.error, isNotNull);
+    // The same failure again shows nothing new.
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect(notified, 3);
+    server.readOverride = null;
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
+    expect(notified, 4);
+    expect(store.error, isNull);
+    // The poll's timer must not outlive the test (fake async checks it).
+    store.dispose();
   });
 
   testWidgets(

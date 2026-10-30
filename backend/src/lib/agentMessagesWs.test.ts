@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
-  auth: vi.fn(), admits: vi.fn(), relay: vi.fn(), publish: vi.fn(), changed: vi.fn(), live: vi.fn(), upgrade: vi.fn(),
+  auth: vi.fn(), admits: vi.fn(), relay: vi.fn(), publish: vi.fn(), changed: vi.fn(), live: vi.fn(), upgrade: vi.fn(), info: vi.fn(),
   SsoAuthError: class SsoAuthError extends Error { constructor(message: string, readonly code: string) { super(message) } },
 }))
 vi.mock('./ssoAuth.js', () => ({ authenticateAccessToken: m.auth, SsoAuthError: m.SsoAuthError }))
+vi.mock('../utils/logger.js', () => ({ logger: { info: m.info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 vi.mock('./agentMessageShares.js', () => ({ admits: m.admits }))
 vi.mock('./bus.js', () => ({ subscribeTabRelay: m.relay, publishTabRelay: m.publish, subscribeAgentMessageShareChanged: m.changed }))
 vi.mock('./hub.js', () => ({ trackSocketLiveness: m.live }))
@@ -52,6 +53,25 @@ describe('blind shared-tab relay WebSocket', () => {
     expect(m.auth).not.toHaveBeenCalled(); expect(m.upgrade).not.toHaveBeenCalled()
   })
 
+  // WebSocket roadmap Phase 0: which daemon, how its socket ended and after how long.
+  it('logs the daemon it declared, and how and when its socket closed', async () => {
+    await connect(req(`share=${SHARE}&machine=ken-mac&client=relay&v=0.9.1`))
+    vi.advanceTimersByTime(1_500)
+    ws.emit('close', 4409, Buffer.from('Replaced by a newer connection'))
+    const lines = m.info.mock.calls.filter(c => c[0] === 'agent-messages disconnected').map(c => c[1])
+    expect(lines).toEqual([expect.objectContaining({ endpoint: 'agentMessages', client: 'relay', version: '0.9.1', userId: 'ken',
+      machineId: 'ken-mac', code: 4409, reason: 'Replaced by a newer connection', aliveMs: 1_500 })])
+  })
+
+  // Review of #2029: as the observer's, the shared tab's lines never carry its id.
+  it('keeps the shared tab id out of its connect and disconnect lines', async () => {
+    await connect(req(`share=${SHARE}&machine=ken-mac&client=relay`))
+    ws.emit('close', 1000, Buffer.alloc(0))
+    const lines = m.info.mock.calls.filter(c => String(c[0]).startsWith('agent-messages'))
+    expect(lines.map(c => c[0])).toEqual(['agent-messages connected', 'agent-messages disconnected'])
+    expect(JSON.stringify(lines)).not.toContain(SHARE)
+  })
+
   it('upgrades a refused connection and closes it 4403, authenticating as a daemon', async () => {
     m.admits.mockResolvedValue(false)
     await connect(req(`share=${SHARE}&machine=ken-mac&autonomousEnv=stag`))
@@ -78,6 +98,13 @@ describe('blind shared-tab relay WebSocket', () => {
     socket.destroyed = false; m.auth.mockRejectedValueOnce(new m.SsoAuthError('down', 'AUTH_SERVICE_UNAVAILABLE')); await connect()
     expect(socket.write).toHaveBeenCalledTimes(3); expect(socket.destroy).toHaveBeenCalledTimes(4)
     expect(m.upgrade).not.toHaveBeenCalled(); expect(m.admits).not.toHaveBeenCalled()
+  })
+
+  it('answers a team sign-in (lib/teamSession.ts) 403 before the upgrade: refused for good, not a token to refresh', async () => {
+    m.auth.mockRejectedValueOnce(new m.SsoAuthError('This connection is not available to a team sign-in', 'TEAM_SESSION_LIMITED'))
+    await connect()
+    expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+    expect(m.admits).not.toHaveBeenCalled(); expect(m.upgrade).not.toHaveBeenCalled()
   })
 
   it('tells an admitted socket it is ready and subscribes to its own channel and share changes', async () => {
@@ -195,12 +222,15 @@ describe('blind shared-tab relay WebSocket', () => {
     expect(m.publish).toHaveBeenCalledTimes(1)
   })
 
-  it('closes 4403 when a share change or the 5 second re-check finds the socket no longer admitted', async () => {
+  it('closes 4403 when a share change or the 60 second re-check finds the socket no longer admitted', async () => {
     await connect(); m.admits.mockResolvedValue(false); changed(); await flush()
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
     m.admits.mockResolvedValue(true); ws = new Socket(); await connect()
-    await vi.advanceTimersByTimeAsync(5000); expect(ws.close).not.toHaveBeenCalled()
-    m.admits.mockResolvedValue(false); await vi.advanceTimersByTimeAsync(5000)
+    const checks = m.admits.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000); expect(ws.close).not.toHaveBeenCalled()
+    expect(m.admits.mock.calls.length).toBe(checks + 1)
+    m.admits.mockResolvedValue(false); await vi.advanceTimersByTimeAsync(59_999); expect(ws.close).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
   })
 

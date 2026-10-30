@@ -1,0 +1,19 @@
+[Unit]
+Description=Harness setup hotspot, to unlock this computer from a phone
+Documentation=file:///usr/lib/harness-os/unlock/run
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+After=systemd-udev-trigger.service systemd-modules-load.service
+Wants=systemd-udev-trigger.service
+# Gone before the system proper starts: its NetworkManager takes the radio (and setup.py its hotspot).
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target initrd-cleanup.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/harness-os/unlock/run
+# The disk opened from the phone: the system proper starts at once, and this goes with it. A moment
+# first, for the page's "unlocked" to reach the phone over the air.
+ExecStop=/bin/sh -c 'sleep 2'
+ExecStopPost=/usr/lib/harness-os/unlock/run stop
+KillMode=control-group

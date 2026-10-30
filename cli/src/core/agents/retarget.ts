@@ -14,6 +14,7 @@
 import type { BackendSocket } from '../../backendSocket.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
+import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
@@ -23,26 +24,30 @@ import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
+import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
+import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
-import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
-import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { nativeOpencodeStore } from '../../engines/kit/nativeLocations.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 
 type RetargetAgent = NonNullable<BackendSocket['onRetargetAgent']>
 
 export interface RetargetDeps {
+  /** What it answers when no backend here can respawn a pane: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
   /** Whether the engine's turn state says this session is mid-turn (normalizers.sessionTurnOpen). */
   sessionTurnOpen: (sessionId: string) => boolean
   /** Whether a purge holds this agent (PurgeAgentService.busy). */
   purgeBusy: (agentId: string) => boolean | undefined
-  tmuxBackend: TmuxBackend | null
+  /** The backends, and each runtime's own: a row is retargeted in the pane it is in (`restartTargetOf`). */
+  terminals: Pick<TerminalBackendCoordinator, 'backendFor' | 'instances'>
   registry: typeof registry
   runtimeProfiles: Pick<RuntimeProfileManager, 'selectedModel'>
   launchOverridesDeps: LaunchOverridesDeps
@@ -60,17 +65,19 @@ export interface RetargetDeps {
 }
 
 export function createAgentRetargeter({
-  sessionTurnOpen, purgeBusy, tmuxBackend, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
+  sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, refreshGridAssignment, opencodeDb,
+  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE',
 }: RetargetDeps) {
   const authority = createLaunchAuthority({ byAgent: id => registry.byAgent(id),
     revision: id => restartJobs.revision(id), cancelled: () => false })
   const retargetAgent: RetargetAgent = async ({ agentId, grid }) => {
     if (purgeBusy(agentId)) return { ok: false, error: 'AGENT_BUSY' }
-    if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    // No backend here can respawn a pane (tmux missing, the pty host down): the configured backend's code.
+    if (!terminals.instances().some(canRestart)) return { ok: false, error: noBackendCode }
     const live = registry.resolve(agentId)
     if (!live) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    if (live.guest) return GUEST_HARNESS_REFUSAL
     // Registry observations can update a row in place while a service or pane
     // read waits. The request keeps its original conversation and exact process.
     const session = structuredClone(live)
@@ -89,9 +96,11 @@ export function createAgentRetargeter({
       detail,
     ].filter(Boolean).join(' ') })
     const changed = () => failed('AGENT_CHANGED', 'The harness changed or stopped during retarget.')
-    const pane = session.runtimes.find((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
-    // Only tmux panes can be respawned. Saying so is better than a generic failure the user cannot act on.
-    if (!pane) return { ok: false, error: 'RETARGET_UNSUPPORTED_BACKEND', detail: `${session.engine} is not running in a tmux pane` }
+    // Only a pane on a backend that respawns in place can be retargeted: its tmux pane first, as before. Saying
+    // so is better than a generic failure the user cannot act on.
+    const place = restartTargetOf(session, (runtime) => terminals.backendFor(runtime))
+    if (!place) return { ok: false, error: 'RETARGET_UNSUPPORTED_BACKEND', detail: `${session.engine} is not running in a tmux pane` }
+    const { backend, runtime: pane } = place
     // The swap kills a process it has validated by pid + start marker. Without one there is nothing to
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
@@ -143,7 +152,8 @@ export function createAgentRetargeter({
     if (!current()) return changed()
     if (!valid.ok) return { ok: false, error: valid.error, detail: valid.detail }
     // A resumed opencode session takes its model from its own rows in opencode.db, not from `-m`
-    // (see below), and those rows are written through the `sqlite3` CLI. Without it the respawn
+    // (see below), and those rows are written through the `sqlite3` CLI, or through `node:sqlite` where no CLI
+    // is installed (Windows; `kit/nativeSessionModel.ts`). Without either the respawn
     // would land the right provider, key and argv on a pane that then answers on the OLD model —
     // the failure this handler exists to refuse — so it is refused here, before the pane is touched.
     // Only when the launch will name a model: a grid launch always does; a move home does only when
@@ -155,11 +165,11 @@ export function createAgentRetargeter({
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
     const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
     if (!current()) return changed()
-    if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
+    if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !builtinSqlite() && !binaryOnPath('sqlite3')) {
       return {
         ok: false,
         error: 'OPENCODE_SQLITE_MISSING',
-        detail: 'the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
+        detail: 'this Node has no node:sqlite and the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
       }
     }
     // The replacement enters the row's folder before it execs: a folder that is gone is refused here,
@@ -258,8 +268,10 @@ export function createAgentRetargeter({
           }
         }
       }
-      if (!grid) {
-        const cleared = await tmuxBackend.clearEnv(pane, gridEnvVarNames(session.engine), dispatchCurrent)
+      // A backend with no `clearEnv()` (the pty host keeps the pane's create env as tmux keeps its session's) clears
+      // the same names in the respawn itself: `clearPaneEnv` below.
+      if (!grid && backend.clearEnv) {
+        const cleared = await backend.clearEnv(pane, gridEnvVarNames(session.engine), dispatchCurrent)
         if (!dispatchCurrent()) return preparationChanged()
         if (cleared.state !== 'succeeded') {
           return failed('GRID_CLEAR_FAILED', 'reason' in cleared ? cleared.reason : 'tmux would not clear the pane environment')
@@ -273,7 +285,8 @@ export function createAgentRetargeter({
       const outcome = await restartAgent(
         { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         retargetPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, pane, built.overrides, retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+        { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
+          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
       )
       replacementStarted = outcome.ok
       if (!current()) return changed()
@@ -284,7 +297,7 @@ export function createAgentRetargeter({
       // Commit the new process now. Optional grid metadata follows outside the route hold.
       const gateway = await probeGatewayRuntime(outcome.processIdentity)
       if (!current()) return changed()
-      await clearPaneRemainOnExit(pane.paneId, current)
+      await backend.releaseHold(pane, current)
       if (!current()) return changed()
       registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and

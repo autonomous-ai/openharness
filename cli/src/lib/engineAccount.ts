@@ -16,6 +16,7 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
+import { isCodexRelayAuth } from './subscriptionRelay.js'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -37,6 +38,9 @@ export interface EngineAccountDeps {
   platform?: NodeJS.Platform
   /** Whether a macOS Keychain generic-password item with this service exists. */
   keychainHas?: (service: string) => Promise<boolean>
+  /** False: whether it is signed in only, without the session folders' scan (`lastUsedAt` null). The gateway's
+   *  first-launch count asks this, once per installation (gateway/productUsage.ts). */
+  lastUsed?: boolean
 }
 
 const exists = (path: string) => stat(path).then(() => true, () => false)
@@ -86,7 +90,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   if (engine === 'claude') {
     const custom = env.CLAUDE_CONFIG_DIR
     const dir = custom || join(home, '.claude')
-    const lastUsedAt = await newestChild(join(dir, 'projects'))
+    const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))
     if (CLAUDE_ENV.some(name => Boolean(env[name]))) return { signedIn: true, lastUsedAt }
     if (await exists(join(dir, '.credentials.json'))) return { signedIn: true, lastUsedAt }
     if (typeof (await readJson(join(dir, 'settings.json')))?.apiKeyHelper === 'string') return { signedIn: true, lastUsedAt }
@@ -101,9 +105,11 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   }
   if (engine === 'codex') {
     const dir = env.CODEX_HOME || join(home, '.codex')
-    const lastUsedAt = await newestDay(join(dir, 'sessions'))
+    const lastUsedAt = deps.lastUsed === false ? null : await newestDay(join(dir, 'sessions'))
     if (env.OPENAI_API_KEY) return { signedIn: true, lastUsedAt }
     const auth = await readJson(join(dir, 'auth.json'))
+    // The owner relay's sign-in (lib/subscriptionRelay.ts codexRelayAuth) is the relay's, not this account's own.
+    if (isCodexRelayAuth(auth)) return { signedIn: false, lastUsedAt }
     const tokens = auth?.tokens as Record<string, unknown> | null | undefined
     if (auth && (auth.OPENAI_API_KEY || (tokens && (tokens.access_token || tokens.refresh_token)))) {
       return { signedIn: true, lastUsedAt }

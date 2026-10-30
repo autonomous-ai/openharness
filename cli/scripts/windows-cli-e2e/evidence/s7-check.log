@@ -1,0 +1,60 @@
+# s7 checks (08:59:58)
+clean: nothing of Harness is left. Checked: C:\Users\hxe2e\.harness, the task 'Harness harnessd (hxe2e)', the user PATH, the processes running from C:\Users\hxe2e\.harness\, the uninstall's temp files, notify.mjs in 4 settings files, the [hooks.state] records in C:\Users\hxe2e\.codex\config.toml, and 6 hook file(s) named by -HookFiles
+## procs.ps1 -User hxe2e
+
+(empty table = nothing)
+## the user PATH after (B5.3)
+Path [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;%APPDATA%\npm;%USERPROFILE%\.local\bin
+## the program's own leftovers (B5.9): bin\harness.exe, harness.exe~RF*.TMP, runtime, the root, the temp script/log
+File Not Found
+File Not Found
+File Not Found
+## env and engine settings
+
+HKEY_CURRENT_USER\Environment
+    Path    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;%APPDATA%\npm;%USERPROFILE%\.local\bin
+    TEMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    TMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    PORT    REG_SZ    18474
+    ADAPTER_UPDATE_URL    REG_SZ    http://192.168.65.1:8799/cli/metadata.json
+    OneDrive    REG_EXPAND_SZ    C:\Users\hxe2e\OneDrive
+
+===== C:\Users\hxe2e\.claude\settings.json
+{
+  "hooks": {},
+  "autoUpdatesChannel": "latest"
+}
+
+===== C:\Users\hxe2e\.codex\hooks.json
+{
+  "hooks": {}
+}
+
+===== C:\Users\hxe2e\.codex\config.toml
+[tui]
+screen_reader_detection_done = true
+
+===== C:\Users\hxe2e\.codex\rules\harness.rules
+(absent)
+===== C:\Users\hxe2e\.commandcode\settings.json
+{
+  "hooks": {}
+}
+
+===== plugin and hook files Harness wrote outside ~\.harness
+C:\Users\hxe2e\.config\kilo\.bash-permission-migrated  0 bytes
+C:\Users\hxe2e\.config\kilo\.gitignore  107 bytes
+C:\Users\hxe2e\.config\kilo\kilo.jsonc  50 bytes
+C:\Users\hxe2e\.config\kilo\package-lock.json  14605 bytes
+C:\Users\hxe2e\.config\kilo\package.json  61 bytes
+(the files listed under .config\kilo after the uninstall are Kilo's own: its config, package.json and node_modules, which Kilo writes at start; Harness's plugin there, plugin\launcher-register.js, is gone)
+## user variables removed (09:13:15)
+The operation completed successfully.
+The operation completed successfully.
+
+HKEY_CURRENT_USER\Environment
+    Path    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;%APPDATA%\npm;%USERPROFILE%\.local\bin
+    TEMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    TMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    OneDrive    REG_EXPAND_SZ    C:\Users\hxe2e\OneDrive
+

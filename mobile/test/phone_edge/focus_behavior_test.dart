@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:file_selector/file_selector.dart' show XFile;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,7 +12,10 @@ import 'package:harness_mobile/phone/machines_tab.dart';
 import 'package:harness_mobile/phone/phone_search_catalog.dart'
     show phoneAgentId;
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
+import 'package:harness_mobile/phone/terminal_file_send.dart';
+import 'package:harness_mobile/phone/terminal_find_bar.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
+import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -20,6 +26,7 @@ import 'package:harness_mobile/state/pending_question.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
+import 'package:harness_mobile/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
 
 import '../voice_fakes.dart';
@@ -104,6 +111,29 @@ void main() {
     lowerKeyboard(tester);
     await frames(tester);
     expect(find.byType(VoiceMicButton), findsOneWidget);
+    await focus.close();
+  });
+
+  testWidgets('a keyboard asked for again while ⌄ still slides it down is '
+      "the page's", (tester) async {
+    final focus = await _Focus.open(tester);
+    bool focused() =>
+        tester.widget<TerminalPanel>(find.byType(TerminalPanel)).focused;
+
+    await focus.tapPrompt();
+    raiseKeyboard(tester);
+    await frames(tester);
+    expect(focused(), isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('terminal-key-Hide keyboard')));
+    // Halfway down when the prompt is tapped again: the inset turns back without reaching zero.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pump(const Duration(milliseconds: 16));
+    await focus.tapPrompt();
+    raiseKeyboard(tester);
+    await frames(tester);
+
+    expect(focused(), isTrue, reason: 'the keyboard up is read as up');
     await focus.close();
   });
 
@@ -330,15 +360,180 @@ void main() {
     });
   });
 
+  // The desktop's ⌘F: the phone could not search what a harness had said at all — a long build's
+  // one error line was found by scrolling and reading.
+  group('find in terminal', () {
+    Finder bar() => find.byKey(const ValueKey('terminal-find-bar'));
+    Finder field() =>
+        find.descendant(of: bar(), matching: find.byType(TextField));
+    String status(WidgetTester tester) =>
+        (tester.widget<Text>(
+                  find.descendant(
+                    of: find.byKey(const ValueKey('terminal-find-status')),
+                    matching: find.byType(Text),
+                  ),
+                ).data ??
+                '')
+            .trim();
+
+    /// The page, its terminal holding [lines], and Find opened from the `⋯` menu.
+    Future<_Focus> openFind(
+      WidgetTester tester, {
+      String lines = 'row 1 marker\r\nrow 2\r\nrow 3 marker\r\n',
+    }) async {
+      final focus = await _Focus.open(tester);
+      focus.session.terminal.write(lines);
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tester.tap(find.text('Find in terminal'));
+      await frames(tester);
+      return focus;
+    }
+
+    Future<void> search(WidgetTester tester, String query) async {
+      await tester.enterText(field(), query);
+      await frames(tester);
+    }
+
+    testWidgets('opens from the menu with its field focused, counts and steps, '
+        'and nothing typed reaches the shell', (tester) async {
+      final focus = await openFind(tester);
+
+      expect(bar(), findsOneWidget);
+      expect(
+        tester.binding.focusManager.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<TextField>(),
+        isNotNull,
+        reason: 'the field has the keyboard',
+      );
+      await search(tester, 'marker');
+      expect(status(tester), '1/2');
+
+      await tester.tap(find.byKey(const ValueKey('terminal-find-next')));
+      await frames(tester);
+      expect(status(tester), '2/2');
+      await tester.tap(find.byKey(const ValueKey('terminal-find-previous')));
+      await frames(tester);
+      expect(status(tester), '1/2');
+
+      expect(focus.typed, isEmpty, reason: 'the query is the bar’s');
+      await focus.close();
+    });
+
+    testWidgets('nothing found reads 0/0, and ↑ ↓ take no tap', (tester) async {
+      final focus = await openFind(tester);
+      await search(tester, 'needle');
+
+      expect(status(tester), '0/0');
+      final next = tester.widget<IconButton>(
+        find.byKey(const ValueKey('terminal-find-next')),
+      );
+      expect(next.onPressed, isNull);
+      await focus.close();
+    });
+
+    // ⚠️ Every keyboard raised or lowered ends in a keyframe that replaces the terminal — Find's
+    // own field's keyboard among them. Read as the terminal's, that keyboard handed the input
+    // connection back to the panel, and the rest of the query went to the shell.
+    testWidgets('a keyframe while typing keeps the search, and the query out of '
+        'the shell', (tester) async {
+      final focus = await openFind(tester);
+      await search(tester, 'mar');
+      // The field's keyboard, up — the one the terminal must not take for its own.
+      raiseKeyboard(tester);
+      await frames(tester);
+      // What the machine sends after the resize the field's keyboard caused: a new screen.
+      await focus.session.handleBinary(
+        TerminalBinaryFrame(
+          kind: TerminalBinaryKind.keyframe,
+          streamId: focus.session.streamId!,
+          seq: 1000,
+          bytes: Uint8List.fromList(
+            utf8.encode('one marker\r\nanother marker\r\n'),
+          ),
+          compressed: false,
+          cols: focus.session.terminal.viewWidth,
+          rows: focus.session.terminal.viewHeight,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 250));
+      await frames(tester);
+      expect(
+        tester.binding.focusManager.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<TerminalFindBar>(),
+        isNotNull,
+        reason: 'the keyboard is still the field’s after the terminal was replaced',
+      );
+
+      await search(tester, 'marker');
+      // Both found on the new screen; which one is lit follows the match carried across.
+      expect(status(tester), matches(RegExp(r'^[12]/2$')));
+      expect(focus.typed, isEmpty);
+      await focus.close();
+    });
+
+    testWidgets('× and Back put it away, and the page stays', (tester) async {
+      final focus = await openFind(tester);
+      await tester.tap(find.byKey(const ValueKey('terminal-find-close')));
+      await frames(tester);
+      expect(bar(), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tester.tap(find.text('Find in terminal'));
+      await frames(tester);
+      expect(bar(), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await frames(tester);
+      expect(bar(), findsNothing, reason: 'Back closes Find first');
+      expect(find.byType(TerminalPage), findsOneWidget);
+      await focus.close();
+    });
+
+    // The keyboard-inset rule (`phone_shell.dart`): a bar on the keyboard sits exactly on it, never
+    // a second keyboard's height higher.
+    testWidgets('the bar sits on the keyboard, not two keyboards up', (
+      tester,
+    ) async {
+      final focus = await openFind(tester);
+      raiseKeyboard(tester);
+      await frames(tester);
+
+      final screen = tester.view.physicalSize.height / tester.view.devicePixelRatio;
+      final keyboard = tester.view.viewInsets.bottom / tester.view.devicePixelRatio;
+      expect(tester.getBottomLeft(bar()).dy, moreOrLessEquals(screen - keyboard, epsilon: 1));
+
+      lowerKeyboard(tester);
+      await frames(tester);
+      expect(
+        tester.getBottomLeft(bar()).dy,
+        greaterThan(screen - keyboard),
+        reason: 'back at the foot once the keyboard has gone',
+      );
+      await focus.close();
+    });
+  });
+
   group('the menu', () {
     Future<_Focus> openMenu(
       WidgetTester tester, {
       bool working = false,
       bool raw = false,
+      String engine = 'claude',
+      EdgeConn? connection,
     }) async {
       final focus = await _Focus.open(
         tester,
-        agents: [edgeAgent('a', project: longProject, branch: longBranch)],
+        agents: [
+          edgeAgent(
+            'a',
+            engine: engine,
+            project: longProject,
+            branch: longBranch,
+          ),
+        ],
+        connection: connection,
       );
       if (working) focus.app.stateOf('m')!.processingAgentIds.add('a');
       focus.app.stateOf('m')!.terminalPasteRawAvailable = raw;
@@ -438,13 +633,773 @@ void main() {
       await focus.close();
     });
 
+    /// A machine that forks what it is asked to, as `f`, echoing the receipt — or, with [failure],
+    /// records the fork as refused for that reason.
+    EdgeConn forking({Map<String, dynamic>? failure}) => EdgeConn(
+      const {},
+      (type, payload) => type != 'agent_fork'
+          ? null
+          : failure != null
+          ? {
+              'creationId': payload['creationId'],
+              'state': 'failed',
+              'failure': failure,
+            }
+          : {
+              'creationId': payload['creationId'],
+              'state': 'created',
+              'level': 'native',
+              'agent': {
+                'id': 'f',
+                'name': payload['name'] ?? 'f',
+                'engine': 'claude',
+                'terminal': {'available': true},
+              },
+            },
+    )..handshaken = true;
+
+    testWidgets('Clone opens another of this one, in the same folder, and the '
+        'source stays as it was', (tester) async {
+      final conn = EdgeConn(const {}, startsAgents)..handshaken = true;
+      final focus = await openMenu(tester, connection: conn);
+      await tapInView(tester, find.text('Clone'));
+      for (var i = 0; i < 40 && focus.opened.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      final [sent] = conn.payloads['agent_create']!;
+      expect(sent['engine'], 'claude');
+      expect(sent['cwd'], '/code/$longProject');
+      expect(sent['name'], 'a - clone');
+      expect(focus.opened, [('m', 'new-agent')]);
+      expect(conn.requests, isNot(contains('agent_close')));
+      await focus.close();
+    });
+
+    testWidgets('Clone, while it is out, says so and cannot be pressed '
+        'again', (tester) async {
+      final reply = Completer<Map<String, dynamic>>();
+      final conn = _HeldCreateConn(reply.future)..handshaken = true;
+      final focus = await openMenu(tester, connection: conn);
+      await tapInView(tester, find.text('Clone'));
+      await frames(tester);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('cloning…'), findsOneWidget);
+      await tapInView(tester, find.text('Clone'));
+      await frames(tester);
+      expect(conn.payloads['agent_create'], hasLength(1));
+
+      reply.complete({'error': 'BUSY'});
+      await frames(tester);
+      await focus.close();
+    });
+
+    testWidgets('Fork is offered where the machine can fork, and not on a '
+        'terminal', (tester) async {
+      var focus = await openMenu(tester);
+      expect(find.text('Fork'), findsOneWidget);
+      await focus.close();
+
+      focus = await openMenu(tester, engine: 'terminal');
+      expect(find.text('Fork'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('Fork: the desktop’s form, named after the source, then the '
+        'fork opens and the source is left as it was', (tester) async {
+      final conn = forking();
+      final focus = await openMenu(tester, connection: conn);
+      await tapInView(tester, find.text('Fork'));
+      await frames(tester);
+
+      expect(find.text('Fork Harness'), findsOneWidget);
+      expect(
+        find.text('Continues the conversation in the same project folder.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('fork-name')))
+            .controller!
+            .text,
+        'a - fork',
+      );
+      await tester.enterText(
+        find.byKey(const Key('fork-task')),
+        'Try the other approach',
+      );
+      await tester.tap(find.byKey(const Key('fork-confirm')));
+      for (var i = 0; i < 40 && focus.opened.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      final [sent] = conn.payloads['agent_fork']!;
+      expect(sent['agentId'], 'a');
+      expect(sent['name'], 'a - fork');
+      expect(sent['prompt'], 'Try the other approach');
+      expect(focus.opened, [('m', 'f')]);
+      await frames(tester);
+      expect(find.text('Fork Harness'), findsNothing, reason: 'the form went');
+      expect(
+        conn.requests,
+        isNot(contains('agent_close')),
+        reason: 'the source is not touched',
+      );
+      await focus.close();
+    });
+
+    testWidgets('Fork the machine refuses says why in the form, and opens '
+        'nothing', (tester) async {
+      final conn = forking(
+        failure: {
+          'code': 'AGENT_BUSY',
+          'detail': 'a is in the middle of a turn.',
+        },
+      );
+      final focus = await openMenu(tester, connection: conn);
+      await tapInView(tester, find.text('Fork'));
+      await frames(tester);
+      await tester.tap(find.byKey(const Key('fork-confirm')));
+      await frames(tester);
+
+      expect(find.text('a is in the middle of a turn.'), findsOneWidget);
+      expect(find.text('Fork'), findsOneWidget, reason: 'can be sent again');
+      expect(focus.opened, isEmpty);
+      await focus.close();
+    });
+
+    testWidgets('Fork with no name is not sent', (tester) async {
+      final conn = forking();
+      final focus = await openMenu(tester, connection: conn);
+      await tapInView(tester, find.text('Fork'));
+      await frames(tester);
+      await tester.enterText(find.byKey(const Key('fork-name')), '  ');
+      await tester.tap(find.byKey(const Key('fork-confirm')));
+      await frames(tester);
+
+      expect(find.text('Name cannot be empty'), findsOneWidget);
+      expect(conn.payloads['agent_fork'], isNull);
+      await focus.close();
+    });
+
+    // The form's own fields raise the keyboard, and on a small phone it takes most of the screen:
+    // the form scrolls inside what is left rather than overflowing, and Fork stays in reach.
+    testWidgets('Fork’s form under the keyboard on a small phone still reaches '
+        'Fork', (tester) async {
+      final conn = forking();
+      final focus = await openMenu(tester, connection: conn);
+      setPhone(tester, smallPhone);
+      await frames(tester);
+      await tapInView(tester, find.text('Fork'));
+      await frames(tester);
+      raiseKeyboard(tester);
+      await frames(tester);
+      expect(tester.takeException(), isNull, reason: 'no overflow');
+
+      final confirm = find.byKey(const Key('fork-confirm'));
+      await tester.ensureVisible(confirm);
+      await tester.pump();
+      final bottom = tester.getRect(confirm).bottom;
+      expect(
+        bottom,
+        lessThanOrEqualTo(smallPhone.size.height - smallPhone.keyboard),
+        reason: 'above the keyboard',
+      );
+      await tester.tap(confirm);
+      for (var i = 0; i < 40 && focus.opened.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(focus.opened, [('m', 'f')]);
+      lowerKeyboard(tester);
+      await frames(tester);
+      await focus.close();
+    });
+
+    testWidgets('Fork closed while it is on its way carries on, says so when '
+        'it lands, and offers the fork', (tester) async {
+      final reply = Completer<Map<String, dynamic>>();
+      final forkConn = _HeldForkConn(reply.future)..handshaken = true;
+      final focus = await openMenu(tester, connection: forkConn);
+      await tapInView(tester, find.text('Fork'));
+      await frames(tester);
+      await tester.tap(find.byKey(const Key('fork-confirm')));
+      await frames(tester);
+      expect(
+        find.text('Forking continues if you close this dialog.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('fork-cancel')));
+      await frames(tester);
+      expect(find.text('Fork Harness'), findsNothing);
+
+      // The menu says so while it is out, and goes when the answer lands under it.
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('forking…'), findsOneWidget);
+
+      reply.complete({
+        'creationId': forkConn.receipt,
+        'state': 'created',
+        'agent': {
+          'id': 'f',
+          'name': 'a - fork',
+          'engine': 'claude',
+          'terminal': {'available': true},
+        },
+      });
+      await frames(tester);
+      expect(find.text('forking…'), findsNothing, reason: 'the menu went');
+      expect(find.text('Fork created.'), findsOneWidget);
+      expect(
+        focus.opened,
+        isEmpty,
+        reason: 'offered, not opened over the page',
+      );
+      await tester.tap(find.text('Open'));
+      await frames(tester);
+      expect(focus.opened, [('m', 'f')]);
+      await focus.close();
+    });
+
+    /// A harness its machine can save and stop — what Change agent needs of one.
+    Agent switchable() => Agent(
+      id: 'a',
+      name: 'a',
+      engine: 'claude',
+      sessionId: 'session-a',
+      project: const AgentProject(name: 'web', cwd: '/code/web'),
+      terminalAvailable: true,
+      createdAt: DateTime.utc(2026, 10, 16, 1),
+      closeSupported: true,
+    );
+
+    /// The switch's own requests, in the order the machine got them.
+    List<String> switchSteps(EdgeConn conn) => [
+      for (final type in conn.requests)
+        if (const {
+          'agent_handoff_prepare',
+          'agent_recent',
+          'agent_close',
+          'agent_create',
+        }.contains(type))
+          type,
+    ];
+
+    /// Change agent ▸ [label], picked by searching for it: the list is longer than a screen.
+    Future<void> switchTo(WidgetTester tester, String label) async {
+      await tester.tap(find.text('Change agent'));
+      await frames(tester);
+      await tester.enterText(find.byType(TextField).last, label);
+      await frames(tester);
+      await tester.tap(find.text(label, findRichText: true).last);
+      await frames(tester);
+    }
+
+    /// A machine that reviews then deletes what it is asked to — or, with [review], answers the
+    /// review only when that does.
+    EdgeConn purging({Future<Map<String, dynamic>>? review}) =>
+        _PurgeConn(review ?? Future.value({'reviewId': 'review-1'}))
+          ..handshaken = true;
+
+    testWidgets('while it works: Stop after it finishes queues the stop, and '
+        'the menu then offers to keep it running', (tester) async {
+      final conn = EdgeConn(const {}, (type, payload) {
+        if (type != 'agent_close') return null;
+        return payload['mode'] == 'cancel'
+            ? {'cancelled': true}
+            : {'deferred': true};
+      })..handshaken = true;
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      focus.app.stateOf('m')!.processingAgentIds.add('a');
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+
+      await tapInView(tester, find.text('Stop after it finishes'));
+      await frames(tester);
+      expect(conn.payloads['agent_close']!.single['mode'], 'after_task');
+      expect(find.text('Stops after it finishes.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Stop after it finishes'), findsNothing);
+      await tapInView(
+        tester,
+        find.text('Stops after finishing · Keep running'),
+      );
+      await frames(tester);
+      expect(conn.payloads['agent_close']!.last['mode'], 'cancel');
+      // Behind the first answer's snackbar, which has its few seconds first.
+      await tester.pump(const Duration(seconds: 5));
+      await frames(tester);
+      expect(find.text('Keeps running.'), findsOneWidget);
+      await focus.close();
+    });
+
+    testWidgets('idle, or a shell, has no stop to queue — Stop is the '
+        'answer', (tester) async {
+      var focus = await _Focus.open(tester, agents: [switchable()]);
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Stop after it finishes'), findsNothing);
+      expect(find.text('Stop this harness'), findsOneWidget);
+      await focus.close();
+
+      focus = await openMenu(tester, working: true);
+      expect(
+        find.text('Stop after it finishes'),
+        findsNothing,
+        reason: 'its machine cannot close it',
+      );
+      await focus.close();
+    });
+
+    testWidgets('Delete is offered beside Stop, and not on a terminal', (
+      tester,
+    ) async {
+      var focus = await openMenu(tester);
+      expect(find.text('Stop this harness'), findsOneWidget);
+      expect(find.text('Delete this harness'), findsOneWidget);
+      await focus.close();
+
+      focus = await openMenu(tester, engine: 'terminal');
+      expect(find.text('Stop this harness'), findsOneWidget);
+      expect(find.text('Delete this harness'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('Delete, confirmed, reviews then deletes the harness this page '
+        'shows, conversation and all', (tester) async {
+      final conn = purging();
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tapInView(tester, find.text('Delete this harness'));
+      await frames(tester);
+      expect(find.text('Delete a?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await frames(tester);
+
+      expect(
+        [for (final p in conn.payloads['agent_purge']!) p['mode']],
+        ['inspect', 'delete'],
+      );
+      expect(conn.payloads['agent_purge']!.last, {
+        'agentId': 'a',
+        'sessionId': 'session-a',
+        'createdAt': DateTime.utc(2026, 10, 16, 1).millisecondsSinceEpoch,
+        'mode': 'delete',
+        'reviewId': 'review-1',
+      });
+      expect(conn.requests, isNot(contains('agent_delete')));
+      expect(focus.app.stateOf('m')!.agents, isEmpty);
+      await focus.close();
+    });
+
+    testWidgets('Delete, while it is out, says so and cannot be pressed '
+        'again', (tester) async {
+      final review = Completer<Map<String, dynamic>>();
+      final conn = purging(review: review.future);
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tapInView(tester, find.text('Delete this harness'));
+      await frames(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await frames(tester);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Delete this harness'), findsNothing);
+      await tapInView(tester, find.text('Deleting…'));
+      await frames(tester);
+      expect(find.text('Delete a?'), findsNothing, reason: 'took no tap');
+
+      await tester.tapAt(const Offset(200, 40));
+      await frames(tester);
+      review.complete({'error': 'OWNER_REQUIRED'});
+      await frames(tester);
+      expect(find.text('Delete failed: OWNER_REQUIRED'), findsOneWidget);
+      expect(conn.payloads['agent_purge'], hasLength(1));
+      await focus.close();
+    });
+
+    testWidgets('Change agent is named by the agent it is on, and offered to '
+        'an agent only', (tester) async {
+      var focus = await openMenu(tester);
+      final row = find
+          .ancestor(of: find.text('Change agent'), matching: find.byType(Row))
+          .first;
+      expect(
+        find.descendant(of: row, matching: find.text('Claude')),
+        findsOneWidget,
+      );
+      await focus.close();
+
+      focus = await openMenu(tester, engine: 'terminal');
+      expect(find.text('Change agent'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('Change agent: the desktop picker’s rows, then the agent picked '
+        'opens in place of this one', (tester) async {
+      final conn = EdgeConn({
+        'agent_handoff_prepare': {
+          'agentId': 'a',
+          'file': null,
+          'gitRepo': true,
+          'cwd': '/code/web',
+          'degraded': <String>[],
+        },
+        'agent_close': {'closed': true},
+      }, startsAgents)..handshaken = true;
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tester.tap(find.text('Change agent'));
+      await frames(tester);
+
+      expect(find.text('Current agent'), findsOneWidget);
+      expect(
+        find.text('Continue this project with recent context'),
+        findsWidgets,
+      );
+      expect(find.text('New conversation in the same project'), findsWidgets);
+      await tester.enterText(find.byType(TextField).last, 'Codex');
+      await frames(tester);
+      await tester.tap(find.text('Codex', findRichText: true).last);
+      for (var i = 0; i < 120 && focus.opened.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 250));
+      }
+
+      expect(switchSteps(conn), [
+        'agent_handoff_prepare',
+        'agent_close',
+        'agent_create',
+      ]);
+      expect(conn.payloads['agent_create']!.single['engine'], 'codex');
+      expect(focus.opened, [('m', 'new-agent')]);
+      // Nothing to hand over: the desktop's line for a switch without history.
+      expect(
+        find.text(
+          'Switched to Codex without history: no earlier conversation from '
+          'Claude was found to hand off.',
+        ),
+        findsOneWidget,
+      );
+      await focus.close();
+    });
+
+    testWidgets('Change agent that cannot go on says why, and opens nothing', (
+      tester,
+    ) async {
+      // A machine older than `agent_close`: the old agent could not be saved and stopped safely.
+      final focus = await openMenu(tester);
+      await switchTo(tester, 'Codex');
+      await frames(tester);
+
+      expect(
+        find.text(
+          'Update the Harness CLI on this machine to close saved sessions safely.',
+        ),
+        findsOneWidget,
+      );
+      expect(switchSteps(focus.conn), isEmpty);
+      expect(focus.opened, isEmpty);
+      await focus.close();
+    });
+
+    testWidgets('Change agent, while it runs, says so and cannot be pressed '
+        'again', (tester) async {
+      final handoff = Completer<Map<String, dynamic>>();
+      final conn = _SwitchConn(() => handoff.future)..handshaken = true;
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await switchTo(tester, 'Codex');
+      expect(conn.handoffs, 1);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('switching…'), findsOneWidget);
+      await tester.tap(find.text('Change agent'));
+      await frames(tester);
+      expect(
+        find.text('Current agent'),
+        findsNothing,
+        reason: 'the row took no tap, so no second chooser opened',
+      );
+      expect(conn.handoffs, 1);
+
+      await tester.tapAt(const Offset(200, 40));
+      await frames(tester);
+      handoff.complete({'error': 'BUSY'});
+      await frames(tester);
+      await focus.close();
+    });
+
+    // The first switch tried on a phone waited half a minute on the computer: its two-second line
+    // had gone, the menu opened to check said `switching…` long after, and the answer was in a
+    // snackbar under that menu.
+    testWidgets('Change agent says it is switching for as long as it is, and '
+        'when it ends under an open menu the menu goes and the answer shows', (
+      tester,
+    ) async {
+      final handoff = Completer<Map<String, dynamic>>();
+      final conn = _SwitchConn(() => handoff.future)..handshaken = true;
+      final focus = await _Focus.open(
+        tester,
+        agents: [switchable()],
+        connection: conn,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await switchTo(tester, 'Codex');
+
+      // Past the two seconds a flash lasts.
+      await tester.pump(const Duration(seconds: 3));
+      expect(find.text('switching to Codex…'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('switching…'), findsOneWidget);
+
+      handoff.completeError(
+        const WsRequestFailure(responseType: 'result', code: 'BUSY'),
+      );
+      await frames(tester);
+
+      expect(find.text('Rename'), findsNothing, reason: 'the menu went');
+      expect(
+        find.text('Preparing the handoff took too long. Try switching again.'),
+        findsOneWidget,
+      );
+      expect(find.text('switching to Codex…'), findsNothing);
+      expect(switchSteps(conn), ['agent_handoff_prepare']);
+      await focus.close();
+    });
+
+    /// The menu again, over the terminal, as a second look at it opens it.
+    Future<void> reopen(WidgetTester tester) async {
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+    }
+
+    /// The menu put away by a tap above it, on the veil.
+    Future<void> putAway(WidgetTester tester) async {
+      await tester.tapAt(const Offset(200, 40));
+      await frames(tester);
+    }
+
+    // ⚠️ A second press is a second restart: the machine runs it once the first is done, and the
+    // engine that just came back is replaced again.
+    testWidgets('Restart, while it runs, says so and cannot be pressed again', (
+      tester,
+    ) async {
+      final reply = Completer<Map<String, dynamic>>();
+      final conn = _RestartConn(() => reply.future);
+      final focus = await openMenu(tester, connection: conn);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(conn.restarts, 1);
+
+      // Nothing seemed to happen: the menu opened again, Restart pressed again.
+      await reopen(tester);
+      expect(find.text('restarting…'), findsOneWidget);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(conn.restarts, 1);
+      expect(
+        find.text('restarting…'),
+        findsOneWidget,
+        reason: 'the row took no tap, so the menu is still up',
+      );
+
+      await putAway(tester);
+      reply.complete({'resumed': true});
+      await frames(tester);
+      await reopen(tester);
+      expect(find.text('restarting…'), findsNothing);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(
+        conn.restarts,
+        2,
+        reason: 'once it is over, it can be asked again',
+      );
+      await focus.close();
+    });
+
+    testWidgets('Restart that came back on a new conversation says so', (
+      tester,
+    ) async {
+      final focus = await openMenu(
+        tester,
+        connection: EdgeConn(const {
+          'agent_restart': {'resumed': false},
+        }),
+      );
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(find.text('Restarted with a new conversation.'), findsOneWidget);
+      await focus.close();
+    });
+
+    testWidgets('Restart that came back where it was says nothing', (
+      tester,
+    ) async {
+      final focus = await openMenu(
+        tester,
+        connection: EdgeConn(const {
+          'agent_restart': {'resumed': true},
+        }),
+      );
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(find.byType(SnackBar), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('Restart from a machine too old to say how it came back says '
+        'nothing', (tester) async {
+      final focus = await openMenu(tester);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(focus.conn.requests, contains('agent_restart'));
+      expect(find.byType(SnackBar), findsNothing);
+      await focus.close();
+    });
+
+    // A terminal always restarts as a fresh shell, which is what its Restart promised.
+    testWidgets('Restart of a terminal, a fresh shell, says nothing', (
+      tester,
+    ) async {
+      final focus = await openMenu(
+        tester,
+        engine: 'terminal',
+        connection: EdgeConn(const {
+          'agent_restart': {'resumed': false},
+        }),
+      );
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(focus.conn.requests, contains('agent_restart'));
+      expect(find.byType(SnackBar), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('Restart the machine refuses says why in a sentence, not as '
+        'the socket\'s error', (tester) async {
+      final conn = _RestartConn(
+        () async => throw const WsRequestFailure(
+          responseType: 'agent_restart_result',
+          code: 'AGENT_BUSY',
+        ),
+      );
+      final focus = await openMenu(tester, connection: conn);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(
+        find.text(
+          'Another operation is changing this harness. Wait for it to finish, then retry.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('agent_restart_result'), findsNothing);
+      await putAway(tester);
+      await reopen(tester);
+      expect(find.text('restarting…'), findsNothing);
+      await focus.close();
+    });
+
+    // The machine may be restarting it still: "failed" would send the person to press Restart
+    // again, over a restart that is about to finish.
+    testWidgets('Restart whose reply never came does not say it failed', (
+      tester,
+    ) async {
+      final conn = _RestartConn(
+        () async => throw const WsRequestTimeout('agent_restart'),
+      );
+      final focus = await openMenu(tester, connection: conn);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(
+        find.text(
+          'Could not confirm the restart. Check the terminal before restarting again.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('failed'), findsNothing);
+      expect(find.textContaining('timed out'), findsNothing);
+
+      await putAway(tester);
+      await reopen(tester);
+      expect(find.text('restarting…'), findsNothing);
+      await tester.tap(find.text('Restart'));
+      await frames(tester);
+      expect(
+        conn.restarts,
+        2,
+        reason: 'not held for good by a reply that never came',
+      );
+      await focus.close();
+    });
+
+    // A row that opens a screen of its own says so by opening it: no trailing `…`. The ellipsis is
+    // kept for a row saying something is on its way (`forking…`, `Deleting…`).
+    testWidgets('no row ends in an ellipsis', (tester) async {
+      final focus = await openMenu(tester);
+      for (final label in const [
+        'Fork',
+        'Rename',
+        'Stop this harness',
+        'Delete this harness',
+      ]) {
+        expect(find.text(label), findsOneWidget);
+      }
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                (widget.data ?? widget.textSpan?.toPlainText() ?? '')
+                    .contains('…'),
+          ),
+        ),
+        findsNothing,
+      );
+      await focus.close();
+    });
+
     testWidgets('Rename, Stop and Settings open their own screens', (
       tester,
     ) async {
       final focus = await openMenu(tester);
       // Switched off everywhere for now (`kModelSheetEnabled`): no row that looks like a choice.
       expect(find.text('Model'), findsNothing);
-      await tester.tap(find.text('Rename…'));
+      await tester.tap(find.text('Rename'));
       await frames(tester);
       expect(find.byType(TextField), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -452,7 +1407,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      await tapInView(tester, find.text('Stop this harness…'));
+      await tapInView(tester, find.text('Stop this harness'));
       await frames(tester);
       expect(find.text('Cancel'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -465,6 +1420,61 @@ void main() {
       expect(find.byType(SettingsPage), findsOneWidget);
       await focus.close();
     });
+  });
+
+  // ⌘V on an iPad's keyboard, Ctrl+V on an Android one: the menu's own Paste, not the desktop's —
+  // which ended in a ⌃V that pasted the far machine's clipboard rather than this phone's.
+  group('a hardware keyboard\'s paste', () {
+    final phones = TargetPlatformVariant({
+      TargetPlatform.iOS,
+      TargetPlatform.android,
+    });
+
+    /// The page, typing into its terminal.
+    Future<_Focus> typing(WidgetTester tester) async {
+      final focus = await _Focus.open(tester);
+      await focus.tapPrompt();
+      await tester.pump();
+      raiseKeyboard(tester);
+      await frames(tester);
+      return focus;
+    }
+
+    Future<void> pasteChord(WidgetTester tester) async {
+      final ios = defaultTargetPlatform == TargetPlatform.iOS;
+      final platform = ios ? 'ios' : 'android';
+      final modifier = ios
+          ? LogicalKeyboardKey.metaLeft
+          : LogicalKeyboardKey.controlLeft;
+      await tester.sendKeyDownEvent(modifier, platform: platform);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV, platform: platform);
+      await tester.sendKeyUpEvent(modifier, platform: platform);
+      await frames(tester);
+    }
+
+    testWidgets('pastes the clipboard\'s text as the menu\'s Paste does', (
+      tester,
+    ) async {
+      final focus = await typing(tester);
+      _clipboard = {'text': 'git status'};
+      await pasteChord(tester);
+      expect(focus.typed.join(), contains('git status'));
+      await focus.close();
+    }, variant: phones);
+
+    testWidgets('with nothing on the clipboard says so, and sends no ⌃V', (
+      tester,
+    ) async {
+      final focus = await typing(tester);
+      _clipboard = null;
+      await pasteChord(tester);
+      expect(focus.typed.join(), isNot(contains('\x16')));
+      expect(
+        find.text('There is nothing on the clipboard to paste.'),
+        findsOneWidget,
+      );
+      await focus.close();
+    }, variant: phones);
   });
 
   group('a question', () {
@@ -807,6 +1817,67 @@ void main() {
         find.text('Allow camera access in Settings to send a photo.'),
         findsOneWidget,
       );
+      await focus.close();
+    });
+  });
+
+  group('a file', () {
+    testWidgets('where the computer takes one: behind the same key, and out '
+        'as an upload under its name', (tester) async {
+      final restore = pickTerminalFile;
+      addTearDown(() => pickTerminalFile = restore);
+      var picks = 0;
+      pickTerminalFile = () async {
+        picks++;
+        // Named by its path, as a picked file is on a phone.
+        return XFile.fromData(
+          Uint8List.fromList(utf8.encode('log line')),
+          path: '/picked/server.log',
+        );
+      };
+      final focus = await _Focus.open(tester);
+      focus.app.stateOf('m')!
+        ..terminalImagePasteAvailable = true
+        ..terminalPasteFileAvailable = true;
+      focus.fill();
+      await frames(tester);
+      await focus.tapPrompt();
+      await tester.pump();
+      raiseKeyboard(tester);
+      await frames(tester);
+
+      await tester.tap(
+        find.byKey(const ValueKey('terminal-key-Send image or file')),
+      );
+      await frames(tester);
+      await tester.tap(find.text('Choose a file'));
+      await frames(tester);
+
+      expect(picks, 1);
+      final begin = focus.sent
+          .where((frame) => frame.$1 == 'terminal_chunked_upload_begin')
+          .single
+          .$2;
+      expect(begin['uploadKind'], 'file');
+      expect(begin['filename'], 'server.log');
+      await focus.close();
+    });
+
+    testWidgets('where it does not, the key offers pictures only', (
+      tester,
+    ) async {
+      final focus = await _Focus.open(tester);
+      focus.app.stateOf('m')!.terminalImagePasteAvailable = true;
+      focus.fill();
+      await frames(tester);
+      await focus.tapPrompt();
+      await tester.pump();
+      raiseKeyboard(tester);
+      await frames(tester);
+
+      await tester.tap(find.byKey(const ValueKey('terminal-key-Send image')));
+      await frames(tester);
+      expect(find.text('Choose a file'), findsNothing);
       await focus.close();
     });
   });
@@ -1441,6 +2512,120 @@ void main() {
       await focus.close();
     });
   });
+
+  // The keys a pane's chrome offers and a phone cannot press, read off this
+  // page's own buffer and drawn on its key strip — and taken off it again the
+  // moment the pane cannot type.
+  group('the pane\'s own keys on the strip', () {
+    const queued = '\r\n  ? 1 question\r\n    shift+← to answer';
+    const cycle = '\r\n  ⏵⏵ auto mode on (shift+tab to cycle)';
+    final esc = find.byKey(const ValueKey('terminal-key-esc'));
+
+    Future<_Focus> offered(
+      WidgetTester tester, {
+      String engine = 'codex',
+      String screen = queued,
+    }) async {
+      final focus = await _Focus.open(
+        tester,
+        agents: [edgeAgent('a', engine: engine)],
+      );
+      raiseKeyboard(tester);
+      await frames(tester);
+      focus.session.terminal.write(screen);
+      await frames(tester);
+      return focus;
+    }
+
+    testWidgets('a Codex agent\'s queued question: its key on the strip, and '
+        'the key answers it', (tester) async {
+      final focus = await offered(tester);
+      expect(esc, findsOneWidget);
+      expect(find.text('answer'), findsOneWidget);
+      expect(
+        tester.getTopRight(find.text('answer')).dx,
+        lessThan(tester.getTopLeft(esc).dx),
+        reason: 'it leads the strip',
+      );
+
+      await tester.tap(find.text('answer'));
+      await frames(tester);
+      expect(focus.typed, contains('\x1b[1;2D'));
+      await focus.close();
+    });
+
+    testWidgets('Claude Code\'s cycle: on the strip, past its own keys', (
+      tester,
+    ) async {
+      final focus = await offered(tester, engine: 'claude', screen: cycle);
+      expect(find.text('cycle'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('cycle')).dx,
+        greaterThan(tester.getTopRight(esc).dx),
+      );
+      await focus.close();
+    });
+
+    testWidgets('taken by the computer: the pane\'s keys leave the strip', (
+      tester,
+    ) async {
+      final focus = await offered(tester);
+      expect(find.text('answer'), findsOneWidget);
+
+      await focus.takenByComputer();
+      await frames(tester);
+      expect(focus.session.acceptsInput, isFalse);
+      expect(find.text('answer'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('a stream that died: the pane\'s keys leave the strip', (
+      tester,
+    ) async {
+      final focus = await offered(tester);
+      expect(find.text('answer'), findsOneWidget);
+
+      await focus.session.handleFrame('terminal_closed', {
+        'streamId': focus.session.streamId,
+        'code': 'TERMINAL_CLOSED',
+        'reason': 'the daemon restarted',
+      });
+      await frames(tester);
+      expect(focus.session.status, TerminalSessionStatus.closed);
+      expect(find.text('answer'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('the agent is gone: no key of its pane is left', (
+      tester,
+    ) async {
+      final focus = await offered(tester);
+      expect(find.text('answer'), findsOneWidget);
+
+      focus.app.stateOf('m')!
+        ..agentsFromCache = false
+        ..agents = [edgeAgent('other')];
+      await focus.app.syncAgentsForTest('m');
+      await frames(tester);
+      expect(find.text('a is gone'), findsOneWidget);
+      expect(find.text('answer'), findsNothing);
+      await focus.close();
+    });
+
+    testWidgets('the hint goes once the pane stops offering it', (
+      tester,
+    ) async {
+      final focus = await offered(tester);
+      expect(find.text('answer'), findsOneWidget);
+
+      // Answered: Codex redraws its bottom pane without the queue.
+      focus.session.terminal.write('\x1b[2J\x1b[H› ');
+      await frames(tester, count: 8);
+      expect(find.text('answer'), findsNothing);
+      expect(esc, findsOneWidget, reason: 'the strip itself stays');
+      await focus.close();
+    });
+  });
 }
 
 /// The clipboard's contents as `Clipboard.getData` reports them.
@@ -1499,13 +2684,15 @@ class _Focus {
   /// Every frame the session sent — a reopen among them.
   final List<(String, Map<String, dynamic>)> sent;
 
+  /// [connection], when given, is the machine instead of one answering from [answers].
   static Future<_Focus> open(
     WidgetTester tester, {
     List<Agent>? agents,
     Map<String, Map<String, dynamic>> answers = const {},
+    EdgeConn? connection,
   }) async {
     setPhone(tester, largePhone);
-    final conn = EdgeConn(answers);
+    final conn = connection ?? EdgeConn(answers);
     final app = edgeApp(conn: conn, agents: agents ?? [edgeAgent('a')]);
     final sent = <(String, Map<String, dynamic>)>[];
     final session = await liveTerminal(app, 'a', sent: sent);
@@ -1692,6 +2879,126 @@ class _Focus {
     await tester.pump(const Duration(seconds: 3));
     app.dispose();
     await tester.pump(const Duration(seconds: 30));
+  }
+}
+
+/// A machine whose answer to `agent_restart` the test writes: held until the test gives it, or
+/// thrown — the way a real socket hands the page a refusal ([WsRequestFailure]) and a reply that
+/// never came ([WsRequestTimeout]).
+class _RestartConn extends EdgeConn {
+  _RestartConn(this.restart);
+
+  /// What every `agent_restart` gets back.
+  final Future<Map<String, dynamic>> Function() restart;
+
+  /// How many restarts were sent.
+  int get restarts => payloads['agent_restart']?.length ?? 0;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    if (type != 'agent_restart') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    requests.add(type);
+    (payloads[type] ??= []).add(payload);
+    return restart();
+  }
+}
+
+/// A machine whose every `agent_handoff_prepare` waits on [handoff] — a Change agent held mid-way.
+class _SwitchConn extends EdgeConn {
+  _SwitchConn(this.handoff);
+
+  final Future<Map<String, dynamic>> Function() handoff;
+
+  /// How many handoffs were asked for.
+  int get handoffs => payloads['agent_handoff_prepare']?.length ?? 0;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    if (type != 'agent_handoff_prepare') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    requests.add(type);
+    (payloads[type] ??= []).add(payload);
+    return handoff();
+  }
+}
+
+/// A machine whose `agent_fork` answers only when [reply] does — a fork still on its way.
+class _HeldForkConn extends EdgeConn {
+  _HeldForkConn(this.reply);
+
+  final Future<Map<String, dynamic>> reply;
+
+  /// The receipt the fork was sent under, for the answer to echo.
+  String? get receipt =>
+      payloads['agent_fork']?.single['creationId'] as String?;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    if (type != 'agent_fork') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    requests.add(type);
+    (payloads[type] ??= []).add(payload);
+    return reply;
+  }
+}
+
+/// A machine that answers Delete's review with [review], and deletes under any review id.
+class _PurgeConn extends EdgeConn {
+  _PurgeConn(this.review);
+
+  final Future<Map<String, dynamic>> review;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    if (type != 'agent_purge') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    requests.add(type);
+    (payloads[type] ??= []).add(payload);
+    return payload['mode'] == 'inspect'
+        ? review
+        : Future.value({'deleted': true});
+  }
+}
+
+/// A machine whose `agent_create` answers only when [reply] does — a clone still on its way.
+class _HeldCreateConn extends EdgeConn {
+  _HeldCreateConn(this.reply);
+
+  final Future<Map<String, dynamic>> reply;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    if (type != 'agent_create') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    requests.add(type);
+    (payloads[type] ??= []).add(payload);
+    return reply;
   }
 }
 

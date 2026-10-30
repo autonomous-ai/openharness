@@ -1,42 +1,72 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/serial_port_lease.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 void main() {
-  test('the lease is released even when the work throws', () async {
-    expect(SerialPortLease.held, isFalse);
-    await expectLater(
-      SerialPortLease.hold<void>(() async => throw StateError('flash died')),
-      throwsStateError,
-    );
-    // Leaving it held would switch daemon supervision off for the rest of the
-    // session — a worse fault than the one it prevents, and a silent one.
-    expect(SerialPortLease.held, isFalse);
-  });
-
-  test('overlapping holders do not release each other', () async {
-    final outer = Completer<void>();
-    final inner = Completer<void>();
-    unawaited(SerialPortLease.hold(() => outer.future));
-    unawaited(SerialPortLease.hold(() => inner.future));
-    await Future<void>.delayed(Duration.zero);
-
-    inner.complete();
-    await Future<void>.delayed(Duration.zero);
+  test('per-run Windows leases and the legacy marker each block until retired or stale', () {
+    final dir = Directory.systemTemp.createTempSync('flasher-leases-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final environment = {'HARNESS_FLASHER_CACHE': dir.path};
+    final current = '${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n';
+    final owned = File('${dir.path}/flashing.${'a' * 32}')
+      ..writeAsStringSync(current);
+    final foreign = File('${dir.path}/flashing.${'b' * 32}')
+      ..writeAsStringSync(current);
+    final legacy = File('${dir.path}/flashing')..writeAsStringSync(current);
     expect(
-      SerialPortLease.held,
+      SerialPortLease.heldByAnotherProcess(environment: environment),
       isTrue,
-      reason: 'the outer one still holds it',
     );
-
-    outer.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(SerialPortLease.held, isFalse);
+    legacy.deleteSync();
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isTrue,
+    );
+    owned.deleteSync();
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isTrue,
+    );
+    foreign.writeAsStringSync(
+      '${DateTime.now().subtract(const Duration(hours: 2)).millisecondsSinceEpoch ~/ 1000}\n',
+    );
+    // Other cache files must not become leases merely because they hold a fresh number.
+    File('${dir.path}/flashing.backup').writeAsStringSync(current);
+    File('${dir.path}/cancel').writeAsStringSync(current);
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isFalse,
+    );
   });
+
+  test(
+    'the flasher folder uses HARNESS_FLASHER_CACHE, else the Harness home',
+    () {
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {
+            'HARNESS_FLASHER_CACHE': '/x/f',
+            'HOME': '/h',
+            'USERPROFILE': '/h',
+          },
+        ),
+        '/x/f',
+      );
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+        ),
+        HarnessFileStore.defaultDirectoryPath(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+          name: 'flasher',
+        ),
+      );
+    },
+  );
 
   test('a flash started in a terminal also stops the daemon being restarted', () async {
     // The case that matters most for a device already in someone's hands: they run `harness flash`
@@ -88,14 +118,22 @@ void main() {
       spawnCommand: () async => spawned = true,
     );
 
-    await SerialPortLease.hold(() async {
-      // Flashing stops the daemon first, so discovery finds nothing and the
-      // old code went straight on to start it again — taking back the port
-      // esptool was writing through.
-      final probe = await discovery.ensureRunning();
-      expect(probe.state, LocalCliProbeState.down);
-      expect(probe.endpoint, isNull);
+    // A run-id lease of its own in the real flasher folder, so a flash the
+    // machine may really be running keeps its shared flag untouched.
+    final dir = Directory(SerialPortLease.flasherDirectory())
+      ..createSync(recursive: true);
+    final lease = File('${dir.path}/flashing.${'e' * 32}')
+      ..writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
+    addTearDown(() {
+      if (lease.existsSync()) lease.deleteSync();
     });
+
+    // Flashing stops the daemon first, so discovery finds nothing and the
+    // old code went straight on to start it again — taking back the port
+    // esptool was writing through.
+    final probe = await discovery.ensureRunning();
+    expect(probe.state, LocalCliProbeState.down);
+    expect(probe.endpoint, isNull);
 
     expect(spawned, isFalse);
   });

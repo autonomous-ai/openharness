@@ -6,7 +6,7 @@ import { readProcessEnv } from '../../lib/processEnv.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import { processLaunchArgs } from '../../lib/tmux.js'
+import { processLaunchArgs } from '../../lib/processTable.js'
 
 export interface GridAssignmentsDeps {
   models: () => Pick<ModelsPort, 'gridAssignments'>

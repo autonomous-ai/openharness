@@ -5,6 +5,7 @@ import '../shared/theme/app_pane_icon.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
+import '../super_tabs/pane.dart';
 import '../shared/theme/workspace_bar_style.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -127,6 +128,10 @@ class PaneHeaderButton extends StatelessWidget {
                         : .22
                   : emphasized
                   ? 1
+                  // The close mark is full ink at rest (AppIcons.closeInk),
+                  // as the tabs' ×; the quieter pane controls are not.
+                  : icon == AppPaneSymbol.close
+                  ? AppIcons.closeInk
                   : MediaQuery.highContrastOf(context)
                   ? .7
                   : .45,
@@ -145,7 +150,7 @@ class PaneCloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => PaneHeaderButton(
-    label: 'Close Pane',
+    label: SuperPane.maybeOf(context) == null ? 'Close Pane' : 'Hide terminal',
     command: 'pane.close',
     icon: AppPaneSymbol.close,
     iconSize: AppIcons.closeSize,

@@ -221,6 +221,75 @@ void main() {
     },
   );
 
+  // Find's `+` after the last tab chip: the desktop's New Tab.
+  test(
+    'an agent made from the + after the tabs opens a tab of its own, and the phone is in it',
+    () async {
+      await join();
+      desk.note('t1');
+
+      desk.adopt(
+        (machineId: 'm', agentId: 'new'),
+        name: 'Fix login',
+        newTab: true,
+      );
+
+      expect([for (final tab in desk.tabs) tab.name], [
+        'Desktop',
+        'Docker',
+        'Fix login',
+      ]);
+      final made = desk.tabs.last;
+      expect(_agentsOf(desk, made.id), ['new']);
+      expect(made.nameIsCustom, isFalse);
+      expect(_agentsOf(desk, 't1'), ['a', 'b']);
+      expect(desk.activeTabId, made.id);
+      await pumpEventQueue();
+      expect(backend.received.map((op) => op['op']), [
+        'tab.create',
+        'pane.add',
+      ]);
+      expect(backend.received.last['agentId'], 'new');
+    },
+  );
+
+  test('a tab of its own wins over a tab picked by hand', () async {
+    await join();
+    desk.note('t1');
+
+    desk.adopt((machineId: 'm', agentId: 'new'), tabId: 't2', newTab: true);
+    await pumpEventQueue();
+
+    expect(desk.tabs, hasLength(3));
+    expect(_agentsOf(desk, 't2'), ['c']);
+    expect(_agentsOf(desk, desk.tabs.last.id), ['new']);
+    expect(desk.activeTabId, desk.tabs.last.id);
+  });
+
+  test('a tab of its own is for that agent alone, not the next', () async {
+    await join();
+    desk.note('t2');
+
+    desk.adopt((machineId: 'm', agentId: 'new'), newTab: true);
+    final made = desk.tabs.last.id;
+    // The next agent made on the phone — a fork, a form opened later — joins the tab the phone
+    // is in, which is the new one now.
+    desk.adopt((machineId: 'm', agentId: 'next'));
+    await pumpEventQueue();
+
+    expect(desk.tabs, hasLength(3));
+    expect(_agentsOf(desk, made), ['new', 'next']);
+  });
+
+  test('a phone with no desk makes no tab for a new agent', () async {
+    // Never joined: the desk has not answered, so nothing can be written.
+    desk.adopt((machineId: 'm', agentId: 'new'), newTab: true);
+    await pumpEventQueue();
+
+    expect(desk.tabs, isEmpty);
+    expect(backend.received, isEmpty);
+  });
+
   test('a tab picked by hand counts with the phone in no tab too', () async {
     await join();
     desk.note(null);
@@ -270,6 +339,88 @@ void main() {
     expect(_agentsOf(desk, 't1'), ['a']);
     expect(_agentsOf(desk, 't2'), isEmpty);
     expect(backend.received.map((op) => op['tabId']), ['t1', 't2']);
+  });
+
+  test(
+    'a tab closed on the phone leaves the desk, and the phone with it',
+    () async {
+      await join();
+      desk.note('t1');
+
+      desk.closeTab('t1');
+      await pumpEventQueue();
+
+      expect([for (final tab in desk.tabs) tab.id], ['t2']);
+      expect(backend.received, [
+        {'op': 'tab.close', 'id': 't1'},
+      ]);
+      expect([for (final tab in backend.tabs) tab.id], ['t2']);
+      // Out of it: the agent on screen decides again which tab the phone is in.
+      expect(desk.activeTabId, isNull);
+    },
+  );
+
+  test('closing another tab leaves the phone in the one it is in', () async {
+    await join();
+    desk.note('t1');
+
+    desk.closeTab('t2');
+    await pumpEventQueue();
+
+    expect([for (final tab in desk.tabs) tab.id], ['t1']);
+    expect(desk.activeTabId, 't1');
+  });
+
+  test('closing a tab that is gone, or with no desk, writes nothing', () async {
+    desk.closeTab('t1');
+    await pumpEventQueue();
+    expect(backend.received, isEmpty);
+
+    await join();
+    desk.closeTab('gone');
+    await pumpEventQueue();
+
+    expect(backend.received, isEmpty);
+    expect(desk.tabs, hasLength(2));
+  });
+
+  test(
+    'a tab renamed on the phone keeps the name every computer shows',
+    () async {
+      await join();
+
+      desk.renameTab('t2', '  Deep work ');
+      await pumpEventQueue();
+
+      expect(backend.received, [
+        {
+          'op': 'tab.rename',
+          'id': 't2',
+          'name': 'Deep work',
+          'nameIsCustom': true,
+        },
+      ]);
+      final renamed = desk.tabs.firstWhere((tab) => tab.id == 't2');
+      expect(renamed.name, 'Deep work');
+      expect(renamed.nameIsCustom, isTrue);
+    },
+  );
+
+  test('a name the desk would refuse is never sent', () async {
+    await join();
+
+    // The backend takes 80 at most (`DESK_NAME_MAX`), and a refused write
+    // would stop this phone writing to the desk at all.
+    desk.renameTab('t2', 'x' * (PhoneDesk.nameMaxLength + 1));
+    desk.renameTab('t2', '   ');
+    await pumpEventQueue();
+
+    expect(backend.received, isEmpty);
+    expect(desk.enabled, isTrue);
+
+    desk.renameTab('t2', 'x' * PhoneDesk.nameMaxLength);
+    await pumpEventQueue();
+    expect(backend.received, hasLength(1));
   });
 
   test(

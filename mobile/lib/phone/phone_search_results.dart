@@ -1,14 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
+import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
+    show showDeskTabRenameDialog;
 
 import 'agent_index.dart';
+import 'agents_page.dart' show showAgentActions;
 import 'desk_groups.dart';
 import 'desk_tab_filter_bar.dart';
 import 'find_row.dart';
@@ -19,6 +23,7 @@ import 'phone_search_catalog.dart' show phoneAgentId;
 import 'phone_search_commands.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
+import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'resume_agent.dart';
 import 'search_result_text.dart'
@@ -52,6 +57,7 @@ class PhoneSearchResults extends StatefulWidget {
     this.onOpen,
     this.showing,
     this.onNewHarness,
+    this.onNewTab,
     this.opening,
   });
 
@@ -63,6 +69,11 @@ class PhoneSearchResults extends StatefulWidget {
   /// (`+ New Harness in api`). Null leaves the row out.
   final void Function(({String machineId, String folder, String label})? place)?
   onNewHarness;
+
+  /// The `+` after the last tab chip: a New Tab, the desktop's — the new-agent form, and the
+  /// harness it makes opens a tab of its own. Drawn only where the chips are and the desk takes
+  /// writes ([AppNotifier.deskWritable]). Null leaves it out.
+  final VoidCallback? onNewTab;
 
   final AppNotifier notifier;
   final PhoneSearchController controller;
@@ -244,6 +255,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
               ],
               selected: tab?.id,
               onSelected: (id) => setState(() => _tabId = id),
+              onNewTab: widget.notifier.deskWritable ? widget.onNewTab : null,
+              onLongPress: widget.notifier.deskWritable ? _holdTab : null,
             ),
           Expanded(
             child: _rowsDue
@@ -259,6 +272,46 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       );
     },
   );
+
+  /// Holding a tab's chip: the desktop's tab menu — Rename Tab… and Close Tab.
+  ///
+  /// Close asks nothing first: it takes the tab off the desk, and so off every computer's tab row,
+  /// but stops none of its harnesses — they keep running, under All and in search
+  /// ([AppNotifier.closeDeskTab]).
+  void _holdTab(String tabId) {
+    final notifier = widget.notifier;
+    final tab = deskTabFilters(notifier)
+        .where((each) => each.id == tabId)
+        .firstOrNull;
+    if (tab == null) return;
+    unawaited(
+      showPhoneSheet(
+        context,
+        title: tab.name,
+        actions: [
+          PhoneSheetAction(
+            icon: LucideIcons.pencil300,
+            label: 'Rename Tab…',
+            onTap: () {
+              if (!mounted) return;
+              unawaited(
+                showDeskTabRenameDialog(context, notifier, tabId, tab.name),
+              );
+            },
+          ),
+          PhoneSheetAction(
+            icon: LucideIcons.x300,
+            label: 'Close Tab',
+            onTap: () {
+              notifier.closeDeskTab(tabId);
+              // The list was narrowed to it: back to All, as for a tab closed on another computer.
+              if (mounted && _tabId == tabId) setState(() => _tabId = null);
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Whether this is Find's plain list of harnesses — no mode (`>`, `?`, a group, `:`) and not
   /// walked into one project or machine. The only list the tab chips narrow.
@@ -592,6 +645,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       terms: terms,
       selected: selected,
       enabled: openable || _resuming == row.id,
+      onLongPress: () => _hold(entry),
       // The harness on screen is where Cancel goes: a tap on it is Cancel.
       onTap: _resuming != null
           ? null
@@ -683,6 +737,44 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   static bool _isShowing(PhoneDestination row, AgentRef showing) =>
       row.entry?.machineId == showing.machineId &&
       row.entry?.agent.id == showing.agentId;
+
+  /// Holding a harness: Stop it while its computer answers. While it does not — dialled again and
+  /// again, its row only last known — Stop could never arrive, so the phone takes the row off its
+  /// own list instead; the computer's list puts it back when it answers, if it is still there.
+  void _hold(AgentEntry entry) {
+    final notifier = widget.notifier;
+    final machineId = entry.machine.machine.machineId;
+    final agent = entry.agent;
+    if (phoneMachineStatusOf(entry.machine) == PhoneMachineStatus.ready) {
+      // Its computer answers: the sheet a computer's own list offers — Stop, Delete.
+      unawaited(showAgentActions(context, notifier, machineId, agent));
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    unawaited(
+      showPhoneSheet(
+        context,
+        title: agent.displayName,
+        actions: [
+          PhoneSheetAction(
+            icon: LucideIcons.eyeOff300,
+            label: 'Remove from this list',
+            onTap: () {
+              unawaited(notifier.forgetUnreachableAgent(machineId, agent.id));
+              messenger?.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    '${entry.machineName} is not connected. If it comes back '
+                    'and this harness is still there, it shows again.',
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   /// A tap goes to the controller first, which absorbs the ones that only move
   /// the search: a `?` row taking its mode, a project or machine narrowing it.

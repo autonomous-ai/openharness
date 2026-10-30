@@ -37,6 +37,13 @@ typedef struct {
     uint32_t since_ms, elapsed_s, event_ms;
     bool has_event;                      // event_ms is set (an agent with none takes any feed, wrap or not)
     char activity[POD_ACTIVITY_BYTES], question[320], recap[POD_RECAP_BYTES];
+    // The open question's Super Tab (the shared project it was asked in; "" = a plain question) and what it needs
+    // (pod_attention_t: decision or stuck; NONE without a Super Tab). Set and cleared with question[].
+    char super_tab[SUPER_TAB_MAX];
+    uint8_t attention;
+    // What a Super Tab question holds back (a pod_state_t): the state the agent's turns and sweeps would have given it,
+    // taken once the question closes. Before the first such feed, the state it had when asked.
+    uint8_t wait_after;
     char verb[POD_VERB_BYTES];
     char steps[POD_STEPS_MAX][POD_STEP_BYTES];   // this turn's tools and previous activity sentences, newest first (cut on a codepoint)
     uint16_t step_at_s[POD_STEPS_MAX];   // seconds into the turn each step arrived (steps[] order); 0xFFFF = unknown (no turn start seen)
@@ -86,9 +93,12 @@ typedef struct {
 #define POD_UNREAD_MAX  16
 #define POD_UNREAD_TEXT 240
 #define POD_TOKEN_MAX   64
+#define POD_UNREAD_TTL_MS    (6u * 3600u * 1000u)   // an entry lives 6 h from receipt (the device's monotonic ms, uint32-wrap safe)
+#define POD_BEEP_COALESCE_MS 30000                  // at most one beep per this long
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
+    bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
     int32_t elapsed_s;                   // the turn's length, -1 unknown
@@ -110,6 +120,16 @@ typedef struct {
     uint8_t unread_count;
     pod_read_out_t reads[POD_READS_MAX];
     uint8_t read_count;
+    // The Swarm cards (hello swarmCard:v1): the daemon's list, in card order, with each Lead's cached recap text (PSRAM, owned here).
+    pod_swarm_t swarms[SWARMS_CARD_MAX];
+    uint8_t swarm_n;                     // the received ones, in the order of want[]
+    char want[SWARMS_CARD_MAX][ID_MAX];  // the last `supertabs` id list: set and order; a Swarm not here is dropped, one not received yet is absent
+    uint8_t want_n;
+    bool swarm_ids;                      // a `supertabs` list has arrived on this link (want[] is then the truth; before it, a Swarm that is not here may just not be sent yet)
+    // supertab.focus: the desktop opened this Swarm project. Kept until the view that acts on it clears focus_pending (a focus for a
+    // Swarm the list does not hold yet waits for it).
+    bool focus_pending;
+    char focus_tab[ID_MAX], focus_lead[ID_MAX];
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -154,9 +174,34 @@ void pod_model_turn(pod_model_t *, const char *id, const char *kind, const char 
 // turn.stats: the last turn's test and commit counts (-1 leaves a field unknown). Unknown agents are ignored.
 void pod_model_turn_stats(pod_model_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
 void pod_model_question(pod_model_t *, const char *id, const char *text);
+// The same for a Super Tab's question: super_tab (NULL or "" = a plain one, attention ignored) and what it needs.
+// Unlike a plain one it survives the agent's turns and library sweeps: only question_close (or the link) ends it.
+void pod_model_question_tab(pod_model_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
+// What the agent's open question asks for: DECISION or STUCK while it asks (pod_model_eff) a Super Tab's question, else NONE.
+pod_attention_t pod_model_attention(const pod_model_t *, const pod_agent_t *);
 void pod_model_question_close(pod_model_t *, const char *id);
 void pod_model_recap(pod_model_t *, const char *id, const char *recap, bool restore);
 void pod_model_link(pod_model_t *, bool up);
+
+// ---- the Swarm cards ----
+// The `supertabs` id list (at most SWARMS_CARD_MAX, bad or repeated ids skipped): Swarms not listed are dropped and their texts freed, the
+// rest are put in this order; a listed Swarm not received yet stays absent until pod_model_supertab brings it.
+void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
+// One `supertab` frame: replaces that Swarm's data (a new one is placed by the id list's order). A Lead that was in the old data (same Lead id)
+// keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
+void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
+// A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
+void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+// The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
+// close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
+void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
+void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
+// supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
+void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
+const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none
+const pod_swarm_t *pod_model_swarm(const pod_model_t *, const char *swarm_id);
+// Index of the Lead in the Swarm, or -1.
+int pod_model_lead_index(const pod_swarm_t *, const char *lead_id);
 
 const pod_agent_t *pod_model_find(const pod_model_t *, const char *id);
 // The agents with the most recent task (the newer of act_ms and lib_ms), at most max, newest first. An agent with
@@ -195,5 +240,7 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
+// The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
+void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.
 int pod_model_take_reads(pod_model_t *, pod_read_out_t out[], int max);

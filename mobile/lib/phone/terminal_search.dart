@@ -273,7 +273,13 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// picked tab before the form opens would be undone while the form is up. The picked tab
   /// travels with the request instead (`NewAgentPage.deskTabId`); on All it is null and the tab
   /// the phone is in still decides.
-  void Function(({String machineId, String folder, String label})? place)?
+  ///
+  /// [newTab] — the `+` after the last tab chip — puts it in a tab of its own instead, the desktop's
+  /// New Tab (`NewAgentPage.newDeskTab`); the tab the chips are narrowed to is not read then.
+  void Function(
+    ({String machineId, String folder, String label})? place, {
+    bool newTab,
+  })?
   _newAgent() {
     final showing = widget.showing;
     final here = showing == null
@@ -291,9 +297,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
               )
               .firstOrNull;
     if (!ready && first == null) return null;
-    return (place) {
+    return (place, {newTab = false}) {
       // Read before Find goes away with the chips.
-      final deskTabId = _results.currentState?.deskTabId;
+      final deskTabId = newTab ? null : _results.currentState?.deskTabId;
       _close();
       if (place != null) {
         unawaited(
@@ -303,6 +309,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             place.machineId,
             folder: place.folder,
             deskTabId: deskTabId,
+            newDeskTab: newTab,
             voice: widget.voice,
           ),
         );
@@ -313,6 +320,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             widget.notifier,
             showing!.machineId,
             deskTabId: deskTabId,
+            newDeskTab: newTab,
             voice: widget.voice,
           ),
         );
@@ -323,6 +331,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             widget.notifier,
             first!.machine.machineId,
             deskTabId: deskTabId,
+            newDeskTab: newTab,
           ),
         );
       }
@@ -555,6 +564,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                         onNewHarness: newAgent == null
                             ? null
                             : (place) => newAgent(place),
+                        onNewTab: newAgent == null
+                            ? null
+                            : () => newAgent(null, newTab: true),
                       ),
                     },
                   ),

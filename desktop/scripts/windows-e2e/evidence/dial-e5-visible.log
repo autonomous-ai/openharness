@@ -1,0 +1,208 @@
+# E5.2 COMPLETE WITH LIMITS; cleanup WAIVED BY OWNER2026-10-20; all eleven verdicts scoped; E5.3 root closure after docs commit/review.
+# Curated from coordinator-verified private receipts and visually inspected images.
+# Raw images and identity-bearing receipts remain private outside the repository.
+original hardware-run product/artifact source: 4c3def3cccaf0e820de63aeeb742a9852c6ce95a
+original hardware-run product/artifact tree: 2671233afc41a1485a56e4ce41f146f8f569ddd5
+original hardware receipt local head: 030ba49cf7dcc279601abe74b23eb0a59369a0f9; test-kit fix 23bba54ed and shipping docs after original product source.
+current repository HEAD/final I1+M1 wave:444139f69e9aa8b2dd92503702bb8bfedf35c99e; eight paths committed; scoped rereview PASS/I1+M1 resolved/no new findings.
+actual hardware inputs remain app/native4c +CLI4fe12/dev.dial3 +PowerShellc95; no new GUI binary or final-wave hardware result.
+round2 CLI candidate SHA-256: 8cacd1f7cb52228cf356d47ba7e2cda90530cb1ab93901af6d85a87ad856199b
+current tested hardware mixed inputs: CLI4fe12de12/dev.dial3; PowerShellc95e86208; app/native4c; prior dev2 failures retained.
+historical dev2 private upgrade: CLI 0.9.0-dev.dial2 and PowerShell flasher from c95e86208; native configuration/current-version/helper-pin checks PASS; verdict file hash before==after; completion=2026-10-20T11:16:27.2047485Z.
+historical dev2 CLI bundle SHA-256: af87a5d0e61f23f2be2ee3dd2528eab41dbe63aa883721d4985748646104e6a5
+PowerShell flasher SHA-256: 681b96cea559a301189223ed629b15f9b729932ea3f85cc00e8dc1db9da6847f
+dev2 hardware-run mixed provenance: app/native artifacts stay 4c3def3cccaf0e820de63aeeb742a9852c6ce95a; CLI/PowerShell c95e86208 only; no whole-runtime c95 claim.
+recovery native CI: https://github.com/autonomous-ai/openharness/actions/runs/39412223533 ; all four jobs SUCCESS, exact c95e86208 source.
+recovery native CI each architecture: contract tests 739 passed/56 skipped; flasher31/31 plus official0.0.92 no-flash; exact watch installation and clean uninstall.
+native CI: https://github.com/autonomous-ai/openharness/actions/runs/39390890060
+native CI result: all four jobs SUCCESS across x64 and ARM64.
+combined desktop build: https://github.com/autonomous-ai/openharness/actions/runs/39393250390
+combined desktop result: both architectures SUCCESS; DRY_RUN=1; no publication.
+platform: Windows 10.0.26200.0; native Windows PowerShell 5.1.26100.9711.
+
+isolation: owner-authorized existing Windows desktop; separate E profile/instance/scratch.
+environment overrides: process-local only; existing installation/profile/auth not adopted.
+public E2E kit new-user guards: unchanged.
+auth: normal target QR claim SUCCESS; expected account verified privately.
+auth: target owns its authentication with method qr and a separate verified computer identity.
+auth: Mac SSO bearer held only in memory through supported backend; Mac auth files not copied.
+auth proof: verified target claim/auth/computer identity; initial Node login-child exit not required proof.
+2026-10-20T09:11:49.6111191Z app: exact staged executable visible in Session 1; private_profile=true.
+probe: authenticated local WebSocket; verified own computer/data/auth/core-PID/daemon record before targeting only own machine.
+device: attached=true; count=1; firmware=0.0.92; reported setting names=14.
+serial helpers: two owned processes, one watch and one open.
+Devices UI: private reviewed screenshot shows one Connected card.
+2026-10-20T09:35:03.3470782Z detail UI: Connected; firmware=0.0.92; brightness=35%.
+setting operation: protocol brightness 80 -> 35; native read after reconnect confirmed 35.
+setting operation: foreground/PID/session-guarded actual UI slider 35 -> 80.
+fresh own-machine firmware probe: brightness=80; attached=true.
+2026-10-20T09:38:12.0207855Z detail UI: brightness=80%; image privately retrieved via allowlisted copy and visually inspected.
+private 80% image SHA-256: f1575a6704cdfa9fcf61a3d1bede2280e58dbaa9ea48fd95dd26015d0b0a8e57
+images: private because they contain full device identity and private workspace information; no public image available yet.
+UI automation: UIA exposed only two root nodes; actions used guarded coordinates and inspected screenshots, not named-control UIA coverage.
+private observer: legacy tool broadcast observer TIMEOUT; broadcasts skip tools; replaced by correlated own-machine RPC.
+private observer verdict: harness limitation, not an established product failure.
+Devices chat panel: not ready; backend chat could not start; separate observed issue with unresolved root cause.
+
+pre-restart firmware heartbeat uptime seconds: 6244,6304,6364,6424,6484,6545,6605; strictly increasing.
+pre-restart heartbeat limit: does not establish continuity across two daemon restarts.
+2026-10-20T09:43:25.4972147Z app quit: own Harness menu; only E app verified absent; owned daemon still attached=true.
+first private restart test: FAILED TEST-HARNESS BASELINE in 241 ms before any daemon stop/start.
+first private restart test diagnosis: PowerShell 5.1 singleton device .Count=null; native inspection attached_count=1/id_present=true/isArray=false/arrayCount=1/scalarCount=null.
+first private restart test disposition: array-normalized private predicate fixed; original failed receipt retained; not a product failure.
+corrected native two-restart test: Script PASS; two actual owned-daemon stop/start cycles.
+corrected test identity: own endpoint verified before each stop/read; same owned USB dial attached_count=1 after each restart.
+corrected test heartbeat uptime seconds: baseline=8112; restart1=8172; restart2=8232; strictly increasing.
+corrected test checkpoints: 4; recovery_daemon_verified=true.
+corrected test duration: 205618 ms; ended 2026-10-20T09:52:19.4693671Z.
+corrected test receipt: complete private JSON downloaded and read by coordinator; original failed baseline receipt preserved.
+corrected test limit: physical dial-screen Person observation NOT RUN; full scenario incomplete.
+
+firmware preparation: read-only official listing returned 92 versions; older release 0.0.91 selected.
+latest official metadata: HTTPS verified; version=0.0.92; size=3360672; SHA-256=eadb3846a6658026048418804a60341adc45fdb24793ebc9cabd782def0c8458.
+firmware preparation: optional no-flash prefetch ended with private PowerShell 5.1 NativeCommandError while handling expected older-version stderr.
+firmware preparation result: no board write; no cache images found; no prefetch rerun planned; no product flash outcome.
+private S6 runner preparation: per-dial daemon proof prefix matching corrected before the actual run recorded below.
+private S6 runner SHA-256: 00599e902b57c76edcd8be1aae6823ad9d69b99d41a5f4bee6fa777efa96b6f0
+historical private stage transport: hidden AppData lookup failed because Get-Item lacked Force; preparation issue before the later actual S6 run, not a product outcome.
+
+S1: timed physical hotplug and dial-screen photo NOT RUN; attached-state prerequisite only; second dial NOT RUN.
+S2: Script PASS for two actual restarts with increasing uptime and attachment recovery; Person screen observation NOT RUN; full scenario incomplete.
+S3: PARTIAL Connected/brightness UI and fresh state evidence; pet and physical screen confirmation NOT RUN.
+S4: PnP simulation BLOCKED, not product serial-reconnect FAIL; fresh CLI3 monitor started.
+S4 native result=PNPUTIL_REBOOT_REQUIRED_3010/exit3010 at2026-10-20T13:51:26.1423Z; monitor=ADMIN_RESTART_NOT_PASSED/session_changed=false.
+S4 no reboot/retry; physical hand replug and hard-reset acceptance NOT RUN.
+S5: PASS; Script-only acceptance case, no additional Person predicate.
+S5 holder: separate owned .NET SerialPort held COM3 for 20 s.
+S5 while held: attached_count=0; own daemon identity verified; exactly one busy report.
+S5 after release: same own physical dial attached_count=1 within 2636 ms, below 10 s; busy reports remain 1.
+S5 recovery_daemon_verified=true; all 12 command exits=0.
+S5 start: 2026-10-20T09:56:35.3556648Z; end: 2026-10-20T09:57:08.0729145Z; recorded duration=32725 ms.
+S5 receipt: private JSON downloaded and read by coordinator.
+S6: Script PASS; physical update-screen Person observation NOT RUN; full scenario incomplete.
+S6 source: 4c3def3cccaf0e820de63aeeb742a9852c6ce95a.
+S6 CLI: flash --version 0.0.91 --yes; exit=0; duration=85468 ms; running_old=true; expected_unverified_old_warning=true.
+S6 2026-10-20T10:13:49.4747816Z own-daemon sample: attached=true; fw=0.0.91; updating absent.
+S6 2026-10-20T10:13:58.9149062Z own-daemon sample: attached=true; fw=0.0.91; updating=0.0.92.
+S6 2026-10-20T10:14:11.0768362Z own-daemon sample: attached=true; fw=0.0.92; updating absent.
+S6 fresh per-dial protocol: old hello 0.0.91; offer 0.0.92 size=3360672; installed acknowledged=3360672/3360672; new hello 0.0.92.
+S6 complete_protocol_evidence=true; transitions_observed=true; all probe command exits=0.
+S6 recovery_daemon_verified=true; recovery_attempted=false; no manual recovery.
+S6 start=2026-10-20T10:12:20.4135623Z; end=2026-10-20T10:14:11.7465309Z; elapsed approximately 111.333 s; poll elapsed=24.4006 s.
+S6 receipt: private JSON read through allowlisted field projections; raw identity-bearing protocol lines not copied.
+S7: PARTIAL; actual GUI flash success observed; full scenario not PASS.
+S7 app: exact staged source 4c3def3cccaf0e820de63aeeb742a9852c6ce95a; private profile; PID=2000; Session=1; visible launch=2026-10-20T10:15:31.1528052Z.
+S7 pre-click native GUI probe: COM3 ready.
+S7 2026-10-20T10:20:37.0310449Z private screenshot: actual Flasher UI targeting 0.0.92 -> COM3; write progress=21%.
+S7 completion private screenshot reviewed by coordinator: title "circle 0.0.92 is on the dial"; board=COM3; flashed=0.0.92; Took 1:01.
+S7 actual output: "running 0.0.92 ✓" and "starting Harness again".
+S7 later fresh own-runtime probe: started=2026-10-20T10:24:15.041Z; code=OK; mode=read_only; daemonVerified=true; attachedCount=1; fw=0.0.92.
+S7 limits: before/after attachment-session comparison NOT MEASURED; <=15 s daemon-return timing NOT MEASURED despite later recovery observation; physical dial observation NOT RUN.
+S7 privacy: screenshots and metadata retained privately; no raw images or full device identities copied.
+historical M1 observation: old GUI header flash-circle.sh vs actualPS1; source444139f69 later resolved/scopedreviewPASS, no newGUIartifact claim.
+S8 current scope: GUI genuine mid-write cancellation + normal CLI3 recovery PASS; new dev3 GUI flash NOT RUN; original early cancellation/recovery failures below retained.
+S8 click=2026-10-20T10:27:40.9299071Z; exact owned COM3 write_flash process count at click=2.
+S8 all owned esptool gone=2026-10-20T10:27:41.4869419Z; recorded disappearance latency=559 ms.
+S8 15 s observation=2026-10-20T10:27:56.1025101Z; owned esptool count=0; watcher completed=true; error absent.
+S8 private screenshot reviewed by coordinator: "Flash failed"; "Stopped. Harness has been started again."; output reports a cancellation error.
+S8 cancellation limit: screenshot shows esptool Connecting..., so not confirmed mid-byte-write; process disappearance does not establish UI completion/daemon-return latency.
+S8 recovery flash: actual GUI reports running 0.0.92 and Took 0:59.
+S8 recovery failure: own identity-verified read-only queries at 10:31 and 10:34 UTC still show attached_count=0/fw=null.
+S8 diagnostic 2026-10-20T10:37:34Z: flashing/cancel markers=false; E-owned serial WATCH only, no OPEN helper or esptool.
+S8 owned per-dial log: open=2026-10-20T10:27:45.425Z; closed for silence=2026-10-20T10:28:05.520Z.
+S8 owned persisted dial-ports record: one foreign verdict at 2026-10-20T10:28:05.505Z with unchanged USB attachment session; no full session identifier copied.
+S8 log limit: no hello since 2026-10-20T10:21:21.245Z; no busy-to-free recovery line.
+S8 confirmed source diagnosis: restarted daemon reloads six-hour foreign verdict and skips chosen port; daemon off during successful reflash missed busy-to-free transition; unchanged USB attachment preserves block.
+S8 first recovery-change intended scope at c95e86208; scoped CLI successful-write-and-running-verification completion hook before PowerShell daemon restart; selected port verdict only, sibling verdicts preserved; no cancel/fail/no-flash/unverified-running clearing.
+S8 code validation: task scoped review clean; local CLI 73/73 and TypeScript typecheck PASS; actual native test-PC PowerShell5.1 fixtures 13/13 PASS without hardware/network operations.
+S8 hardware validation: prior4c FAIL retained; genuine mid-write cancel->foreign-verdict->direct TryAgain on actual dev2/c95 also FAILED recovery; historical native fixture/CI passes do not erase this result.
+S8 original failure source scope: product 4c3def3cccaf0e820de63aeeb742a9852c6ce95a; failure receipt local head 030ba49cf7dcc279601abe74b23eb0a59369a0f9; earlier S2/S5/S6 receipts remain valid for their inputs.
+S7 fixed mixed-input actual run: app/native4c, CLI/PowerShellc95; reviewed private image shows actual write27.5%.
+S7 fixed observer: passed=true; watch_session_unchanged=true; fresh protocol hello and fresh attachment observed.
+S7 fixed observer start=2026-10-20T12:37:37.5504048Z; end=2026-10-20T12:38:54.0641423Z.
+S7 fixed native writer exit=2026-10-20T12:38:32.3713346Z; attached query observed=2026-10-20T12:38:53.7558803Z; delta=21384.5457 ms.
+S7 fixed metric limitation: starts at OS native writer exit, NOT CLI completion; no PASS or FAIL inference for15s CLI-return criterion.
+S7 fixed baseline: same dial already attached; baseline core PID differs from original failing state; why old unattached state ceased is unproven.
+S8 proof limitation: preserved verdict-file hash alone plus already-attached successful flash does NOT prove original negative recovery fixed in hardware.
+S7 fixed completion image: reviewed at2026-10-20T12:41:32.0356658Z; SHA-256=4cd0c3c718e1234b51967d7cee4df2eab537a60f112433c0bf227dbdc7146318; own query2026-10-20T12:41:13.843Z=OK/signed-in/daemonVerified/dev.dial2/attached1; no15sCLI-return claim.
+private transport history: owner changed endpoint; SSH host key matches same test PC; no address/fingerprint recorded.
+private GUI preparation history: first launch succeeded; first window preparation timed out after endpoint transition; second preparation and fresh screenshot PASS; no UIA fix needed.
+S8 private v2 attempt: missed write window, no Stop performed; stale arm request rejected; preserved harness failure, not product failure.
+S8 genuine pre-click image: 2026-10-20T13:01:49.3269075Z; reviewed actual Writing17.0%, compressed bytes212992/1249692; raw image private.
+S8 actual Stop=2026-10-20T13:01:50.3652759Z; exact owned writers=2; both gone=2026-10-20T13:01:51.6806950Z; elapsed1317ms<=2s.
+S8 15s observation=2026-10-20T13:02:05.4872051Z; owned writers=0; completed=true/error absent.
+S8 post-cancel UI reviewed at13:04:10.9447UTC: Stopped/Harnessstartedagain/cancellation error; last Writing19.7%.
+S8 owned per-dial open=2026-10-20T13:01:54.980Z, 4.615s afterStop; close for silence=2026-10-20T13:02:15.066Z.
+S8 binding ruling: spec requires daemon back within10s, not attached=true after torn image; open log proves daemon activity4.615s, NOT first IPC-response timing.
+S8 post-cancel state: unattached expected for torn image; negative verdict count1 at2026-10-20T13:02:15.055Z; same USB attachment session; flashing/cancel markersfalse.
+S8 decisive recovery: direct TryAgain, no new detect/cache clear/PnP; baseline attached=false; start2026-10-20T13:08:18.839Z; native writer exit2026-10-20T13:09:12.6776Z.
+S8 decisive recovery FAILURE: old negative verdict count1 still present at13:10:36.69UTC; no new open/hello; dial remains unattached.
+S8 decisive completion GUI reviewed13:12UTC: running0.0.92 check; Took0:59; no callback warning; UI flash success does not establish dial recovery.
+S8 result on c95e86208: actual hardware recovery FAIL; first ordinary revised flash with already-attached baseline remains noncausal proof.
+S8 round2: committed4fe12de12d7e1d8695bae0b01529a432fec28a17; lifetime regression targets unreferenced watch/short-lived Node early exit; actual entry/bundle argument forwarding previously verified; no repaired hardware result.
+S8 round2 local validation: actual watch/short-lived Node regression RED3failed9passed -> final selected suite GREEN103/103; TypeScript typecheck PASS.
+S8 round2 independent scoped review: PASS/no new breakage found.
+S8 round2 actual WindowsPS5.1 native bundle-entry fixtureV2: PASS; olddev2 exit0/A+B unchanged/fake-startfalse, not a full-watch RED.
+S8 round2 CLI3 native fixture: 500ms snapshot selectedA removed only/B unchanged; exit0; helper gone within5s.
+S8 round2 CLI3 selection upgrade: actual PASS; exact8cac bundle from4fe12 selected; verdict bytes unchanged/same13:02 foreign fixture; this upgrade itself made no board write; subsequent normal-CLI hardware recovery PASS below; app/native4c and PowerShellc95 unchanged.
+private orchestrationv1: failed after observer-only start on PS5.1 File.Replace null-backup handling; no product bug inferred.
+private read-only partial proof: flash requestfalse/writers0/markersfalse/negativecount1 unchanged13:02 fixture/baselineattachedfalse; v2 helper preparation was historical; superseded by successful normal CLI3 recovery, not a product failure.
+S8 historical reproduction preservation: foreign verdict retained until reviewed CLI3 recovery; later S4 blocked/S10 collector-start outcomes recorded separately.
+S8 CLI3 decisive normal-CLI recovery: PASS; app/native4c, CLI4fe12de12/dev.dial3/exact8cac bundle, PowerShellc95.
+S8 CLI3 baseline: attached=false; unchanged13:02 negative verdict; no preparatory detect/cache clear/PnP/GUI actions.
+S8 CLI3 actual command: normal product flash --yes --port COM3; Limited Session1; existing app remains Done/alive, no new GUI probe.
+S8 CLI3 product start=2026-10-20T13:42:28.9149Z; exit=2026-10-20T13:43:31.8549Z; exitcode0; duration62960ms; driver64775ms.
+S8 CLI3 result: running0.0.92=true; completionwarning=false; negativecount0; bothmarkersfalse; sameAppalive.
+S8 CLI3 native writer exit=2026-10-20T13:43:14.0166159Z; attached observed=2026-10-20T13:43:34.6539207Z; nativewriterexit delta20637.3048ms.
+S8 CLI3 product CLI exit->attached=2.7990s, comparable15s return metric; sameUSBsession=true/freshhello=true; observer ended2026-10-20T13:43:34.9449923Z/PASS.
+S8 scope ruling: prior GUI Writing17% cancellation PASS plus decisive real normal-CLI3 recovery PASS; no new dev3 GUI flash/image; first post-cancel IPC not timed (open activity4.615s only).
+S8 historical4c/c95 hardware failures preserved; successful CLI3 run causally recovered unchanged negative baseline; earlier already-attached ordinary flash remains noncausal evidence.
+S8 receipt: safe proof files read through allowlisted primitive fields only; no raw identities/images or full raw protocol JSON copied.
+S9: two-user console handover NOT RUN because owner active visibleSession1 hostsC/sharedtests; autonomous switch unsafe.
+S10 snapshot interval: same5 stablepairs; start2026-10-20T13:53:12.1757386Z/end2026-10-20T14:03:13.5336234Z; wall601.3578848s.
+S10 collector result: FAILED postprocessing Measure-Object OrderedDictionary comparison; original receipt preserved SHA-256=f7cd287039026718a92275840d1fa2f3bee73cc59c9241ec2669be2b378f62b1; no original PASS claim.
+S10 verified DERIVED CPU seconds: core20.8125; serial2 combined0.0625; total20.953125 INCLUDING test loopback server; native same-vector postprocessing PASS.
+S10 derived timing provenance: verified=true/postprocessing_only=true/source unchanged=true; elapsed_at_failure_includes_final_probe_and_postprocessing=true.
+S10 pinned collector catch overwrites pre-probe elapsed after failed comparison; stopwatch601.7609357s is AT FAILURE including final probe/failed postprocessing, NOT clean measurement interval.
+S10 final probe14:03:13.5616602Z->14:03:13.7529415Z; collector ended14:03:13.9389074Z; no clock-adjustment hypothesis/repeat600s/threshold/unplugged sample.
+S10 verified role CPU/RSS bytes: core20.8125/93790208->78700544; master0.078125/27111424->15917056; serialA0.046875/5238784->5165056; serialB0.015625/6103040->5918720; testloopback0/13942784->14012416.
+S10 normal app Quit: own app count0; backend remains private E runtime; unplugged600s NOT RUN.
+S11: actual standard-user SSH uninstall FAIL/exit1 with partial cleanup.
+S11 actual effects: stopped own scheduled daemon; removed PATH entry; then helper cleanup AccessDenied under documented standard-SSH restriction.
+S11 diagnostic: run uninstall at Windows desktop; no replay performed.
+S11 later admin read-only audit: ownership/inventory complete for installed profile; own processes0/serial files1/launcher present; partial uninstall remains.
+second tools-only profile admin read-only audit: ownership/inventory complete; own processes0/serial files0/launcher absent; inventory PASS, not an uninstall (no product installed).
+S11 limits: installed-profile files/launcher remain; physical waiting-screen and owner-E product uninstall NOT RUN; owner-E process/task teardown separately PASS; both profiles retained pending E teardown/shared-scratch cleanup.
+historical private second tools-only audit helper: failed before counts; later admin read-only inventory completed; separate harness issue, no product uninstall failure.
+S11 private earlier harness attempt: ExecutionPolicy blocked before any action; corrected with process-only Bypass, separate from actual uninstall failure.
+cleanup native history: first/v3 preflight guards failed before mutations/zeroactions; original failed receipts preserved.
+owner-E cleanupv4: PASS; normal privateCLI3stop/exactheldPTYstop/exactserverstop;24completedownedNoWaittasks unregistered; finalownedrootprocesses0/tasks0.
+owner-E cleanupv4 UTC2026-10-20T14:35:20.8387298Z->2026-10-20T14:37:27.2000336Z; receiptelapsed126472ms; SHA-256=0a3b13b17ea4bbfcd57ae33e784746e1bea597bdfc7f6b98bd345ecb7f53ed68.
+owner-E cleanup limits: no path deletion/product uninstall/ownerprofile change; account/shared-scratch cleanup separate.
+private five-proof archive: builtAFTERowner-Eprocessstop/BEFOREanypathdeletion; preexistingMacproofmanifest beforestop; nativePASS/downloaded/MacwholeZIPhash+5entryhash+CRCverified; ZIPsha=b9dd06eecfe2348b65076dd3e998421c0657f0775906f5937e6acddc11963fe9/11830bytes/5sourcefiles.
+private archive limits: no auth/screenshots/config/profile/rawlogs; existing private scenarioJSON/images/commandproofs already manifested before stop, no raw content copied to repo.
+account cleanup: BOTH BLOCKED by Loaded guard; tools-only and installed-profile attempts each ownprocesses0/noaccount-profiledeletion/ownershipreceiptretained.
+account exact-profile read-only audits: PASS;31snapshots each/20.988s and20.919s; LoadedTRUE/SpecialFALSE/exactownedidentity-pathmatches/bothhivespresent/RefCountunknown.
+account session audit: no exact-owned-identity logon or WTS session; no safe owned-session logoff; loader/handleprovenance unproved; cleanup attempts wereBLOCKED; ownerwaived furthercleanup; no hive unload/globalrestart/reboot performed.
+final read-only baseline comparison: NOT PASS; original5processidentities/2tasks;3oldidentities absent+3oldlisteners absent=6differences;0taskdifferences/2of2tasks retained.
+final baseline cause: UNPROVEN, concurrentC/sharedwork; no E action against C authorized/performed; no baseline change or C restore; no full C-state certification.
+cleanup final scope: allEownedruntimeprocess/tasks stoppedPASS; ownerWAIVED failedaccount/pathcleanup2026-10-20; retainportableEroot+2testprofiles+keys/sharedscratch+positiveownershipreceipts.
+ownerfinaladjudication: stopfurthercleanup/no reboot/unload/deleteattempts; preparedremoverNOTexecuted; no account/profile/pathdeletion or ownerprofilechange claimed.
+cleanup ownerwaiver cost: retainedtestaccounts/files/diskspace+possiblelatermanualcleanup; no rebootapprovalquestion or nextcleanupaction pending.
+cleanup preservation: originalSSHuninstallfailure/5of5historicalsetupreceipt and finalbaselineNOTPASS6unexplaineddiff retained; no Crestore/baselinerewrite/causalityclaim.
+whole-implementation final review: returned WITH FIXES at frozen4fe12de12; E5.3 refresh separate, incomplete.
+final I1 Important E blocker: forced Windows kill can leave flashing marker valid10min/suppress daemon restart; slow download can miss cancellation15s; root verified.
+final I1+M1 fix source:444139f69 committed8paths; scoped rereview complete PASS/I1+M1 resolved/no new findings.
+final native PS5.1 function-only fixtures:7/7 PASS on test PC; PS1SHA07d51c80b43799aeef0948677ff3f14a0015c4e6b9576577e8e7ba502998aad8; no hardware entry/network/device/taskkill/newGUI run.
+final native fixture ZIP SHA-256:3d267ab86c2bf405e0c693c35d104cc7e42b78dbb0442d1186747e5237f492df
+final desktop focused result:84pass1existing skip assembled from two receipts(finalflasher23 +otherfivefiles61/1); NOT uninterrupted6filePASS; failed/source-changed attempts retained.
+final fix limits: scoped I1+M1 rereview PASS/no new findings; actualGUI/hardware inputs still4c app/native,4feCLI,c95PS1; no new GUI binary claim.
+final compatibility: updatedPS1+validrunid selects per-run marker even through olderCLI; oldapp/noidentity oroldcachedPS1 useslegacy. Newapp+oldercachedPS1 forcedfallback retainslegacy marker/possible10min suppression; CLIagealone notdecisive.
+final I2: inherited Important summary ordering outsideE/nonblocking forE remains open; notification/C owner follow-up, carried to owner final report.
+final M2: unbounded initial native Windows read test remains deferred to combined Windows owner by ruling; passing native evidence does not resolve it.
+native inventoryV2: complete12ownedprocesses/109taskreceipts/0issues; NOT cleanup; owned paths remain retained, cleanup pending after native function fixtures.
+historical first inventory:55sdeadline failed before enumeration;0processcount meant not enumerated, not verified zero.
+latest C comparison: read-only38dde shortcut/clipboard changes vs testedC877 parent; no serial/flash/native/CLIrunner delta; no additional merge.
+complete Ruling appendix: report includes all 32 ledger Ruling entries and recorded costs; missing cost explicitly marked.
+timing: original user-request timestamp not recorded; trackedledgerwindow 2026-10-20T02:57:34.449628Z->2026-10-20T14:59:04Z = 12 h 1 min 29.550372 s (43289.550372 s); reportupdatewindow notoriginalrequestduration; overlappingnetwaiting unreconstructable; Emerge/publicationnotperformed.
+final report update UTC:2026-10-20T14:59:04Z; E5.2 COMPLETE WITH LIMITS/ownerwaivedcleanup; E5.3 root closure after docs commit/review; no globalpreservation/uninstall/physicalacceptancePASS inferred.

@@ -6,8 +6,23 @@ import { emptyPorts, type RecapSession, type TurnLifecycle } from '../core/api.j
 import { SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import type { LiveEvent } from '../lib/normalize.js'
+import type { TierDecision, TierInput } from '../lib/notifyTier.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createRecaps, startRecaps } from './recaps.js'
+
+const jevMade = vi.hoisted(() => vi.fn())
+vi.mock('../lib/jev/jevClient.js', async (orig) => {
+  const actual = await orig<typeof import('../lib/jev/jevClient.js')>()
+  return {
+    ...actual,
+    createJevDecide: (options: Parameters<typeof actual.createJevDecide>[0]) => {
+      jevMade(options)
+      // The real hosted request and answer parsing, without discovering a key on this computer or calling OpenRouter.
+      return actual.createJevDecide({ ...options, key: async () => null })
+    },
+  }
+})
+
+const { createRecaps, startRecaps } = await import('./recaps.js')
 
 const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'recaps-')); dirs.push(dir); return dir }
@@ -18,10 +33,11 @@ const started = (userMessage = 'what is the fix?') => ({ type: 'turn_started', p
 const ended = { type: 'turn_ended', payload: {} } as LiveEvent
 const flush = () => new Promise((done) => setTimeout(done, 0))
 
-function setup(over: Parameters<typeof createRecaps>[1] = {}) {
-  const core = fakeCore({ dataDir: temp() })
+const decided = (tier: TierDecision['tier']): TierDecision => ({ tier, by: 'test', detail: '', ms: 0 })
+
+function setup(over: Parameters<typeof createRecaps>[1] = {}, core = fakeCore({ dataDir: temp() })) {
   vi.mocked(core.transcripts.lastTurn).mockResolvedValue({ assistantText: 'The fix is in. Tests pass.', userMessage: 'what is the fix?' } as never)
-  const recaps = createRecaps(core, { recapForce: false, recapWithoutDevice: () => true, ...over })
+  const recaps = createRecaps(core, { recapForce: false, recapWithoutDevice: () => true, decideTier: async () => decided('list'), ...over })
   const opts = (recaps.mirror as unknown as { opts: CommanderMirrorOpts }).opts
   const tell = (event: TurnLifecycle, seen = watching) => recaps.port.lifecycle(event, seen)
   return { core, recaps, opts, tell }
@@ -239,5 +255,70 @@ describe('the recaps', () => {
     await flush()
     expect(core.clients.turnSummary).not.toHaveBeenCalled()
     expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toEqual({ kind: 'done', text: 'done' })
+  })
+
+  describe('a finished turn\'s tier', () => {
+    afterEach(() => { delete process.env.HARNESS_NOTIFY_SMART })
+    const turn = async (tell: (event: TurnLifecycle, seen?: typeof watching) => void, seen: typeof watching & { remote?: boolean }) => {
+      // The core says the engine with every event (core/turns/recaps.ts `session`).
+      tell({ kind: 'events', session: { ...s1, engine: 'codex' }, events: [started()], replay: false }, seen)
+      tell({ kind: 'events', session: { ...s1, engine: 'codex' }, events: [ended], replay: false }, seen)
+    }
+
+    it('is decided once, with the agent and its engine, for the dial and the apps while a device listens', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const decideTier = vi.fn(async (_input: TierInput) => decided('alert'))
+      const { core, tell } = setup({ decideTier })
+      await turn(tell, watching)
+      await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+      expect(decideTier).toHaveBeenCalledExactlyOnceWith({ agent: 'app', engine: 'codex', recap: expect.any(String),
+        durationS: 0, stats: {}, subagent: false, onScreen: false, failed: false })
+      expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
+      expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toMatchObject({ kind: 'summary', tier: 'alert' })
+    })
+
+    it('is decided for an app away from this desk with no device, and for nobody when neither listens', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const decideTier = vi.fn(async () => decided('list'))
+      const away = setup({ decideTier })
+      await turn(away.tell, { device: false, active: false, remote: true })
+      await vi.waitFor(() => expect(away.core.clients.turnSummary).toHaveBeenCalled())
+      expect(vi.mocked(away.core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'list' } })
+      expect(decideTier).toHaveBeenCalledTimes(1)
+      const alone = setup({ decideTier })
+      await turn(alone.tell, { ...nobody, remote: false })
+      await vi.waitFor(() => expect(alone.core.clients.turnSummary).toHaveBeenCalled())
+      expect(decideTier).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(alone.core.clients.turnSummary).mock.calls[0][0].payload).not.toHaveProperty('tier')
+    })
+
+    it('builds the default decider without Jev when HARNESS_NOTIFY_SMART is 0, and with it otherwise', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      jevMade.mockClear()
+      process.env.HARNESS_NOTIFY_SMART = '0'
+      const off = setup({ decideTier: undefined })
+      expect(jevMade).not.toHaveBeenCalled()
+      await turn(off.tell, watching)
+      await vi.waitFor(() => expect(off.core.clients.turnSummary).toHaveBeenCalled())
+      // A turn under two minutes, with nobody to ask: the rule's silence.
+      expect(vi.mocked(off.core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'silent' } })
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[recap\] notify · app · silent · fallback:off · 0s · \d+ms$/))
+      delete process.env.HARNESS_NOTIFY_SMART
+      setup({ decideTier: undefined })
+      expect(jevMade).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks Harness\'s Jev through the core\'s signed-in backend, and sends what it chose', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const backend = vi.fn(async () => ({ status: 200, body: { data: { answers: {
+        tier: { choice: 'alert', probabilities: { alert: 0.7, list: 0.2, silent: 0.1 } },
+      } } } }))
+      const { core, tell } = setup({ decideTier: undefined }, fakeCore({ dataDir: temp(), account: { backend } }))
+      await turn(tell, watching)
+      await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+      expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', expect.objectContaining({
+        state: { agent: 'app (codex)', recap: expect.any(String), turn: 'ran 0 s', recent: '0 alerts and 0 list entries in the last 30 minutes' } }))
+      expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
+    })
   })
 })

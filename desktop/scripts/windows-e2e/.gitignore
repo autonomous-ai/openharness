@@ -1,0 +1,3 @@
+# Private local run state, credentials, downloads and build output.
+.work/
+__pycache__/

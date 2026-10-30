@@ -1,11 +1,14 @@
 /** Terminal identity and exit evidence stay with the core's live registry. */
 import type { CoreApi, TerminalsPort } from '../api.js'
-import type { tmuxPaneState } from '../../lib/tmux.js'
+import { primaryRuntime } from '../../lib/terminalRuntime.js'
+import type { TerminalPaneRead, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { checkPidRuntime } from '../../lib/deleteAgentFallback.js'
 
 interface TerminalSessionDeps {
   agents: Pick<CoreApi['agents'], 'byAgent' | 'displayName' | 'terminalAvailable'>
-  paneState: typeof tmuxPaneState
+  /** The pane's state, as its own backend reads it (`TerminalBackend.paneState`): asked with the row's runtime,
+   *  never the bare `tmuxPane`, which is a ptyhost pane's id on a ptyhost row. */
+  paneState: (runtime: TerminalRuntimeRef) => Promise<TerminalPaneRead>
   processState: typeof checkPidRuntime
 }
 
@@ -18,12 +21,12 @@ export function createTerminalSessions(deps: TerminalSessionDeps): Pick<Terminal
     // October 6 shell-return E2E: a resumed process exited after discovery marked its row inactive,
     // before retirement. That flag cannot suppress an exact exit probe or the parked shell is stranded.
     if (!row || row.engine === 'terminal' || row.launch?.state === 'starting' || row.launch?.state === 'failed'
-      || !row.tmuxPane || !row.processIdentity?.startMarker) return { exited: false }
+      || !row.runtimes.length || !row.processIdentity?.startMarker) return { exited: false }
     const session = { ...row, processIdentity: { ...row.processIdentity } }
     const identity = (value: ReturnType<typeof deps.agents.byAgent>) => JSON.stringify([value?.engine, value?.sessionId,
       value?.registeredAt, value?.tmuxPane, value?.launch?.state, value?.processIdentity])
     const before = identity(session)
-    const pane = await deps.paneState(session.tmuxPane)
+    const pane = await deps.paneState(primaryRuntime(session))
     if (pane === 'gone' || pane === 'unknown' || pane.engineExit == null) return { exited: false }
     const process = await deps.processState(session)
     return { exited: process.state === 'gone' && identity(deps.agents.byAgent(agentId)) === before }

@@ -179,6 +179,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
       child: Dialog(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         insetPadding: const EdgeInsets.all(16),
         child: ConstrainedBox(
           constraints: BoxConstraints(

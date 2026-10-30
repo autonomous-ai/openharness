@@ -152,7 +152,13 @@ class TerminalSession extends ChangeNotifier {
   final TerminalBinarySender sendBinary;
 
   final Duration resyncTimeout;
-  final bool readOnly;
+  final bool _readOnly;
+  bool get readOnly => _readOnly || _watchOnly;
+  String? _inputContext;
+  String? _openedInputContext;
+  bool _watchOnly;
+  bool _openedWatchOnly = false;
+  String? get inputContext => _inputContext;
 
   // A controllable clock keeps coalescing tests independent of host scheduling.
   final DateTime Function() _now;
@@ -213,10 +219,19 @@ class TerminalSession extends ChangeNotifier {
     this.client,
     this.onOpenStalled,
     this.takeover = true,
-    this.readOnly = false,
+    bool readOnly = false,
+    String? inputContext,
+    bool watchOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now {
+  }) : _now = now ?? DateTime.now,
+       // ignore: prefer_initializing_formals
+       _readOnly = readOnly,
+       // The public parameter deliberately omits the private field's underscore.
+       // ignore: prefer_initializing_formals
+       _inputContext = inputContext,
+       // ignore: prefer_initializing_formals
+       _watchOnly = watchOnly {
     terminal = _newTerminal();
   }
 
@@ -286,6 +301,10 @@ class TerminalSession extends ChangeNotifier {
   Timer? _heartbeat;
   int _heartbeatTick = 0;
   DateTime? _lastStreamActivityAt;
+
+  /// When the oldest input frame still waiting for the stream to answer went out; null when nothing
+  /// typed is waiting. See [_inputAnswered].
+  DateTime? _inputUnansweredSince;
   Timer? _ackTimer;
   Timer? _inputTimer;
   Timer? _resizeTimer;
@@ -305,7 +324,10 @@ class TerminalSession extends ChangeNotifier {
 
   bool get acceptsInput =>
       !readOnly &&
+      !_watchOnly &&
       !watching &&
+      _inputContext == _openedInputContext &&
+      _watchOnly == _openedWatchOnly &&
       status == TerminalSessionStatus.controlling &&
       streamId != null;
 
@@ -331,6 +353,31 @@ class TerminalSession extends ChangeNotifier {
     if (engine == engineId) return;
     engineId = engine;
     notifyListeners();
+  }
+
+  /// An opaque provenance hint, never an access grant. Staging a new scope
+  /// immediately withholds input until its replacement stream is ready.
+  void stageInputContext(String? value, {bool watchOnly = false}) {
+    if (_inputContext == value && _watchOnly == watchOnly) return;
+    _inputContext = value;
+    _watchOnly = watchOnly;
+    _inputBytes.clear();
+  }
+
+  Future<void> setInputContext(String? value, {bool watchOnly = false}) async {
+    stageInputContext(value, watchOnly: watchOnly);
+    if (_disposed ||
+        (_openedInputContext == value && _openedWatchOnly == watchOnly)) {
+      return;
+    }
+    await _open(
+      initialCols: _measuredViewport?.cols ?? cols,
+      initialRows: _measuredViewport?.rows ?? rows,
+      waitForViewportSize: false,
+      resetRecovery: true,
+      preserveTerminal: true,
+      allowRedial: false,
+    );
   }
 
   Future<void> open({
@@ -390,6 +437,7 @@ class TerminalSession extends ChangeNotifier {
     _lastInputFlushAt = null;
     _lastResizeFlushAt = null;
     _lastStreamActivityAt = null;
+    _inputUnanswered('reopen');
     _renderTail = Future<void>.value();
     _inputSendTail = Future<void>.value();
     streamId = null;
@@ -453,11 +501,15 @@ class TerminalSession extends ChangeNotifier {
       'rows': rows,
       'compression': const ['zlib', 'none'],
       if (client != null) 'client': client!.toJson(),
+      if (_inputContext != null) 'inputContext': _inputContext,
+      if (_watchOnly) 'watchOnly': true,
       // Absent is the takeover an open has always been; `false` asks the daemon
       // to leave whoever holds the terminal alone and hand this one a watcher.
       if (!takeover) 'takeover': false,
     };
     _openAskedTakeover = takeover;
+    _openedInputContext = _inputContext;
+    _openedWatchOnly = _watchOnly;
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
         status != TerminalSessionStatus.opening ||
@@ -807,6 +859,7 @@ class TerminalSession extends ChangeNotifier {
             _resyncTimer = null;
             status = TerminalSessionStatus.controlling;
             _lastStreamActivityAt = _now();
+            _inputAnswered('keyframe');
             _markForAck(bytes.length);
             notifyListeners();
             final measured = _measuredViewport;
@@ -828,6 +881,7 @@ class TerminalSession extends ChangeNotifier {
             _expectedSeq = frame.seq + 1;
             _lastRenderedSeq = frame.seq;
             _lastStreamActivityAt = _now();
+            _inputAnswered('sync');
             _markForAck(0);
             return;
           }
@@ -846,6 +900,7 @@ class TerminalSession extends ChangeNotifier {
           _expectedSeq = frame.seq + 1;
           _lastRenderedSeq = frame.seq;
           _lastStreamActivityAt = _now();
+          _inputAnswered('output');
           _markForAck(bytes.length);
         })
         .catchError((Object error, StackTrace stackTrace) async {
@@ -1003,9 +1058,12 @@ class TerminalSession extends ChangeNotifier {
   Terminal _newTerminal({bool bindCallbacks = true}) {
     final result = Terminal(
       maxLines: 10000,
-      platform: defaultTargetPlatform == TargetPlatform.linux
-          ? TerminalTargetPlatform.linux
-          : TerminalTargetPlatform.macos,
+      platform: switch (defaultTargetPlatform) {
+        TargetPlatform.linux => TerminalTargetPlatform.linux,
+        // The native app only: a browser on Windows keeps the keys it had.
+        TargetPlatform.windows when !kIsWeb => TerminalTargetPlatform.windows,
+        _ => TerminalTargetPlatform.macos,
+      },
       // ⌥⏎ and ⌥⌫ have to become Meta-prefixed before they reach the pty, or the engine's prompt
       // reads the first as the submit it is byte-identical to and never hears the second at all.
       // See [AltAsMetaInputHandler].
@@ -1021,6 +1079,9 @@ class TerminalSession extends ChangeNotifier {
 
   void _bindTerminal(Terminal result) {
     result.onOutput = _onTerminalOutput;
+    // tmux/the PTY host owns cursor-position replies. Sending the renderer's
+    // duplicate cursor reply to ConPTY makes PSReadLine eat the first key.
+    result.onCursorPositionReport = (_) {};
     result.onResize = (width, height, _, _) => resize(width, height);
   }
 
@@ -1039,6 +1100,7 @@ class TerminalSession extends ChangeNotifier {
       'content': content,
       'agentId': agentId,
       'mode': 'auto',
+      if (_inputContext != null) 'inputContext': _inputContext,
       if (!kIsWeb && client?.kind == 'desktop') 'usageIntent': 'interactive',
     });
   }
@@ -1317,12 +1379,22 @@ class TerminalSession extends ChangeNotifier {
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),
           compressed: false,
         );
+        final sendStartedAt = _now();
         final sent = await sendBinary(frame);
+        final sendTook = _now().difference(sendStartedAt);
+        if (sendTook >= _slowInputThreshold) {
+          appLog.warn(
+            'terminal',
+            'input send slow machine=$machineId agent=$agentId stream=$currentStreamId '
+                'link=$linkMode tookMs=${sendTook.inMilliseconds} bytes=${frame.bytes.length}',
+          );
+        }
         if (!_isCurrent(generation)) return;
         if (!sent) {
           transportLost('Terminal input was not sent');
           return;
         }
+        _inputUnansweredSince ??= sendStartedAt;
       }
     });
     _inputSendTail = queued.catchError((_) {
@@ -1379,6 +1451,48 @@ class TerminalSession extends ChangeNotifier {
   /// charged its full window to every single keystroke and to the start of every drag, which is
   /// latency paid for a batch that mostly never materializes.
   static const _inputCoalesceWindow = Duration(milliseconds: 4);
+
+  /// Typing that takes this long to be sent, or to be answered, is logged: the person feels it,
+  /// and a stall shorter than the 15s stream timeout leaves no other trace (2026-10-19).
+  static const _slowInputThreshold = Duration(seconds: 3);
+
+  /// A sync frame answers only after the daemon's idle cadence (5s interval, swept every 5s), so
+  /// a keystroke the program never echoes waits up to ~10s for one on a healthy link.
+  static const _slowInputSyncThreshold = Duration(seconds: 11);
+
+  /// The stream spoke after input went out. Typing that waited long for it is logged with the
+  /// time it waited and what answered, so a lag a person reports can be matched against both
+  /// machines' logs. An echo normally answers within a round trip; a burst of output after a
+  /// long wait is a link that stalled without closing.
+  void _inputAnswered(String by) {
+    final since = _inputUnansweredSince;
+    if (since == null) return;
+    _inputUnansweredSince = null;
+    final waited = _now().difference(since);
+    final threshold = by == 'sync'
+        ? _slowInputSyncThreshold
+        : _slowInputThreshold;
+    if (waited < threshold) return;
+    appLog.warn(
+      'terminal',
+      'input answered late machine=$machineId agent=$agentId stream=$streamId '
+          'link=$linkMode waitedMs=${waited.inMilliseconds} by=$by',
+    );
+  }
+
+  /// The stream is being given up on while typing still waits for it: say how long it waited.
+  void _inputUnanswered(String until) {
+    final since = _inputUnansweredSince;
+    if (since == null) return;
+    _inputUnansweredSince = null;
+    final waited = _now().difference(since);
+    if (waited < _slowInputThreshold) return;
+    appLog.warn(
+      'terminal',
+      'input unanswered machine=$machineId agent=$agentId stream=$streamId '
+          'link=$linkMode waitedMs=${waited.inMilliseconds} until=$until',
+    );
+  }
 
   /// The daemon's ceiling on one input frame (`INPUT_MAX_BYTES` in
   /// `cli/src/lib/terminalStreamManager.ts`). Larger is refused, not split.
@@ -1536,6 +1650,7 @@ class TerminalSession extends ChangeNotifier {
       _resyncAttempts = 0;
       status = TerminalSessionStatus.resyncing;
       errorCode = reason;
+      _inputUnanswered(reason);
       _inputBytes.clear();
       notifyListeners();
     }
@@ -1628,6 +1743,7 @@ class TerminalSession extends ChangeNotifier {
     final closingStream = streamId;
     _cancelTimers();
     _inputBytes.clear();
+    _inputUnansweredSince = null;
     streamId = null;
     linkMode = null;
     status = TerminalSessionStatus.closed;
@@ -1654,6 +1770,7 @@ class TerminalSession extends ChangeNotifier {
       'terminal',
       'transport lost machine=$machineId agent=$agentId message=$message',
     );
+    _inputUnanswered('transport_lost');
     _generation++;
     _cancelTimers();
     _inputBytes.clear();
@@ -1672,8 +1789,9 @@ class TerminalSession extends ChangeNotifier {
     appLog.warn(
       'terminal',
       'failed machine=$machineId agent=$agentId stream=$streamId code=$code'
-      '${message == null ? '' : ' message=$message'}',
+          '${message == null ? '' : ' message=$message'}',
     );
+    _inputUnanswered(code);
     _generation++;
     _cancelTimers();
     _inputBytes.clear();

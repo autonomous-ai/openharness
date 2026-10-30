@@ -5,6 +5,7 @@ import type { NativeExecutableSnapshot } from './nativeVersion.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { LAUNCH_LOCATION_VARIABLES, nativeProcessEnvironment } from './nativeLocations.js'
+import { builtinSqlite, runSqliteScript } from '../../lib/sqliteBuiltin.js'
 
 export interface NativeSessionModel { providerID: string; modelID: string }
 export type NativeModelResult = { ok: true } | { ok: false; code: string; detail: string; effect?: 'uncertain' }
@@ -63,8 +64,9 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
   /**
    * Rewrite `sessionId`'s model in `dbPath` so that resuming it opens on `model`.
    *
-   * One transaction: both rows or neither. Refuses without writing when `sqlite3` is absent, when the
-   * id is not an opencode session id, or when the session has no user message yet (the declared transaction guards it).
+   * One transaction: both rows or neither. Writes through the `sqlite3` CLI when it is on PATH, else `node:sqlite`.
+   * Refuses without writing when neither is there, when the id is not an opencode session id, or when the session
+   * has no user message yet (the declared transaction guards it).
    */
   async function setSessionModel(
     dbPath: string,
@@ -82,29 +84,38 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
       return { ok: false, code: rule.errors.writeFailed, detail: 'refusing to write an empty provider or model id' }
     }
     const values: Record<string, string> = { session: lit(sessionId), provider: lit(model.providerID), model: lit(model.modelID) }
-    const sql = rule.sqlite.statements.join('\n').replace(/\{\{(session|provider|model)\}\}/g, (_token, key: string) => values[key]!)
+    const statements = rule.sqlite.statements.map((statement) =>
+      statement.replace(/\{\{(session|provider|model)\}\}/g, (_token, key: string) => values[key]!))
 
     let stdout: string
     try {
-      // `-bail` stops at the first failing statement; the shell then exits with the transaction still
-      // open, and SQLite rolls it back on close — so a failing second UPDATE leaves the first unapplied.
-      // Bounded: a CLI that never answers used to hold this `agent_create` open for good. The write
-      // itself waits at most `busy_timeout` (5s, above) for opencode's lock, so 15s is generous.
-      ({ stdout } = await execFileAsync('sqlite3', [...rule.sqlite.args, dbPath, sql], { timeout: rule.sqlite.timeoutMs, killSignal: 'SIGKILL' }))
+      // The CLI first: the write waits up to `busy_timeout` (5s) for opencode's lock, and in a child process that
+      // wait is not the daemon's. `-bail` stops at the first failing statement; the shell then exits with the
+      // transaction still open, and SQLite rolls it back on close — so a failing second UPDATE leaves the first
+      // unapplied. Bounded: a CLI that never answers used to hold this `agent_create` open for good, so 15s.
+      ({ stdout } = await execFileAsync('sqlite3', [...rule.sqlite.args, dbPath, statements.join('\n')], { timeout: rule.sqlite.timeoutMs, killSignal: 'SIGKILL' }))
     } catch (err) {
       const error = err as NodeJS.ErrnoException & { stderr?: string }
-      if (error?.code === 'ENOENT') {
-        return { ok: false, code: rule.errors.sqliteMissing, detail: 'sqlite3 CLI not found on PATH' }
+      if (error?.code !== 'ENOENT') {
+        const stderr = String(error?.stderr ?? '').trim()
+        return { ok: false, code: rule.errors.writeFailed, detail: stderr || String(error?.message ?? err) }
       }
-      const stderr = String(error?.stderr ?? '').trim()
-      return { ok: false, code: rule.errors.writeFailed, detail: stderr || String(error?.message ?? err) }
+      // Windows ships no sqlite3 CLI: the same statements through node:sqlite when this Node has it. It runs on
+      // this thread, so a lock opencode holds stalls it up to `busy_timeout`; that is only where no CLI exists.
+      const Database = builtinSqlite()
+      if (!Database) return { ok: false, code: rule.errors.sqliteMissing, detail: 'sqlite3 CLI not found on PATH' }
+      try {
+        stdout = runSqliteScript(Database, dbPath, statements).join('\n')
+      } catch (builtinError) {
+        return { ok: false, code: rule.errors.writeFailed, detail: String((builtinError as Error)?.message ?? builtinError) }
+      }
     }
     const lines = stdout.trim().split('\n').map((line) => line.trim()).filter(Boolean)
     // Lines: the pragma's echo, then the two change counts.
     const messages = Number(lines[lines.length - 2])
     const sessions = Number(lines[lines.length - 1])
     if (!Number.isFinite(messages) || !Number.isFinite(sessions)) {
-      return { ok: false, code: rule.errors.writeFailed, detail: `unexpected sqlite3 output: ${stdout.trim().slice(0, 200)}` }
+      return { ok: false, code: rule.errors.writeFailed, detail: `unexpected SQLite output: ${stdout.trim().slice(0, 200)}` }
     }
     if (messages === 0) {
       return {

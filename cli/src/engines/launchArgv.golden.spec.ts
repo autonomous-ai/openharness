@@ -233,6 +233,9 @@ beforeAll(() => {
   saved.ADAPTER_DATA_DIR = env.ADAPTER_DATA_DIR
   saved.CODEX_HOME = env.CODEX_HOME
   env.ADAPTER_DATA_DIR = dataDir
+  // The profile is a throwaway one (HOME for POSIX, USERPROFILE for Windows), so no engine home is the person's.
+  mkdirSync(join(root, 'home'))
+  for (const name of ['HOME', 'USERPROFILE']) { savedEnv[name] = process.env[name]; process.env[name] = join(root, 'home') }
   env.CODEX_HOME = join(homedir(), '.codex')
   for (const name of ENGINE_PATHS) { savedEnv[`config:${name}`] = config[name]; config[name] = undefined }
   for (const name of PROCESS_VARS) { savedEnv[name] = process.env[name]; delete process.env[name] }
@@ -247,7 +250,7 @@ afterAll(() => {
   env.ADAPTER_DATA_DIR = saved.ADAPTER_DATA_DIR!
   env.CODEX_HOME = saved.CODEX_HOME!
   for (const name of ENGINE_PATHS) config[name] = savedEnv[`config:${name}`]
-  for (const name of PROCESS_VARS) {
+  for (const name of [...PROCESS_VARS, 'HOME', 'USERPROFILE']) {
     if (savedEnv[name] === undefined) delete process.env[name]
     else process.env[name] = savedEnv[name]
   }
@@ -264,8 +267,8 @@ function placeholders(text: string): string {
     .split(`'${node}'`).join("'<daemon-node>'")
     .split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
     .split(dataDir).join('<data>')
-    .split(root).join('<root>')
     .split(homedir()).join('<home>')
+    .split(root).join('<root>')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sh/g, '<one-time>.sh')
     .split(`exec ${posixRunner()} '`).join("exec <posix-runner> '")
 }
@@ -406,7 +409,7 @@ async function overridesCases(): Promise<Record<string, unknown>> {
     const result = await buildLaunchOverrides({
       machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async (key, files) => { calls.push(`writeGridConfigDir ${key} ${files.map((file) => file.name).join(',')}`); return `/state/grid-engine-config/${key}` },
-      tmuxSupportsSessionEnv: async () => true,
+      capabilities: async () => ({ sessionEnv: true }),
       installCodexHooks: (home) => { calls.push(`installCodexHooks ${home}`); return true },
       readCodexConfig: (path) => { calls.push(`readCodexConfig ${path}`); return config },
       dshLaunch: async (dsh, workspace, eng, key) => {

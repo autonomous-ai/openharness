@@ -1,7 +1,7 @@
 // What pro_cable tells the app. pro_cable parses the daemon's messages and calls these; pro_app (Task 6) implements
 // them, and test_pro_cable.c stubs them with a recorder.
 //
-// EVERY CALL RUNS ON THE cable_link TASK (6 KB stack). A pointer argument is valid only until the call returns:
+// EVERY CALL RUNS ON THE cable_link TASK (STACK_CABLE_LINK, 12 KB). A pointer argument is valid only until the call returns:
 // copy what must outlive it. A NULL string means "the daemon did not send that field" (an older daemon sends
 // less); "" means it sent an empty one. None of these is ever called with a string longer than its stated cap, and
 // every cut is on a UTF-8 boundary.
@@ -38,6 +38,18 @@ void pro_app_agents(const pro_agent_row_t *rows, int n);
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                     const char *selected, const cable_tile_t *tiles, int tile_n);
 
+// ---- Swarm cards (hello swarmCard:v1) ----
+// `supertabs`: the current set and order of Swarm ids (at most SWARMS_CARD_MAX, each shorter than ID_MAX, no repeats). A Swarm not
+// listed is dropped; a listed one not yet received stays absent until its `supertab` frame arrives.
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n);
+// `supertab`: one Swarm's data (<= SWARM_LEADS_MAX Leads, names cut on a UTF-8 boundary, a bad Lead skipped), replacing that Swarm's. Ignored
+// when its id is not in the last id list. `since_at_ms` and every Lead's `text` are 0/NULL here: the model stamps the clock and keeps the cached texts.
+void pro_app_supertab(const pod_swarm_t *s);
+// `supertab.recap`: the Lead's last message (<= SWARM_TEXT_MAX - 1 bytes; "" when `none`), `at` its epoch seconds.
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+// `supertab.focus`: the desktop opened this Swarm project. Both ids are non-empty.
+void pro_app_supertab_focus(const char *tab, const char *lead);
+
 // ---- library ----
 // Same layout as pod_library_row_t (pod_glue.h). `machine` is the machine NAME ("" when the machine list does not
 // hold the id), `status` one of idle working question finished failed paused offline.
@@ -57,14 +69,16 @@ void pro_app_context(const char *id, const char *machine, const char *project, c
 //   "step"     text = one tool card (non-empty, <= 120 B), elapsed_s -1
 //   "done" / "error"  text "", elapsed_s 0
 // `turn.activity` is delivered as verb, then activity, then step, each only when its field is present.
+// kind "error": `text` is the failure message (may be ""); the failed turn is filed as an alert.
 void pro_app_turn(const char *id, const char *kind, const char *text, int elapsed_s);
 // turn.stats, once before turn.done: each count is 0..1000000, or -1 when the message left it out.
 void pro_app_turn_stats(const char *id, int tests_passed, int tests_failed, int commits, int tokens_in, int tokens_out);
 
 // `text` and `recap` are NULL when absent, `full` is NULL from a daemon without recap=long-v1.
-// `notify`: a live turn's end that is news here (not `restore`, not `quiet`, not `silent`): file an unread entry, show the
-// banner and beep. The recap itself is applied either way.
-void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, bool notify);
+// `tier`: how loud a live turn's end is (see pod_tier_t; a `restore` is never news, whatever it says): alert files an unread
+// entry, shows the banner and beeps (one beep per POD_BEEP_COALESCE_MS), list only files the entry, silent files nothing.
+// The recap itself is applied either way.
+void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, pod_tier_t tier);
 
 // ---- notifications ----
 // notif.replace: the whole unread list (the daemon sends it on greeting; at most 8 items, one per agent). Strings are never
@@ -74,7 +88,10 @@ void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
 
-void pro_app_question(const char *id, const char *text);
+// request is the question's request id: with the prompt it tells a re-sent question from a new one. super_tab is the Super Tab
+// the asking agent works in (NULL for a plain question; never "", at most SUPER_TAB_MAX - 1 bytes) and attention what it needs
+// (POD_ATTN_DECISION or POD_ATTN_STUCK with a super_tab, POD_ATTN_NONE without).
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention);
 void pro_app_question_close(const char *id);
 
 // The daemon's surface moved to this agent.

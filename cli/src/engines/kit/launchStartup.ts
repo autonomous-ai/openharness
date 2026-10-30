@@ -20,6 +20,16 @@ function probedFlag(launch: Launch): string | null {
   return launch?.startup?.ownedFlag && launch.sharedServer ? launch.sharedServer.ownedFlag : null
 }
 
+/**
+ * The owned-process flag the contract has probed before each run, and what to say when no probe can answer; null
+ * when it declares none. On Windows, which has no launch script, the daemon probes it itself (engines/nativeLaunch.ts)
+ * and the flag goes in the engine's argv (lib/windows/engineStart.ts).
+ */
+export function startupOwnedFlag(launch: Launch): { flag: string; unverified: string } | null {
+  const flag = probedFlag(launch)
+  return flag ? { flag, unverified: launch!.startup!.ownedFlag!.unverified } : null
+}
+
 /** The variable that carries the probe's answer to each run, named after the flag (`harness_codex_no_daemon`). */
 const flagVariable = (engine: string, flag: string): string => `harness_${engine}_${flag.replace(/^-+/, '').replace(/[^A-Za-z0-9]/g, '_')}`
 

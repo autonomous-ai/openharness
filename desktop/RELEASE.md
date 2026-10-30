@@ -26,7 +26,7 @@ HTTPS read of the manifest; `--prepare` and `--wait` also need the authenticated
 
 For an authorized release, run `--prepare` once the final implementation is pushed to its PR
 branch, while the required tests and review run. It selects the next version by the same rules
-as a release, builds/signs/notarizes all platforms in CI, and verifies all six downloads at an
+as a release, builds/signs/notarizes all platforms in CI, and verifies all nine downloads at an
 isolated candidate path. It creates neither a release tag nor a product manifest/Release page.
 After checks pass, merge and release that same version normally. CI reuses the candidate only
 when the Desktop build inputs and version match; unrelated component merges and a clean
@@ -168,8 +168,8 @@ It compiles one universal app, copies it into separate directories, pins and ver
 renderer, then packages, notarizes and uploads both variants in parallel. Version/build-number,
 arm64/x86_64 slices, signatures and hardened runtime are checked before publication. Each variant
 still receives both app and DMG notarization, with the stapled app inside the DMG. Separate scratch
-manifests are combined only after all macOS and Linux builds succeed, followed by verification of
-all six public downloads. `macos-build-timings` records the bounded build and per-variant phases.
+manifests are combined only after all macOS, Linux and Windows builds succeed, followed by verification of
+all nine public downloads. `macos-build-timings` records the bounded build and per-variant phases.
 App copies and DMG staging use independent APFS clones when available. The temporary
 notarization ZIP uses faster compression; the downloadable ZIP retains normal compression
 and is rebuilt from the stapled app while DMG notarization runs. Compression failures stop
@@ -481,7 +481,7 @@ running app back.
 `scripts/upload-desktop-linux.sh` publishes architecture-specific Linux ARM64 and x64 releases to the
 **same** `metadata.json` as macOS. `release-desktop.yml` runs it on both a `ubuntu-22.04` and a
 `ubuntu-22.04-arm` runner — the oldest Ubuntu supported, because the bundle links the build host's
-GLib and glibc and a 24.04 build will not start on 22.04 — so one `make release-desktop` covers every build — which is also why the six
+GLib and glibc and a 24.04 build will not start on 22.04 — so one `make release-desktop` covers every build — which is also why the nine
 `desktop-*` keys only stay on one version when the release goes through CI. Run by hand
 (`make upload-desktop-linux ARCH=arm64`) it moves one key and leaves the others behind. `amd64` and
 `x86_64` are accepted aliases for `x64`; `aarch64` is accepted as an alias for `arm64`.
@@ -498,8 +498,10 @@ and none is needed: the trust boundary is the same sha256-verified manifest entr
 already checks on every platform.
 
 The Linux viewer uses the host's WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`). The AppImage
-contains Harness and its Flutter bundle, but does not bundle WebKitGTK; install the runtime package
-from the distribution before launching Harness. Linux release builds also need
+contains Harness and its Flutter bundle, but does not bundle WebKitGTK. The Linux plugin is loaded
+optionally: if the host runtime or plugin is unavailable, Harness still launches and viewer panes
+show the URL placeholder (recordings offer browser playback). Install the runtime package and
+restart Harness to enable embedded viewing. Linux release builds also need
 `libwebkit2gtk-4.1-dev` on the build host.
 
 **Packaged as a single-file AppImage**, not a tarball. The script stages an AppDir
@@ -560,3 +562,81 @@ Same shape as macOS (see above), with the platform-specific pieces:
 
 Same conventions as macOS — publish to a scratch `METADATA_PATH` first, and roll back only by
 publishing a newer version containing the older code (see above).
+
+## Windows
+
+Every release ships Windows with macOS and Linux: `release-desktop.yml`'s `build-windows` builds each architecture on
+its own runner and `upload-windows` publishes from ubuntu. Three files go to `harness/desktop/<version>/`:
+
+- `Harness-windows-x64.zip` and `Harness-windows-arm64.zip` (`desktop-windows-x64`, `desktop-windows-arm64`), the
+  install-shaped zips below, which the Windows updater and `install.ps1 -App` take;
+- `harness-install.exe` (`desktop-windows-installer`), what the website's **Download for Windows** serves. It carries
+  no app: it reads the manifest when it runs, picks this PC's zip as `install.ps1 -App` does, checks it and runs its
+  `Harness.exe --install` (`installer/`, docs/superpowers/specs/2026-10-19-windows-installer-design.md).
+
+Nothing is code-signed yet. Windows shows SmartScreen once, on the installer a browser downloaded; Smart App Control
+blocks the build where it is on. A failed Windows build stops the release, as a failed macOS or Linux build does.
+
+If Microsoft Defender flags `harness-install.exe` or the app, submit the file as a software developer at
+https://www.microsoft.com/wdsi/filesubmission with the release version. Do not change the build to dodge a detection.
+
+### Staging
+
+`scripts/package-windows.ps1` packages the complete Flutter Release bundle in the per-user install shape:
+`Harness.exe` (the `harness-desktop-launcher` binary), `Harness.ico`, `current`, and
+`app\<version>\` with `harness-desktop.exe`, `harness_pipe_io.dll`, the other runtime DLLs and `data\`.
+The app's first-frame `.started` marker is excluded. `Harness.exe --install` installs from this
+zip, and the Windows updater consumes the same layout. The version comes from the app EXE's
+`ProductVersion` resource, stamped by `flutter build windows --build-name <version>`; Windows
+does not use a `version.txt` file.
+
+The Windows desktop workflow has a release mode that builds both x64 and arm64 staging zips, and a staging
+`harness-install.exe` (`desktop-windows-installer`) in the x64 job, on
+their own runners. It passes `--dart-define=HARNESS_STAGING=true`, so the installed app reads the
+staging desktop manifest and installs the staging CLI. `dry_run` defaults to true. Its artifact
+contains **proposed Windows manifest entries**, computed without reading or writing the bucket;
+it does not describe the live manifest's unrelated keys. A live staging publication requires the
+owner's explicit approval, then merges the two keys into the observed staging manifest generation:
+
+```bash
+# Only after approval for this staging publish:
+gh workflow run windows-desktop.yml -f release=true -f version=<version> -f dry_run=false
+```
+
+```
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/metadata.json
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/<version>/harness-desktop-<version>-windows-x64.zip
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/<version>/harness-desktop-<version>-windows-arm64.zip
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/<version>/harness-install.exe
+```
+
+The publisher validates both complete zips (`check-windows-zip.py`) and the installer before upload, creates each versioned object only
+when absent, reads the uploaded bytes back, and conditionally writes the manifest so another
+publisher's change cannot be lost. If a publish stops after uploading an object, that version is
+spent: inspect staging and use a new version. Signing is separate.
+
+**Install by one command.** After an approved staging publish, `bash cli/scripts/upload-install-ps1.sh --app`
+publishes `harness/staging/desktop/install.ps1`, a copy of B's installer with its app-default line on. A person runs
+`irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex`. It chooses this PC's zip from the staging
+desktop manifest, verifies its size and SHA-256, and runs the zip's `Harness.exe --install`. PowerShell's download
+does not add the browser's mark of the web, so SmartScreen does not show its first-run prompt. Smart App Control can
+still block an unsigned build. `--app --production` is the owner's later publication step, after production has the
+Windows manifest keys.
+
+### First production release
+
+The first release with Windows follows the merge of the Windows PR, and each step needs the owner's go. The CLI side
+comes first: the app installs the CLI through the production `install.ps1`, which 404s until step 5. Until then, do
+not cut a desktop release, because every desktop release now publishes the Windows zips and `harness-install.exe`.
+
+1. the CLI release. macOS and Linux go to production; its Windows terminal host and CLI go to staging only;
+2. the staging E2E on Windows (docs/testing/windows-cli-e2e.md) with that release;
+3. the Windows Node runtime manifest, through the Node workflow with the production `metadata_path`;
+4. `cli/scripts/promote-pty-payload.sh <that release>`, which uploads nothing and checks each payload file's SHA-256
+   and size;
+5. `bash cli/scripts/upload-install-ps1.sh --production`. It refuses until production has this CLI's Windows terminal
+   host and a Windows Node runtime;
+6. `make release-desktop`, the first with the Windows keys;
+7. `bash cli/scripts/upload-install-ps1.sh --app --production`, which refuses until production has both Windows zips;
+8. the website release. Its Windows download answers 503 until the production manifest has
+   `desktop-windows-installer`, so it goes last.

@@ -13,6 +13,12 @@ import 'model_manager_controller.dart';
 /// Between a shared model's name and the machine serving it, in its row's title.
 const modelMachineSeparator = ' · ';
 
+/// What a shared model's second line says: the machine serving it, and the grid it serves on.
+String servedOn(String machine, String? grid) => [
+  if (machine.isNotEmpty) machine,
+  if (grid != null && grid.isNotEmpty) grid,
+].join(modelMachineSeparator);
+
 enum ModelSearchSection {
   subscriptions('Subscriptions'),
   apis('APIs'),
@@ -43,6 +49,7 @@ class ModelSearchEntry {
     this.searchAliases = const [],
     this.controller,
     this.own = false,
+    this.elsewhere = false,
     this.gridModel,
     this.sharedBy,
   });
@@ -58,6 +65,10 @@ class ModelSearchEntry {
   final List<String> searchAliases;
   final ModelManagerController? controller;
   final bool own;
+
+  /// Served by another machine — one of yours, or one shared with you. Its row is listed under
+  /// Shared with you even when it is [own], and keeps the controls an own model has.
+  final bool elsewhere;
   final GridModel? gridModel;
   final String? sharedBy;
 
@@ -67,7 +78,7 @@ class ModelSearchEntry {
       ? ModelSearchSection.apis
       : isDownload
       ? ModelSearchSection.catalog
-      : own
+      : own && !elsewhere
       ? ModelSearchSection.local
       : ModelSearchSection.shared;
 
@@ -297,20 +308,24 @@ class ModelSearchCatalog extends ChangeNotifier {
           continue;
         }
         final words = sectionWords(section);
+        // Your models are this computer's. A model another machine serves — on your own grid too —
+        // is shared with you, named with that machine and its grid (owner, 2026-10-18: Muse-Glimmer,
+        // served by another machine on the account's grid, read as if it were on this one).
+        final here = section.own && identical(owner, manager);
+        final machine = owner?.machine?.machine.displayName ?? model.node;
         discovered.add(
           ModelSearchEntry(
             id: id,
             // Shown without its quant, as hn shows it; found, and switched onto, by its id.
             name: withoutQuant(model.id),
-            source: section.own
-                ? 'On your machines'
-                : 'Shared · ${section.name}',
-            node: owner?.machine?.machine.displayName ?? model.node,
-            searchAliases: [model.id, model.node, if (section.own) 'local'],
+            source: here ? 'On this computer' : 'Shared · ${gridModel.grid}',
+            node: machine,
+            searchAliases: [model.id, model.node, if (here) 'local'],
             own: section.own,
+            elsewhere: !here,
             controller: owner,
             gridModel: gridModel,
-            sharedBy: section.own ? null : model.node,
+            sharedBy: here ? null : servedOn(machine, gridModel.grid),
             status:
                 offlineRowNote(model) ??
                 words.sentence ??
@@ -362,10 +377,13 @@ class ModelSearchCatalog extends ChangeNotifier {
       named[key] = (named[key] ?? 0) + 1;
     }
     bool twin(ModelManagerController owner, LocalModel model) =>
-        (named['${identityHashCode(owner)}:${model.shownName.toLowerCase()}'] ?? 0) >
+        (named['${identityHashCode(owner)}:${model.shownName.toLowerCase()}'] ??
+            0) >
         1;
     final all = [
       for (final (:owner, :model) in local)
+        // Another machine's — one of yours, or one shared with you — is listed as shared, under
+        // its machine and the grid it serves on, as a model found on a grid is.
         ModelSearchEntry(
           id: _managedRowIds.putIfAbsent(
             _managedKey(owner, model),
@@ -381,8 +399,15 @@ class ModelSearchCatalog extends ChangeNotifier {
           status: localStatus(model, controller: owner),
           local: model,
           own: true,
+          elsewhere: !identical(owner, manager),
           controller: owner,
           gridModel: served[_managedKey(owner, model)],
+          sharedBy: identical(owner, manager)
+              ? null
+              : servedOn(
+                  owner.machine?.machine.displayName ?? '',
+                  served[_managedKey(owner, model)]?.grid,
+                ),
           searchAliases: [
             ?owner.machine?.machine.hostname,
             ?model.quantization,

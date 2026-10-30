@@ -24,6 +24,7 @@ import { describeGridLaunch, gridCapableEngines, gridEnvVarNames, type GridLaunc
 import { validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../lib/launchOverrides.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentEngine } from '../engines/types.js'
+import type { TerminalBackendCapabilities } from '../lib/terminalTypes.js'
 import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { gridLaunchInProcess } from './gridLaunchInProcess.js'
 
@@ -31,7 +32,8 @@ export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
   dataDir: string
   machine: () => GridLaunchMachine | Promise<GridLaunchMachine>
-  tmuxSupportsSessionEnv: () => Promise<boolean>
+  /** What the backend new panes are made on can do (`TerminalBackend.capabilities`). */
+  capabilities: () => Promise<TerminalBackendCapabilities>
   /** A Codex `config.toml`, as the own-login provider reads it. */
   readCodexConfig: (path: string) => string | null
   /** What a launch records on its row once built. */
@@ -85,7 +87,7 @@ export function launchShapes(world: LaunchWorld) {
     machine: world.machine,
     gridLaunch,
     writeGridConfigDir,
-    tmuxSupportsSessionEnv: world.tmuxSupportsSessionEnv,
+    capabilities: world.capabilities,
     installCodexHooks: () => true,
     readCodexConfig: world.readCodexConfig,
     dshLaunch: dshLaunch.relaunch,

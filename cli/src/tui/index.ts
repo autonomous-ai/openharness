@@ -101,7 +101,19 @@ async function ensureDaemon(port: number, dataDir: string, identity?: () => stri
   return false
 }
 
-export async function tuiCommand(argv: string[], opts: { port: number; dataDir?: string; identity?: () => string }): Promise<number> {
+/** `hn` is not built for Windows (spec B, decision 5): said once, in place of a download that cannot succeed. */
+export const TUI_UNAVAILABLE_ON_WINDOWS =
+  'The Harness terminal app (hn) is not available on Windows yet. Use the Harness desktop app, or `harness` commands.'
+
+export async function tuiCommand(
+  argv: string[],
+  opts: { port: number; dataDir?: string; identity?: () => string; platform?: NodeJS.Platform },
+): Promise<number> {
+  if ((opts.platform ?? process.platform) === 'win32') {
+    if (argv[0] === '--where') { console.log('(not available on Windows)'); return 0 }
+    console.error(`  ✗ ${TUI_UNAVAILABLE_ON_WINDOWS}`)
+    return 1
+  }
   if (argv[0] === '--install' || argv[0] === 'install') {
     try { await installManagedTui(process.argv[1] ?? '', (line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }

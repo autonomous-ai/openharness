@@ -8,7 +8,7 @@
 ///                  QR code → the camera: How to get the QR code, its steps
 /// ② Your computer  On your computer, go to   [autonomous.ai/go ⇪]
 ///                  under the picture: Looking for your computer▌
-///                  under the link: (1) Install Harness  (2) Sign in, Use you@…
+///                  under the link: (1) Download and install Harness  (2) Sign in, Use you@…
 ///                  under the account: Not you? Sign out
 ///   The Mac joins  MacBook Pro is ready.
 /// ③ The session    by the mic, once: Send it, or say anything.
@@ -25,6 +25,13 @@
 /// account to sign in with, and where Add Phone is (owner, 2026-10-12, after trying it):
 /// until the phone adds the computer itself, the computer signs in on its own, and that is where
 /// people stood stuck.
+/// Exception approved by the owner, Tony, 2026-10-22: one suggestion with a Send button above the
+/// mic in the first session, once — Desktop's pre-typed starter when the pane has one, otherwise the
+/// first of the New Harness first-task ideas. It goes after Send or a spoken message; no cycling and
+/// no other additions were approved.
+/// Owner, 2026-10-23: that session (OpenCode, Claude Code, Codex) opens with the keyboard up over the
+/// task typed into the prompt — Claude Code's and Codex's typed by the phone — and its mic pretends:
+/// no microphone and no permission prompt, a second tap sends the prompt as it stands.
 abstract final class OnboardingCopy {
   /// ① The welcome's headline: everything lit, the promise.
   static const welcome =
@@ -60,10 +67,10 @@ abstract final class OnboardingCopy {
   /// ② Under the picture, while the laptop breathes.
   static const looking = 'Looking for your computer';
 
-  /// ② The first step under the link: installing Harness — the link above it is the download, so
-  /// the step need not say so (`set_up_computer.dart`'s [goToSteps]; the second is signing in with
-  /// this account). Under the camera, the note under the first step's address.
-  static const installStep = 'Install Harness';
+  /// ② The first step under the link: getting Harness from it — the link is the download, and the
+  /// step says so (owner, 2026-10-19) (`set_up_computer.dart`'s [goToSteps]; the second is signing
+  /// in with this account). Under the camera, the note under the first step's address.
+  static const installStep = 'Download and install Harness';
 
   /// ② Right under the account the steps name, at home: the question, and the way out after it.
   static const notYou = 'Not you?';
@@ -79,6 +86,6 @@ abstract final class OnboardingCopy {
   /// What the phone says by the mic the first time it opens a session — one line, once.
   static const micSendIt = 'Send it, or say anything.';
   static const micPickUp = 'Pick up where you left off.';
-  static const micSayWhat = 'Say what to build.';
+  static const micSayWhat = 'Say what to build, or send this:';
   static const micTalk = 'Talk to it.';
 }

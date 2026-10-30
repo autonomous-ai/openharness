@@ -183,6 +183,7 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
         insetPadding: const EdgeInsets.all(24),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         child: DesktopDialogSurface(
           child: SizedBox(
             width: grid.AppDesktop.formWidth,

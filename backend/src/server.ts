@@ -7,41 +7,33 @@ import { DAEMONS, env } from './config/env.js'
 import { registerJsonBodyParser } from './lib/jsonBodyParser.js'
 import { errorHandler } from './middlewares/errorHandler.js'
 import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
-import { cursorRoutes } from './routes/cursor.js'
-import { voiceRoutes } from './routes/voice.js'
-import { harnessShareRoutes } from './routes/harnessShares.js'
-import { machineShareRoutes } from './routes/machineShares.js'
-import { harnessLinkRoutes } from './routes/harnessLinks.js'
-import { communityRoutes } from './routes/community.js'
-import { communityTranslateRoutes } from './routes/communityTranslate.js'
-import { communityCommentRoutes } from './routes/communityComments.js'
-import { communityCreatorRoutes } from './routes/communityCreators.js'
-import { communityNotificationRoutes } from './routes/communityNotifications.js'
-import { communityReportRoutes } from './routes/communityReports.js'
-import { communityEditRoutes } from './routes/communityEdit.js'
-import { deviceKeyRoutes } from './routes/deviceKeys.js'
-import { qrSignInRoutes } from './routes/qrSignIn.js'
-import { deskRoutes } from './routes/desk.js'
-import { connectorRoutes } from './routes/connectors.js'
-import { connectorVaultRoutes } from './routes/connectorVault.js'
-import { agentMessagesRoutes } from './routes/agentMessages.js'
-import { zooRoutes } from './routes/zoo.js'
-import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
+import { registerControlRoutes } from './routes/control.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
 import { handleAgentMessagesUpgrade } from './lib/agentMessagesWs.js'
-import { deviceAuthRoutes } from './routes/deviceAuth.js'
-import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, productUsageRoutes, agentRouteRoutes, jevRouteRoutes, storeRoutes } from './routes/index.js'
 import { startSubdomainProxy, startMeshProxy } from './lib/subdomainProxy.js'
 import { handleDeviceUpgrade } from './lib/deviceWs.js'
 import { handleWebUpgrade } from './lib/webWs.js'
 import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
+import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
+import { prisma } from './lib/prisma.js'
+import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
+import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
+import { useSharedRateCounter } from './lib/rateLimit.js'
+import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
+import { redisWindowCounter } from './lib/redisRateCounter.js'
+import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { startRelayUsageFlush } from './lib/productUsage.js'
+import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
+import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
 // sockets, one DB/Redis hiccup inside a fire-and-forget promise would then drop every one of them and
@@ -77,7 +69,11 @@ const app = Fastify({
       // data. Nothing in this codebase called setNoDelay() before, so every socket here defaulted to
       // Nagle-enabled.
       if (socket instanceof net.Socket) socket.setNoDelay(true)
+      const path = (req.url ?? '').split('?')[0]
+      // Counted apart from real connects (lib/wsAttribution.ts): a socket that closes before it is tracked was refused.
+      const endpoint = endpointOf(path)
       if (pendingUpgrades >= MAX_PENDING_UPGRADES) {
+        if (endpoint) refusedUpgrade(endpoint)
         try { socket.write('HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
         return
@@ -97,7 +93,7 @@ const app = Fastify({
       // A handshake that never completes (auth call hung, peer went silent) must not hold the socket.
       // `ws` resets the timeout to 0 once it completes the upgrade, so this only ever fires pre-upgrade.
       if (socket instanceof net.Socket) socket.setTimeout(UPGRADE_HANDSHAKE_TIMEOUT_MS, () => socket.destroy())
-      const path = (req.url ?? '').split('?')[0]
+      if (endpoint) watchUpgrade(endpoint, socket)
       if (path === '/api/observer-ws') {
         handleObserverUpgrade(req, socket, head)
         return
@@ -139,18 +135,19 @@ const app = Fastify({
 async function start(): Promise<void> {
   // Mint the Cloudflare TURN credential before the first socket lands; no-op when TURN is unconfigured.
   startTurnCredentialRefresh()
+  // Every request is named by its route pattern before any hook reads the database, so its queries count for it.
+  registerWorkContext(app)
+  // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
+  selfProfileFromEnv(app)
+  // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
+  const stopQueryStats = startQueryStats()
+  const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
 
   app.setErrorHandler(errorHandler)
 
   registerJsonBodyParser(app)
 
-  app.addHook('onSend', async (_request, reply) => {
-    reply.header('X-Content-Type-Options', 'nosniff')
-    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    if (env.NODE_ENV === 'production') {
-      reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
-    }
-  })
+  registerSecurityHeaders(app)
 
   // Allow all origins (reflect the request origin so credentialed requests work too). Methods +
   // headers are reflected (allowedHeaders omitted → echoes Access-Control-Request-Headers), so any
@@ -164,48 +161,32 @@ async function start(): Promise<void> {
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
   useSharedSsoProfileStore(redisSsoProfileStore)
+  // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
+  useSharedRateCounter(redisWindowCounter(pub))
+  // Each pod's socket counts once a minute: open, connects by client, short-lived, refused (WebSocket roadmap Phase 0).
+  startWsCounterLog()
+  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
+  // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
+  watchGroupIndexes(prisma)
 
-  // SSO access-token gate for the control API (data-plane auth happens before Fastify).
+  // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
+  // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
+  // answered before it costs a sign-in.
+  const routeLimit = createRouteRateLimit({
+    perPersonPerMinute: env.ROUTE_RATE_LIMIT_PER_PERSON_MINUTE,
+    perCallerPerSecond: env.ROUTE_RATE_LIMIT_PER_CALLER_SECOND,
+    perPersonPerSecond: env.ROUTE_RATE_LIMIT_PER_PERSON_SECOND,
+  })
+  app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)
+  app.addHook('onRequest', routeLimit.afterSignIn)
 
-  await app.register(healthRoutes)
-  await app.register(authRoutes)
-  await app.register(userRoutes)
-  await app.register(machineRoutes)
-  await app.register(planRoutes)
-  await app.register(gridRoutes) // the account's private harness grid name
-  await app.register(deviceRoutes)
-  await app.register(mobileRoutes)
-  await app.register(appRoutes)
-  await app.register(analyticsRoutes)
-  await app.register(productUsageRoutes)
-  await app.register(agentRouteRoutes) // which agent a task belongs to — the prompt lives here, not in the CLI
-  await app.register(jevRouteRoutes, { count: redisCount }) // ⌘B's Jev decisions on Harness's key, for people with none of their own
-  await app.register(cursorRoutes)   // standalone STT + LLM for the Cursor desktop app (self-contained)
-  // The cabled dial's transcription, authenticated by the caller's SSO token rather than a shared secret.
-  // Absent from the auth middleware's skip-list on purpose: that absence IS the gate.
-  await app.register(voiceRoutes)
-  await app.register(deviceAuthRoutes) // device-authorization grant: how the desktop app gets a machine key
-  await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
-  await app.register(harnessShareRoutes)
-  await app.register(machineShareRoutes)
-  await app.register(harnessLinkRoutes)
-  await app.register(communityRoutes)
-  await app.register(communityEditRoutes)      // an author edits their publication in place
-  await app.register(communityCommentRoutes)   // a harness page reads its earlier comments
-  await app.register(communityCreatorRoutes)   // a creator's page: their name, followers and the reader's follow
-  await app.register(communityReportRoutes)    // readers report a publication or comment; reviewers restore or remove it
-  await app.register(communityNotificationRoutes) // a creator's bell: comments, replies and forks of their work
-  await app.register(communityTranslateRoutes) // a Hub draft's words in English, for its author to review
-  await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
-  await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
-  await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
-  await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
-  await app.register(connectorVaultRoutes) // those connections sealed for the account's computers, which keep them in step
-  await app.register(agentMessagesRoutes)   // which tabs' harnesses may message each other (lib/agentMessages.ts)
-  await app.register(experimentalSettingsRoutes, { daemons: DAEMONS })
-  // Availability is separate from opt-in: every account starts off, and its collection is retained.
-  await app.register(zooRoutes, { daemons: DAEMONS, requireAccountOptIn: true })
+  // Mongo always; Redis where one is configured. Each answers within 1 s or counts as down (lib/readiness.ts).
+  const readiness = createReadiness(backendReadinessChecks(process.env, {
+    mongo: () => prisma.$runCommandRaw({ ping: 1 }),
+    redis: () => pub.ping(),
+  }))
+  await registerControlRoutes(app, { daemons: DAEMONS, count: redisCount, readiness })
   logger.info(describeDaemonsSwitch(DAEMONS))
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).
@@ -213,12 +194,17 @@ async function start(): Promise<void> {
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
 
+  // Connect counts are kept in memory and written once a minute; shutdown writes what is left (lib/productUsageRelay.ts).
+  const stopRelayUsage = startRelayUsageFlush()
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
     shuttingDown = true
     logger.info(`Received ${signal}, shutting down...`, { openSockets: openSocketCount() })
     try {
+      // Readiness answers 503 from here on. On a signal, keep serving for DRAIN_DELAY_MS first so the load balancer
+      // takes this process out of rotation before its listeners close; a crash closes at once.
+      await drainBeforeClosing(processDrain, exitCode === 0 ? env.DRAIN_DELAY_MS : 0)
       appProxyServer.close()
       meshServer?.close()
       // Start Fastify's close (it tells the http server to stop accepting new connections) but DON'T await
@@ -232,9 +218,15 @@ async function start(): Promise<void> {
       // handlers clear presence/owner keys as fire-and-forget Redis writes. Let them land before closeBus
       // quits the connection, else a half-open socket's key survives on TTL alone.
       await new Promise((resolve) => setTimeout(resolve, 250))
-      // Bounded wait for Fastify to finish (onClose hooks, Prisma disconnect); never block shutdown on it.
+      // Bounded wait for Fastify to finish its onClose hooks; never block shutdown on it.
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
-      await closeBus()
+      // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
+      await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
+      // The last partial minute of both logs, once the drain and the usage flush have run their queries.
+      stopQueryStats()
+      stopRouteLatency()
+      // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
+      await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)
     } catch (err) {
       logger.error('Error during shutdown', err)

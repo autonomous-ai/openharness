@@ -96,6 +96,18 @@ describe('the process the services run in', () => {
     expect(exits).toEqual([0])
   })
 
+  it('stops what it runs when the master asks it to leave (Windows has no SIGTERM to send)', async () => {
+    const channel = new FakeChannel()
+    const running = host({ channel })
+    const stop = vi.fn()
+    running.add({ stop })
+    channel.emit('message', { type: 'harnessd:status', status: {} })
+    channel.emit('message', { type: 'harnessd:shutdown' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stop).toHaveBeenCalledOnce()
+    expect(exits).toEqual([0])
+  })
+
   it('exits all the same when a service never finishes stopping', async () => {
     const running = host({ leaveGraceMs: 300 })
     running.add({ stop: () => new Promise<void>(() => {}) })
@@ -212,10 +224,19 @@ describe('a service in its own process', () => {
     // The connection and the client's own request id, when the core gave them: what a grid command is a job of.
     socket().say({ type: 'session_search', payload: { requestId: 'r4' }, asker: { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' } })
     socket().say({ type: 'session_search', payload: { requestId: 'r5' }, asker: { local: true, owner: true, connection: 7, requestId: null } })
-    await vi.waitFor(() => expect(asked).toHaveLength(5))
+    socket().say({ type: 'session_search', payload: { requestId: 'r6', accountOwner: true }, asker: { local: false, owner: true, accountOwner: false } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r7' }, asker: { local: false, owner: true, accountOwner: true } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r8', accountOwner: true }, asker: { local: false, owner: true, accountOwner: 'yes' } })
+    // A guest's session, whose guest it is: never anything a payload says.
+    socket().say({ type: 'session_search', payload: { requestId: 'r9', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 'kim@acme.io' } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r10', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 7 } })
+    await vi.waitFor(() => expect(asked).toHaveLength(10))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
+      { local: false, owner: true, accountOwner: false }, { local: false, owner: true, accountOwner: true },
+      { local: false, owner: true },
+      { local: false, owner: false, guest: 'kim@acme.io' }, { local: false, owner: false },
     ])
   })
 

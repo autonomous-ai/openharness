@@ -313,7 +313,7 @@
       <tr><td>1 · Sign in</td><td><code>sign_in</code> + <code>sign_in_scan|google|apple|email</code></td><td>Google or Apple pressed, an email code entered, a QR code read</td><td>Signed in</td><td>The service refused, or the page could not open</td><td>Google/Apple page closed, or another attempt replaced it</td></tr>
       <tr><td>2 · Your computer</td><td><code>computer_wait</code></td><td>"On your computer, go to" shows</td><td>A computer joins the account</td><td>—</td><td>Signed out ("Not you? Sign out"), see the note</td></tr>
       <tr><td>3 · Ready</td><td><code>session_open</code></td><td>"… is ready." starts</td><td>A session opens (its own, or one picked meanwhile)</td><td>No session after 90 s</td><td>Signed out, see the note</td></tr>
-      <tr><td>4 · Session</td><td><code>first_message</code></td><td>That session opens</td><td>First line sent from it (mic, composer or Return)</td><td>—</td><td>Left the session first</td></tr>
+      <tr><td>4 · Session</td><td><code>first_message</code></td><td>That session opens</td><td>First line sent in any session after it (mic, composer or Return), or a task typed into New Harness</td><td>—</td><td>Signed out first</td></tr>
       <tr><td>5 · Notifications</td><td><code>notify_permission</code></td><td>The system prompt shows</td><td>Allow</td><td>—</td><td>Don't Allow (<code>unknown</code> when the OS gives no answer)</td></tr>
     </table></div>
     <div class="note">Each flow runs at most once per sign-in and app launch. These are counts of attempts, not of people: the daily totals have no identity to deduplicate them.
@@ -381,8 +381,8 @@
       <div class="scroll"><table>
         <tr><th>Counter</th><th>When</th></tr>
         <tr><td>first_message_started</td><td>The hand-over opens the session with its one line by the mic</td></tr>
-        <tr><td>first_message_ok</td><td>The first line sent from that page: a take from the mic, the composer, or a Return</td></tr>
-        <tr><td>first_message_cancelled</td><td>Left the page before sending</td></tr>
+        <tr><td>first_message_ok</td><td>The first line sent after the hand-over in any session (a take from the mic, the composer, or a Return), or a task typed into New Harness. Before 2026-10-20 only a line sent from the session the hand-over opened counted: compare releases separately</td></tr>
+        <tr><td>first_message_cancelled</td><td>Signed out before sending. Leaving the session no longer ends it: a line sent in another one still answers it</td></tr>
       </table></div>
       <p>The old AA <code>app_first_message</code> timed from sign-in. This times from the session opening, so steps 2 and 3 are not counted twice. Sign-in to first message is the sum of the steps.</p>
       <div class="note">The message itself, the agent, the computer and the starter task are never part of it.</div></figcaption></figure>

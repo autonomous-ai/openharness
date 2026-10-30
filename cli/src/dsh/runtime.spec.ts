@@ -97,7 +97,7 @@ describe('session isolation and lifecycle', () => {
 
   it('does not inherit the previous account private grid on a harness relaunch', async () => {
     const result = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
-      writeGridConfigDir: async () => '/unused', tmuxSupportsSessionEnv: async () => true,
+      writeGridConfigDir: async () => '/unused', capabilities: async () => ({ sessionEnv: true }),
       installCodexHooks: () => true, dshLaunch: async () => ({ ok: true, launch: prepareHarnessLaunch(pkg, ws, 'claude', 'new-account') }),
     }, 'claude', { dsh: pkg.id, cwd: ws }, 'agent')
     if (!result.ok) throw new Error(result.detail)
@@ -143,7 +143,7 @@ describe('session isolation and lifecycle', () => {
     pkg.manifest.agent!.env = { TOOLCHAIN: 'changed' }
     write(join(pkg.realDir, 'AGENTS.md'), '# Updated instructions\n')
     const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
-      tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => true,
+      capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true,
       dshLaunch: async (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) =>
         ({ ok: true as const, launch: prepareHarnessLaunch(pkg, workspace, engine, key, { privateGrid: 'new-grid' }) }) }
     const result = await buildLaunchOverrides(deps, 'claude', { dsh: pkg.id, cwd: ws, dshRuntime: 'original' }, 'registry-agent-id')
@@ -163,7 +163,7 @@ describe('session isolation and lifecycle', () => {
 
   it('keeps older rows stable using their agent id and supports package renames', async () => {
     const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
-      tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => true,
+      capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true,
       dshLaunch: async (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) => ({ ok: true as const, launch: prepareHarnessLaunch(pkg, workspace, engine, key) }) }
     const first = await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'old-agent')
     pkg.manifest.formerly = [pkg.id]
@@ -174,7 +174,7 @@ describe('session isolation and lifecycle', () => {
 
   it('reports preparation failures, missing dependencies, or no resolver before a relaunch', async () => {
     const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
-      tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => true }
+      capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true }
     expect(await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'key')).toMatchObject({ ok: false, error: 'DSH_NOT_INSTALLED' })
     expect(await buildLaunchOverrides({ ...deps, dshLaunch: () => { throw new Error('broken context') } }, 'codex', { dsh: pkg.id, cwd: ws }, 'key'))
       .toMatchObject({ ok: false, error: 'DSH_RUNTIME_FAILED', detail: 'Error: broken context' })
@@ -298,6 +298,16 @@ describe('runtime validation and file ownership', () => {
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('already occupied')
     rmSync(join(pkg.realDir, 'skills/draw/SKILL.md'))
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('Harness skill is missing')
+  })
+
+  // An exact string compare refused a link to the same folder written another way as "already occupied".
+  it('relaunches over its own skill link however the link writes the same folder', () => {
+    const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'draw')
+    unlinkSync(skill)
+    symlinkSync(`${join(pkg.realDir, 'skills/draw')}/`, skill)
+    expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).not.toThrow()
+    expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toContain('# Draw')
   })
 })
 

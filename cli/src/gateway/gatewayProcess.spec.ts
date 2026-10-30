@@ -77,9 +77,10 @@ function wire() {
   let options!: ServiceProcessOptions
   const gateways: Array<ReturnType<typeof stubGateway>> = []
   const hosts: GatewayHost[] = []
-  runGatewayService({
+  const linkStop = vi.fn()
+  const service = runGatewayService({
     dataDir: '/data', socketPath: '/data/daemon.sock', machineId: 'computer-1', token: 'token',
-    run: (given) => { options = given; return { stop: vi.fn() } },
+    run: (given) => { options = given; return { stop: linkStop } },
     start: (host) => { hosts.push(host); const stub = stubGateway(); gateways.push(stub); return stub as unknown as StartedGateway },
   })
   const heard = {
@@ -107,7 +108,7 @@ function wire() {
   }
   const connect = () => { options.onConnected!(core); link.connected() }
   const disconnect = () => { options.onDisconnected!(); link.disconnected() }
-  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options }
+  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options, service, linkStop }
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
@@ -149,6 +150,30 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(w.gateways[1].port.holdRequests).not.toHaveBeenCalled()
   })
 
+  it('stops the gateway, and its usage collector with it, before its link closes as the process goes', async () => {
+    // The process's stop used to close the link and nothing else: the gateway's stop waited for the link's close
+    // event, which the process's exit came before, so its collector never wrote a clean exit
+    // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
+    const w = wire()
+    w.connect()
+    const [gateway] = w.gateways
+    let finished = false
+    gateway.stop.mockImplementation(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); finished = true })
+    const stopping = w.service.stop()
+    expect(gateway.stop).toHaveBeenCalledOnce()
+    expect(w.linkStop).toHaveBeenCalledOnce()
+    expect(gateway.stop.mock.invocationCallOrder[0]).toBeLessThan(w.linkStop.mock.invocationCallOrder[0])
+    await stopping
+    expect(finished).toBe(true)
+    // The link's close that follows finds nothing left to stop.
+    w.disconnect()
+    expect(gateway.stop).toHaveBeenCalledOnce()
+    // Never started: the process still goes.
+    const idle = wire()
+    await idle.service.stop()
+    expect(idle.linkStop).toHaveBeenCalledOnce()
+  })
+
   it('starts once it knows the core took its link, though the core says start a frame before', () => {
     const w = wire()
     // The core's link says start as it takes the connection, before the `connected` that tells this process.
@@ -172,6 +197,8 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.notice({ kind: 'status', connected: true })
     w.link.notice({ kind: 'client', connId: 'phone-1', client: { role: 'web', label: null, identity: 'P', direct: false } })
     w.link.port.broadcast({ type: 'turn_started' })
+    // A guest's harness's event, named for that guest's sessions (gateway/gateway.ts `broadcast`).
+    w.link.port.broadcast({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
     w.link.port.commander({ type: 'commander_event' })
     w.link.port.user({ type: 'notification' })
     w.link.port.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
@@ -190,6 +217,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.ops.wifiService(false)
     await w.link.stop()
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started' })
+    expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
     expect(port.commander).toHaveBeenCalledWith({ type: 'commander_event' })
     expect(port.user).toHaveBeenCalledWith({ type: 'notification' })
     expect(port.reply).toHaveBeenCalledWith('phone-1', 'agents_list', 'r-1', { agents: [] })
@@ -209,7 +237,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     // Stopped: what the core says after is for no gateway, and is dropped.
     expect(w.gateways[0].stop).toHaveBeenCalled()
     w.link.port.broadcast({ type: 'after' })
-    expect(port.broadcast).toHaveBeenCalledTimes(1)
+    expect(port.broadcast).toHaveBeenCalledTimes(2)
   })
 
   it('tells the core everything the gateway says, as the same call', () => {

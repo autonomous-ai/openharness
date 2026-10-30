@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/api/api_client.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/phone_app_links.dart';
+import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/viewer/viewer_services.dart';
@@ -19,6 +21,7 @@ import 'package:harness/widgets/add_phone_dialog.dart';
 import 'package:harness/widgets/desktop_chrome.dart'
     show DesktopChrome, DesktopDialogSurface;
 
+import 'support/add_phone_measurement.dart';
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show createApp, MemoryStore;
@@ -35,6 +38,23 @@ AppNotifier _signedInApp() {
     ..currentUser = const CurrentUserProfile(email: 'dee+phone@example.com');
   app.machineStates['m']!.localOnly = true;
   return app;
+}
+
+class _DeviceSnapshotApi extends ApiClient {
+  _DeviceSnapshotApi({this.fails = false, this.listing, this.pending})
+    : super(
+        config: AppConfig.dev,
+        session: AuthSession(storage: MemoryStore()),
+      );
+  final bool fails;
+  final Map<String, dynamic>? listing;
+  final Completer<Map<String, dynamic>?>? pending;
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async {
+    if (pending != null) return pending!.future;
+    if (fails) throw StateError('unreadable');
+    return listing ?? {'members': <Object>[]};
+  }
 }
 
 /// A scripted daemon: answers in order, records every code it was handed.
@@ -76,7 +96,9 @@ Future<void> _open(
   WidgetTester tester,
   AppNotifier app,
   PhonePairCall pair, {
+  AddPhoneOpening? from,
   PhoneSignInCodeCall? signInCode,
+  bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
   bool reduceMotion = false,
@@ -99,8 +121,10 @@ Future<void> _open(
     showAddPhoneDialog(
       tester.element(find.byType(Scaffold)),
       app,
+      from: from,
       pair: pair,
       signInCode: signInCode ?? _FakeSignIn().call,
+      signInUnavailable: signInUnavailable,
       onConnectMachine: onConnectMachine,
       onManageDevices: onManageDevices,
     ),
@@ -182,7 +206,7 @@ void main() {
         Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'],
         'h1',
       );
-      expect(find.text('Scan with the Harness app.'), findsOneWidget);
+      expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
       expect(find.text('No app yet?'), findsOneWidget);
       expect(
         find.descendant(
@@ -232,7 +256,7 @@ void main() {
       expect(find.byKey(const ValueKey('add-phone-ready')), findsOneWidget);
       expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
       expect(find.byType(PhonePairQr), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byKey(const ValueKey('add-phone-close')), findsNothing);
       expect(
         find.byKey(const ValueKey('add-phone-see-phones')),
@@ -365,7 +389,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('add-phone-cancel')), findsOneWidget);
       expect(find.text('Sign in first'), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byType(PhonePairQr), findsNothing);
       expect(daemon.codes, isEmpty);
       expect(signIn.minted, 0);
@@ -656,11 +680,62 @@ void main() {
       final fields = Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment);
       expect(fields.keys, ['e', 'm', 'c']);
       expect(fields['c'], daemon.codes.single);
+      // An older CLI, or a moment without one: nothing more is said.
+      expect(find.byKey(const ValueKey('add-phone-email-code')), findsNothing);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       await tester.pump(const Duration(seconds: 10));
     });
+
+    testWidgets(
+      'with no sign-in code to be had on this PC, the QR says the phone will ask for an emailed one',
+      (tester) async {
+        final app = _signedInApp();
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon(List.filled(10, _failed('NO_INTENT')));
+        var unavailable = true;
+        final signIn = _FakeSignIn(available: false);
+        await _open(
+          tester,
+          app,
+          daemon.call,
+          signInCode: () => unavailable ? signIn.call() : _FakeSignIn().call(),
+          signInUnavailable: () => unavailable,
+        );
+        await _codeUp(tester);
+        expect(Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment).keys, [
+          'e',
+          'm',
+          'c',
+        ]);
+        expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('add-phone-email-code')))
+              .data,
+          'Your phone will ask for a code from your email.',
+        );
+        // Still the QR to scan, as with an older CLI.
+        expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
+
+        // The pipe is back by the next renewal: the code is in the QR, the sentence gone.
+        unavailable = false;
+        await tester.pump(const Duration(seconds: 61));
+        await tester.pump();
+        expect(
+          Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'],
+          'h1',
+        );
+        expect(
+          find.byKey(const ValueKey('add-phone-email-code')),
+          findsNothing,
+        );
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 10));
+      },
+    );
   });
 
   group('arming the daemon', () {
@@ -688,7 +763,7 @@ void main() {
           signIn: 'h1',
         ).toString(),
       );
-      expect(find.text('Scan with the Harness app.'), findsOneWidget);
+      expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-phone-status')), findsNothing);
 
       await tester.pump(const Duration(milliseconds: 1500));
@@ -874,7 +949,7 @@ void main() {
       );
       // Few words: no heading or caption of its own; Close stays.
       expect(find.text('Get Harness on your phone'), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byKey(const ValueKey('add-phone-close')), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('add-phone-hide-downloads')));
@@ -892,42 +967,337 @@ void main() {
     });
   });
 
+  for (final from in AddPhoneOpening.values) {
+    testWidgets(
+      'opens immediately from ${from.name} while the snapshot never completes',
+      (tester) async {
+        final snapshot = Completer<Map<String, dynamic>?>();
+        final app = _signedInApp()
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = _DeviceSnapshotApi(pending: snapshot);
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+        await _open(tester, app, daemon.call, from: from);
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        expect(find.byKey(const ValueKey('add-phone-close')), findsOneWidget);
+        expect(find.byType(PhonePairQr), findsOneWidget);
+        expect(snapshot.isCompleted, isFalse);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(find.byType(AddPhoneDialog), findsNothing);
+      },
+    );
+  }
+
+  testWidgets(
+    'joins before a late snapshot are judged once against its known keys',
+    (tester) async {
+      final snapshot = Completer<Map<String, dynamic>?>();
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(pending: snapshot);
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, from: AddPhoneOpening.menu);
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      await _joins(tester, app, pub: 'existing');
+      await _joins(tester, app, pub: 'new-phone');
+      app.newDevices.clear();
+      await _joins(tester, app, pub: 'new-phone');
+      app.notifyListeners();
+      await tester.pump();
+      expect(usage.pairings, isEmpty);
+      snapshot.complete({
+        'members': [
+          {
+            'pub': 'existing',
+            'label': 'Existing',
+            'kind': 'viewer',
+            'addedAt': 1,
+            'fingerprint': 'fp',
+            'self': false,
+          },
+        ],
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.menu]);
+      app.newDevices.clear();
+      await _joins(tester, app, pub: 'existing');
+      await _joins(tester, app, pub: 'new-phone');
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.menu]);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final failed in [false, true]) {
+    testWidgets(
+      'a ${failed ? 'failed' : 'null'} late snapshot drops buffered attribution and keeps the dialog usable',
+      (tester) async {
+        final snapshot = Completer<Map<String, dynamic>?>();
+        final usage = AddPhoneRecorder();
+        final app = createApp(productMeasurement: usage)
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = _DeviceSnapshotApi(pending: snapshot);
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+        await _open(tester, app, daemon.call, from: AddPhoneOpening.offer);
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        await _joins(tester, app);
+        await tester.pump();
+        expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
+        expect(usage.pairings, isEmpty);
+        if (failed) {
+          snapshot.completeError(StateError('snapshot unavailable'));
+        } else {
+          snapshot.complete(null);
+        }
+        await tester.pump();
+        await tester.pump();
+        await _joins(tester, app, pub: 'another-phone');
+        await tester.pump();
+        expect(usage.pairings, isEmpty);
+        expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'a buffered join can be attributed after closing but a later join cannot',
+    (tester) async {
+      final snapshot = Completer<Map<String, dynamic>?>();
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(pending: snapshot);
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, from: AddPhoneOpening.offer);
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      await _joins(tester, app, pub: 'while-open');
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await _joins(tester, app, pub: 'after-close');
+      snapshot.complete({'members': <Object>[]});
+      await tester.pump();
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.offer]);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final from in AddPhoneOpening.values) {
+    testWidgets('new phones count once per device from ${from.name}', (
+      tester,
+    ) async {
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(
+          listing: {
+            'members': [
+              {
+                'pub': 'existing',
+                'label': 'Existing phone',
+                'kind': 'viewer',
+                'addedAt': 1,
+                'fingerprint': 'fp',
+                'self': false,
+              },
+            ],
+          },
+        );
+      addTearDown(app.dispose);
+      // A completed handshake alone can be a phone that was already on the account.
+      final daemon = _FakeDaemon([() => const PhonePairAnswer.paired('Phone')]);
+      await _open(tester, app, daemon.call, from: from);
+      await _codeUp(tester);
+      expect(usage.pairings, isEmpty);
+      await _joins(tester, app, pub: 'existing');
+      await _joins(tester, app, pub: 'computer', kind: 'machine');
+      await tester.pump();
+      expect(usage.pairings, isEmpty);
+      await _joins(tester, app, pub: 'new-one');
+      await tester.pump();
+      expect(usage.pairings, [from]);
+      // Remove the banner so the same real notice is emitted again.
+      app.newDevices.clear();
+      await _joins(tester, app, pub: 'new-one');
+      app.notifyListeners();
+      await tester.pump();
+      expect(usage.pairings, [from]);
+      await _joins(tester, app, pub: 'new-two');
+      await tester.pump();
+      expect(usage.pairings, [from, from]);
+      app.currentUser = const CurrentUserProfile(
+        id: 'b',
+        email: 'b@example.test',
+      );
+      await _joins(tester, app, pub: 'another-account');
+      await tester.pump();
+      expect(usage.pairings, [from, from]);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await _joins(tester, app, pub: 'closed');
+      expect(usage.pairings, [from, from]);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets(
+    'an unreadable opening snapshot leaves pairing attribution unknown',
+    (tester) async {
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(fails: true);
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, from: AddPhoneOpening.offer);
+      await _joins(tester, app);
+      await tester.pump();
+      expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
+      expect(usage.pairings, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('a phone joining an open menu dialog counts its source once', (
+    tester,
+  ) async {
+    const channel = MethodChannel('harness/swarm_tabs');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => true);
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final usage = AddPhoneRecorder();
+    final app = createApp(productMeasurement: usage)
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..api = _DeviceSnapshotApi()
+      ..currentUser = const CurrentUserProfile(
+        id: 'a',
+        email: 'a@example.test',
+      );
+    addTearDown(app.dispose);
+    await mount(tester, app, nativeTabs: true);
+    messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('addPhone'),
+      ),
+      (_) {},
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(AddPhoneDialog), findsOneWidget);
+    await _joins(tester, app);
+    await tester.pump();
+    expect(usage.pairings, [AddPhoneOpening.menu]);
+    await _joins(tester, app);
+    app.notifyListeners();
+    await tester.pump();
+    expect(usage.pairings, [AddPhoneOpening.menu]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await _joins(tester, app, pub: 'after-close');
+    expect(usage.pairings, [AddPhoneOpening.menu]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   group('the way in', () {
     // `createApp` has no profile and no local machine, so the dialog opens
     // with nothing to arm — these tests never reach for a real daemon.
-    testWidgets('Harness ▸ Add Phone… opens the dialog', (tester) async {
-      const channel = MethodChannel('harness/swarm_tabs');
-      final messenger = tester.binding.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(channel, (_) async => true);
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      final app = createApp()..status = AppStatus.authenticated;
-      addTearDown(app.dispose);
-      await mount(tester, app, nativeTabs: true);
+    // Each way in is counted as its own (`ui_desktop_add_phone_<way>`).
+    for (final (name, arguments, from) in [
+      ('Harness ▸ Add Phone…', null, AddPhoneOpening.menu),
+      (
+        'The native title bar\'s phone',
+        {'from': 'titlebar'},
+        AddPhoneOpening.titlebar,
+      ),
+    ]) {
+      testWidgets('$name opens the dialog', (tester) async {
+        const channel = MethodChannel('harness/swarm_tabs');
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (_) async => true);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final usage = AddPhoneRecorder();
+        final app = createApp(productMeasurement: usage)
+          ..status = AppStatus.authenticated;
+        addTearDown(app.dispose);
+        await mount(tester, app, nativeTabs: true);
 
-      final handled = Completer<void>();
-      messenger.handlePlatformMessage(
-        channel.name,
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('addPhone'),
-        ),
-        (_) => handled.complete(),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.byType(AddPhoneDialog), findsOneWidget);
-      expect(find.text('Add your phone'), findsOneWidget);
+        final handled = Completer<void>();
+        messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('addPhone', arguments),
+          ),
+          (_) => handled.complete(),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        expect(find.text('Add your phone'), findsOneWidget);
+        expect(usage.openings, [from]);
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      await handled.future;
-      expect(find.byType(AddPhoneDialog), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    });
+        // Asked again while it is open: refused, so not counted.
+        messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('addPhone', arguments),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+        expect(usage.openings, [from]);
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await handled.future;
+        expect(find.byType(AddPhoneDialog), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
 
     testWidgets('> add phone opens the dialog from the command search', (
       tester,
     ) async {
-      final app = createApp()..status = AppStatus.authenticated;
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated;
       addTearDown(app.dispose);
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyP, shift: true);
@@ -940,6 +1310,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.command]);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
@@ -948,18 +1319,48 @@ void main() {
     });
 
     testWidgets('the tab row\'s Add Phone opens the dialog', (tester) async {
-      final app = createApp()..status = AppStatus.authenticated;
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated;
       addTearDown(app.dispose);
       await mount(tester, app);
       await tester.tap(find.byKey(const ValueKey('swarm-add-phone-button')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.titlebar]);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(AddPhoneDialog), findsNothing);
       await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the account menu\'s Add Phone opens the dialog', (
+      tester,
+    ) async {
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..currentUser = const CurrentUserProfile(
+          name: 'Dee Example',
+          email: 'dee@example.com',
+        );
+      addTearDown(app.dispose);
+      await mount(tester, app);
+      await tester.tap(find.byKey(const ValueKey('swarm-account-button')));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('account-menu-addPhone')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.account]);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(AddPhoneDialog), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
     });
   });
 }

@@ -1,8 +1,11 @@
 import { cpus } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
-import { readMachineMemory, readMachineGpus, readMachineDisk, type GpuResource, type MemoryPressure, type MemoryReading } from './machineHardware.js'
+import { readMachineDevice, readMachineMemory, readMachineGpus, readMachineDisk, type GpuResource, type MemoryPressure, type MemoryReading } from './machineHardware.js'
 
 export interface MachineResources {
+  deviceType?: string | null
+  chip?: string | null
+  os?: string
   cpuPercent: number | null
   memoryUsedBytes: number | null
   memoryTotalBytes: number | null
@@ -32,8 +35,8 @@ export function createMachineResourcesReader(deps: {
 } = {
   cpuTimes, memory: readMachineMemory, wait: () => delay(200), now: Date.now,
   hardware: async () => {
-    const [gpus, disk] = await Promise.all([readMachineGpus(), readMachineDisk()])
-    return { gpus, ...disk }
+    const [gpus, disk, device] = await Promise.all([readMachineGpus(), readMachineDisk(), readMachineDevice()])
+    return { gpus, ...disk, ...device }
   },
 }): () => Promise<MachineResources> {
   let cached: { at: number; value: MachineResources } | undefined

@@ -23,8 +23,8 @@ import 'desk_sync.dart';
 /// phone happened to be in, on every computer the person owns. So nothing here
 /// is derived from `swarms`: the tabs are read, and every write is one a person
 /// made by hand on the phone — [adopt] for an agent created here, [drop] for one
-/// deleted here, and [createTabFor]/[addToTab] for the two `+`s on the tabs
-/// panel.
+/// deleted here, [createTabFor]/[addToTab] for the two `+`s on the tabs
+/// panel, and [renameTab]/[closeTab] for holding a tab's chip in Find.
 ///
 /// What is NOT on the desk stays per device, as it does on a window: which tab
 /// is open ([activeTabId]) is this phone's own, and so is the agent within it.
@@ -59,6 +59,10 @@ class PhoneDesk {
 
   /// The app has tabs it did not have a moment ago: rebuild.
   final VoidCallback onChanged;
+
+  /// The longest tab name the desk takes — backend `DESK_NAME_MAX`, in UTF-16
+  /// units like [String.length].
+  static const int nameMaxLength = 80;
 
   final DeskSyncState _state = DeskSyncState();
   Timer? _retry;
@@ -222,9 +226,9 @@ class PhoneDesk {
   /// (the desk is empty, or the person is in the group for agents no tab holds):
   /// the agent is then exactly where it would have been anyway.
   ///
-  /// [name] is the agent's own, and it is used only by [openNextAgentInNewTab]
-  /// — a tab made for one agent is named after it, which is what a window does
-  /// with a tab it opens.
+  /// [name] is the agent's own, and it is used only for a tab of its own
+  /// ([newTab], [openNextAgentInNewTab]) — a tab made for one agent is named
+  /// after it, which is what a window does with a tab it opens.
   ///
   /// [tabId] is a tab the person picked for this agent before asking for it —
   /// Find narrowed to a tab when New Harness was tapped — and it wins over the
@@ -232,16 +236,29 @@ class PhoneDesk {
   /// so still names the tab Find was opened over. The phone is in the picked tab
   /// from here, as it is after [createTabFor]. A tab closed on another computer
   /// while the form was open falls back to the tab the phone is in.
-  void adopt(AgentRef agent, {String? name, String? tabId}) {
+  ///
+  /// [newTab] is the `+` at the end of Find's tab chips: the agent opens a tab
+  /// of its own ([createTabFor]), the way the desktop's `+` opens a New Tab that
+  /// becomes everyone's tab once its first harness is in it. It travels with
+  /// the request rather than being armed here, so only the agent asked for
+  /// from that `+` gets the tab — never a fork or a form opened later.
+  void adopt(
+    AgentRef agent, {
+    String? name,
+    String? tabId,
+    bool newTab = false,
+  }) {
     if (!_state.enabled) return;
-    final wanted = _newTabForNextAgent;
+    final wanted = newTab || _newTabForNextAgent;
+    final wantedName = _newTabName;
     _newTabForNextAgent = false;
+    _newTabName = null;
     final pane = DeskPaneRef(
       machineId: agent.machineId,
       agentId: agent.agentId,
     );
     if (wanted) {
-      createTabFor(agent, name: name);
+      createTabFor(agent, name: wantedName ?? name);
       return;
     }
     final picked = tabId == null
@@ -314,11 +331,33 @@ class PhoneDesk {
   void renameTab(String tabId, String name) {
     if (!_state.enabled) return;
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return;
+    // A name the backend refuses would fail the whole batch, and a refused
+    // write stops this phone writing to the desk at all.
+    if (trimmed.isEmpty || trimmed.length > nameMaxLength) return;
     final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
     if (tab == null || (tab.name == trimmed && tab.nameIsCustom)) return;
     _queue([
       {'op': 'tab.rename', 'id': tabId, 'name': trimmed, 'nameIsCustom': true},
+    ]);
+  }
+
+  /// A tab closed by hand on this phone: it leaves the desk, and so every
+  /// computer's tab row.
+  ///
+  /// ⚠️ **The tab, not its harnesses.** A window that hears the desk closed a
+  /// tab releases its views and stops nothing (desktop `_deskReconcile`); the
+  /// agents keep running and stay under All and in search. Stopping one is the
+  /// harness's own Stop, which says what it ends.
+  ///
+  /// The phone was in it: from here it is in no tab, and the agent on screen
+  /// decides again which one it is in (`activeDeskGroup`).
+  void closeTab(String tabId) {
+    if (!_state.enabled) return;
+    if (!_state.synced.any((t) => t.id == tabId)) return;
+    // Before the write, so the notice it makes already has the phone out of it.
+    if (_activeTabId == tabId) _activeTabId = null;
+    _queue([
+      {'op': 'tab.close', 'id': tabId},
     ]);
   }
 
@@ -349,12 +388,22 @@ class PhoneDesk {
   /// made minutes later from the terminal's own `+` — in a tab of its own.
   /// [forgetNewTabIntent] is the cancel path; between the two, the flag cannot
   /// survive the screen that set it.
-  void openNextAgentInNewTab() => _newTabForNextAgent = true;
+  ///
+  /// [name]: the tab's, over the agent's own — Start on a computer just set up names it "code", the
+  /// tab its screen then opens on.
+  void openNextAgentInNewTab({String? name}) {
+    _newTabForNextAgent = true;
+    _newTabName = name;
+  }
 
   /// The form closed without making anything — see [openNextAgentInNewTab].
-  void forgetNewTabIntent() => _newTabForNextAgent = false;
+  void forgetNewTabIntent() {
+    _newTabForNextAgent = false;
+    _newTabName = null;
+  }
 
   bool _newTabForNextAgent = false;
+  String? _newTabName;
 
   /// The desk's ids are 32 hex characters (backend `lib/desk.ts`), and a tab
   /// made here has to look like one made anywhere else.

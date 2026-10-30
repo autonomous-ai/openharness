@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
 
 const dirs: string[] = []
 const originalPath = process.env.PATH
@@ -60,6 +60,19 @@ function fakeTmux(): string {
   chmodSync(tmux, 0o700)
   return dir
 }
+
+it('notices a tmux appearing on PATH, in the managed runtime or a known install folder without running it', () => {
+  const runtime = noManagedTmux(), home = scratch('tmux-recheck-home-')
+  const environment = { PATH: '/missing', HOME: home, HARNESS_HOMEBREW_PREFIXES: join(home, 'no-brew') }
+  expect(tmuxAvailableNow(environment, runtime)).toBe(false)
+  const bin = fakeTmux()
+  expect(tmuxAvailableNow({ ...environment, PATH: bin }, runtime)).toBe(true)
+  expect(tmuxAvailableNow({ ...environment, HARNESS_BIN_DIR: bin }, runtime)).toBe(true)
+  const managed = join(runtime, 'tmux')
+  writeFileSync(managed, '#!/bin/sh\nexit 99\n', { mode: 0o700 })
+  writeFileSync(join(runtime, 'current-tmux'), managed)
+  expect(tmuxAvailableNow(environment, runtime)).toBe(true)
+})
 
 describe('ensureTmuxOnPath', () => {
   it('adopts the directory the user\'s shell finds tmux in', async () => {

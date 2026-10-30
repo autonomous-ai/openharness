@@ -10,12 +10,31 @@ import 'log_append_io.dart' as fallback;
 /// O_APPEND. Another window can append between that seek and the write,
 /// causing the two writers to overwrite each other. Use a kernel append on
 /// the desktop POSIX hosts; no file lock or polling is needed.
-void appendDurableLog(File file, String contents) {
+void appendDurableLog(File file, String contents) =>
+    _appendLog(file, contents, sync: true);
+
+/// [appendDurableLog] without the fsync. The bytes are the kernel's when it
+/// returns, so a crash or kill of this process loses none of them; only a
+/// power loss or OS crash before writeback can. Routine records use it
+/// because these calls run on the UI isolate, and on Linux ext4 an fsync
+/// waits for a journal commit (10–500+ ms under other I/O; macOS's is cheap).
+/// That is the best fit for production's long frames: sampled frames over
+/// 250 ms went from 6 (Oct 15) to 297 (Oct 16), and ~69 of 72 on Oct 17 came
+/// from two Linux computers. Not measured on those machines.
+void appendLog(File file, String contents) =>
+    _appendLog(file, contents, sync: false);
+
+void _appendLog(File file, String contents, {required bool sync}) {
+  if (file.path.contains('\u0000')) {
+    throw ArgumentError.value(file.path, 'path', 'Contains a NUL byte');
+  }
   if (!Platform.isMacOS && !Platform.isLinux) {
-    fallback.appendDurableLog(file, contents);
+    sync
+        ? fallback.appendDurableLog(file, contents)
+        : fallback.appendLog(file, contents);
     return;
   }
-  _posix.append(file.path, contents);
+  _posix.append(file.path, contents, sync: sync);
 }
 
 final _posix = _PosixAppend();
@@ -41,15 +60,13 @@ class _PosixAppend {
         Platform.isMacOS ? '__error' : '__errno_location',
       );
 
-  void append(String path, String contents) {
-    if (path.contains('\u0000')) {
-      throw ArgumentError.value(path, 'path', 'Contains a NUL byte');
-    }
+  /// Empty [contents] with [sync] commits what earlier unsynced appends left.
+  void append(String path, String contents, {required bool sync}) {
     final bytes = utf8.encode(contents);
     using((arena) {
       final name = path.toNativeUtf8(allocator: arena);
-      final data = arena<Uint8>(bytes.length);
-      data.asTypedList(bytes.length).setAll(0, bytes);
+      final data = bytes.isEmpty ? nullptr : arena<Uint8>(bytes.length);
+      if (bytes.isNotEmpty) data.asTypedList(bytes.length).setAll(0, bytes);
       // O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC. The descriptor never
       // escapes a call, even on a partial write, signal or disk failure.
       final flags = Platform.isMacOS
@@ -69,7 +86,7 @@ class _PosixAppend {
           }
           offset += written;
         }
-        _retry(() => _sync(fd), path);
+        if (sync) _retry(() => _sync(fd), path);
       } finally {
         // Do not retry close on EINTR: the fd may already have been released
         // and reused by another thread.

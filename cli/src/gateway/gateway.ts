@@ -15,20 +15,20 @@
  */
 import { env } from '../config/env.js'
 import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
-import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
-import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
+import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from '../lib/deviceRecentTrim.js'
 import { encryptRpcResult, rpcResultType } from '../lib/e2ee/applicationFrames.js'
-import { b64d, fingerprint, isWrapped } from '../lib/e2ee/core.js'
+import { b64d, fingerprint, isWrapped, type WrappedPayload } from '../lib/e2ee/core.js'
 import { E2eeManager, type LinkedPeer, type PairResult } from '../lib/e2ee/manager.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { logFrame, sid } from '../lib/log.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType } from '../lib/relayFrames.js'
-import { encodeTerminalHop, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { encodeTerminalHop, TerminalBinaryKind, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -58,6 +58,8 @@ export class RelayGateway implements GatewayPort {
     presence(active: boolean): void
     opened(surface: WindowSurface): void
     observe(type: 'turn_started' | 'turn_ended' | 'text_delta' | 'error', agent: string, replay: boolean, interrupted?: boolean): void
+    /** An agent's launch state as its `agent_synced` frame says it, the failure's code a listed name only. */
+    launchState?(agent: string, state: 'starting' | 'ready' | 'failed' | 'held' | 'other', code?: LaunchErrorCode): void
   }
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
   readonly e2ee: E2eeManager
@@ -65,8 +67,22 @@ export class RelayGateway implements GatewayPort {
   private readonly link: UpstreamLink
   private readonly core: GatewayEvents
   private readonly terminalP2p: TerminalP2pResponderPool
-  private readonly p2pPendingOpens = new Map<string, Set<string>>()
+  /** The `terminal_open`s a client sent over its P2P channel, by request id, each with the E2EE counter it was
+   *  sealed under: the stream its `terminal_ready` names starts on P2P, decided at that counter. */
+  private readonly p2pPendingOpens = new Map<string, Map<string, number>>()
   private readonly p2pStreams = new Map<string, Set<string>>()
+  /**
+   * Per client and stream, the E2EE counter of the frame that last decided which wire the stream's output
+   * rides. A client seals its frames in the order it decides, whichever wire carries them (one counter
+   * domain for both, lib/e2ee/replayWindow.ts), but the two wires deliver at different speeds: a relay
+   * `terminal_ack` the phone sealed just BEFORE its P2P resync arrived ~100–250ms after it, took the
+   * stream back off P2P, and the phone, seeing output on the relay again, dropped its whole channel and
+   * typed over the relay for ~4s while it dialled again (2026-10-15, `demoted · reason=relay_binary_received`
+   * 0.3–3s after `migrate · done`). A frame sealed before the decision in force is not a decision.
+   */
+  private readonly routeCounters = new Map<string, Map<string, number>>()
+  /** Streams whose stale relay frame has been logged since their last move onto P2P: once is enough. */
+  private readonly staleRouteLogged = new Set<string>()
   /**
    * The terminal streams each remote client has open, as the core's frames to it say: `terminal_ready`
    * opens one, `terminal_closed` ends it. A stream a client moves onto its P2P channel must be one it
@@ -84,6 +100,8 @@ export class RelayGateway implements GatewayPort {
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
   private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
   private readonly downChains = new Map<string, Promise<void>>()
+  /** P2P signalling, per connection, apart from `downChains` — see `enqueueDown`. */
+  private readonly signalChains = new Map<string, Promise<void>>()
   /**
    * Remote clients' frames wait here until the core is ready (`openRequests`), each in its connection's own
    * order: the port answers long before start-up has wired every handler, and a request answered in
@@ -126,7 +144,7 @@ export class RelayGateway implements GatewayPort {
       machineId, auth, computerId, autonomousEnv,
       events: {
         down: (frame, connId) => this.enqueueDown(frame, connId, 'relay'),
-        binary: (connId, clientFrame) => this.enqueueTerminalBinary(connId, clientFrame),
+        binary: (connId, clientFrame) => this.enqueueTerminalBinary(connId, clientFrame, 'relay'),
         up: () => this.onLinkUp?.(),
         gone: () => this.linkGone(),
         status: (connected) => this.core.status(connected),
@@ -143,10 +161,22 @@ export class RelayGateway implements GatewayPort {
       isConnectionAvailable: connId => this.directDeviceSinks.has(connId) || this.connected(),
       onIdentityPaired: (connId, pub) => { if (this.directDeviceSinks.has(connId)) this.directDevicePins.set(connId, pub) },
       onIdentityRevoked: identity => { this.deviceUnpaired(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
-      onSessionOpened: (connId, role, identity) => this.core.client(connId, {
-        role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
-      }),
-      onSessionDropped: (connId) => this.core.client(connId, null),
+      onSessionOpened: (connId, role, identity) => {
+        // A new session counts from the start again: a counter kept from the last one would pin its streams.
+        this.forgetRoutes(connId)
+        const peer = this.e2ee.pairedPeers().find(p => p.identityPub === identity)
+        this.core.client(connId, {
+          role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
+          accountOwner: role === 'web' && !!peer && !peer.shared,
+          ...(peer?.kind === 'machine' && peer.machineId && !peer.shared ? { machineId: peer.machineId } : {}),
+          // Trusted only because this machine is shared: that account's guest, never the owner.
+          ...(peer?.shared ? { guest: peer.sharedWith ?? '' } : {}),
+        })
+      },
+      onSessionDropped: (connId) => {
+        this.forgetRoutes(connId)
+        this.core.client(connId, null)
+      },
       onPeerLinked: (peer) => {
         // The mutual half of a password link: a machine that proved this one's password is pinned back,
         // so this machine can dial it without that machine's own password.
@@ -190,6 +220,8 @@ export class RelayGateway implements GatewayPort {
     this.p2pPendingOpens.clear()
     this.p2pStreams.clear()
     this.liveStreams.clear()
+    this.routeCounters.clear()
+    this.staleRouteLogged.clear()
     this.replayCommanderOnNextSnapshot = true
   }
 
@@ -240,14 +272,45 @@ export class RelayGateway implements GatewayPort {
 
   // ── out, to remote clients ───────────────────────────────────────────────────────────────────────
 
-  /** User-content events are group-encrypted (E2EE) here; system frames pass through as plaintext. */
-  broadcast(frame: Frame): void {
+  /** User-content events are group-encrypted (E2EE) here; system frames pass through as plaintext.
+   *  [guest]: the guest whose harness the frame is about (the core reads it from the registry). The group
+   *  never reaches a guest (manager.ts `groupKeyFor`, backend/src/lib/hub.ts), so its sessions are sent
+   *  the frame sealed for each of them. */
+  broadcast(frame: Frame, guest?: string): void {
     if ((frame.type === 'turn_started' || frame.type === 'turn_ended' || frame.type === 'text_delta' || frame.type === 'error') && typeof frame.agentId === 'string') {
       const interrupted = frame.type === 'turn_ended' && (frame.payload as { aborted?: unknown } | undefined)?.aborted === true
       try { this.productUsage?.observe(frame.type, frame.agentId, frame.replay === true, interrupted) } catch { /* Work continues without metrics. */ }
     }
+    // A created harness whose engine then did not start is announced, not replied: the reply already said
+    // created (core/agents/newPane.ts), so these were counted as launches that worked (production counters,
+    // 2026-10-16). The core says it to every remote client in this frame; the gateway reads its launch state.
+    if (frame.type === 'agent_synced' && this.productUsage?.launchState) {
+      try {
+        const agent = (frame.payload as { agent?: { id?: unknown; launch?: { state?: unknown; error?: unknown } } } | undefined)?.agent
+        const state = agent?.launch?.state
+        if (typeof agent?.id === 'string') {
+          this.productUsage.launchState(agent.id, state === 'starting' || state === 'ready' || state === 'failed' || state === 'held' ? state : 'other',
+            state === 'failed' ? launchErrorCode(agent.launch?.error) : undefined)
+        }
+      } catch { /* Work continues without metrics. */ }
+    }
     if (this.link.servesThisComputerOnly()) return
     this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (guest) {
+      for (const connId of this.e2ee.guestSessions(guest)) {
+        const sealed = this.e2ee.wrapFor(connId, frame)
+        if (sealed) this.link.enqueue({ t: 'up', targetConnId: connId, frame: sealed })
+      }
+    }
+  }
+
+  /** The guest a remote connection's session is (gateway/sharedTrust.ts), '' when its store did not
+   *  record the account; undefined for everyone else. */
+  private guestOf(connId: string): string | undefined {
+    const identity = this.e2ee.sessionIdentity(connId)
+    if (!identity) return undefined
+    const peer = this.e2ee.pairedPeers().find((p) => p.identityPub === identity)
+    return peer?.shared ? (peer.sharedWith ?? '') : undefined
   }
 
   /** A DEVICE-audience frame (commanderEligible, not web). User/data frames are group-encrypted (E2EE)
@@ -386,9 +449,17 @@ export class RelayGateway implements GatewayPort {
 
   // ── in, from remote clients ──────────────────────────────────────────────────────────────────────
 
+  /**
+   * A client's frame, in its connection's order. P2P signalling has an order of its own: answering an offer
+   * awaits a STUN race and ICE gathering (0.1–0.7s, 5s behind a dead STUN server), and in line with the
+   * rest it held every frame the client sent after it. An offer and its candidates still go one at a time,
+   * so a candidate never reaches a responder its offer has not built yet; a disconnect racing an offer is
+   * the pool's to settle (`offerSeq`, `stillCurrent`).
+   */
   private enqueueDown(frame: Frame, connId: string, transport: RemoteTransport): void {
     const key = connId || '__backend__'
-    const previous = this.downChains.get(key) ?? Promise.resolve()
+    const chains = TERMINAL_P2P_SIGNAL_TYPES.has(frame.type as string) ? this.signalChains : this.downChains
+    const previous = chains.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
       .then(() => this.requestGate)
@@ -397,28 +468,35 @@ export class RelayGateway implements GatewayPort {
         console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
       })
       .finally(() => {
-        if (this.downChains.get(key) === next) this.downChains.delete(key)
+        if (chains.get(key) === next) chains.delete(key)
       })
-    this.downChains.set(key, next)
+    chains.set(key, next)
   }
 
-  private enqueueTerminalBinary(connId: string, raw: Uint8Array): void {
-    const key = connId || '__backend__'
-    const previous = this.downChains.get(key) ?? Promise.resolve()
-    const next = previous
-      .catch(() => { /* prior failure is already logged */ })
-      .then(async () => {
-        const clear = this.e2ee.unwrapTerminalBinary(connId, raw)
-        if (clear) await this.core.binary(connId, clear)
-        else { const gone = this.e2ee.terminalSessionGone(connId, raw); if (gone) this.sendTo(connId, gone) }
-      })
-      .catch((err) => {
+  /**
+   * A client's terminal bytes (keystrokes, a paste, an upload's chunks): opened as they arrive, in the order
+   * they arrive, and handed to the core at once. They used to wait in line behind the connection's JSON
+   * frames, and with them behind whatever those awaited: a P2P offer's answer here, and in one process
+   * (`HARNESSD_SERVICES=none`) the core's own handling of each frame, a resize's keyframe included.
+   * Nothing a JSON frame does is a precondition for a keystroke: a stream exists only once the client was
+   * told so (`terminal_ready`), the session that opens these bytes only once it was welcomed, and the
+   * core keeps each stream's bytes in their order (backendSocket.ts `enqueueTerminalBinary`). Opened here
+   * rather than later, a hello that replaces this connection's session cannot leave the bytes sealed under
+   * the old one unopenable.
+   */
+  private enqueueTerminalBinary(connId: string, raw: Uint8Array, via: RemoteTransport = 'relay'): void {
+    try {
+      const clear = this.e2ee.unwrapTerminalBinary(connId, raw)
+      if (!clear) { const gone = this.e2ee.terminalSessionGone(connId, raw); if (gone) this.sendTo(connId, gone); return }
+      if (env.TYPING_TRACE && (clear.kind === TerminalBinaryKind.input || clear.kind === TerminalBinaryKind.paste)) {
+        console.log(`[typing] in conn=${sid(connId)} stream=${sid(clear.streamId)} ${clear.kind === TerminalBinaryKind.paste ? 'paste' : `seq=${clear.seq}`} ${clear.bytes.length}B via=${via}`)
+      }
+      void Promise.resolve(this.core.binary(connId, clear)).catch((err) => {
         console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
       })
-      .finally(() => {
-        if (this.downChains.get(key) === next) this.downChains.delete(key)
-      })
-    this.downChains.set(key, next)
+    } catch (err) {
+      console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+    }
   }
 
   /**
@@ -508,6 +586,13 @@ export class RelayGateway implements GatewayPort {
       return
     }
     const payload = (opened.payload ?? {}) as Record<string, unknown>
+    // A guest manages none of this machine's pairings and is no member of its trust group
+    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md): the rest it asks, the core decides.
+    if ((type === 'group_sync' || GATEWAY_REQUEST_TYPES.has(type)) && this.guestOf(connId) !== undefined) {
+      this.logRequest(connId, opened)
+      this.reply(connId, type, payload.requestId, { error: 'GUEST_NOT_ALLOWED' })
+      return
+    }
     // Trust-group roster exchange: only over an E2EE session, from the identity that session proved —
     // the roster carries the keys this machine trusts, and the peer's own entry must be that identity.
     if (type === 'group_sync') {
@@ -522,7 +607,8 @@ export class RelayGateway implements GatewayPort {
       await this.manage(connId, type, payload)
       return
     }
-    if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport)
+    // `unwrapDown` opened it, so its envelope counter is a number.
+    if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport, (frame.payload as WrappedPayload).__e2e.n)
     await this.core.frame(connId, opened, transport, role)
   }
 
@@ -562,6 +648,7 @@ export class RelayGateway implements GatewayPort {
       this.p2pPendingOpens.delete(connId)
       this.p2pStreams.delete(connId)
       this.liveStreams.delete(connId)
+      this.forgetRoutes(connId)
       await this.core.disconnected(connId)
       return
     }
@@ -602,6 +689,34 @@ export class RelayGateway implements GatewayPort {
     if (type === 'connectors_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.core.notice({ type, revision: typeof revision === 'number' ? revision : 0 })
+      return
+    }
+
+    // Work waits for an agent of this machine's (backend lib/adapterWs.ts): the Swarm host reads its deliveries now. Naming
+    // none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
+    if (type === 'super_tab_deliveries') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      this.core.notice(typeof p.tabId === 'string' && typeof p.agentId === 'string'
+        ? { type, tabId: p.tabId, agentId: p.agentId } : { type })
+      return
+    }
+
+    // A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now.
+    // Naming none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
+    if (type === 'swarm_host_changed') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number'
+        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt } : { type })
+      return
+    }
+
+    // A Swarm the account is in changed (backend lib/swarmClientPushes.ts): the windows read it again. Naming none, the server
+    // says it pushes. Backend-only like desk_changed: a client could only make a window read early.
+    if (type === 'swarm_changed') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      const parts = Array.isArray(p.parts) && p.parts.length && p.parts.every(part => part === 'main' || part === 'machine') ? p.parts as Array<'main' | 'machine'> : null
+      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number' && parts
+        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt, parts } : { type })
       return
     }
 
@@ -713,7 +828,7 @@ export class RelayGateway implements GatewayPort {
       return
     }
     if (data.length > 512 * 1024) return
-    this.enqueueTerminalBinary(connId, data)
+    this.enqueueTerminalBinary(connId, data, 'p2p')
   }
 
   /** What the core has told a remote client about its terminal streams: one opened, one closed. */
@@ -728,50 +843,102 @@ export class RelayGateway implements GatewayPort {
       const streams = this.liveStreams.get(connId)
       streams?.delete(streamId)
       if (streams?.size === 0) this.liveStreams.delete(connId)
+      this.forgetRoutes(connId, streamId)
     }
   }
 
+  /**
+   * Which wire a client's frame says its stream's output should ride, read from the frame's E2EE
+   * [counter] — see `routeCounters`. Only a frame sealed AFTER the decision in force can change it:
+   * - a `terminal_resync` over P2P moves a live stream onto P2P (live migration: remoteRelay.ts and the
+   *   phone send a SECOND resync over the channel once it is ready, after the first, over the relay,
+   *   drained and snapshotted the stream). The live-stream check guards against promoting a streamId
+   *   whose pane was closed in the same instant the migration was in flight;
+   * - any `terminal_*` frame for the stream over the relay moves it back: a client demotes with a relay
+   *   resync, or, for one stream, by simply sending its next frame (an ack, `terminal_alive`) over the relay.
+   * A relay frame sealed before the stream moved onto P2P changes nothing, and neither does a P2P frame
+   * sealed before the client moved it back.
+   */
   private noteTerminalInputRoute(
     connId: string,
     type: string,
     payload: Record<string, unknown>,
     transport: RemoteTransport,
+    counter: number,
   ): void {
     if (type === 'terminal_open' && typeof payload.requestId === 'string') {
       let pending = this.p2pPendingOpens.get(connId)
-      if (!pending) { pending = new Set(); this.p2pPendingOpens.set(connId, pending) }
-      if (transport === 'p2p') pending.add(payload.requestId)
+      if (!pending) { pending = new Map(); this.p2pPendingOpens.set(connId, pending) }
+      if (transport === 'p2p') pending.set(payload.requestId, counter)
       else pending.delete(payload.requestId)
       return
     }
     const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
-    // Live-migration promotion: the client's remoteRelay.ts sends a SECOND terminal_resync over p2p
-    // (after the first one, over relay, already drained/snapshotted the stream) once its own p2p
-    // channel is ready — arriving here is our signal to start routing this stream's OUTPUT over p2p
-    // too, mirroring what the client just did on its side. The live-stream check guards against
-    // promoting a streamId whose pane was closed in the same instant the migration was in flight.
-    if (type === 'terminal_resync' && transport === 'p2p' && streamId
-      && this.liveStreams.get(connId)?.has(streamId)) {
-      let streams = this.p2pStreams.get(connId)
-      if (!streams) { streams = new Set(); this.p2pStreams.set(connId, streams) }
-      streams.add(streamId)
+    // Only a stream the core told this client it has has a route to decide (and a counter worth keeping).
+    if (!streamId || !this.liveStreams.get(connId)?.has(streamId)) return
+    const decided = this.routeCounters.get(connId)?.get(streamId) ?? -1
+    if (counter <= decided) {
+      if (transport !== 'p2p' && this.p2pStreams.get(connId)?.has(streamId)) this.logStaleRoute(connId, streamId, type, counter, decided)
       return
     }
-    if (transport !== 'p2p' && streamId) this.p2pStreams.get(connId)?.delete(streamId)
+    if (type === 'terminal_resync' && transport === 'p2p') {
+      this.routeToP2p(connId, streamId, counter, 'terminal_resync')
+      return
+    }
+    if (transport === 'p2p') return
+    this.decideRoute(connId, streamId, counter)
+    if (this.p2pStreams.get(connId)?.delete(streamId)) {
+      if (this.p2pStreams.get(connId)!.size === 0) this.p2pStreams.delete(connId)
+      console.log(`[terminal-p2p] conn=${sid(connId)} stream=${sid(streamId)} route=relay by=${logSafeType(type)} n=${counter}`)
+    }
+  }
+
+  private routeToP2p(connId: string, streamId: string, counter: number, by: string): void {
+    this.decideRoute(connId, streamId, counter)
+    this.staleRouteLogged.delete(`${connId}\0${streamId}`)
+    let streams = this.p2pStreams.get(connId)
+    if (!streams) { streams = new Set(); this.p2pStreams.set(connId, streams) }
+    if (streams.has(streamId)) return
+    streams.add(streamId)
+    console.log(`[terminal-p2p] conn=${sid(connId)} stream=${sid(streamId)} route=p2p by=${by} n=${counter}`)
+  }
+
+  private decideRoute(connId: string, streamId: string, counter: number): void {
+    let streams = this.routeCounters.get(connId)
+    if (!streams) { streams = new Map(); this.routeCounters.set(connId, streams) }
+    streams.set(streamId, counter)
+  }
+
+  /** A relay frame sealed before its stream moved onto P2P, kept from undoing the move: said once per move. */
+  private logStaleRoute(connId: string, streamId: string, type: string, counter: number, decided: number): void {
+    const key = `${connId}\0${streamId}`
+    if (this.staleRouteLogged.has(key)) return
+    this.staleRouteLogged.add(key)
+    console.log(`[terminal-p2p] conn=${sid(connId)} stream=${sid(streamId)} kept on p2p: relay ${logSafeType(type)} n=${counter} was sealed before the move (n=${decided})`)
+  }
+
+  /** Forget the routing decisions for one stream, or for every stream of a connection. */
+  private forgetRoutes(connId: string, streamId?: string): void {
+    if (streamId === undefined) {
+      this.routeCounters.delete(connId)
+      for (const key of this.staleRouteLogged) if (key.startsWith(`${connId}\0`)) this.staleRouteLogged.delete(key)
+      return
+    }
+    const streams = this.routeCounters.get(connId)
+    streams?.delete(streamId)
+    if (streams?.size === 0) this.routeCounters.delete(connId)
+    this.staleRouteLogged.delete(`${connId}\0${streamId}`)
   }
 
   private routeTerminalOutputToP2p(connId: string, type: string, payload: Record<string, unknown>): boolean {
     const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
     const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
     const pending = this.p2pPendingOpens.get(connId)
-    if ((type === 'terminal_ready' || type === 'terminal_error') && requestId && pending?.has(requestId)) {
-      pending.delete(requestId)
-      if (pending.size === 0) this.p2pPendingOpens.delete(connId)
-      if (type === 'terminal_ready' && streamId) {
-        let streams = this.p2pStreams.get(connId)
-        if (!streams) { streams = new Set(); this.p2pStreams.set(connId, streams) }
-        streams.add(streamId)
-      }
+    const openedAt = requestId ? pending?.get(requestId) : undefined
+    if ((type === 'terminal_ready' || type === 'terminal_error') && openedAt !== undefined) {
+      pending!.delete(requestId)
+      if (pending!.size === 0) this.p2pPendingOpens.delete(connId)
+      if (type === 'terminal_ready' && streamId) this.routeToP2p(connId, streamId, openedAt, 'terminal_open')
       return true
     }
     const streams = this.p2pStreams.get(connId)
@@ -786,6 +953,7 @@ export class RelayGateway implements GatewayPort {
   private demoteP2pConnection(connId: string, reason: string): void {
     this.p2pPendingOpens.delete(connId)
     this.p2pStreams.delete(connId)
+    this.forgetRoutes(connId)
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
   }
 

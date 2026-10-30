@@ -36,12 +36,18 @@ dependencies:
     sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
   collection: ^1.19.1
+  # A wall clock tests can move: the Finder tells a double click by time.
+  clock: ^1.1.2
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   lucide_icons_flutter: ^3.1.15
   flutter_svg: ^2.3.0
+  # Selectable agent messages, code and tables. Pure Flutter/Dart; no native
+  # plugin. Super Tab disables automatic images and permits only web links.
+  flutter_markdown_plus: ^1.0.12
+  markdown: ^7.3.1
   dio: ^5.11.0
   web_socket_channel: ^3.0.3
   flutter_riverpod: ^2.6.1
@@ -82,11 +88,21 @@ dependencies:
   desktop_drop: ^0.8.4
   path: ^1.9.1
   # The web pane: a domain harness's viewer (Circuit's board, Workshop's part)
-  # drawn beside its agent's terminal. macOS uses WKWebView; Linux uses
-  # WebKitGTK 4.1. Linux AppImage users need the host runtime library; see
-  # RELEASE.md.
-  webview_all: ^1.4.4
-  webview_all_wkwebview: ^1.4.4
+  # drawn beside its agent's terminal. THE one native plugin this feature adds
+  # — WKWebView via the endorsed `webview_flutter_wkwebview`, which lands in
+  # the macOS SPM package list and GeneratedPluginRegistrant. Linux support
+  # is added separately below; it falls back to the URL when WebKitGTK is
+  # unavailable. See CLAUDE.md on what a plugin costs.
+  webview_flutter: ^4.14.1
+  # Named directly for the WebKit creation params (muted autoplay in viewer panes).
+  webview_flutter_platform_interface: ^2.15.1
+  webview_flutter_wkwebview: ^3.26.1
+  # Last Linux release using the official Flutter platform interface.
+  webview_all_linux: 1.2.1
+  # The Finder tile's code editor and its highlighter (lib/finder/): pure
+  # Dart, no native plugin, so the macOS SPM package list is unchanged.
+  re_editor: ^0.10.0
+  re_highlight: ^0.0.3
 
 dev_dependencies:
   flutter_test:

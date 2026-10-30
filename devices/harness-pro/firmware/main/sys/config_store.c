@@ -1,86 +1,11 @@
 #include "config_store.h"
-#include <stdlib.h>
 #include <string.h>
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
-#include "esp_random.h"
-#include "mbedtls/sha256.h"
 
 static const char *TAG = "config";
 static const char *NS = "pair";
-
-static void read_str(nvs_handle_t h, const char *key, char *dst, size_t cap);   // defined below
-
-// SHA-256(salt_hex || pattern) → 64-char lowercase hex. salt_hex is the stored per-device salt.
-static void lock_hash(const char *salt_hex, const char *pattern, char out_hex[65])
-{
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0);   // 0 = SHA-256
-    mbedtls_sha256_update(&ctx, (const unsigned char *)salt_hex, strlen(salt_hex));
-    mbedtls_sha256_update(&ctx, (const unsigned char *)pattern, strlen(pattern));
-    uint8_t digest[32] = { 0 };
-    mbedtls_sha256_finish(&ctx, digest);
-    mbedtls_sha256_free(&ctx);
-    for (int i = 0; i < 32; i++) snprintf(out_hex + i * 2, 3, "%02x", digest[i]);
-}
-
-void config_set_lock(const char *pattern)
-{
-    if (!pattern || !pattern[0]) return;
-    uint8_t salt[8];
-    esp_fill_random(salt, sizeof(salt));
-    char salt_hex[17];
-    for (int i = 0; i < 8; i++) snprintf(salt_hex + i * 2, 3, "%02x", salt[i]);
-    char hex[65];
-    lock_hash(salt_hex, pattern, hex);
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, "lock_salt", salt_hex);
-    nvs_set_str(h, "lock_hash", hex);
-    nvs_set_u8(h, "lock_on", 1);
-    nvs_commit(h);
-    nvs_close(h);
-    ESP_LOGI(TAG, "lock set");
-}
-
-bool config_lock_enabled(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
-    uint8_t on = 0;
-    if (nvs_get_u8(h, "lock_on", &on) != ESP_OK) on = 0;
-    nvs_close(h);
-    return on == 1;
-}
-
-bool config_check_lock(const char *pattern)
-{
-    if (!pattern || !pattern[0]) return false;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
-    char salt_hex[33] = "", want[80] = "";
-    read_str(h, "lock_salt", salt_hex, sizeof(salt_hex));
-    read_str(h, "lock_hash", want, sizeof(want));
-    nvs_close(h);
-    if (!salt_hex[0] || !want[0]) return false;
-    char hex[65];
-    lock_hash(salt_hex, pattern, hex);
-    return strcasecmp(hex, want) == 0;
-}
-
-void config_clear_lock(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_erase_key(h, "lock_salt");
-    nvs_erase_key(h, "lock_hash");
-    nvs_set_u8(h, "lock_on", 0);
-    nvs_commit(h);
-    nvs_close(h);
-    ESP_LOGI(TAG, "lock cleared");
-}
 
 void config_store_init(void)
 {
@@ -158,16 +83,5 @@ bool config_save_muted(bool muted)
     bool ok = nvs_set_u8(h, "muted", muted ? 1 : 0) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
     ESP_LOGI(TAG, "save_muted %d: %s", (int)muted, ok ? "ok" : "FAILED");
-    return ok;
-}
-
-bool config_clear_all(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    nvs_erase_all(h);
-    bool ok = nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    ESP_LOGW(TAG, "clear_all: %s", ok ? "ok" : "FAILED");
     return ok;
 }

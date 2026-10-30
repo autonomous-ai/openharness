@@ -24,6 +24,18 @@ import { ReplayWindow } from './replayWindow.js'
 
 type Frame = Record<string, unknown>
 
+/**
+ * `up` frames the web audience is sent sealed although core.ts's `ENCRYPTED_UP_TYPES` does not name them.
+ * `commander_question` carries the question and its option labels — user content, as a recap is — and since
+ * 2026-10-21 it goes to the owner's apps over the relay too (core/questions.ts), so a phone hears an agent
+ * waiting on it. Kept here rather than in core.ts, as `wrapCommander` keeps it for the devices: core.ts is
+ * hashed and pinned, while every reader opens by the envelope (any `payload.__e2e`: the phone's and the
+ * desktop's relay_session_crypto.dart `unwrapIncoming`), so none of them changes. Its close carries only a
+ * request id, and goes as the devices are sent it: in the clear.
+ */
+const SEALED_FOR_WEB: ReadonlySet<string> = new Set(['commander_question'])
+const sealsForWeb = (type: string | undefined): type is string => !!type && (C.isEncryptedUpType(type) || SEALED_FOR_WEB.has(type))
+
 export type PairResult =
   | { ok: true; label: string; fingerprint: string }
   | { ok: false; error: 'NO_INTENT' | 'EXPIRED' | 'CODE_MISMATCH' | 'BACKEND_DOWN' | 'RATE_LIMITED' | 'BUSY' | 'TIMEOUT' | 'CANCELLED' }
@@ -139,6 +151,7 @@ export interface LinkedPeer {
   kind?: PeerKind      // absent for an older joiner that did not say
   label: string
   shared?: boolean     // another account's machine this one is shared with (gateway/sharedTrust.ts)
+  sharedWith?: string  // with `shared`: the account (email) it is shared with — whose guest its sessions are
 }
 
 const MACHINE_ID_RE = /^[a-f0-9]{32}$/
@@ -196,8 +209,8 @@ export class E2eeManager {
   trustPeer(peer: LinkedPeer, at = this.now()): void {
     const existing = this.store.pairedPeer(peer.pub)
     if (existing && existing.label === peer.label && existing.machineId === peer.machineId && existing.kind === peer.kind
-      && !!existing.shared === !!peer.shared) return
-    this.store.addPaired(peer.pub, peer.label, existing?.pairedAt ?? at, existing?.role ?? 'web', { machineId: peer.machineId, kind: peer.kind, shared: peer.shared })
+      && !!existing.shared === !!peer.shared && existing.sharedWith === peer.sharedWith) return
+    this.store.addPaired(peer.pub, peer.label, existing?.pairedAt ?? at, existing?.role ?? 'web', { machineId: peer.machineId, kind: peer.kind, shared: peer.shared, sharedWith: peer.sharedWith })
   }
   /** Stop trusting `pub` (a no-op when it is not paired): the same path as `harness unpair`. */
   untrustPeer(pub: string): boolean {
@@ -342,9 +355,38 @@ export class E2eeManager {
     this.epoch = hex8()
     this.groupCounter = 0
     for (const [connId, s] of this.sessions.entries()) {
-      const enc = C.aeadSeal(s.s2c, s.s2cCounter++, C.utf8('e2e-rekey'), C.utf8(JSON.stringify({ groupKey: C.b64e(this.groupKey), epoch: this.epoch })))
+      const enc = C.aeadSeal(s.s2c, s.s2cCounter++, C.utf8('e2e-rekey'), C.utf8(JSON.stringify({ groupKey: C.b64e(this.groupKeyFor(s.webIdentityPub)), epoch: this.epoch })))
       this.deps.sendTo(connId, { type: 'e2e_rekey', payload: { enc: C.b64e(enc), n: s.s2cCounter - 1 } })
     }
+  }
+
+  /** The group key a session is handed: the machine's, except for a GUEST (a key trusted only because the
+   *  machine is shared, gateway/sharedTrust.ts), which gets a throwaway one. A guest must not open the
+   *  owner's broadcasts; what concerns its own harnesses is sealed for its session alone (`wrapFor`),
+   *  and the backend sends it nothing else (backend/src/lib/hub.ts). */
+  private groupKeyFor(identityPub: string): Uint8Array {
+    return this.store.pairedPeer(identityPub)?.shared ? crypto32() : this.groupKey
+  }
+
+  /** The sessions of the guest `email` (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
+  guestSessions(email: string): string[] {
+    if (!email) return []
+    const out: string[] = []
+    for (const [connId, s] of this.sessions.entries()) {
+      const peer = this.store.pairedPeer(s.webIdentityPub)
+      if (peer?.shared && peer.sharedWith === email) out.push(connId)
+    }
+    return out
+  }
+
+  /** An `up` event sealed for ONE session: its content under that session's key, as a reply is. Null
+   *  without a session. A frame that carries no content passes through as `wrapUp` passes it. */
+  wrapFor(connId: string, frame: Frame): Frame | null {
+    const s = this.sessions.get(connId)
+    if (!s) return null
+    const type = frame.type as string | undefined
+    if (!sealsForWeb(type)) return frame
+    return { ...frame, payload: C.wrapPayload(s.s2c, 'p', s.s2cCounter++, type, frame.dbSessionId as string | undefined, frame.payload) }
   }
 
   // ── outbound wrapping ──────────────────────────────────────────────────────────────────────────
@@ -352,7 +394,7 @@ export class E2eeManager {
   /** Encrypt a broadcast `up` event under the group key if it carries user content; else pass through. */
   wrapUp(frame: Frame): Frame {
     const type = frame.type as string | undefined
-    if (!type || !C.isEncryptedUpType(type)) return frame
+    if (!sealsForWeb(type)) return frame
     const wrapped = C.wrapPayload(this.groupKey, 'g', this.groupCounter++, type, frame.dbSessionId as string | undefined, frame.payload, this.epoch)
     return { ...frame, payload: wrapped }
   }
@@ -892,7 +934,7 @@ export class E2eeManager {
     this.deps.onSessionOpened?.(connId, role, identityPub)
     const id = this.store.getIdentity()
     const enc = C.aeadSeal(keys.s2c, 0, C.utf8('e2e-welcome'), C.utf8(JSON.stringify({
-      groupKey: C.b64e(this.groupKey),
+      groupKey: C.b64e(this.groupKeyFor(identityPub)),
       epoch: this.epoch,
       // strictDown: this daemon opens a sealed frame of ANY type and refuses unsealed ones from the relay,
       // so a client may seal the types older daemons took in the clear (STRICT_DOWN_TYPES).

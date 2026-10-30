@@ -1,5 +1,5 @@
 import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { isAppProductUsageReport } from './lib/appProductUsageReport.js'
+import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -24,11 +24,13 @@ import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
+import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
+import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -57,6 +59,8 @@ export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: read
 export interface PairOutcome {
   status: number
   body: Record<string, unknown>
+  /** A busy backend's Retry-After, passed on where an answer is forwarded whole (the usage report). */
+  retryAfterMs?: number
 }
 
 export interface HookServerHandlers {
@@ -161,6 +165,10 @@ export interface HookServerHandlers {
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
+  /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
+   *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
+   *  it the route does not exist (404), as before on a Mac or Linux. */
+  onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
@@ -184,6 +192,12 @@ export interface HookServerHandlers {
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
   onProductFeedback?: (body: unknown) => Promise<PairOutcome>
+  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
+   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
+  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
+  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
+   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
+  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -254,6 +268,12 @@ function validHookBody(value: unknown): value is BoundHookBody {
       if (hint.backend === 'tmux') {
         if (Object.keys(hint).some((field) => field !== 'backend' && field !== 'paneId')
           || typeof hint.paneId !== 'string' || !/^%\d+$/.test(hint.paneId)) return false
+      } else if (hint.backend === 'ptyhost') {
+        // A Harness pty host pane, as its shell names itself (`HARNESS_PANE=<instance>:%N`, hook/notify.mjs): the
+        // instance and the pane, nothing else.
+        if (Object.keys(hint).some((field) => !['backend', 'instance', 'paneId'].includes(field))
+          || typeof hint.instance !== 'string' || !PTY_HOST_INSTANCE.test(hint.instance)
+          || typeof hint.paneId !== 'string' || !/^%\d{1,9}$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
         // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
         // backend is retired and `normalizedRuntimeHints` drops the hint, but the rest of the body is
@@ -289,6 +309,9 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
+      else if (hint?.backend === 'ptyhost' && PTY_HOST_INSTANCE.test(hint.instance) && /^%\d{1,9}$/.test(hint.paneId)) {
+        hints.push({ backend: 'ptyhost', instance: hint.instance, paneId: hint.paneId })
+      }
     }
   }
   if (body.tmuxPane && /^%\d+$/.test(body.tmuxPane)
@@ -371,14 +394,27 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
 }
 
 export interface HookServerOptions {
-  /** Also serve on this Unix socket (see lib/localSocket.ts). Null or absent: TCP only. */
+  /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
   socketPath?: string | null
+  /** Windows: the daemon's token. When given, `socketPath` is a pipe whose every request proves it (lib/localSocket.ts). */
+  pipeToken?: Buffer | null
   /** A private socket identifies this user's daemon even when another OS user holds the TCP port. */
   allowPortFallback?: boolean
   /** Completed acknowledgements are retained for a live process, never evicted to admit another hook. */
   admissionReceiptCapacity?: number
   /** Bound native payload and provenance retained by pending admission or linked Stop. */
   admissionBytesCapacity?: number
+}
+
+/** The `/api/status` fields a caller without the local credential is answered. */
+// Which daemon this is (its pid and computer, as a takeover or a status check compares) and where its socket
+// is — never the account, its folders or its connections.
+const PUBLIC_STATUS_FIELDS = ['version', 'pid', 'corePid', 'computerId', 'localWs', 'localSocket', 'supported'] as const
+
+function publicStatus(status: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { credentialRequired: true }
+  for (const key of PUBLIC_STATUS_FIELDS) if (key in status) out[key] = status[key]
+  return out
 }
 
 export function startHookServer(
@@ -414,8 +450,9 @@ export function startHookServer(
         res.writeHead(code, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(body))
       }
-      // Over the daemon's own socket the filesystem already said who this is, and no browser can get
-      // there; everything else must prove it was addressed to this loopback server.
+      // Over the daemon's own socket the filesystem already said who this is, and over its Windows pipe the request
+      // proved the daemon's token; no browser can get to either. Everything else must prove it was addressed to
+      // this loopback server.
       const trustedLocal = isTrustedLocal(req)
       // Before any route, reads included. See lib/loopbackRequest.ts.
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
@@ -443,7 +480,20 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
-      const hookOk = hookCredentialMatches(hookCredential, req.headers['x-harness-hook-token'])
+      // An engine hook's token. Today the daemon's own credential; a guest's harness will carry a token
+      // scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md), checked here.
+      const hookTokenMatches = (request: http.IncomingMessage): boolean =>
+        hookCredentialMatches(hookCredential, request.headers['x-harness-hook-token'])
+      const hookOk = hookTokenMatches(req)
+      // The loopback port takes any local OS user's process, so over TCP every route but the few below
+      // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
+      // read. Over the daemon's Unix socket the filesystem already said who this is.
+      const credentialOk = trustedLocal || localCredentialMatches(hookCredential, req)
+      // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
+      // own token, above) and the native device routes (their own bearer, just below).
+      const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
+        || url.startsWith('/api/hook/') || url.startsWith('/api/autonomous-device/')
+      if (!credentialOk && !open) { json(401, { error: LOCAL_CREDENTIAL_REQUIRED }); return }
 
       if (url.startsWith('/api/autonomous-device/')) {
         const peer = req.socket.remoteAddress
@@ -469,7 +519,10 @@ export function startHookServer(
       // it linked from retired with the browser setup links (#348). `harness stop` stops the daemon
       // through its pid, never through here.
       if (req.method === 'GET' && url === '/api/status') {
-        json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
+        const status = handlers.onStatus ? await handlers.onStatus() : { supported: false }
+        // Without the credential, only what says a daemon is here and where its socket is: nothing about
+        // the account, its folders or its connections.
+        json(200, credentialOk ? status : publicStatus(status)); return
       }
 
       // SessionStart AND UserPromptSubmit both POST here (the catch hook re-registers so a session
@@ -670,7 +723,9 @@ export function startHookServer(
           if (!current()) return { kind: 'reject', reason: 'stale_hook' }
           if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const row = live()!
-          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId))) {
+          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId
+            // A paneId is only unique within one pty host.
+            && (hint.backend !== 'ptyhost' || (runtime.backend === 'ptyhost' && runtime.instance === hint.instance))))) {
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
@@ -1031,6 +1086,9 @@ export function startHookServer(
         await proxied(handlers.onExperimentalRead); return
       }
       if (req.method === 'POST' && url === '/api/product-usage/report') {
+        // On every answer, a refusal too: the Desktop counts names newer than revision 1 only after
+        // reading it here, because a proxy that predates a name refused the whole report.
+        res.setHeader(APP_USAGE_VOCABULARY_HEADER, String(APP_USAGE_VOCABULARY))
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onProductUsageReport) { json(503, { error: 'UNAVAILABLE' }); return }
         let body: unknown
@@ -1038,14 +1096,45 @@ export function startHookServer(
           const raw = await readBody(req, 8192)
           body = JSON.parse(raw)
         } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        if (!isAppProductUsageReport(body)) {
+        // Without the names this contract does not know yet; see lib/appProductUsageReport.ts.
+        const report = appProductUsageReport(body)
+        if (!report) {
           json(400, { error: 'BAD_REQUEST' }); return
         }
         try {
-          const result = await handlers.onProductUsageReport(body)
+          const result = await handlers.onProductUsageReport(report)
+          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
+          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
+      }
+      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
+      // with only "Could not upload the file".
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
+      if (attachment) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
+        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
+        // `post --attach` names itself; the backend checks that this account runs that agent.
+        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
+        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
+      }
+      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
+      if (signInAnswer) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
+        // The code and nothing else: whose account approves is this computer's session, never the caller's.
+        const code = (body as { code?: unknown } | null)?.code
+        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
+            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
+          json(400, { error: 'BAD_REQUEST' }); return
+        }
+        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
+        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
       }
       if (req.method === 'POST' && url === '/api/product-usage/feedback') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
@@ -1095,6 +1184,13 @@ export function startHookServer(
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onAuthHandoff); return
+      }
+      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
+      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
+      if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        await proxied(handlers.onDaemonStop); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
@@ -1191,7 +1287,7 @@ export function startHookServer(
       if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
       // The private socket is mandatory when opting into multi-user startup. A duplicate daemon
       // must not survive on a random port while another one owns this user's socket.
-      listenLocalSocket(handle, socketPath).then(
+      listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
         (localSocket) => {
           console.log(`[hooks] listening on ${socketPath}`)
           resolve({ server, port: actual, localSocket })

@@ -12,6 +12,7 @@ import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
+import 'package:harness/widgets/account_menu.dart';
 import 'package:harness/widgets/setup_tour.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -90,7 +91,6 @@ void main() {
     await repeated;
     expect(find.byType(Dialog), findsOneWidget);
     await _menu(tester, 'showLayout');
-    await _menu(tester, 'flashFirmware');
     expect(find.byType(Dialog), findsOneWidget);
     Navigator.of(tester.element(find.byType(Dialog))).pop();
     await tester.pump(const Duration(milliseconds: 300));
@@ -133,6 +133,49 @@ void main() {
     app.dispose();
   });
 
+  // A dropdown is an overlay entry, which stays above every route: a dialog or
+  // page opened while one is up must close it first, or its rows stay live
+  // over the modal (Sign out behind Check for Updates).
+  testWidgets('a dialog or page that opens closes the open dropdown', (
+    tester,
+  ) async {
+    final app = createApp();
+    await _mount(tester, app);
+    Future<void> openMenu() async {
+      unawaited(
+        showAccountMenu(
+          tester.element(find.byType(SwarmScreen)),
+          name: 'Tim',
+          email: 'tim@example.com',
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(AccountMenu), findsOneWidget);
+    }
+
+    await openMenu();
+    final shortcuts = _menu(tester, 'showShortcuts');
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.byType(AccountMenu), findsNothing);
+    Navigator.of(tester.element(find.byType(Dialog))).pop();
+    await tester.pump(const Duration(milliseconds: 300));
+    await shortcuts;
+
+    // Settings from the app menu (a page, not a dialog) too.
+    await openMenu();
+    final settings = _menu(tester, 'settings');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    expect(find.byType(AccountMenu), findsNothing);
+    Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
+    await tester.pump(const Duration(milliseconds: 300));
+    await settings;
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
   testWidgets('app menu dialogs do not open over Settings', (tester) async {
     final app = createApp();
     await _mount(tester, app);
@@ -140,7 +183,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(SettingsScreen), findsOneWidget);
-    for (final method in ['showShortcuts', 'showLayout', 'flashFirmware']) {
+    for (final method in ['showShortcuts', 'showLayout']) {
       await _menu(tester, method);
     }
     await tester.pump();

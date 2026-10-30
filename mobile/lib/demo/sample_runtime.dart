@@ -234,7 +234,13 @@ class SampleRuntime implements SampleHarnessHost {
           name: harness.agent['name'] as String? ?? 'harness',
           machine: machine.machine.displayName,
         ),
-        (aborted: false, replay: false, subagent: false, reply: reply),
+        (
+          aborted: false,
+          replay: false,
+          subagent: false,
+          reply: reply,
+          tier: null,
+        ),
         watching: () => _watching(ref),
       );
     }
@@ -315,6 +321,11 @@ class SampleRuntime implements SampleHarnessHost {
               {
                 'engine': engine,
                 'installed': engine == 'claude' || engine == 'codex',
+                // Both signed in, Claude Code used last: New Harness opens on it, as the sample's
+                // harnesses show.
+                if (engine == 'claude' || engine == 'codex') 'signedIn': true,
+                if (engine == 'claude') 'lastUsedAt': 2,
+                if (engine == 'codex') 'lastUsedAt': 1,
                 'installable': true,
                 'command': engine,
                 if (engine == 'codex') 'supportsCodexHome': true,

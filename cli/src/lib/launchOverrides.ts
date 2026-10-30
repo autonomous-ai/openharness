@@ -1,3 +1,4 @@
+import type { SwarmSkill } from './savedSkill.js'
 /**
  * What a pane has to be launched WITH, beyond the engine's own argv, for the engine to come back
  * where it was: on the same grid with the same credential, or under the same Codex profile.
@@ -8,8 +9,8 @@
  * its own login, spending the wrong account while looking identical. Written once so the three
  * callers cannot drift: the half that drifts is the half nobody ran today.
  *
- * Dependency-injected like restoreAgents.ts, because the two machine-specific parts (the tmux version
- * probe and the config directory writer) are exactly the parts worth stubbing in a spec.
+ * Dependency-injected like restoreAgents.ts, because the two machine-specific parts (the terminal
+ * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
@@ -28,12 +29,14 @@ import {
   type GridLaunchRecord,
   type GridLaunchRequest,
 } from './gridLaunchWire.js'
-import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
+import type { TerminalBackendCapabilities } from './terminalTypes.js'
+import { tmuxTooOldForSessionEnv } from './tmuxVersion.js'
 import { harnessEnvToClear } from '../dsh/launch.js'
 import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
+import { machineMcpLaunchArgs } from './machineMcp.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -84,7 +87,8 @@ export interface LaunchOverridesDeps {
     files: NonNullable<GridEngineLaunch['configDir']>['files'],
     links: NonNullable<GridEngineLaunch['configDir']>['links'],
   ) => Promise<string>
-  tmuxSupportsSessionEnv: () => Promise<boolean>
+  /** What the backend the pane is made on can do (`TerminalBackend.capabilities`). */
+  capabilities: () => Promise<TerminalBackendCapabilities>
   /** Install the daemon's hooks into a non-default Codex profile. The caller decides whether hook
    *  installation is enabled at all. */
   installCodexHooks: (codexHome: string) => boolean | Promise<boolean>
@@ -100,13 +104,29 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
+  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
+   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
+  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
+  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
+  /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
+   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+   *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
+   *  with a harness package that is missing, starting it without its role would silently change what it is. */
+  swarm?: {
+    prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+    args(engine: string): string[]
+  }
 }
+
+/** The answer to relaunching a Swarm session while the Swarm is off on this computer. */
+export const SWARM_OFF = { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' } as const
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
 export interface LaunchSource extends NativeLaunchSource {
@@ -123,6 +143,7 @@ export interface LaunchSource extends NativeLaunchSource {
   dsh?: string | null
   /** The session-scoped runtime bundle. Older rows use their stable agent id. */
   dshRuntime?: string | null
+  swarmSkill?: SwarmSkill
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
   /**
@@ -158,7 +179,7 @@ const noOverrides = (): LaunchOverrides => ({ env: {}, extraArgs: [], clearEnv: 
  * builds — config directory included — once it holds the pane).
  */
 export async function validateLaunchOverrides(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine' | 'gridLaunch'>,
+  deps: Pick<LaunchOverridesDeps, 'capabilities' | 'machine' | 'gridLaunch'>,
   engine: AgentEngine,
   source: LaunchSource,
   native?: NativeLaunch,
@@ -171,14 +192,13 @@ export async function validateLaunchOverrides(
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
 async function tmuxRefusal(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv'>, engine: AgentEngine, override: GridLaunchOverride,
+  deps: Pick<LaunchOverridesDeps, 'capabilities'>, engine: AgentEngine, override: GridLaunchOverride,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
-  if (await deps.tmuxSupportsSessionEnv()) return { ok: true }
+  if ((await deps.capabilities()).sessionEnv) return { ok: true }
   return {
     ok: false,
     error: 'TMUX_TOO_OLD_FOR_GRID',
-    detail: `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
-      + `which is the first version that can give a pane its own environment — so ${engine} could not be `
+    detail: `${tmuxTooOldForSessionEnv('a pane')} — so ${engine} could not be `
       + `pointed at grid ${override.networkName}.`,
   }
 }
@@ -207,6 +227,8 @@ export async function prepareLaunchOverrides(
 ): Promise<LaunchPreparationResult> {
   const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
   if (!current()) return changed
+  if (source.swarmSkill && !deps.swarm) return SWARM_OFF
+  const swarm = deps.swarm
   const owner = current
   source = structuredClone(source)
   const inspected = capturedNative ? { ok: true as const, launch: capturedNative } : await deps.native?.(engine, source, { id: configKey, current: owner })
@@ -267,6 +289,12 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
+    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    if (source.swarmSkill?.github) {
+      let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
+      try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+      if (github) overrides = { ...overrides, env: { ...overrides.env, ...github.env }, clearEnv: [...overrides.clearEnv, ...github.clearEnv] }
+    }
     // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
     // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
     // so the guard is for a row edited by hand — it relaunches as a general session rather than
@@ -277,10 +305,23 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again. Never
+    // a Buddy's (core/agents/create.ts).
+    const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
+    if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
+    // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
+    if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
+    let swarmInstructions: string | undefined
+    if (source.swarmSkill) {
+      try {
+        if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
+        swarmInstructions = swarm!.prepare(source.cwd, source.swarmSkill).instructions
+      } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
     const told = agentLaunchArgs(engine, source.startedBy, {
-      cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution,
+      cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
     return { ok: true, overrides: { ...overrides, ...(native ? { native, env: { ...overrides.env, ...native.environment } } : {}), clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
@@ -309,12 +350,20 @@ async function prepareBaseLaunchOverrides(
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
     const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
+    // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
+    // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
+    const offered = await (engine === 'codex' && source.codexHome ? deps.ownerRelay?.(engine, source.codexHome) : deps.ownerRelay?.(engine)) ?? null
+    // A Codex home of its own the relay cannot sign in (a Product Manager's, its relay not yet published after a reboot): held
+    // with why, as a launch that waits is, never relaunched signed out (team/relay.ts).
+    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: offered.refused }
+    const relay = offered
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
-    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
-    if (restored || provider.length) {
+    const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length || relay) {
       ownLogin = {
-        env: { ...(restored?.env ?? {}) },
+        env: { ...(relay?.env ?? {}), ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
         ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),

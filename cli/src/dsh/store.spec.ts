@@ -117,7 +117,12 @@ describe('the built-in shelf (store/)', () => {
     try {
       env.HARNESS_STORE_REF = 'viewer-packages'
       resetBundledDshRegistry()
-      expect(bundledDshRegistry().filter((row) => row.path).every((row) => row.ref === 'viewer-packages')).toBe(true)
+      // An outside package with a folder of its own (store/registry) keeps the ref it lists.
+      const rows = bundledDshRegistry().filter((row) => row.path)
+      const ours = rows.filter((row) => row.repo.replace(/\.git$/, '') === HARNESS_MONOREPO)
+      expect(ours.length).toBeGreaterThan(0)
+      expect(ours.every((row) => row.ref === 'viewer-packages')).toBe(true)
+      expect(rows.filter((row) => !ours.includes(row)).every((row) => row.ref !== 'viewer-packages')).toBe(true)
     } finally {
       env.HARNESS_STORE_REF = saved
       resetBundledDshRegistry()

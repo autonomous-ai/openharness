@@ -6,8 +6,10 @@
  * - `pins`: the machines shared WITH this account, each under the key its owner's device key log names.
  *   Pinned in machinePeers.json so a window here reaches one through the relay as it does the account's
  *   own (lib/remoteRelay.ts).
- * - `keys`: the machines of the accounts THIS machine is shared with. Trusted in paired.json as the
- *   account's own machines are (role `web`): the owner shares the machine with full rights.
+ * - `keys`: the machines of the accounts THIS machine is shared with. Trusted in paired.json under role
+ *   `web`, each with the account it is shared with (`sharedWith`): its sessions are that GUEST's, which
+ *   the core lets use its own space and nothing of the owner's
+ *   (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
  *
  * Each is marked `shared`, which keeps it out of the trust group (lib/e2ee/groupSyncer.ts) and lets this
  * take back what it gave and nothing else. Something the account itself already trusts or pins is never
@@ -19,7 +21,7 @@ import type { LinkedPeer } from '../lib/e2ee/manager.js'
 import type { PairedClient } from '../lib/e2ee/store.js'
 
 /** One machine and its key, as the service names it. */
-export interface SharedPeer { machineId: string; pub: string; label: string }
+export interface SharedPeer { machineId: string; pub: string; label: string; email?: string }
 
 /** What the service wants trusted; the most of each it may ask for. A part left out is left as it is:
  *  the service says only what it could read this time. */
@@ -39,6 +41,7 @@ export interface SharedTrustDeps {
 
 const PUB_RE = /^[A-Za-z0-9+/]{43}=$/
 const MACHINE_RE = /^[A-Za-z0-9_-]{1,128}$/
+const EMAIL_RE = /^[^\s@]{1,128}@[^\s@]{1,128}$/
 
 /** The valid peers of a list the service sent, at most SHARED_TRUST_MAX, each machine and key once. */
 export function sharedPeers(raw: unknown): SharedPeer[] {
@@ -50,7 +53,8 @@ export function sharedPeers(raw: unknown): SharedPeer[] {
     if (!p || typeof p.pub !== 'string' || !PUB_RE.test(p.pub) || typeof p.machineId !== 'string' || !MACHINE_RE.test(p.machineId)) continue
     if (seen.has(p.machineId) || seen.has(p.pub)) continue
     seen.add(p.machineId); seen.add(p.pub)
-    out.push({ machineId: p.machineId, pub: p.pub, label: typeof p.label === 'string' ? p.label.slice(0, 120) : '' })
+    const email = typeof p.email === 'string' && EMAIL_RE.test(p.email.trim()) ? p.email.trim().toLowerCase() : undefined
+    out.push({ machineId: p.machineId, pub: p.pub, label: typeof p.label === 'string' ? p.label.slice(0, 120) : '', ...(email ? { email } : {}) })
   }
   return out
 }
@@ -89,7 +93,7 @@ function applyKeys(deps: SharedTrustDeps, desired: SharedPeer[]): number {
   for (const want of keys.values()) {
     const held = paired.find((p) => p.identityPub === want.pub)
     if (held && !held.shared) continue // trusted as the account's own already
-    deps.trust({ pub: want.pub, machineId: want.machineId, kind: 'machine', label: want.label, shared: true })
+    deps.trust({ pub: want.pub, machineId: want.machineId, kind: 'machine', label: want.label, shared: true, ...(want.email ? { sharedWith: want.email } : {}) })
     trusted++
   }
   return trusted

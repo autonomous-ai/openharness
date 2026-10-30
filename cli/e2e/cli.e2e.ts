@@ -312,4 +312,59 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(calls(m), 'no platform tool was asked anything').toEqual([])
     expect(readFileSync(m.definition, 'utf8'), 'and the other folder\'s definition is left as it was').toContain(other)
   })
+
+  it.each(['launchd', 'systemd'] as const)('harness uninstall under %s: the harness, the service, the daemon, the hooks, the commands, the PATH line and ~/.harness go; a foreign hook stays', async (platform) => {
+    const m = await install(platform)
+    allow(m, 'platform')
+    const home = m.daemon.env.HOME!
+    // What install.sh leaves beside the bundle: the launchers and the PATH line (cli/scripts/install.sh ensure_rc).
+    const bin = join(home, '.local', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'harness'), `#!/bin/sh\nexec '${m.node}' '${m.cli}' "$@"\n`, { mode: 0o755 })
+    writeFileSync(join(bin, 'hn'), `#!/bin/sh\nexec '${join(bin, 'harness')}' tui "$@"\n`, { mode: 0o755 })
+    writeFileSync(join(home, '.zshrc'), 'alias ll="ls -l"\n\n# added by harness installer\nexport PATH="$HOME/.local/bin:$PATH"\n')
+    // Somebody else's hook beside the ones the daemon installs.
+    const settings = join(home, '.claude', 'settings.json')
+    mkdirSync(dirname(settings), { recursive: true })
+    const foreign = { hooks: [{ type: 'command', command: '/usr/bin/true' }] }
+    writeFileSync(settings, JSON.stringify({ hooks: { Stop: [foreign] } }))
+
+    expect((await harness(m, 'service', 'install')).status).toBe(0)
+    const master = pidOf(m)!
+    seen.add(master)
+    const client = await LocalClient.connect(m.daemon)
+    const agent = await create(m, client, 'before-uninstall')
+    // One turn, so its conversation has an opening a stop can read (a harness still starting is held, not stopped).
+    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
+    client.send('message', { agentId: agent.id, content: 'before the uninstall' })
+    await ended
+    client.close()
+    await until('the hooks to be in Claude Code\'s settings', () => readFileSync(settings, 'utf8').includes('notify.mjs'), 30_000)
+    // What this install owns, by the suite's own handles: the master, and the processes in its private tmux server.
+    const owned = [master, ...(await panes(m)).split('\n').map((line) => Number(line.split(' ')[1])).filter(Boolean)]
+    for (const pid of owned) seen.add(pid)
+
+    const run = await harness(m, 'uninstall', '--yes')
+    expect(run.status, said(run)).toBe(0)
+    expect(run.stdout).toContain('✓ stopped 1 harness')
+    expect(run.stdout).toContain(`✓ removed the Harness daemon from ${platform}`)
+    expect(existsSync(m.definition)).toBe(false)
+    await until('the master to go', () => !alive(master), 15_000)
+    // launchd's bootout forgets the pid; the fake systemctl's disable keeps the last one, which must be dead.
+    const unit = platformPid(m)
+    expect(unit === null || !alive(unit), 'the platform has no live daemon').toBe(true)
+    expect(JSON.parse(readFileSync(settings, 'utf8')).hooks.Stop).toEqual([foreign])
+    expect(readFileSync(settings, 'utf8')).not.toContain('notify.mjs')
+    expect(existsSync(join(m.daemon.env.CODEX_HOME!, 'hooks.json')) ? readFileSync(join(m.daemon.env.CODEX_HOME!, 'hooks.json'), 'utf8') : '').not.toContain('notify.mjs')
+    expect(existsSync(join(bin, 'harness'))).toBe(false)
+    expect(existsSync(join(bin, 'hn'))).toBe(false)
+    expect(readFileSync(join(home, '.zshrc'), 'utf8')).toBe('alias ll="ls -l"\n')
+    expect(existsSync(join(home, '.harness'))).toBe(false)
+    // This test's data folder is outside the home (IsolatedDaemon): named, and left.
+    expect(run.stdout).toContain(`· left ${m.daemon.dataDir}`)
+    // Nothing of this throwaway install is left: no session in its private tmux server, none of its processes.
+    expect(await panes(m).catch(() => ''), 'no pane is left in the private tmux server').toBe('')
+    expect(await m.daemon.tmux.run('list-sessions').catch(() => ''), 'no Harness session is left').not.toMatch(/harness/i)
+    await until('every process this install owned to go', () => owned.every((pid) => !alive(pid)), 15_000)
+  })
 })

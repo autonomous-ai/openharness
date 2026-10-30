@@ -11,7 +11,7 @@ import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { executableFileIdentity } from './engineBin.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { probeTerminalAgents } from './terminalAgentDiscovery.js'
-import { enrichProcessRows, processRows } from './tmux.js'
+import { enrichProcessRows, processRows } from './processTable.js'
 
 const realDescribe = process.platform === 'darwin' && process.env.RUN_DARWIN_PROCESS_IMAGES === '1'
   ? describe : describe.skip

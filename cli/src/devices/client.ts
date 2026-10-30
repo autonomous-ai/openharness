@@ -1,20 +1,27 @@
 /** Devices DSH tools use the same owned-machine bridge as Desktop. No serial or credential access. */
 import { randomUUID } from 'node:crypto'
+import { env } from '../config/env.js'
+import { localCredentialHeaders } from '../lib/localCredential.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 
 export interface DevicesClientDeps {
   port: number
+  /** The daemon's data dir, where its local credential is (lib/localCredential.ts). */
+  dataDir?: string
   machineId(): Promise<string | null>
-  connect(url: string): ClientSocket
+  /** A loopback socket to the daemon, carrying [headers] (its local credential). */
+  connect(url: string, headers?: Record<string, string>): ClientSocket
   fetch?: typeof fetch
   request?: (machineId: string, type: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>
   delay?: (ms: number) => Promise<void>
+  /** How long the other computer has to answer: 12 s unless a request needs longer (an engine probe's login shells). */
+  timeoutMs?: number
 }
 
 export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`)
+    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`, localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR))
     const requestId = randomUUID()
     let settled = false, sent = false
     const finish = (error: Error | null, reply?: Record<string, unknown>): void => {
@@ -24,7 +31,7 @@ export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: 
       try { socket.close() } catch { /* already closed */ }
       if (error) reject(error); else resolve(reply!)
     }
-    const timer = setTimeout(() => finish(new Error('This computer did not answer in time.')), 12_000)
+    const timer = setTimeout(() => finish(new Error('This computer did not answer in time.')), deps.timeoutMs ?? 12_000)
     socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('error', error => finish(error))
     socket.on('close', code => finish(new Error(code === 4404 ? 'Link this computer in Machines first.' : 'The computer disconnected.')))
@@ -53,7 +60,7 @@ async function ownedHosts(deps: DevicesClientDeps): Promise<Host[]> {
   const localId = await deps.machineId()
   if (!localId) throw new Error('Start Harness on this computer first.')
   const response = await (deps.fetch ?? fetch)(`http://127.0.0.1:${deps.port}/api/machines`, {
-    headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(8000),
+    headers: { 'x-adapter-local': '1', ...localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR) }, signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) throw new Error('Could not read the account’s computers. Sign in and try again.')
   const body = await response.json() as { data?: { machines?: Record<string, unknown>[] }; machines?: Record<string, unknown>[] }

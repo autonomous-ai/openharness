@@ -3,8 +3,8 @@
  * the `harness` verbs as it would through its shell tool. It lists the harnesses, starts one with a task, waits for
  * it, reads its answer, and closes it; it may not close one it did not start. Neither may message the other while
  * they share no tab (owner, 2026-10-11: Agent Messages off means off). The fake engines answer by echoing
- * (harness/fakeEngine.mjs). A harness it starts says so in the pull requests it opens: in the arguments its engine is
- * launched with, each launch, while the account has that on.
+ * (harness/fakeEngine.mjs). Agent-started harnesses retain their coordination instructions, without
+ * adding Harness attribution to pull requests, even if an older account setting still asks for it.
  *
  * What agents may do is the account's (Settings ▸ Experimental, every switch off by default): signed in to the fake
  * backend, which answers the account's experiments and its tabs (there are none), and turned on where a test needs it.
@@ -18,9 +18,9 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { retainContributions, retainedHarnesses } from '../src/superTabs/retention.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
-/** The line (lib/agentAttribution.ts), as a reader of the pull request sees it. */
-const AGENT_ATTRIBUTION_LINE = '🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.'
 const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000b8', name: 'studio', token: 'e2e-token-agent-client' }
 const signIn = (d: IsolatedDaemon) => writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({
@@ -83,7 +83,7 @@ describe('Harness for agents, end to end', () => {
     await backend?.close(); backend = undefined
   })
   /** A daemon signed in to the fake backend, whose account has [experiments] on, read and kept before the test goes on. */
-  const signedIn = async (experiments: Record<string, boolean>, options: { trustPrompt?: boolean; before?: (d: IsolatedDaemon) => void } = {}) => {
+  const signedIn = async (experiments: Record<string, boolean>, options: { trustPrompt?: boolean; before?: (d: IsolatedDaemon) => void; env?: Record<string, string> } = {}) => {
     const relay = await FakeBackend.start()
     backend = relay
     relay.addMachine(ME)
@@ -91,7 +91,7 @@ describe('Harness for agents, end to end', () => {
     Object.assign(relay.experiments, experiments)
     const d = await IsolatedDaemon.create({ trustPrompt: options.trustPrompt, env: {
       BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
-      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...options.env,
     } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
@@ -203,7 +203,7 @@ describe('Harness for agents, end to end', () => {
     // Owner, October 12: "we need to be very careful about when to start a new agent so we don't waste user token and we
     // need to properly clean up after too". The cleanup runs in its own process here, as it does by default (the edge
     // host): what the core tells it and what it asks back cross the link.
-    const { d } = await signedIn({ agents_start_agents: true })
+    const { d, relay } = await signedIn({ agents_start_agents: true })
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     const list = async (includeStopped = false) => (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped }, 30_000)).agents
     const lead = async (name: string) => {
@@ -250,6 +250,15 @@ describe('Harness for agents, end to end', () => {
     const second = await lead('lead2')
     const joined = await start(second, 'joined')
     const left = await start(second, 'left')
+    const shared = await start(second, 'shared')
+    relay.superTabs = overOldRoutes(async (_method, raw) => {
+      const path = new URL(raw, relay.httpUrl).pathname
+      return { data: path === `/api/super-tabs/hosts/${ME.machineId}`
+        ? [{ tabId: 'retained-team', agent: { id: 'shared-member', harnessId: shared.id, machineId: ME.machineId }, observers: [] }]
+        : [] }
+    })
+    expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
+    await until('the team host to retain its member', () => retainedHarnesses(d.dataDir).has(shared.id) || null, 10_000, 100)
     client.send('message', { agentId: joined.id, content: 'hello from the person' })
 
     // The app closes lead, as a pane's close does (`agent_close`): kid closes with it.
@@ -265,10 +274,43 @@ describe('Harness for agents, end to end', () => {
     expect(byPerson.code, byPerson.out + byPerson.err).toBe(0)
     await until('left to close with lead2', async () => (await stateOf(left)) === 'stopped' || null, 60_000, 500)
     expect(await stateOf(joined)).toBe('active')
+    expect(await stateOf(shared)).toBe('active')
     // One line for each close.
     expect(d.log()).toMatch(/\[agent-cleanup\] closed kid \(\w+\): the harness that started it was closed\. Its conversation is kept\./)
     expect(d.log()).toMatch(/\[agent-cleanup\] closed left \(\w+\): the harness that started it was closed\./)
     expect(d.log()).not.toMatch(/\[agent-cleanup\] closed joined/)
+    expect(d.log()).not.toMatch(/\[agent-cleanup\] closed shared/)
+    client.close()
+  })
+
+  // HARNESS_SWARM=off (the review of #1765): the agent cleanup, in the edge host, is handed none of the Swarm, and a harness
+  // the Swarm's saved roster names is closed with its starter as any other. On, the test above keeps it (`shared`).
+  it('with the Swarm off, a harness the Swarm\'s saved roster keeps is closed with its starter, as any other', async () => {
+    const { d } = await signedIn({ agents_start_agents: true }, { env: { HARNESS_SWARM: 'off' } })
+    const client = await LocalClient.connect(d, { machineId: ME.machineId })
+    const list = async () => (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents
+    const dir = join(d.projectsDir, 'lead')
+    mkdirSync(dir, { recursive: true })
+    const made = await client.request('agent_create', { engine: 'claude', cwd: dir, bypassPermission: true, name: 'lead' }, 90_000)
+    expect(made.error, JSON.stringify(made)).toBeUndefined()
+    const lead = await until('lead to bind its conversation', async () => {
+      const row = (await list()).find((a) => a.id === made.agent.id)
+      return row?.sessionId && row.status === 'active' ? row : null
+    }, 60_000, 500)
+    const from = client.frames.length
+    client.send('message', { agentId: lead.id, content: 'hello lead' })
+    await client.waitFor((f) => f.type === 'turn_ended' && f.agentId === lead.id, 60_000, 'lead\'s first turn to end', from)
+    const started = await harness(d, String(lead.tmuxPane), ['new', 'claude', 'kept', '--name', 'kept', '--', 'hello kept'])
+    expect(started.code, started.out + started.err).toBe(0)
+    const kept = await until('kept to run', async () => (await list()).find((a) => a.name === 'kept' && a.status === 'active' && a.tmuxPane) ?? null, 60_000, 500)
+    // What the Swarm's host would have kept here had it run: its retention names the harness as a Super Tab member.
+    retainContributions(d.dataDir, ME.machineId, [{ tabId: 'retained-team', agent: { harnessId: kept.id, machineId: ME.machineId } }])
+    expect(retainedHarnesses(d.dataDir).has(kept.id)).toBe(true)
+    const closed = await client.request('agent_close', { agentId: lead.id, sessionId: lead.sessionId, createdAt: lead.createdAt, mode: 'now' }, 60_000)
+    expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
+    await until('kept to close with lead', async () => (await list()).find((a) => a.id === kept.id)?.status === 'stopped' || null, 60_000, 500)
+    expect(d.log()).toMatch(/\[agent-cleanup\] closed kept \(\w+\): the harness that started it was closed\./)
+    expect(d.log()).not.toMatch(/\[harnessd\] service superTabs started/)
     client.close()
   })
 
@@ -402,7 +444,7 @@ describe('Harness for agents, end to end', () => {
     expect(hello.result.instructions).toContain('Never give work to, or close, a harness you did not start')
     server.notify('notifications/initialized')
     const tools = (await server.request('tools/list')).result.tools.map((t: { name: string }) => t.name)
-    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
 
     // An empty folder of its own: refused, with the project it can ask for instead.
     const scratch = join(d.root, 'tmp', 'mcp-scratch')
@@ -450,7 +492,7 @@ describe('Harness for agents, end to end', () => {
     await d.start()
     await until('Harness to allow its commands in Claude Code and Codex', () => existsSync(rules)
       && readFileSync(settings, 'utf8').includes('mcp__plugin_harness_harness__harness_send'), 30_000)
-    const tools = { whoami: 'harness_whoami', ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
+    const tools = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
     const verbs = Object.keys(tools) as Array<keyof typeof tools>, launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,
@@ -553,7 +595,7 @@ describe('Harness for agents, end to end', () => {
     expect(again.err).toContain('Settings ▸ Experimental')
   })
 
-  it('a harness an agent starts says so in the pull requests it opens, on every launch, while the account has it on', async () => {
+  it('keeps delegation instructions without PR attribution, even with an older account setting', async () => {
     const { d } = await signedIn({ agents_start_agents: true, agent_pull_request_line: true })
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     const live = (name: string) => until(`${name} to be up`, async () => {
@@ -571,24 +613,30 @@ describe('Harness for agents, end to end', () => {
     expect(await commandsIn(d, String(lead.tmuxPane))).toContain(`--append-system-prompt ${HARNESS_INSTRUCTIONS}`)
     const run = (...args: string[]) => harness(d, String(lead.tmuxPane), args)
 
-    // Claude Code, started by it: Claude Code's own pull request line kept, and Harness's after it.
+    // An older account switch must not add attribution to a new Claude harness.
     expect((await run('new', 'claude', 'kid', '--name', 'kid', '--', 'hello kid')).code).toBe(0)
     const kid = await live('kid')
-    // `ps` may print the emoji and the dash as it likes; the rest is as the engine was given it.
-    expect(await commandsIn(d, String(kid.tmuxPane))).toMatch(new RegExp(`--settings \\{"attribution":\\{"pr":"${ascii('🤖 Generated with [Claude Code](https://claude.com/claude-code)')}\\\\n${ascii(AGENT_ATTRIBUTION_LINE)}"\\}\\}`))
+    const kidCommand = await commandsIn(d, String(kid.tmuxPane))
+    expect(kidCommand).toContain(HARNESS_INSTRUCTIONS)
+    expect(kidCommand).not.toContain('--settings')
 
-    // Codex, started by it: told as Codex is told its own attribution.
+    // Codex receives delegation instructions, without an instruction to mark PRs.
     expect((await run('new', 'codex', 'kidx', '--name', 'kidx', '--', 'hello kidx')).code).toBe(0)
     const kidx = await live('kidx')
-    // Codex, started by it: told how to use Harness, then told as Codex is told its own attribution, in one value.
-    expect(await commandsIn(d, String(kidx.tmuxPane))).toMatch(new RegExp(`-c developer_instructions="${ascii(HARNESS_INSTRUCTIONS)}.*When you create or update a pull request, .*\`${ascii(AGENT_ATTRIBUTION_LINE)}\``))
+    const codexCommand = await commandsIn(d, String(kidx.tmuxPane))
+    expect(codexCommand).toContain(HARNESS_INSTRUCTIONS)
+    expect(codexCommand).not.toContain('When you create or update a pull request')
+    expect(codexCommand).not.toContain('Started by another agent')
 
-    // A restart launches it again from its row: the line comes back with it.
+    // Restarting a saved harness does not restore the removed attribution.
     const restarted = await client.request('agent_restart', { agentId: kid.id }, 90_000)
     expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
-    await until('kid to come back with its line', async () => {
+    await until('kid to come back with delegation instructions', async () => {
       const row = await live('kid')
-      return row.tmuxPane && (await commandsIn(d, String(row.tmuxPane))).includes('"attribution"') ? row : null
+      const command = row.tmuxPane ? await commandsIn(d, String(row.tmuxPane)) : ''
+      if (!command.includes(HARNESS_INSTRUCTIONS)) return null
+      expect(command).not.toContain('--settings')
+      return row
     }, 60_000, 500)
 
     // Turned off by the person: the next one an agent starts has no line.
@@ -617,9 +665,6 @@ async function enginesIn(d: IsolatedDaemon, pane: string): Promise<string> {
   if (!panes.split('\n').includes(pane)) return ''
   return (await commandsIn(d, pane)).split('\n').filter((line) => /^(?:codex|claude)\s/.test(line)).join('\n')
 }
-
-/** [text] as a pattern that matches it whatever `ps` prints for a character outside ASCII. */
-const ascii = (text: string): string => [...text].map((ch) => /[ -~]/.test(ch) ? ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '.+?').join('')
 
 /** The command lines of the processes in [pane], as `ps` prints them: the engine's carries the arguments it was launched
  *  with (the fake engines' process title is their engine's name, then their arguments, as a CLI's is). */

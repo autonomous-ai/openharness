@@ -1,0 +1,388 @@
+name: Windows
+
+# On demand (Actions -> Windows -> Run workflow): build, test and contract-test the host, and run the Windows
+# CLI specs, on each architecture's own runner.
+# Called by release.yml with `release: true`: build the release payload only, stamped with the CLI's version
+# (HARNESS_PTY_VERSION, pty/src/cli.rs), for the staging publish. A release is not a test suite
+# (docs/validation-and-release.md); the staging E2E is the gate before production.
+# The payload is the six files install.ps1 ($HarnessPtyFiles) installs: harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command,
+# pty/src/command.rs), conpty.dll, OpenConsole.exe and harness-serial.exe (serial/, the dial's serial port).
+on:
+  workflow_dispatch:
+    # The same inputs as workflow_call, so a staging payload can be built by hand (Actions -> Windows -> Run workflow).
+    inputs:
+      version:
+        description: 'The CLI release version the host reports (X.Y.Z, or a prerelease)'
+        type: string
+        required: false
+        default: ''
+      release:
+        description: 'Build the release payload only, without the tests'
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: 'The CLI release version the host reports (X.Y.Z)'
+        type: string
+        required: false
+        default: ''
+      release:
+        description: 'Build the release payload only, without the tests'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # When called, github.workflow is the caller's name, so a release run never cancels an on-demand one, nor the reverse.
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-pty:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x64
+            artifact: harness-pty-windows-x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+            artifact: harness-pty-windows-arm64
+    # Each runner builds and tests its own native target. Cross-building the other
+    # target is dropped: it needs extra MSVC components and adds little signal.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v7
+        with:
+          # Same runtime pin as release.yml / ci.yml.
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      # The pinned ConPTY payload (pty/scripts/fetch-conpty.ps1): its hash is checked on every run.
+      - name: Fetch ConPTY payload
+        if: hashFiles('pty/scripts/fetch-conpty.ps1') != ''
+        shell: pwsh
+        run: pwsh pty/scripts/fetch-conpty.ps1
+      # Includes the launcher's and the harness command's tests (harness_launch, harness_launch_job, harness_command,
+      # harness_command_ctrl_c). A runner's job may refuse breakaway under cargo test; the launcher then logs it and
+      # starts the CLI inside the job, and the tests allow that.
+      - name: Rust tests
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        run: cargo test --locked --target ${{ matrix.target }}
+      # The previous version of the host, for the specs of two real builds (the rollover, sub-project G): the same source
+      # stamped older, built into the same target first and copied aside, with the ConPTY payload it loads from its own
+      # folder. The release build below changes HARNESS_PTY_VERSION, which recompiles only the crate.
+      - name: Build the previous host
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        shell: pwsh
+        env:
+          HARNESS_PTY_VERSION: '0.0.1'
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }} --bin harness-pty
+          if ($LASTEXITCODE -ne 0) { throw "cargo build exited $LASTEXITCODE" }
+          $previous = "target/${{ matrix.target }}/previous"
+          New-Item -ItemType Directory -Force $previous | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/harness-pty.exe", "vendor/conpty/${{ matrix.arch }}/conpty.dll", "vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $previous
+          & "$previous/harness-pty.exe" version
+      # The Rust side of the two builds: both hosts serve one home side by side, each with its own discovery file
+      # (pty/tests/control.rs). Set, HARNESS_PTY_BIN_OLD must name a file, or the test fails rather than skips.
+      - name: 'Rust: two versions side by side'
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        env:
+          HARNESS_PTY_BIN_OLD: ${{ github.workspace }}\pty\target\${{ matrix.target }}\previous\harness-pty.exe
+        run: cargo test --locked --target ${{ matrix.target }} --test control two_versions_serve_side_by_side -- --nocapture
+      # harness-serial (serial/, sub-project E): the dial's serial port. Tested on each architecture.
+      - name: 'Serial: Rust tests'
+        if: ${{ !inputs.release }}
+        working-directory: serial
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: 'Serial: build release'
+        working-directory: serial
+        env:
+          HARNESS_PTY_VERSION: ${{ inputs.version }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      # Every bin of the crate: harness-pty.exe, harness-launch.exe and harness.exe.
+      - name: Build release
+        working-directory: pty
+        env:
+          # Empty on an on-demand run, and then the crate's own version (release_version in pty/src/cli.rs).
+          HARNESS_PTY_VERSION: ${{ inputs.version }}
+        run: cargo build --locked --release --target ${{ matrix.target }} --bins
+      # The host loads conpty.dll (and through it OpenConsole.exe) from its own folder, as it ships in dist/pty/
+      # (cli/scripts/lib/ptyPayload.mjs) and in runtime\pty\<version>\: put them there so what is tested is what ships.
+      - name: Place the ConPTY payload beside the host
+        shell: pwsh
+        run: |
+          $release = "pty/target/${{ matrix.target }}/release"
+          Copy-Item "pty/vendor/conpty/${{ matrix.arch }}/conpty.dll", "pty/vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $release
+          Copy-Item "serial/target/${{ matrix.target }}/release/harness-serial.exe" $release
+          Get-ChildItem $release -Filter '*.dll'
+          Get-ChildItem $release -Filter 'OpenConsole.exe'
+      - name: Check the release payload
+        if: ${{ inputs.release }}
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $release = "pty/target/${{ matrix.target }}/release"
+          $said = & "$release/harness-pty.exe" version
+          if ($said -notmatch ('"version":"' + [regex]::Escape($env:VERSION) + '"')) { throw "harness-pty.exe says $said, not $env:VERSION" }
+          $serial = & "$release/harness-serial.exe" version
+          if ($serial -notmatch ('"version":"' + [regex]::Escape($env:VERSION) + '"')) { throw "harness-serial.exe says $serial, not $env:VERSION" }
+          # A command line without `--` is a usage error (exit 2): the launcher runs, and it is a GUI-subsystem program.
+          $launch = Start-Process -FilePath "$release/harness-launch.exe" -ArgumentList 'version' -Wait -PassThru
+          if ($launch.ExitCode -ne 2) { throw "harness-launch.exe exited $($launch.ExitCode), not 2" }
+          # Outside an install (no cli\current above its folder) the harness command says how to reinstall and exits 3.
+          # Start-Process, not `&`: an expected non-zero exit must not become the step's ($LASTEXITCODE).
+          $stderr = Join-Path $env:RUNNER_TEMP 'harness-exe.stderr'
+          $command = Start-Process -FilePath "$release/harness.exe" -ArgumentList 'version' -NoNewWindow -Wait -PassThru -RedirectStandardError $stderr
+          $broken = Get-Content -Raw -LiteralPath $stderr
+          if ($command.ExitCode -ne 3 -or $broken -notmatch 'Harness is not installed completely') { throw "harness.exe exited $($command.ExitCode) and said: $broken" }
+      - name: CLI install
+        if: ${{ !inputs.release }}
+        working-directory: cli
+        run: npm ci
+      - name: Contract suite against the real host, and the Windows CLI specs
+        if: ${{ !inputs.release }}
+        working-directory: cli
+        shell: pwsh
+        env:
+          RUN_TERMINAL_CONTRACT: "1"
+          HARNESS_PTY_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-pty.exe
+          # serialWindows.spec.ts runs the real harness-serial.exe, placed beside the host by the payload step.
+          HARNESS_SERIAL_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-serial.exe
+        run: |
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts')
+          npx vitest run @paths --maxWorkers=1
+      # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
+      # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows
+      # PowerShell 5.1). Verbose, so the log names each case that ran.
+      - name: 'Two real builds: the pty host rollover and the payload install'
+        if: ${{ !inputs.release }}
+        working-directory: cli
+        shell: pwsh
+        env:
+          HARNESS_PTY_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-pty.exe
+          HARNESS_PTY_BIN_PREV: ${{ github.workspace }}\pty\target\${{ matrix.target }}\previous\harness-pty.exe
+          # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
+          HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
+        run: |
+          $paths = @('src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts', 'src/scripts/installPs1.spec.ts')
+          npx vitest run @paths --maxWorkers=1 --reporter=verbose
+      - name: Collect the payload
+        shell: pwsh
+        run: |
+          $release = "pty/target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force payload | Out-Null
+          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe" payload/
+          Get-ChildItem payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: payload/
+          if-no-files-found: error
+      # Keep the tested serial/PTY payload available for independent hardware checks if the flasher gate fails.
+      # The Windows flasher (sub-project E), as Windows PowerShell 5.1 runs it, with no board: its version, a refused
+      # port name, and a download and check of the newest published firmware into a cache folder whose name a shell
+      # would mangle (Review Focus 1). It writes to no device and publishes nothing.
+      - name: 'Flasher: without a board'
+        if: ${{ !inputs.release }}
+        shell: powershell
+        run: |
+          # Own website dependencies; the Windows-gated cases use only private caches and fake children.
+          Push-Location website
+          try {
+            npm ci
+            if ($LASTEXITCODE -ne 0) { throw 'website npm ci failed' }
+            npx vitest run src/app/flash-circle.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Windows flasher behavior specs failed' }
+          } finally { Pop-Location }
+          $ps1 = 'website\src\app\flash-circle.ps1\flash-circle.ps1'
+          $said = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ps1 --version-info
+          if ($said -notmatch '^flash-circle \d+\.\d+\.\d+$') { throw "--version-info said: $said" }
+          $bad = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '--port', 'NUL' -Wait -PassThru -NoNewWindow
+          if ($bad.ExitCode -ne 1) { throw "--port NUL exited $($bad.ExitCode), not 1" }
+          # Built from [char] codes: this step's own source must not depend on how the runner encodes it.
+          $odd = "Nguy$([char]0x1EC5)n V$([char]0x0103)n A' & 100%"
+          $env:HARNESS_FLASHER_CACHE = Join-Path (Join-Path $env:RUNNER_TEMP $odd) 'flasher'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ps1 --no-flash
+          if ($LASTEXITCODE -ne 0) { throw "--no-flash exited $LASTEXITCODE" }
+          $images = @(Get-ChildItem -LiteralPath (Join-Path $env:HARNESS_FLASHER_CACHE 'firmware\commander') -Filter '*.bin')
+          if ($images.Count -ne 1 -or $images[0].Length -lt 100000) { throw "expected one firmware image, found $($images.Count)" }
+          Write-Host "ok   $($images[0].Name), $($images[0].Length) bytes, checked against the manifest"
+
+  # install.ps1 as a person runs it, from a manifest of this build's own files: the runtime, the CLI and the pty payload
+  # (spec section 6). Then what the install promises, and `harness uninstall --yes` leaving nothing.
+  install:
+    needs: windows-pty
+    # Not when release.yml calls this workflow for the release payload (B1.13): a release is not a test suite.
+    if: ${{ !inputs.release }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+            artifact: harness-pty-windows-x64
+          - runner: windows-11-arm
+            arch: arm64
+            artifact: harness-pty-windows-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NODE_VERSION: v22.23.2
+      CLI_VERSION: 0.0.0-dev.ci${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/pty-payload
+      - name: Bundle the CLI
+        working-directory: cli
+        shell: pwsh
+        env:
+          ADAPTER_VERSION: ${{ env.CLI_VERSION }}
+        run: |
+          npm ci
+          npm run bundle
+      - name: Fetch Node for Windows, checked against nodejs.org's SHASUMS256.txt
+        shell: pwsh
+        run: |
+          $zip = "node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/$zip" -OutFile "$env:RUNNER_TEMP\$zip"
+          $sums = (Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/SHASUMS256.txt").Content
+          $want = (($sums -split "`n") | Where-Object { $_ -match " $([regex]::Escape($zip))$" }) -replace ' .*', ''
+          $got = (Get-FileHash "$env:RUNNER_TEMP\$zip" -Algorithm SHA256).Hash.ToLower()
+          if (-not $want -or $got -ne $want) { throw "$zip is $got, SHASUMS256.txt says '$want'" }
+      - name: Write the install manifest of this build (B1's windows-install-manifest.mjs)
+        shell: pwsh
+        run: |
+          # Built on demand without HARNESS_PTY_VERSION, the host reports the crate's version (pty/src/cli.rs), so its
+          # version folder is named the same.
+          $ptyVersion = (Select-String -Path pty/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          node cli/scripts/windows-install-manifest.mjs --out "$env:RUNNER_TEMP\manifest" --cli-dir cli/dist `
+            --pty-dir "$env:RUNNER_TEMP\pty-payload" --node-zip "$env:RUNNER_TEMP\node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip" `
+            --version $env:CLI_VERSION --pty-version $ptyVersion
+          if ($LASTEXITCODE -ne 0) { throw "windows-install-manifest.mjs exited $LASTEXITCODE" }
+          Get-Content "$env:RUNNER_TEMP\manifest\install-manifest.json"
+      # OpenCode before Harness, as a person who has it installs Harness: in a prefix of its own, pinned, nothing global.
+      # OPENCODE_PATH names it for the daemon (lib/engineBin.ts), for the steps after this one and, at user level, for
+      # the scheduled task. On Arm it is there to be refused (B4.12 outcome C); on x64 a failed install is not a failure.
+      - name: Install OpenCode into a prefix
+        continue-on-error: ${{ matrix.arch == 'x64' }}
+        shell: pwsh
+        run: |
+          $prefix = "$env:RUNNER_TEMP\opencode"
+          # With its postinstall, as on the VM (npm 11 warns that allowScripts does not cover it, and runs it): the
+          # postinstall puts the platform build in place of bin\opencode.exe. With --ignore-scripts that file stays a
+          # placeholder Windows will not run ("not compatible with the version of Windows"), seen on the VM in B5.12.
+          npm install --global --prefix $prefix opencode-ai@1.19.3
+          if ($LASTEXITCODE -ne 0) { throw "npm install opencode-ai exited $LASTEXITCODE" }
+          $shim = Join-Path $prefix 'opencode.cmd'
+          & $shim --version
+          "OPENCODE_PATH=$shim" >> $env:GITHUB_ENV
+          [Environment]::SetEnvironmentVariable('OPENCODE_PATH', $shim, 'User')
+      - name: Install with Windows PowerShell, as a person does
+        shell: pwsh
+        run: |
+          # No update may replace the build under test. It is 0.0.0-dev.ci<run>, a -dev version the updater never replaces
+          # (lib/selfUpdate.ts), and ADAPTER_UPDATE_DISABLE turns the updater off as well: at user level for a daemon the
+          # scheduled task starts, and in this step's environment for the one `harness start` starts below.
+          [Environment]::SetEnvironmentVariable('ADAPTER_UPDATE_DISABLE', 'true', 'User')
+          $env:ADAPTER_UPDATE_DISABLE = 'true'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\install.ps1 -Manifest "$env:RUNNER_TEMP\manifest\install-manifest.json"
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          # install.ps1 does not start the daemon itself: a task Task Scheduler would not run leaves it down, and the
+          # installer says to run `harness start` (B1.8). That starts it directly through harness-launch.exe (B3.15).
+          $harness = "$env:USERPROFILE\.harness\bin\harness.exe"
+          # The status row is what states the daemon's state (check-install.ps1 says why; before d127faded the footer misled).
+          if (((& $harness status) -join "`n") -notmatch '(?m)^\s*status\s+\S+\s+running') {
+            Write-Host '::notice::the scheduled task did not start harnessd here; starting it with harness start'
+            & $harness start
+            if ($LASTEXITCODE -ne 0) { throw "harness start exited $LASTEXITCODE" }
+          }
+      - name: Check the install
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\windows-ci\check-install.ps1 -Version $env:CLI_VERSION
+      # Whether OpenCode's plugin binds a pane's conversation (B4.15 handed this to x64). Not gating: nothing signs in, so
+      # OpenCode may have no model provider here. The step prints bound, or not bound and why.
+      - name: OpenCode binds its session through the installed daemon (x64, not gating)
+        if: matrix.arch == 'x64'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\oc-proj" | Out-Null
+          node cli/scripts/windows-ci/opencode.mjs bind "$env:RUNNER_TEMP\oc-proj"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::OpenCode did not bind its session on this runner (the reason is in the log above)'; exit 1 }
+      - name: OpenCode is refused on Windows on Arm before a pane opens (B4.12)
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\oc-proj" | Out-Null
+          node cli/scripts/windows-ci/opencode.mjs refused "$env:RUNNER_TEMP\oc-proj"
+          if ($LASTEXITCODE -ne 0) { throw 'OpenCode was not refused the way B4.12 says' }
+      - name: Keep the logs before the uninstall removes them
+        if: always()
+        shell: pwsh
+        run: |
+          # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile:
+          # the master's and the core's cli\data\harness.log, harness-launch.exe's cli\data\logs\launch.log, the terminal
+          # host's pty\logs\pty-host-<instance>.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
+          # takes for hidden and leaves out unless include-hidden-files says otherwise: run 39083518767 uploaded nothing.
+          # Each file copied is named here, so the job's own output says what the artifact holds.
+          $logs = "$env:RUNNER_TEMP\logs"
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          foreach ($tree in @('.harness\cli\data', '.harness\pty\logs', '.harness\logs', '.local\share\opencode\log')) {
+            $from = Join-Path $env:USERPROFILE $tree
+            if (-not (Test-Path $from)) { Write-Host "absent  $from"; continue }
+            $files = @(Get-ChildItem $from -Filter '*.log' -Recurse -File -Force)
+            if (-not $files.Count) { Write-Host "no logs $from" }
+            $files | ForEach-Object {
+              $to = Join-Path (Join-Path $logs $tree) $_.FullName.Substring($from.Length).TrimStart('\')
+              New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+              Copy-Item $_.FullName $to
+              Write-Host "kept    $($_.FullName) ($($_.Length) bytes)"
+            }
+          }
+      - name: Uninstall, and check nothing is left
+        shell: pwsh
+        run: |
+          # The engine files Harness wrote outside ~\.harness as the daemon started (its plugins, and Copilot's hook file),
+          # which the uninstall removes whole; check-uninstall.ps1 reads Claude Code's and Codex's settings itself.
+          $hookFiles = @('.config\opencode\plugin\launcher-register.js', '.config\opencode\plugins\launcher-register\tui.js',
+            '.config\kilo\plugin\launcher-register.js', '.pi\agent\extensions\launcher-register.ts', '.config\amp\plugins\launcher-register.ts',
+            '.copilot\hooks\harness.json') | ForEach-Object { Join-Path $env:USERPROFILE $_ }
+          foreach ($file in $hookFiles) { Write-Host "$(if (Test-Path $file) { 'written' } else { 'absent ' }) $file" }
+          Set-Location $env:USERPROFILE
+          & "$env:USERPROFILE\.harness\bin\harness.exe" uninstall --yes
+          if ($LASTEXITCODE -ne 0) { throw "harness uninstall exited $LASTEXITCODE" }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\cli\scripts\windows-ci\check-uninstall.ps1" -HookFiles ($hookFiles -join ',')
+          if ($LASTEXITCODE -ne 0) { throw 'harness uninstall left something behind' }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: install-logs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/logs
+          include-hidden-files: true

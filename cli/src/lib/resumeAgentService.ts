@@ -1,29 +1,45 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
+import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
-import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
-import { listTmuxPanes } from './tmuxAgentDiscovery.js'
-import { enginePathOverride } from './engineBin.js'
+import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
+import { engineBin, enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
-import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
+import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
 import type { LaunchOverrides, LaunchOverridesResult } from './launchOverrides.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
+import { missingBackendCode, terminalTargetOf, type TerminalBackend } from './terminalBackend.js'
+import { windowsLaunchRefusal } from './windows/launch.js'
+import { isWindowsHeldPane, windowsPaneLaunch } from './windows/engineStart.js'
+import { sameTerminalPlacement } from './terminalRuntime.js'
+import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
 
 export interface ResumeAgentServiceDeps {
+  adoptSwarmSkill?: AdoptSwarmSkill
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'updateProcessIdentity'>
   stoppedAgents: StoppedAgentStore
-  tmuxBackend: CreateAgentPaneDeps['tmuxBackend'] | null
+  /** Where a resumed harness's new pane is made (main.ts `createBackend`); null with no backend ready. */
+  createBackend: (CreateAgentPaneDeps['tmuxBackend'] & Pick<TerminalBackend, 'releaseHold'>) | null
+  /** What a resume answers when [createBackend] is null: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
+  /** The backend that holds [runtime] (`terminals.backendFor`): a pane is asked about on its own backend, tmux's
+   *  first on a row that has one (`terminalTargetOf`). */
+  backendFor(runtime: TerminalRuntimeRef): Pick<TerminalBackend, 'paneState' | 'rootProcess' | 'inventory' | 'releaseHold'> | undefined
   restartJobs: AgentRestartCoordinator
   stopJobs: ReadonlyMap<string, Promise<void>>
   pinnedControls: { has(agentId: string): boolean }
@@ -40,9 +56,22 @@ export interface ResumeAgentServiceDeps {
   relaunchMarks?: Pick<RelaunchMarks, 'note'>
 }
 
+/** A history that could not be prepared, and which check refused it: on 2026-10-26, 10 of 17 failed resumes were
+ *  this and nothing said why. The kind goes in the reply for its counter; the message of a typed failure (an engine's
+ *  file label and a line number, never conversation text) only to this daemon's log. Any other error is logged by
+ *  its class alone: its message can carry a profile path, a token or a line of the conversation (review of #1777). */
+function preparationFailed(agent: string, error: unknown) {
+  const reason = error instanceof ResumePreparationError ? error.kind : 'other'
+  const said = error instanceof ResumePreparationError ? error.message : error instanceof Error ? error.name : typeof error
+  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${said}`)
+  return { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason,
+    detail: reason === 'changed_during' ? 'Codex is still writing this conversation. Try again once it stops.'
+      : 'Could not prepare the saved conversation. Its history has been retained.' }
+}
+
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
-  const { registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+  const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
@@ -75,6 +104,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
     const ownsRoute = () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane
+    // A resume to confirm runs in one of the row's panes, asked of the backend it is on (tmux's first). One with no
+    // pane on a backend here is not confirmed here: the code names the backend missing (TMUX_UNAVAILABLE for tmux).
+    const target = terminalTargetOf(saved, backendFor)
+    if (!target) return { ok: false as const, error: missingBackendCode(saved) }
+    const { backend: terminal, runtime } = target
     // A second look at an unconfirmed resume: the verdict is withdrawn before the check, or the
     // readiness probe would return it straight back. The desk sees the tile leave "Start failed".
     const unconfirmed = ownsRoute() ? registry.byAgent(saved.agentId) : undefined
@@ -85,8 +119,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     const result = await waitForResumedAgent(saved, {
       current: ownsRoute,
       session: () => registry.byAgent(saved.agentId),
-      process: () => resolvePaneEngineProcess(saved.tmuxPane, saved.engine),
-      pane: () => tmuxPaneState(saved.tmuxPane),
+      process: () => resolvePaneEngineProcess(terminal, runtime, saved.engine),
+      pane: () => terminal.paneState(runtime),
       sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
     })
     if (!ownsRoute()) return resumeChanged
@@ -95,7 +129,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // an engine whose hook is delayed or absent must still be attachable and stoppable now.
       if (!result.session.processIdentity
         || !registry.updateProcessIdentity(saved.agentId, result.session.processIdentity)) return resumeChanged
-      await clearPaneRemainOnExit(saved.tmuxPane)
+      await terminal.releaseHold(runtime)
       if (!ownsRoute()) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
       // Whoever got there first wins, and if nobody did, this does: a hook that already reached
@@ -137,7 +171,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // keeps both runtime and reservation; another Enter cannot launch a duplicate process.
       if (result.error === 'RESUME_FAILED' && (await checkPidRuntime(row)).state === 'gone') {
         if (!ownsRoute()) return resumeChanged
-        const pane = await tmuxPaneState(saved.tmuxPane)
+        const pane = await terminal.paneState(runtime)
         if (!ownsRoute()) return resumeChanged
         // Only a pane known to be gone or dead loses its row. One tmux could not read keeps it, as a
         // terminal: the reconciler removes it once its scans agree the pane is gone.
@@ -153,24 +187,30 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     saved: () => stoppedAgents.get(agentId),
     current,
     checkLive: async entry => {
-      if (!entry.tmuxPane) return { state: 'unknown', reason: 'Only tmux resume is supported.' }
-      const inventory = await listTmuxPanes()
-      if (!inventory.ok) return { state: 'unknown', reason: 'Terminal inventory is unavailable.' }
-      const paneAlive = inventory.panes.some(pane => pane.tmuxPane === entry.tmuxPane)
+      // Its own pane on the backend it is on, tmux's first. A row with none on a backend here cannot be checked.
+      const target = terminalTargetOf(entry, backendFor)
+      if (!target) return { state: 'unknown', reason: 'Terminal inventory is unavailable.' }
+      const { backend: terminal, runtime } = target
+      const inventory = await terminal.inventory()
+      if (inventory.state !== 'available') return { state: 'unknown', reason: 'Terminal inventory is unavailable.' }
+      const paneAlive = inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime))
       if (isTerminalEngine(entry.engine)) return paneAlive ? { state: 'alive' } : { state: 'gone', reason: 'Shell pane is gone.' }
       const process = await checkPidRuntime(entry)
       if (process.state !== 'gone') {
         if (!paneAlive || process.state === 'unknown') return { state: 'unknown', reason: 'The previous process is not available through its saved terminal.' }
-        return checkSessionRuntime(entry)
+        return checkSessionRuntime(terminal, entry, runtime)
       }
       if (!entry.processIdentity && paneAlive) return { state: 'unknown', reason: 'The engine has not been identified yet.' }
       return process
     },
     retain: async entry => {
-      const inventory = await listTmuxPanes()
-      if (!inventory.ok) throw new Error('Could not verify the previous terminal. Try again.')
+      // Its own pane, on the backend it is on: a row with none on a backend here cannot be verified, as with no tmux.
+      const target = terminalTargetOf(entry, backendFor)
+      const inventory = target && await target.backend.inventory()
+      if (inventory?.state !== 'available') throw new Error('Could not verify the previous terminal. Try again.')
       if (!current()) return
-      retainExitedSession(entry, inventory.panes.some(pane => pane.tmuxPane === entry.tmuxPane))
+      const { runtime } = target!
+      retainExitedSession(entry, inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime)))
     },
     waitForReady: saved => waitForResume(saved, current),
     canLaunch: async saved => {
@@ -178,7 +218,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
     },
     launch: async (saved, resumeSessionId) => {
-      if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+      // As a create with no backend ready answers (core/agents/create.ts).
+      if (!createBackend) return { ok: false, error: noBackendCode }
       // An explicit change is checked before allocating anything, and is persisted with the
       // resumed row. Ordinary Open keeps the saved mode, including the older-engine fallback.
       if (permissionMode !== undefined) {
@@ -198,6 +239,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       if (resumeSessionId && engineKeepsTranscriptFile(saved.engine) && !saved.transcriptPath) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
       }
+      if (adoptSwarmSkill) {
+        const adopted = await adoptSwarmSkill(saved, current)
+        if (!adopted || !current()) return resumeChanged
+        saved = adopted
+      }
       const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
         ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined, saved.cwd) : undefined
       // Match the registry's globally unique conversation index, including aliases/profiles.
@@ -207,6 +253,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       let token: string | null = null
       let allocationAttempted = false
       try {
+        // Reserve before materializing cold history too: two Open requests must not rewrite a
+        // conversation an earlier, unconfirmed allocation might still be using.
+        token = stoppedAgents.beginResume(agentId)
+        if (!token) token = retakeStaleReservation(agentId)
+        if (!token) return resumeUnconfirmed
+        if (resumeSessionId && saved.transcriptPath) {
+          saved = { ...saved, transcriptPath: await materializeResumeTranscript(saved.engine, resumeSessionId,
+            saved.transcriptPath, saved.codexHome ?? undefined, () => current() && !registry.bySession(saved.sessionId)) }
+          if (!current()) return resumeChanged
+        }
         let transcript = sourceEvidence()
         if (transcript) saved = { ...saved, transcriptPath: transcript.path }
         let sourceError: unknown
@@ -219,11 +275,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           try { transcript?.verify(); return true }
           catch (error) { sourceError = error; return false }
         }
-        // Reserve before preparing history or rewriting launch configuration: an unknown previous
-        // allocation may still have a writer using those files.
-        token = stoppedAgents.beginResume(agentId)
-        if (!token) token = retakeStaleReservation(agentId)
-        if (!token) return resumeUnconfirmed
         const built = await relaunchOverrides(saved, saved, sourceCurrent)
         if (sourceError) throw sourceError
         transcript?.verify()
@@ -238,7 +289,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (resumeSessionId) {
           try { prepareSessionResume(saved) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
-            return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' }
+            return preparationFailed(sid(saved.agentId), error)
           }
           // The confirmed synchronous repair may atomically replace this file.
           // Earn a new proof of the same conversation before the next await.
@@ -272,6 +323,24 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           console.warn(`[resume] ${sid(saved.agentId)} · ${saved.engine} does not take ${droppedFlag}`
             + ` · resuming in Ask · update ${saved.engine} to get ${saved.permissionMode ?? 'Auto'} back`)
         }
+        // Claude Code refuses `--resume` on a session a `claude --bg` job still has open ("that session
+        // is running in the background … run `claude attach …` or `claude stop …` first"). Claude only.
+        // `native` is the captured launch for every ordinary local Claude run (launchOverrides.ts), not
+        // just grid — it is NOT a signal the pane is elsewhere, so it must not gate this off. A DSH
+        // agent's pane is the one case that may run on a different host entirely, whose jobs store this
+        // process cannot see (and must not touch).
+        if (resumeSessionId && saved.engine === 'claude' && !saved.dsh) {
+          // The exact environment the pane is about to get (built below as `paneEnv`): `launchEnv`
+          // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges
+          // `native.environment` into it), and `engineLaunchEnv` adds Windows's own-process variables.
+          await stopConflictingBackgroundJob({
+            bin: engineBin(saved.engine), sessionId: resumeSessionId,
+            env: { ...process.env, ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) },
+            log: message => console.log(`[resume] ${sid(saved.agentId)} ${message}`),
+          })
+          transcript?.verify()
+          if (!current()) return resumeChanged
+        }
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),
           resumeSessionId,
@@ -283,7 +352,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
           installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
         }
-        const argv = buildEngineLaunchArgv(saved.engine, options)
+        // Windows refuses a batch-file engine whose arguments cmd.exe would read (windows/launch.ts): this row alone.
+        let argv: string[]
+        try { argv = buildEngineLaunchArgv(saved.engine, options) } catch (error) { return windowsLaunchRefusal(error) }
+        // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+        const paneEnv = { ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) }
         transcript?.verify()
         if (!current()) return resumeChanged
         clearDeleted(agentId)
@@ -294,17 +367,19 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           current: () => sourceCurrent() && built.overrides.native?.current() !== false,
           ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
           onDispatch: () => { allocationAttempted = true },
-          tmuxBackend: { ...tmuxBackend, create: async request => {
-            const result = await tmuxBackend.create(request)
+          tmuxBackend: { ...createBackend, create: async request => {
+            const result = await createBackend.create(request)
             if (result.dispatch !== 'not_started') allocationAttempted = true
             return result
-          }, kill: runtime => tmuxBackend.kill(runtime) },
+          }, kill: runtime => createBackend.kill(runtime) },
           registry: { openPendingAgent: input => sourceCurrent() ? registry.resumePendingAgent(saved, input.runtimes, input.nativeToken) : null },
           maxAttempts: 1,
           engine: saved.engine,
           sessionLabel: buildHarnessSessionLabel(saved.engine),
           argv,
-          ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}),
+          // Windows: the workspace to start in and the shell the pane becomes after the engine (windows/engineStart.ts).
+          paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held: isWindowsHeldPane(argv) }),
+          ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
         })
         if (sourceError) throw sourceError
         if (!result.ok) {
@@ -318,7 +393,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!current()) {
           // Stop may have completed while allocation was awaiting its tmux reply.
           // The newly claimed runtime still belongs to this cancelled operation.
-          const killed = await tmuxBackend.kill(spawned.runtime)
+          const killed = await createBackend.kill(spawned.runtime)
           if (killed.state === 'succeeded') {
             retainExitedSession(pending, false)
             stoppedAgents.finishResume(agentId, token)
@@ -328,7 +403,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         refreshGridWebSearch(pending.agentId, built.overrides)
         announceSession(pending)
         if (isTerminalEngine(saved.engine)) {
-          await clearPaneRemainOnExit(spawned.runtime.paneId)
+          await createBackend.releaseHold(spawned.runtime)
           if (!current()) return resumeChanged
           const ready = registry.setLaunch(pending.agentId, { state: 'ready' })!
           stoppedAgents.finishResume(agentId, token)

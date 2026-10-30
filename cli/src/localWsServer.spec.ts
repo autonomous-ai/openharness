@@ -8,7 +8,9 @@ import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } fro
 import { listenLocalSocket } from './lib/localSocket.js'
 import { RelayConnectError } from './lib/relayFrames.js'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import { newPipeNonce, newPipePath, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from './lib/windows/pipeAuth.js'
 import { WindowForm } from './cable/windowForm.js'
 
 const machineId = 'machine-123'
@@ -40,8 +42,10 @@ class FakeBackend implements LocalWsBackend {
   async handleLocalBinary(_connId: string, frame: TerminalBinaryClear): Promise<void> {
     this.binaries.push(frame)
   }
-  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+  visibles: Array<[string, readonly string[] | undefined]> = []
+  setLocalTerminalFocus(connId: string, agentId: string | null, visibleAgents?: readonly string[]): void {
     this.focuses.push([connId, agentId])
+    this.visibles.push([connId, visibleAgents])
   }
   observed: Array<[string, unknown]> = []
   observeProduct(connId: string, payload: unknown): void {
@@ -160,6 +164,75 @@ describe('local CLI WebSocket', () => {
       const browser = new WebSocket(url, { headers: { origin: 'http://localhost' } })
       const status = await new Promise<number>((resolve) => browser.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))
       expect(status).toBe(403)
+    } finally {
+      await local?.close()
+      local = null
+      await unix.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('over the Windows pipe, proves the daemon token in the upgrade and drops one without auth', async () => {
+    // A real pipe on Windows; elsewhere a Unix socket with a pipe's name.
+    const dir = process.platform === 'win32' ? null : mkdtempSync('/tmp/hsock-')
+    const pipePath = dir ? join(dir, `harness-${randomBytes(16).toString('hex')}`) : newPipePath()
+    const token = randomBytes(32)
+    const backend = new FakeBackend()
+    const pipe = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, pipePath, { token })
+    await start(backend, { localSocketServer: pipe.server })
+    const createConnection = () => net.connect(pipePath)
+    try {
+      const nonce = newPipeNonce(pipePath)
+      const ws = new WebSocket('ws://localhost/api/local-ws', { createConnection, headers: { [PIPE_AUTH_HEADER]: pipeAuthValue(token, nonce) } })
+      const upgraded = new Promise<http.IncomingMessage>((resolve) => ws.once('upgrade', resolve))
+      await onceOpen(ws)
+      expect(pipeProven((await upgraded).headers, token, nonce)).toBe(true)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      expect(await connected).toMatchObject({ type: 'connected', payload: { machineId, transport: 'local' } })
+      ws.close()
+      const stranger = new WebSocket('ws://localhost/api/local-ws', { createConnection })
+      await expect(onceOpen(stranger)).rejects.toThrow()
+    } finally {
+      await local?.close()
+      local = null
+      await pipe.close()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The port takes any OS user's process — a guest's harness running as its own user
+  // (docs/plans/2026-10-19-guest-machine-sharing-plan.md); only this user can read the 0600 credential.
+  it('takes a TCP upgrade only with the daemon\'s local credential, by header or bearer', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential })
+    const refused = async (headers: Record<string, string>): Promise<number> => {
+      const ws = new WebSocket(url, { headers })
+      return new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))
+    }
+    expect(await refused({})).toBe(401)
+    expect(await refused({ 'x-harness-local': 'w'.repeat(43) })).toBe(401)
+    for (const headers of [{ 'x-harness-local': credential }, { authorization: `Bearer ${credential}` }]) {
+      const ws = new WebSocket(url, { headers })
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      expect(await connected).toMatchObject({ type: 'connected', payload: { machineId } })
+      ws.close()
+    }
+  })
+
+  it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
+    const dir = mkdtempSync('/tmp/lws-cred-')
+    const socketPath = join(dir, 'daemon.sock')
+    const unix = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, socketPath)
+    const tcp = await start(new FakeBackend(), { localSocketServer: unix.server, localCredential: 'c'.repeat(43) })
+    try {
+      const ws = new WebSocket(`ws+unix://${socketPath}:/api/local-ws`)
+      await onceOpen(ws)
+      ws.close()
+      const refused = new WebSocket(tcp)
+      expect(await new Promise<number>((resolve) => refused.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
     } finally {
       await local?.close()
       local = null
@@ -680,6 +753,66 @@ describe('local CLI WebSocket', () => {
     expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
+  it('keeps a Swarm tab\'s superTabId and projectId when they are ids, and the fromDevice mark; drops them otherwise', async () => {
+    const backend = new FakeBackend()
+    const seen: unknown[] = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
+      active: 's1', fromDevice: true,
+      swarms: [
+        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
+        { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'no spaces', projectId: 7 },
+        { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'x'.repeat(48), projectId: 'y'.repeat(48) },
+      ],
+    } }))
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', fromDevice: 'yes', swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(seen).toEqual([
+      { active: 's1', fromDevice: true, tiles: [], swarms: [
+        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
+        { id: 's2', name: 'Bad', agentIds: [], panes: 1 },
+        { id: 's3', name: 'Long', agentIds: [], panes: 1 },
+      ] },
+      // Only a literal true marks it: anything else is an ordinary announce.
+      { active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] },
+    ])
+    ws.close()
+  })
+
+  it('app_swarms keeps a Swarm tab\'s conversationId, and drops one that is not an id', async () => {
+    const backend = new FakeBackend()
+    const seen: unknown[] = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'no spaces' },
+      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'c'.repeat(48) },
+      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 7 },
+    ] } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1' },
+      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1' },
+      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1' },
+    ] })
+    ws.close()
+  })
+
   for (const latestCloses of [false, true]) {
     it(`keeps the device's desk when a ${latestCloses ? 'latest' : 'background'} machine connection closes`, async () => {
       const backend = new FakeBackend(), panes = vi.fn(), swarms = vi.fn(), tabs = vi.fn()
@@ -766,6 +899,26 @@ describe('local CLI WebSocket', () => {
     // Consumed locally: it describes a hand at this desk, and the machine has no use for an unknown
     // frame type arriving on every pane click.
     expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open', 'terminal_open', 'terminal_open'])
+    ws.close()
+  })
+
+  it('app_focus with visibleAgents reaches setLocalTerminalFocus', async () => {
+    const backend = new FakeBackend()
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'a', visibleAgents: ['a', 'b', 7, ''] } }))
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: null, visibleAgents: [] } }))
+    // An older desktop sends no list: it must stay undefined so the window keeps counting as looking.
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'a' } }))
+    await vi.waitFor(() => expect(backend.visibles).toHaveLength(3))
+    expect(backend.visibles.map(([, list]) => list)).toEqual([['a', 'b'], [], undefined])
     ws.close()
   })
 

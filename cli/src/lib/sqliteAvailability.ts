@@ -9,8 +9,9 @@
  * four engines silently mirror nothing until the user installs it.
  *
  * Resolved from PATH directly rather than by spawning: this runs on the startup path and the answer is
- * only used for one advisory log line and to gate the one path that still needs the CLI (the opencode
- * store rewrite in `sessionModel.ts`, a write the built-in binding is not used for).
+ * only used for one advisory log line. The history purge writes through `node:sqlite` too, and falls back to
+ * the CLI only on a Node without it. The opencode store rewrite (`kit/nativeSessionModel.ts`) runs the CLI
+ * first, whose wait for opencode's lock is not the daemon's, and `node:sqlite` only where no CLI is on PATH.
  */
 import { binaryOnPath } from './binaryOnPath.js'
 import { builtinSqlite } from './sqliteBuiltin.js'

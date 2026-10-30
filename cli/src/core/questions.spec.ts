@@ -19,7 +19,7 @@ function setup(over: Partial<QuestionDeps> = {}) {
       keyTerminal: vi.fn(async () => true),
     },
     acquireTerminalControl: vi.fn(() => () => {}),
-    clients: { sendCommander: vi.fn(), sendLocal: vi.fn() },
+    clients: { sendCommander: vi.fn(), sendLocal: vi.fn(), sendRemote: vi.fn() },
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     sessionTurnOpen: (sessionId) => sessionId === 'busy',
     someoneCanAnswer: () => true,
@@ -96,6 +96,8 @@ describe('questions', () => {
     // A question is always news: the person is needed.
     expect(asked.payload.notification).toEqual({ id: 'r1', kind: 'needsYou' })
     expect(vi.mocked(deps.clients.sendCommander).mock.calls).toEqual([[waiting('s1', 'a1')], [asked]])
+    // The owner's apps away from this desk hear the same question, over the relay.
+    expect(vi.mocked(deps.clients.sendRemote).mock.calls.at(-1)).toEqual([asked])
     expect(asking.openQuestions.get('s1')).toBe(asked)
     expect(log.mock.calls[0][0]).toContain('asking the user · "Ship it?" · req=r1')
     // A question with nothing shaped still goes out, and still says so.
@@ -130,8 +132,32 @@ describe('questions', () => {
     expect(deps.deviceInput.setUserAction).toHaveBeenCalledWith('a1', false)
     expect(deps.clients.sendCommander).toHaveBeenCalledWith(closed)
     expect(deps.clients.sendLocal).toHaveBeenCalledWith(closed)
+    expect(deps.clients.sendRemote).toHaveBeenCalledWith(closed)
     expect(asking.openQuestions.has('s1')).toBe(false)
     expect(log.mock.calls[0][0]).toContain('answered elsewhere · closing on every client · req=r1')
+  })
+
+  it('tells an app that connects every question still open, then which are open at all', () => {
+    const { deps, asking } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const remote = vi.mocked(deps.clients.sendRemote)
+    // Nothing open: only the list, empty, so an app that was here before lets go of what it held.
+    asking.reannounceRemote()
+    expect(remote.mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    given(asking.questionWatcher).onQuestion('s2', 'r2', [{ q: 'Which branch?', options: [] }])
+    given(asking.questionWatcher).onQuestionGone('s2', 'r2')
+    const asked = asking.openQuestions.get('s1')
+    remote.mockClear()
+    asking.reannounceRemote()
+    expect(remote.mock.calls).toEqual([[asked], [{ type: 'commander_questions_open', payload: { requestIds: ['r1'] } }]])
+  })
+
+  it('never tells the relay a question it did not ask: a cloud agent\'s shares the open list, not the relay', () => {
+    const { deps, asking } = setup()
+    asking.openQuestions.set('cloud-a', { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } })
+    asking.reannounceRemote()
+    expect(vi.mocked(deps.clients.sendRemote).mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
   })
 })
 

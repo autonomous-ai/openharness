@@ -7,6 +7,7 @@ import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
 import '../logging/app_log.dart';
+import '../measurement/hub_usage.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
@@ -34,15 +35,19 @@ class SharedHarnessPanel extends StatefulWidget {
     this.link = false,
     this.linkEnvironment,
     this.onSignIn,
+    this.onUsage,
   });
   final AppNotifier notifier;
   final TerminalPane pane;
   final SharedHarness grant;
   final bool hasAccess, visible;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   final bool link;
   final String? linkEnvironment;
   final VoidCallback? onSignIn;
+
+  /// A shared link's clicks, for its page to count; the workspace's own shared panes pass none.
+  final ValueChanged<SharedAction>? onUsage;
   @override
   State<SharedHarnessPanel> createState() => _SharedHarnessPanelState();
 }
@@ -63,6 +68,9 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   /// noticed left the person looking at a terminal they cannot type into
   /// (owner, 2026-09-18: "chỉ thấy màn hình terminal").
   bool _viewerChosen = false;
+
+  /// Counted once per panel: the harness drew a live viewer, not only a terminal.
+  bool _viewerShown = false;
   String _lastViewerState = '';
   int _generation = 0;
   bool _commentsSelected = false, _commentsOpened = false;
@@ -89,8 +97,13 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   void _start() {
     final generation = ++_generation;
     final viewer = widget.notifier.viewer;
-    final uri = Uri.parse(widget.notifier.config.localCliBaseUrl)
-        .replace(scheme: 'ws', path: '/api/local-ws');
+    final base = Uri.parse(widget.notifier.config.localCliBaseUrl);
+    // Windows: the port this user's daemon recorded (LocalDaemonTransport.tcpBase).
+    final uri =
+        (viewer == null
+                ? widget.notifier.localDaemonTransport.tcpBase(base)
+                : base)
+            .replace(scheme: 'ws', path: '/api/local-ws');
     _terminal = TerminalSession(
       machineId: widget.pane.machineId,
       agentId: widget.grant.agentId,
@@ -223,6 +236,10 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
             '${payload['message'] != null ? ' · ${payload['message']}' : ''}',
       );
     }
+    if (next != null && _image == null && !_viewerShown) {
+      _viewerShown = true;
+      widget.onUsage?.call(SharedAction.viewerShown);
+    }
     setState(() {
       if (next != null) {
         if (_image == null && !_viewerChosen) _viewerSelected = true;
@@ -277,6 +294,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   }
 
   void _retry() {
+    widget.onUsage?.call(SharedAction.retry);
     _closeSession();
     _ended = false;
     _failure = null;
@@ -284,10 +302,13 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     setState(_start);
   }
 
-  void _toggleComments() => setState(() {
-    _commentsSelected = !_commentsSelected;
-    _commentsOpened = true;
-  });
+  void _toggleComments() {
+    if (!_commentsSelected) widget.onUsage?.call(SharedAction.commentsOpen);
+    setState(() {
+      _commentsSelected = !_commentsSelected;
+      _commentsOpened = true;
+    });
+  }
 
   void _selectViewer(bool viewer) => setState(() {
     _viewerChosen = true;
@@ -418,10 +439,16 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     child: HarnessComments(
       updates: _commentUpdates,
       onSignIn: widget.onSignIn,
-      manage: (action, payload) => _connection.request(
-        'observer_$action',
-        payload: {'agentId': widget.grant.agentId, ...payload},
-      ),
+      manage: (action, payload) async {
+        final answer = await _connection.request(
+          'observer_$action',
+          payload: {'agentId': widget.grant.agentId, ...payload},
+        );
+        if (action == 'comment_post') {
+          widget.onUsage?.call(SharedAction.commentPost);
+        }
+        return answer;
+      },
     ),
   );
 }

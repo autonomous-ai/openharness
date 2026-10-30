@@ -1,0 +1,37 @@
+# s5 rows and hook lines (08:52:15)
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"dac87568…","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"29c3a0f0…","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
+## kilo screen after the prompt
+  ┃  Reply with only the number: what is 6 times 7?
+     42
+     ▣  Code · Auto Free · Glyph Cluster (free) · 5.8s
+  ┃  Code  · Auto Free Kilo Gateway
+## [hook lines
+2026-10-17 18:43:50.815 [hooks] installed Pi discovery extension → C:\Users\hxe2e\.pi\agent\extensions\launcher-register.ts
+2026-10-17 18:43:50.839 [hooks] a NEW amp session picks this up automatically; for one already open, run
+2026-10-17 18:43:50.839 [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)
+2026-10-17 18:48:56.098 [hooks] listening on 127.0.0.1:18474 (SessionStart/SessionEnd callbacks)
+2026-10-17 18:48:56.099 [hooks] listening on \\.\pipe\harness-3bc86b238c3b97b2060f82f82955c7eb
+2026-10-17 18:48:56.363 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 18:48:56.368 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 18:48:56.368 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 18:48:56.369 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 18:48:56.369 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 18:49:59.447 [hooks] listening on 127.0.0.1:18474 (SessionStart/SessionEnd callbacks)
+2026-10-17 18:49:59.448 [hooks] listening on \\.\pipe\harness-c14215e5cd8f38fc6101f88f102855e0
+2026-10-17 18:49:59.573 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 18:49:59.577 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 18:49:59.577 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 18:49:59.578 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 18:49:59.578 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 18:50:19.983 [hooks] listening on 127.0.0.1:18474 (SessionStart/SessionEnd callbacks)
+2026-10-17 18:50:19.984 [hooks] listening on \\.\pipe\harness-41b22efa2e2a73709e28e2f681e3b0f0
+2026-10-17 18:50:20.133 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 18:50:20.136 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 18:50:20.136 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 18:50:20.137 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 18:50:20.137 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 18:51:47.899 [hooks] ses_eb34 session-start · engine=kilo · isNew=true
+## Claude resume (hooks fix A's F6): not run, Claude Code is not signed in on hxe2e (no session to resume)

@@ -71,6 +71,21 @@ describe('createAndRegisterPane', () => {
     expect(tmuxBackend.create).toHaveBeenCalledWith({ label: 'harness-shell-1', cwd: '/work/project with spaces', command: argv })
   })
 
+  it('starts a Windows engine in its workspace with its hand-off, and an explicit folder still wins', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
+    const afterExit = { command: ['pwsh.exe', '-NoLogo'], env: { HARNESS_ENGINE_COMMAND: 'claude' } }
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: 'C:\\work', sessionLabel: 'harness-claude-1', argv: ['claude.exe'],
+      paneLaunch: { cwd: 'C:\\work', afterExit, clearInherited: ['ANTHROPIC_API_KEY'] } })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-1', cwd: 'C:\\work', command: ['claude.exe'], afterExit, clearInherited: ['ANTHROPIC_API_KEY'] })
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', spawnCwd: '/elsewhere', sessionLabel: 'harness-claude-2', argv: ['claude'],
+      paneLaunch: { cwd: '/w' } })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-2', cwd: '/elsewhere', command: ['claude'] })
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', sessionLabel: 'harness-claude-3', argv: ['claude'], paneLaunch: {} })
+    expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-3', cwd: homedir(), command: ['claude'] })
+  })
+
   it('retries past a stale registration collision and succeeds on the next pane', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

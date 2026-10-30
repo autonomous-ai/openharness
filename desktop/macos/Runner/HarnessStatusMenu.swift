@@ -8,6 +8,8 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   private(set) var statusItem: NSStatusItem?
   private var entries: [[String: Any]] = []
   private var working: [[String: Any]] = []
+  /// What needs the person in their Swarms: decisions asked of them, then tags waiting for them.
+  private var swarm: [[String: Any]] = []
   private var activityTimer: Timer?
   private var motionObserver: NSObjectProtocol?
   private var reduceMotion = false
@@ -58,14 +60,17 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     let nextEntries = (state["statusMenuEntries"] as? [[String: Any]] ?? [])
       .filter { $0["unread"] as? Bool == true }
     let nextWorking = state["statusMenuWorkingEntries"] as? [[String: Any]] ?? []
+    let nextSwarm = nextAvailable ? state["statusMenuSwarmEntries"] as? [[String: Any]] ?? [] : []
     guard dirty || enabled != nextEnabled || workspaceAvailable != nextAvailable ||
           !NSArray(array: entries).isEqual(to: nextEntries) ||
-          !NSArray(array: working).isEqual(to: nextWorking) else { return }
+          !NSArray(array: working).isEqual(to: nextWorking) ||
+          !NSArray(array: swarm).isEqual(to: nextSwarm) else { return }
     enabled = nextEnabled
     workspaceAvailable = nextAvailable
     entries = nextEntries
     working = nextAvailable ? nextWorking : []
-    let count = entries.count
+    swarm = nextSwarm
+    let count = entries.count + swarm.count
     statusItem?.button?.image = Self.badgeImage(logo: NSImage(named: "HarnessStatusIcon"),
                                               count: workspaceAvailable ? count : nil)
     statusItem?.button?.toolTip = workspaceAvailable ? "Harness · \(count) unread" : "Harness"
@@ -170,6 +175,39 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
         add("View all \(entries.count) notifications…", "notificationInbox", enabled: enabled)
       }
     }
+    if workspaceAvailable && !swarm.isEmpty {
+      // By Swarm, in Dart's order: each its own five rows and View all, so a
+      // second Swarm's items are never behind the first's overflow.
+      var groups: [[[String: Any]]] = []
+      for entry in swarm {
+        if let last = groups.last?.last, last["swarmTabId"] as? String == entry["swarmTabId"] as? String {
+          groups[groups.count - 1].append(entry)
+        } else {
+          groups.append([entry])
+        }
+      }
+      menu.addItem(.separator())
+      for group in groups {
+        // One Swarm reads "Swarm"; several are told apart by name.
+        let name = groups.count == 1 ? "Swarm" : group.first?["tabName"] as? String ?? "Swarm"
+        let heading = NSMenuItem(title: "\(name) (\(group.count))", action: nil, keyEquivalent: "")
+        heading.identifier = NSUserInterfaceItemIdentifier("swarmHeading")
+        heading.isEnabled = false
+        heading.view = HarnessStatusMenuRow(item: heading, heading: name, count: group.count)
+        menu.addItem(heading)
+        for entry in group.prefix(5) {
+          let item = addSession(entry, to: menu)
+          item.identifier = NSUserInterfaceItemIdentifier("openSwarmNotice")
+          item.isEnabled = enabled
+        }
+        if group.count > 5, let first = group.first {
+          // That Swarm's Notifications page, which lists them all.
+          let swarmName = first["tabName"] as? String ?? "Swarm"
+          let all = add("View all \(group.count) in \(swarmName)…", "openSwarmNotice", enabled: enabled)
+          all.representedObject = ["swarmTabId": first["swarmTabId"] ?? "", "kind": "all", "id": ""]
+        }
+      }
+    }
     if workspaceAvailable && !working.isEmpty {
       menu.addItem(.separator())
       let heading = NSMenuItem(title: "Working (\(working.count))", action: nil, keyEquivalent: "")
@@ -224,14 +262,30 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
       // Dart opens the destination before revealing the window, so activating
       // the previously selected tab cannot acknowledge the wrong notification.
       emit(action, receipt)
+    case "openSwarmNotice":
+      // Dart brings its Swarm tab forward and opens it, then reveals the window.
+      guard enabled, let receipt = item.representedObject as? [String: Any],
+            swarm.contains(where: { sameSwarmNotice($0, receipt) }) else { return }
+      emit(action, receipt)
     case "clearStatusNotifications":
       guard enabled, let receipts = item.representedObject as? [[String: Any]] else { return }
       emit(action, ["receipts": receipts])
+    case "notificationInbox":
+      // Opens the inbox; only a titlebar button toggles it, so an open one stays.
+      guard enabled else { return }
+      showWindow()
+      emit(action, ["open": true])
     default:
       guard enabled else { return }
       showWindow()
       emit(action, nil)
     }
+  }
+
+  private func sameSwarmNotice(_ current: [String: Any], _ displayed: [String: Any]) -> Bool {
+    current["swarmTabId"] as? String == displayed["swarmTabId"] as? String &&
+      (displayed["kind"] as? String == "all" ||
+       ["kind", "id"].allSatisfy { current[$0] as? String == displayed[$0] as? String })
   }
 
   private func sameReceipt(_ current: [String: Any], _ displayed: [String: Any]) -> Bool {

@@ -7,6 +7,8 @@
 /// file already means, so creating it changes nothing.
 library;
 
+import '../core/home_dir.dart';
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -16,12 +18,13 @@ String pairRulesPath({Map<String, String>? environment}) {
   final xdg = env['XDG_CONFIG_HOME'];
   final base = xdg != null && xdg.startsWith('/')
       ? xdg
-      : '${env['HOME'] ?? ''}/.config';
+      : '${maybeHomeDir(environment: env) ?? ''}/.config';
   return '$base/harness/pair.jsonc';
 }
 
 /// A file that means exactly what no file means: the model off, no rules.
-const pairRulesTemplate = '''// Your paired daemon's rules (daemons/BRAIN.md, "Autonomy and rules").
+const pairRulesTemplate =
+    '''// Your paired daemon's rules (daemons/BRAIN.md, "Autonomy and rules").
 // harnessd reads this on every machine and re-reads it when it changes.
 {
   // true lets the daemon ask one small model for better status-line words.
@@ -168,7 +171,9 @@ List<String> pairConfigTurnsOn(String detail) {
       if (f is String && f.trim().isNotEmpty) f.trim(),
   ];
   if (agentsMd.isNotEmpty) {
-    lines.add('learn.agentsMd: notes may go into AGENTS.md in ${agentsMd.join(', ')}');
+    lines.add(
+      'learn.agentsMd: notes may go into AGENTS.md in ${agentsMd.join(', ')}',
+    );
   }
   return lines;
 }

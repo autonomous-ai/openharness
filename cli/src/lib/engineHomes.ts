@@ -29,7 +29,7 @@ import { sessionStoreContracts, sessionStoreOf, type SessionStoreEngine } from '
 import type { AgentEngine } from '../engines/types.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog } from '../engines/kit/homeCatalog.js'
-import { createHomeAdopter, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
+import { createHomeAdopter, homeIsNetworkOrDevice, networkHomeSentence, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 
 /** The homes each engine's person moved (its session store's `sessions.moved.variable`), by engine, as saved. */
@@ -42,6 +42,8 @@ let nativeKnownHomes: HomeCatalog = { claude: [], codex: [] }
 let nativeCatalogOverflow = false
 let pendingCatalogFile = ''
 let pendingHomes: HomeCatalog = { claude: [], codex: [] }
+/** Refused-home sentences already logged (the adoption retries every second). */
+const refusedHomes = new Set<string>()
 let pendingAdopter: ReturnType<typeof createHomeAdopter> | undefined
 
 const savedFile = (): string => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
@@ -122,8 +124,14 @@ function adopt(environment: NodeJS.ProcessEnv, own: Partial<Record<SessionStoreE
   const file = savedFile()
   observeCatalog(file)
   const writer = adopter(file)
-  const requested = (value: string | undefined, home: string): string | null => {
+  const requested = (value: string | undefined, home: string, variable: string): string | null => {
     const dir = value?.trim()
+    if (dir && homeIsNetworkOrDevice(dir)) {
+      // Refused for this engine alone, and said once: the others still adopt, and a retry does not repeat it.
+      const sentence = networkHomeSentence(variable, homedir())
+      if (!refusedHomes.has(sentence)) { refusedHomes.add(sentence); console.warn(`[hooks] ${sentence}`) }
+      return null
+    }
     // A relative or `~` path is not a folder the engine resolves the same way from every directory.
     if (!dir || !isAbsolute(dir)) return null
     const moved = resolve(dir)
@@ -131,7 +139,7 @@ function adopt(environment: NodeJS.ProcessEnv, own: Partial<Record<SessionStoreE
   }
   const engines = Object.keys(movedByEngine) as SessionStoreEngine[]
   const wanted = Object.fromEntries(engines.map(engine => [engine,
-    requested(environment[sessionStoreContracts[engine].sessions.moved.variable], own[engine] ?? ownHomeOf(engine))])) as Record<SessionStoreEngine, string | null>
+    requested(environment[sessionStoreContracts[engine].sessions.moved.variable], own[engine] ?? ownHomeOf(engine), sessionStoreContracts[engine].sessions.moved.variable)])) as Record<SessionStoreEngine, string | null>
   const result = Object.fromEntries(engines.map(engine => [engine, confirmed || !movedByEngine[engine].includes(wanted[engine]!)
     || pendingHomes[engine].includes(wanted[engine]!) ? wanted[engine] : null])) as Record<SessionStoreEngine, string | null>
   for (const engine of engines) {
@@ -387,5 +395,6 @@ export function resetEngineHomes(): void {
   nativeCatalogOverflow = false
   pendingCatalogFile = ''
   pendingAdopter = undefined
+  refusedHomes.clear()
   pendingHomes = { claude: [], codex: [] }
 }

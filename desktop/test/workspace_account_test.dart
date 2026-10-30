@@ -125,7 +125,7 @@ void main() {
       1280 - grid.AppDesktop.tabBarTrailingInset,
     );
     expect(find.byTooltip('Sign in to Harness'), findsOneWidget);
-    expect(find.byTooltip('Explore Harness Store · ⌘S'), findsOneWidget);
+    expect(find.byTooltip('Explore Harness Store · ⌃⌘S'), findsOneWidget);
     await _capture(tester, 'tab-row-sign-in');
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 

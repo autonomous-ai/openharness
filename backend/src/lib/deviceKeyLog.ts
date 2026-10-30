@@ -17,7 +17,8 @@ import { checkDevAck } from './deviceAckCore.js'
  *
  * Who may append what is decided by the CHANNEL, on top of the signatures:
  *  - a machine appends over its own adapter socket, and only about ITSELF (`kind: 'machine'`, its own
- *    machineId) — so no device can register a key under another machine's id;
+ *    machineId) — so no device can register a key under another machine's id; a team machine
+ *    (lib/teamSession.ts) also removes only its own key, never another device of the account;
  *  - a viewer app appends over REST, only `kind: 'viewer'` entries, and signs removals with a viewer key.
  */
 
@@ -33,14 +34,20 @@ export type DeviceKeyAppendResult = { ok: true; head: DevLogHead } | ({ ok: fals
 
 /** Who is appending: a machine over its adapter socket, or a viewer over REST. */
 export type DeviceKeyChannel =
-  | { kind: 'machine'; machineId: string; harnessSessionId?: string }
+  | { kind: 'machine'; machineId: string; harnessSessionId?: string; team?: boolean }
   | { kind: 'viewer'; harnessSessionId?: string }
 
+/**
+ * The entries after `since`, up to the head they are read with. The head comes first and the entries stop
+ * at it: read side by side, an append landing between the two reads gave a head past the entries the page
+ * carried, and a device reads that as a list held back and freezes it (a Harness OS box registering its
+ * key as it signed in from a phone, 2026-10-22).
+ */
 export async function readDeviceKeyLog(userId: string, since: number): Promise<{ acct: string; head: DevLogHead; entries: unknown[] }> {
-  const [rows, head] = await Promise.all([
-    prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: since } }, orderBy: { seq: 'asc' }, take: PAGE }),
-    logHead(userId),
-  ])
+  const head = await logHead(userId)
+  const rows = head.seq > since
+    ? await prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: since, lte: head.seq } }, orderBy: { seq: 'asc' }, take: PAGE })
+    : []
   return { acct: userId, head, entries: rows.map(r => JSON.parse(r.entry) as unknown) }
 }
 
@@ -108,9 +115,41 @@ async function currentState(userId: string): Promise<{ state: DevLogState; sessi
  * shared with it. The newest key wins when one machine has two.
  */
 export async function activeMachineKeys(userId: string): Promise<DevLogMember[]> {
-  const { state } = await currentState(userId)
+  return machineKeys((await currentState(userId)).state.active)
+}
+
+/**
+ * [activeMachineKeys] of many accounts, by account: every member of a machine shared with a domain, on each read or save
+ * of its policy. One log replay each made a 200-person domain 400+ parallel queries (Diego's issue file, 2026-10-27), so the
+ * snapshots and the entries from each one on are read for all of them at once. A snapshot fits its head when the only
+ * entry from its sequence on is its own; an account with neither has no keys. Any other account is verified alone, as
+ * [currentState] does.
+ */
+export async function activeMachineKeysOf(userIds: string[]): Promise<Map<string, DevLogMember[]>> {
+  if (!userIds.length) return new Map()
+  const snaps = new Map((await prisma.deviceKeyLogState.findMany({ where: { userId: { in: userIds } } })).map(s => [s.userId, s]))
+  const rows = await prisma.deviceKeyLogEntry.findMany({ where: { OR: userIds.map(userId => ({ userId, seq: { gte: snaps.get(userId)?.seq ?? 0 } })) },
+    select: { userId: true, seq: true, hash: true } })
+  const since = new Map<string, Array<{ seq: number; hash: string }>>()
+  for (const row of rows) {
+    const list = since.get(row.userId)
+    if (list) list.push(row)
+    else since.set(row.userId, [row])
+  }
+  return new Map(await Promise.all(userIds.map(async (userId): Promise<[string, DevLogMember[]]> => {
+    const snap = snaps.get(userId), after = since.get(userId) ?? []
+    if (!snap && !after.length) return [userId, []]
+    if (snap && after.length === 1 && after[0]!.seq === snap.seq && after[0]!.hash === snap.hash) {
+      return [userId, machineKeys(snap.active as unknown as DevLogState['active'])]
+    }
+    return [userId, await activeMachineKeys(userId)]
+  })))
+}
+
+/** The active machine keys by machine; the newest key wins when one machine has two. */
+function machineKeys(active: DevLogState['active']): DevLogMember[] {
   const byMachine = new Map<string, DevLogMember>()
-  for (const member of Object.values(state.active)) {
+  for (const member of Object.values(active)) {
     if (member.kind !== 'machine' || !member.machineId) continue
     const held = byMachine.get(member.machineId)
     if (!held || held.seq < member.seq) byMachine.set(member.machineId, member)
@@ -145,6 +184,9 @@ function channelAllows(entry: DevLogEntry, state: DevLogState, channel: DeviceKe
   if (channel.kind === 'machine') {
     // A machine speaks only as itself: its own key, under its own id.
     if (entry.op === 'add') return entry.kind === 'machine' && entry.machineId === channel.machineId
+    // A team machine may leave, but never take another device off the account (and so sign it out).
+    const removed = state.active[entry.pub]
+    if (channel.team && !(removed?.kind === 'machine' && removed.machineId === channel.machineId)) return false
     return signer?.kind === 'machine' && signer.machineId === channel.machineId
   }
   if (entry.op === 'add') return entry.kind === 'viewer'

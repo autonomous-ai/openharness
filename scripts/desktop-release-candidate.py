@@ -35,6 +35,7 @@ WORKFLOW = '.github/workflows/release-desktop.yml'
 FILES = dict(zip(verification.KEYS, (
     'Harness-macos.zip', 'Harness-macos.dmg', 'Harness-macos-arm64.zip',
     'Harness-macos-arm64.dmg', 'Harness-linux-x64.AppImage', 'Harness-linux-arm64.AppImage',
+    'Harness-windows-x64.zip', 'Harness-windows-arm64.zip', 'harness-install.exe',
 )))
 PREFIX = r'harness/desktop-candidates/([1-9][0-9]*)-([1-9][0-9]*)-[0-9a-f]{32}'
 RETENTION = timedelta(days=7)
@@ -46,6 +47,11 @@ MAX_AGE_SECONDS = 1200
 BUILD_INPUTS = {
     'desktop': 'tree',
     'scripts': 'tree',
+    # Windows: Harness.exe (pty/, with the crates it builds from) and harness-install.exe (installer/).
+    'installer': 'tree',
+    'pty': 'tree',
+    'term': 'tree',
+    'tui/vendor': 'tree',
     '.github/actions': 'tree',
     WORKFLOW: 'blob',
     'mobile/pubspec.lock': None,  # included when present in the shared pub-cache key
@@ -216,7 +222,7 @@ def read_receipt(artifact, archive, run, repository, version, tree, inputs, buck
     require(timestamp(run['created_at']) <= created <= now and now - created < RETENTION, 'candidate is expired or has invalid timestamps')
     prefix = check_prefix(receipt['prefix'], run['id'], run['run_attempt'])
     entries = receipt['artifacts']
-    require(isinstance(entries, dict) and set(entries) == set(FILES), 'candidate does not contain exactly six artifacts')
+    require(isinstance(entries, dict) and set(entries) == set(FILES), f'candidate does not contain exactly {len(FILES)} artifacts')
     verification.entries_for_version(entries, version)
     for key, entry in entries.items():
         generation = entry.get('generation', '')
@@ -228,7 +234,8 @@ def read_receipt(artifact, archive, run, repository, version, tree, inputs, buck
 
 def check_jobs(run, jobs):
     required = {'version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
-                'build-linux (ubuntu-22.04-arm, arm64)', 'candidate', 'cleanup'}
+                'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
+                'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'}
     require(required <= {job['name'] for job in jobs}, 'candidate build/verification jobs are missing')
     for job in jobs:
         require(job.get('run_id') == run['id'] and job.get('head_sha') == run['head_sha']
@@ -401,7 +408,7 @@ def main(argv=None):
         require(args.parts is not None, 'sealing requires platform manifests')
         receipt = seal(args.version, args.bucket, args.prefix, args.parts, identity)
         Path('desktop-release-candidate.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        print('All six candidate downloads passed; no product manifest was published')
+        print(f'All {len(FILES)} candidate downloads passed; no product manifest was published')
         return 0
     started = time.monotonic()
     client = Client(identity['repository'], started + args.wait_seconds + 90)
@@ -429,7 +436,7 @@ def main(argv=None):
                   candidate_run=receipt['run_id'], candidate_attempt=receipt['run_attempt'],
                   duration_seconds=round(time.monotonic() - started, 3))
     Path('desktop-candidate-reuse.json').write_text(json.dumps(result, indent=2) + '\n')
-    message = f'Reused all six verified packages from candidate {receipt["run_id"]} in {result["duration_seconds"]}s'
+    message = f'Reused all {len(FILES)} verified packages from candidate {receipt["run_id"]} in {result["duration_seconds"]}s'
     print(message)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:

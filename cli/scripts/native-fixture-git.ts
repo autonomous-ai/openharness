@@ -15,7 +15,7 @@ export async function cleanupFixtureGit(root: string): Promise<number> {
     "cleanup must name a private native-fixture directory")
   // The caller installs its private environment before importing production
   // modules. Do not initialize the registry from this helper's static imports.
-  const { argvTokens, processRows } = await import('../src/lib/tmux.js')
+  const { argvTokens, processRows } = await import('../src/lib/processTable.js')
   const owned = async () => {
     const rows = await processRows()
     assert(rows, 'process table must be available to verify fixture cleanup')

@@ -1,0 +1,25 @@
+# offer canary-failing N+2 0.4.21-e2e.1 (08:45:14)
+    "version": "0.4.21-e2e.1",
+      "sha256": "0c75fc09133db420d9d28888b57dee4e726275c48f96e5f09fb4cbe87b087046",
+      "sha256": "96d25e5cd743513553074c75dfb07959068db9350fefafcf024fb40a138aa4ff",
+## 180 s later (08:48:14)
+0.4.20-e2e.1
+0.4.20-e2e.1
+0.4.19-e2e.1
+0.4.20-e2e.1
+current
+data
+notify.mjs
+
+  machine · remote machine
+   status     ● running · this computer only (not signed in)
+   version    v0.4.20-e2e.1
+   agents     2 available
+   pid        2952
+   local api  http://127.0.0.1:18474
+  running in background · stop with: harness stop
+
+2026-10-17 18:45:45.091 [update] newer build available: 0.4.20-e2e.1 → 0.4.21-e2e.1
+2026-10-17 18:45:47.184 [update] 0.4.21-e2e.1 failed its canary (exit 3) — not trying it again for 120 s
+192.168.65.3 - - [18/Oct/2026 08:45:45] "GET /0.4.21-e2e.1/cli.js HTTP/1.1" 200 -
+192.168.65.3 - - [18/Oct/2026 08:45:45] "GET /0.4.21-e2e.1/notify.mjs HTTP/1.1" 200 -

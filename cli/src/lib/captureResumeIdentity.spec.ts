@@ -3,15 +3,15 @@ import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence, savedTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { findLiveSession, findResumedTranscript, processSessionEvidence } from './sessionRepair.js'
-import { processRows, resumeSessionId } from './tmux.js'
+import { processRows, resumeSessionId } from './processTable.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 vi.mock('./registry.js', () => ({ engineKeepsTranscriptFile: vi.fn(() => true) }))
 vi.mock('../engines/transcriptBindings.js', () => ({ savedTranscriptEvidence: vi.fn(), controlTranscriptEvidence: vi.fn() }))
 vi.mock('./sessionRepair.js', () => ({ processSessionEvidence: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
-vi.mock('./tmux.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
+vi.mock('./processTable.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
 vi.mock('./processEvidence.js', async () => {
   const { nativeConversationFixture } = await import('../testing/nativeConversationEvidence.js')
-  const { processRows } = await import('./tmux.js')
+  const { processRows } = await import('./processTable.js')
   return { readProcessEvidence: (...args: Parameters<typeof import('./processEvidence.js')['readProcessEvidence']>) =>
     nativeConversationFixture(async () => [], processRows).processes(...args) }
 })

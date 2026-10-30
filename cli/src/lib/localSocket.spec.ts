@@ -1,12 +1,17 @@
-import { request } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, ORPHAN_STILL_SERVING, ORPHAN_WAIT_MS,
-  refuseServedDataFolder, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
+  askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketListenPath, localSocketName, localSocketPath, ORPHAN_STILL_SERVING,
+  ORPHAN_WAIT_MS, refuseServedDataFolder, servedFolderDeps, unixSocketPath, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
 } from './localSocket.js'
+import { daemonPipe } from './windows/daemonPipe.js'
+import { writeDaemonRecord } from './daemonRecord.js'
+import { ensureDaemonToken, newPipePath } from './windows/pipeAuth.js'
 
 const LOCAL_SOCKET_NAME = localSocketName(18473)
 
@@ -62,6 +67,25 @@ describe('localSocketPath', () => {
     expect(isLocalSocketName('daemon-18473.sock')).toBe(true)
     expect(isLocalSocketName('daemon.sock')).toBe(false)
     expect(isLocalSocketName('daemon-18473.sock.bak')).toBe(false)
+  })
+
+  it('on Windows, names the pipe the running daemon recorded, and a new pipe for each start', () => {
+    // os.tmpdir(), not shortDir()'s /tmp: this case runs on Windows too, and only names paths.
+    const dir = mkdtempSync(join(tmpdir(), 'hsock-'))
+    dirs.push(dir)
+    expect(localSocketPath(dir, 18473, 'win32')).toBeNull()
+    const pipe = newPipePath()
+    writeDaemonRecord(dir, 18473, 24567, { pipe, pid: 4242 })
+    expect(localSocketPath(dir, 18473, 'win32')).toBe(pipe)
+    expect(localSocketPath(dir, 18474, 'win32')).toBeNull()
+    // The filesystem socket the services and ws+unix clients use: none on Windows, the same everywhere else.
+    expect(unixSocketPath(dir, 18473, 'win32')).toBeNull()
+    expect(unixSocketPath(dir, 18473, 'darwin')).toBe(join(dir, LOCAL_SOCKET_NAME))
+    expect(localSocketPath(dir, 18473, 'darwin')).toBe(join(dir, LOCAL_SOCKET_NAME))
+    const first = localSocketListenPath(dir, 18473, 'win32')
+    expect(first).toMatch(/^\\\\\.\\pipe\\harness-[0-9a-f]{32}$/)
+    expect(localSocketListenPath(dir, 18473, 'win32')).not.toBe(first)
+    expect(localSocketListenPath(dir, 18473, 'linux')).toBe(join(dir, LOCAL_SOCKET_NAME))
   })
 })
 
@@ -290,5 +314,81 @@ describe('refuseServedDataFolder', () => {
     const lingering = await run([{ pid: 7, corePid: 8 }])
     expect(lingering).toMatchObject({ outcome: ORPHAN_STILL_SERVING, waited: ORPHAN_WAIT_MS })
     expect(lingering.lines).toHaveLength(1)
+  })
+})
+
+/** A data folder for the token: /tmp's short path where sockets need one, the temp folder on Windows. */
+function pipeDir(): string {
+  if (process.platform !== 'win32') return shortDir()
+  const dir = mkdtempSync(join(tmpdir(), 'hpipe-'))
+  dirs.push(dir)
+  return dir
+}
+
+describe('who serves a data folder, over the Windows pipe', () => {
+  /** The daemon's pipe on Windows, its recorded process taken as running. */
+  const live = { platform: 'win32' as const, pipe: (d: string, p: number) => daemonPipe(d, p, { alive: () => true }) }
+
+  it('asks with the token, and takes only an answer that proves it', async () => {
+    // On Windows these are real pipes (\\.\pipe\harness-<id>); elsewhere sockets named alike.
+    const dir = pipeDir()
+    const pipeName = (): string => (process.platform === 'win32' ? newPipePath() : join(dir, `harness-${randomBytes(16).toString('hex')}`))
+    const token = ensureDaemonToken(dir)
+    const path = pipeName()
+    const status = { pid: 4242, corePid: 4243 }
+    opened.push(await listenLocalSocket((_req, res) => res.end(JSON.stringify(status)), path, { token }))
+    expect(await askDataFolderServer(path, 1_000, token)).toEqual(status)
+    // Another token: a 401 without the proof, which is not this data folder's daemon.
+    expect(await askDataFolderServer(path, 1_000, randomBytes(32))).toBe('none')
+    // Whatever took a dead daemon's name: no proof, so nothing serves, and start-up goes on.
+    const squatted = pipeName()
+    const squatter = createServer((_req, res) => res.end(JSON.stringify(status)))
+    await new Promise<void>((resolve) => squatter.listen(squatted, resolve))
+    try {
+      expect(await askDataFolderServer(squatted, 1_000, token)).toBe('none')
+    } finally {
+      squatter.close()
+    }
+    // A stale record: nothing listens there, so nothing serves. A listener that never answers may be a slow daemon: unknown, and start-up refuses.
+    expect(await askDataFolderServer(pipeName(), 1_000, token)).toBe('none')
+    const silent = pipeName()
+    const mute = createServer(() => { /* never answers */ })
+    await new Promise<void>((resolve) => mute.listen(silent, resolve))
+    try {
+      expect(await askDataFolderServer(silent, 200, token)).toBe('unknown')
+    } finally {
+      mute.closeAllConnections()
+      mute.close()
+    }
+    // A name that is no Harness pipe is never dialled.
+    expect(await askDataFolderServer(join(dir, 'other.sock'), 1_000, token)).toBe('none')
+    expect(servedFolderDeps(dir, 18473, { platform: 'darwin' }).who).toBe(askDataFolderServer)
+    writeDaemonRecord(dir, 18473, 24567, { pipe: path, pid: process.pid })
+    expect(await servedFolderDeps(dir, 18473, live).who(path, 1_000)).toEqual(status)
+    // No token in that folder: no daemon has started there.
+    expect(await servedFolderDeps(pipeDir(), 18473, live).who(path, 1_000)).toBe('none')
+  })
+
+  it('takes a recorded daemon proven gone as serving nothing, without dialling its pipe', async () => {
+    const dir = pipeDir(), port = 18473
+    ensureDaemonToken(dir)
+    // Whatever took the dead daemon's name, and hangs: dialled, it would be `unknown` and block every start.
+    const pipe = process.platform === 'win32' ? newPipePath() : join(dir, `harness-${randomBytes(16).toString('hex')}`)
+    let dialled = 0
+    const squatter = createServer(() => { /* never answers */ })
+    squatter.on('connection', () => { dialled++ })
+    await new Promise<void>((resolve) => squatter.listen(pipe, resolve))
+    try {
+      writeDaemonRecord(dir, port, 24567, { pipe, pid: 4242 })
+      const gone = { platform: 'win32' as const, pipe: (d: string, p: number) => daemonPipe(d, p, { alive: () => false }) }
+      expect(await servedFolderDeps(dir, port, gone).who(pipe, 200)).toBe('none')
+      expect(dialled).toBe(0)
+      // Its process still there: the B2.9 ask, where a silence may be a slow daemon.
+      expect(await servedFolderDeps(dir, port, live).who(pipe, 200)).toBe('unknown')
+      expect(dialled).toBe(1)
+    } finally {
+      squatter.closeAllConnections()
+      squatter.close()
+    }
   })
 })

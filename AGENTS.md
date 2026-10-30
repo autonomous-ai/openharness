@@ -23,7 +23,7 @@ For product names, terminology, and visible copy, follow the
   suite as passing, and never silently skip a required check to meet a time target.
 - Once required checks pass, carry out the authorized merge/release without another
   validation cycle. Verify published versions and checksums, then report completion.
-  Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
+  Desktop's `--wait` follows the exact tag/SHA through the workflow's nine-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
 - CI rules (details in [docs/validation-and-release.md](docs/validation-and-release.md#pr-ci)):
   - PR CI is fast on purpose. It runs only the Linux unit checks of the components
@@ -66,3 +66,22 @@ For product names, terminology, and visible copy, follow the
   Avoid starting candidates while implementation is still changing. The release
   automatically reuses matching Desktop build inputs/version and otherwise builds
   normally; unrelated CLI, firmware or documentation merges do not force a rebuild.
+
+# Feature design rules
+
+Details, incidents and a checklist to copy: [docs/feature-design-rules.md](docs/feature-design-rules.md).
+
+1. Every spec that stores, syncs or exposes data has a **Design** section. It answers each
+   line briefly, or says "N/A because ...":
+   - growth: what deletes it;
+   - concurrency: at what level it locks;
+   - read cost: read only what changed;
+   - scale: 10x, and the metric that warns first;
+   - compatibility: old and new clients;
+   - migration + rollback;
+   - audience: the server enforces it;
+   - identity: never use the machine owner's login;
+   - failure: nothing breaks without saying so;
+   - platforms.
+2. Review the design again when a measured limit is less than 10x away, or when the same
+   bug needs patching a second time.

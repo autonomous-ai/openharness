@@ -83,6 +83,7 @@ beforeEach(async () => {
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
     const path = join(root, name); mkdirSync(path, { recursive: true, mode: 0o700 }); vi.stubEnv(name, path)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'HOME'))
   vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
   mkdirSync(join(root, 'CODEX_HOME', 'sessions'))
   writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')
@@ -290,7 +291,7 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     detachDsh: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
     dataDir: join(root, 'ADAPTER_DATA_DIR') })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
-    stopJobs: new Map(), tmuxBackend: { kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) },
+    stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const checkpoint = async (session: typeof row) => {
@@ -318,7 +319,7 @@ it('retains a typed Stop hold when the native broker contains a failed grant che
   const { createNativeControls } = await import('../core/engines/nativeControls.js')
   const { engineNativeControlRequests } = await import('../engines/worker/nativeControlRequests.js')
   const { launch } = await import('../engines/codex/launch.js')
-  const { argvTokens } = await import('./tmux.js')
+  const { argvTokens } = await import('./processTable.js')
   const { createStopAgentService } = await import('./stopAgentService.js')
   const { StoppedAgentStore } = await import('./stoppedAgents.js')
   const { AgentRestartCoordinator } = await import('./restartAgent.js')
@@ -338,7 +339,7 @@ it('retains a typed Stop hold when the native broker contains a failed grant che
   core.connected('engine-codex')
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })), forget = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
-    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: { kill },
+    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: core.stop })
   await expect(stop(row.agentId)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
@@ -356,7 +357,7 @@ it.each(['checkpoint', 'native drain'])('holds Stop when its transcript changes 
   const forget = vi.fn()
   const stopNative = vi.fn(async () => { if (phase === 'native drain') writeFileSync(transcript, header(B)) })
   const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
-    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: { kill },
+    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative })
   await expect(stop(row.agentId, { checkpoint: async () => {
@@ -390,7 +391,7 @@ it.each(['binding', 'process birth', 'native grant', 'contained grant', 'process
     })
     const forget = vi.fn(), nativeMutation = vi.fn()
     const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
-      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: { kill },
+      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
       agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
       forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async (_session, current) => {
         if (phase === 'native grant' || phase === 'contained grant') writeFileSync(transcript, header(B))
@@ -441,9 +442,10 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
         newOwner = other.agentId
       } else writeFileSync(transcript, header(B))
       return tmuxFeaturesOf({ major: 3, minor: 7 })
-    }) : { create, kill }
+    }) : { create, kill, releaseHold: vi.fn(async () => {}), paneState: vi.fn(async () => 'unknown' as const), rootProcess: vi.fn(async () => null),
+      inventory: vi.fn(async () => ({ state: 'available' as const, roots: [] })) }
     const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
-      stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: backend,
+      stopJobs: new Map(), pinnedControls: new Set(), createBackend: backend, backendFor: () => backend,
       retainExitedSession: vi.fn(), announceSession: announce,
       relaunchOverrides: async (_session, _source, current) => {
         await Promise.resolve()

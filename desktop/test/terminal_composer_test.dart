@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -100,6 +101,7 @@ Widget _host(
   TerminalSession session, {
   bool visible = true,
   VoidCallback? onToggle,
+  String? firstTask,
 }) => MaterialApp(
   home: Scaffold(
     body: SizedBox(
@@ -110,6 +112,7 @@ Widget _host(
         session: session,
         focused: true,
         composerVisible: visible,
+        firstTask: firstTask,
         onToggleComposer: onToggle ?? () {},
       ),
     ),
@@ -136,6 +139,237 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  testWidgets(
+    'a local first harness has an editable suggestion and sends nothing on opening',
+    (tester) async {
+      final sent = <String>[];
+      final app = _notifier(local: true);
+      final session = await _liveSession(sent);
+      await tester.pumpWidget(
+        _host(app, session, firstTask: 'Make a date page.'),
+      );
+      await tester.pump();
+      expect(find.byType(TerminalComposer), findsOneWidget);
+      expect(find.text('Make a date page.'), findsOneWidget);
+      expect(sent, isEmpty);
+      await tester.enterText(find.byType(TextField), 'My own first task');
+      expect(sent, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      session.dispose();
+      app.dispose();
+    },
+  );
+  group('composer clipboard paste', () {
+    String? clipboard;
+    Future<Object?> Function()? checkClipboard;
+    var nonTextPastes = 0;
+    late TerminalSession session;
+    late FocusNode focusNode;
+
+    setUp(() async {
+      session = await _liveSession([]);
+      focusNode = FocusNode();
+      clipboard = 'pasted text';
+      checkClipboard = null;
+      nonTextPastes = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            switch (call.method) {
+              case 'Clipboard.hasStrings':
+                return checkClipboard == null
+                    ? {'value': clipboard?.isNotEmpty ?? false}
+                    : checkClipboard!();
+              case 'Clipboard.getData':
+                return clipboard == null ? null : {'text': clipboard};
+            }
+            return null;
+          });
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+      focusNode.dispose();
+      session.dispose();
+    });
+
+    Future<void> mountComposer(
+      WidgetTester tester, {
+      bool inputEnabled = true,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalComposer(
+              session: session,
+              focusNode: focusNode,
+              inputEnabled: inputEnabled,
+              onPasteNonText: () async => nonTextPastes++,
+            ),
+          ),
+        ),
+      );
+      await tester.enterText(find.byType(TextField), 'draft');
+      await tester.pump();
+    }
+
+    Future<void> paste(WidgetTester tester, {bool command = false}) async {
+      final modifier = command
+          ? LogicalKeyboardKey.metaLeft
+          : LogicalKeyboardKey.controlLeft;
+      await tester.sendKeyDownEvent(modifier);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(modifier);
+      await tester.pump();
+    }
+
+    String draft(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!.text;
+
+    testWidgets('held Ctrl+V pastes text only once', (tester) async {
+      await mountComposer(tester);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+      await tester.pump();
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyV);
+      await tester.pump();
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(draft(tester), 'draftpasted text');
+      expect(nonTextPastes, 0);
+      await tester.pumpWidget(const SizedBox());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+    testWidgets('Ctrl+V with text pastes into the field', (tester) async {
+      await mountComposer(tester);
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      controller.selection = const TextSelection(
+        baseOffset: 0,
+        extentOffset: 5,
+      );
+      await paste(tester);
+      expect(draft(tester), 'pasted text');
+      expect(nonTextPastes, 0);
+      await tester.pumpWidget(const SizedBox());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+    testWidgets('Ctrl+V with no text hands the paste to the pane', (
+      tester,
+    ) async {
+      clipboard = null;
+      await mountComposer(tester);
+      await paste(tester);
+      expect(nonTextPastes, 1);
+      expect(draft(tester), 'draft');
+      await tester.pumpWidget(const SizedBox());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+    testWidgets(
+      'macOS Command+V keeps text paste and never hands images to the pane',
+      (tester) async {
+        await mountComposer(tester);
+        await paste(tester, command: true);
+        expect(draft(tester), 'draftpasted text');
+        clipboard = null;
+        await paste(tester, command: true);
+        expect(draft(tester), 'draftpasted text');
+        expect(nonTextPastes, 0);
+        await tester.pumpWidget(const SizedBox());
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a failed clipboard check stays local and allows another paste',
+      (tester) async {
+        clipboard = null;
+        await mountComposer(tester);
+        checkClipboard = () async =>
+            throw PlatformException(code: 'fixture-check-failed');
+        await paste(tester);
+        expect(tester.takeException(), isNull);
+        expect(
+          find.text('Could not read the clipboard. Try Paste again.'),
+          findsOneWidget,
+        );
+        expect(draft(tester), 'draft');
+        expect(nonTextPastes, 0);
+        checkClipboard = null;
+        await paste(tester);
+        expect(nonTextPastes, 1);
+        await tester.pumpWidget(const SizedBox());
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+
+    for (final hasText in [false, true]) {
+      for (final change in [
+        'focus moved',
+        'input disabled',
+        'control taken',
+        'agent replaced',
+        'stream replaced',
+        'composer disposed',
+      ]) {
+        testWidgets(
+          'pending ${hasText ? 'text' : 'non-text'} clipboard check is cancelled after $change',
+          (tester) async {
+            final check = Completer<Object?>();
+            checkClipboard = () => check.future;
+            clipboard = hasText ? 'pasted text' : null;
+            await mountComposer(tester);
+            await paste(tester);
+            TerminalSession? original;
+            if (change == 'focus moved') {
+              focusNode.unfocus();
+            } else if (change == 'input disabled') {
+              await tester.pumpWidget(
+                MaterialApp(
+                  home: Scaffold(
+                    body: TerminalComposer(
+                      session: session,
+                      focusNode: focusNode,
+                      inputEnabled: false,
+                      onPasteNonText: () async => nonTextPastes++,
+                    ),
+                  ),
+                ),
+              );
+            } else if (change == 'control taken') {
+              await session.handleFrame('terminal_closed', {
+                'streamId': session.streamId,
+                'code': 'TERMINAL_TAKEN_OVER',
+              });
+            } else if (change == 'agent replaced') {
+              original = session;
+              session = await _liveSession([]);
+              await mountComposer(tester);
+            } else if (change == 'stream replaced') {
+              session.streamId = 'replacement-stream';
+            } else {
+              await tester.pumpWidget(const SizedBox());
+            }
+            await tester.pump();
+            check.complete({'value': hasText});
+            await tester.pump();
+            expect(nonTextPastes, 0);
+            if (change != 'composer disposed') expect(draft(tester), 'draft');
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox());
+            if (original != null) {
+              session.dispose();
+              session = original;
+            }
+          },
+          variant: TargetPlatformVariant.only(TargetPlatform.windows),
+        );
+      }
+    }
+  });
+
   testWidgets('a remote pane gets the composer', (tester) async {
     final app = _notifier(local: false);
     final session = await _liveSession([]);

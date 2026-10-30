@@ -81,7 +81,7 @@ DevLogHistoryRow historyRow(
 /// An app whose device list, last-seen times and removal are canned, so a page test is about what the
 /// page does with them.
 class DevicesApp extends AppNotifier {
-  DevicesApp({this.rows = const [], this.seen = const {}})
+  DevicesApp({this.rows = const [], this.seen = const {}, super.systemNotices})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),

@@ -20,6 +20,9 @@ enum { POD_TAP_SLOP = 24 };   // px: farther than this from the DOWN and the con
 enum { POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_EDGE_SWIPE = 80, POD_BOTTOM_Y = 620 };   // POD_BOTTOM_Y: a swipe up that starts at or below it goes Home from a room or a recap
 
 typedef struct { const char *id, *name, *engine, *machine; } pod_roster_row_t;
+// One frame for the daemon about the Swarm cards: `t` is "supertab.select", "supertab.open" or "supertab.recap.get" (a literal), lead "" closes the open recap.
+typedef struct { const char *t; char tab[ID_MAX], lead[ID_MAX]; } pod_supertab_out_t;
+enum { POD_SUPERTAB_OUT_MAX = 8, POD_SUPERTAB_RETRIES = 5, POD_SUPERTAB_RETRY_MS = 3000 };
 
 typedef struct {
     pod_model_t model;
@@ -52,9 +55,11 @@ typedef struct {
     bool notice_on;
     bool notice_bad;             // the red pill (a failure), not the dark one
     // The notice toast (ph_toast, POD_TOAST_MS) (see pod_ui_notify): which entry (by agent), until when, and a contact that began on it.
+    // ban_stay: a Super Tab question's toast (pod_model_attention), which does not run out: it goes when swiped up, when the question
+    // closes (its entry goes) or once Notices is on screen; ban_until then only dates its slide-in.
     char ban_agent[ID_MAX];
     uint32_t ban_until;
-    bool ban_on, ban_touch;
+    bool ban_on, ban_touch, ban_stay;
     // player.library sweep: see pod_ui_sweep_*.
     struct {
         bool active, restart, ever;
@@ -88,6 +93,17 @@ typedef struct {
     uint32_t last_touch_ms;
     char pending_focus[ID_MAX];
     uint32_t pending_focus_ms;
+    // The Swarm cards' Lead view (see pod_ui_take_supertab): the Lead the daemon was last told is open (empty: none), the frames waiting to go, and when a
+    // supertab.focus began waiting for its Swarm list.
+    char sup_tab[ID_MAX], sup_lead[ID_MAX];
+    char sup_close[ID_MAX];      // a "closed" frame the link dropped, owed for this Swarm until sent (empty: none), unless a Lead opens first
+    pod_supertab_out_t sup_q[POD_SUPERTAB_OUT_MAX];
+    uint8_t sup_qn;
+    uint32_t sup_at;             // when the open Lead was last (re)sent to the daemon, at the model's clock
+    uint8_t sup_tries;           // re-sends of open + recap.get so far while it stays LOADING (at most POD_SUPERTAB_RETRIES)
+    bool sup_reopened;           // the one supertab.open sent POD_SUPERTAB_RETRY_MS after opening, so the daemon surely knows the open Lead
+    bool lead_wait;
+    uint32_t lead_wait_ms;
     // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
     bool ota, ota_restarting;
     int ota_pct;
@@ -106,11 +122,16 @@ pod_out_t pod_ui_roster(pod_ui_t *, const pod_roster_row_t *rows, int n);
 // `members` may be NULL (no agentIds); its i-th entry belongs to items[i].
 pod_out_t pod_ui_swarms(pod_ui_t *, const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                         const char *selected, const cable_tile_t *tiles, int tile_count);
-pod_out_t pod_ui_status(pod_ui_t *, const char *id, const char *status, uint32_t now_ms);
 pod_out_t pod_ui_turn(pod_ui_t *, const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms);
 // turn.stats for an agent (-1 leaves a field unknown); unknown agents are ignored.
 pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
-pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text);
+// super_tab: the Super Tab the question was asked in (NULL = a plain question) and its attention (pod_model_question_tab).
+// The Swarm cards: the model's lists (pod_model_supertab_ids / _supertab / _recap / _focus) behind the same sync as every feed.
+pod_out_t pod_ui_supertab_ids(pod_ui_t *, const char (*ids)[ID_MAX], int n);
+pod_out_t pod_ui_supertab(pod_ui_t *, const pod_swarm_t *s, uint32_t now_ms);
+pod_out_t pod_ui_supertab_recap(pod_ui_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+pod_out_t pod_ui_supertab_focus(pod_ui_t *, const char *tab, const char *lead, uint32_t now_ms);   // now_ms: the quiet-window and waiting clocks, as pod_ui_focus's
+pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
 // The daemon took a recording for this agent (voice.result): Working now, before its turn starts (pod_model_sent).
 pod_out_t pod_ui_sent(pod_ui_t *, const char *id, uint32_t now_ms);
 pod_out_t pod_ui_question_close(pod_ui_t *, const char *id);
@@ -123,6 +144,19 @@ pod_out_t pod_ui_recap(pod_ui_t *, const char *id, const char *recap, bool resto
 #define POD_FOLLOW_ECHO_MS 800   // on the Tabs screen: the daemon's echo of the device's own move settles within 750 ms
 #define POD_FOLLOW_PENDING_MS 5000
 pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
+
+// ---- the Lead view (Swarm cards) ----
+// A tap on a Lead pet (POD_A_LEAD) opens the Lead view; a horizontal swipe on it steps to the previous / next Lead; supertab.focus (the model's focus_pending, acted on
+// after every feed) opens the Lead the desktop opened, the way pod_ui_focus does (not while talking, updating or touching; a Lead the list does not hold yet waits
+// POD_FOLLOW_PENDING_MS for it). The frames for the daemon are queued and taken after the lock is released: select (a tap or a swipe, never a follow: the
+// desktop already is there), then whatever makes the daemon's idea of the open recap match the screen: supertab.open with the Lead (and supertab.recap.get unless its
+// text is LOADED; it goes LOADING) when the Lead view shows one, supertab.open with no lead when it no longer does. While the Lead cannot be found (the link dropped,
+// the list not back yet) nothing is sent; a link drop forgets what was open, so the view re-sends open and get when its Lead is back.
+// Returns how many frames were written to out (at most max).
+int pod_ui_take_supertab(pod_ui_t *, pod_supertab_out_t out[], int max);
+// A frame taken by pod_ui_take_supertab that could not be sent (the link was busy): open / recap.get count as not sent, so the retry comes again (a failed retry is not counted);
+// the closing open (no lead) is owed until it is sent, unless a Lead opened since.
+void pod_ui_supertab_unsent(pod_ui_t *, const pod_supertab_out_t *frame);
 
 // The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the
 // root (TABS) and tab 0 has agents, enter tab 0 on its first agent (POD_A_ENTER_TAB). It is device-local: no AGENT_OPEN
@@ -162,14 +196,20 @@ void pod_ui_ota(pod_ui_t *, const char *from, const char *to, int pct, bool rest
 bool pod_ui_updating(const pod_ui_t *);
 
 // ---- notifications ----
-// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed) and show the toast for
-// POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a swipe up dismisses). False,
-// and nothing filed, when the agent is not on the roster. The caller beeps only on true.
+// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed; one per agent, the newest) and, for an
+// alert, show the toast for POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a
+// swipe up dismisses). A Super Tab question's toast (pod_model_attention) stays instead: until swiped up, until the question
+// closes, or until Notices opens. Nothing is filed when the agent is not on the roster.
 #define POD_BANNER_SWIPE_PX 40
 // `awake`: the glass is lit. A dark one is not looking, even when it rests on that agent's screen.
 // When the current toast started (it shows for POD_TOAST_MS); the toast draw reads it for its timer line.
 uint32_t pod_ui_banner_shown_ms(const pod_ui_t *);
-bool pod_ui_notify(pod_ui_t *, const char *agent_id, bool awake, uint32_t now_ms);
+// `tier` (alert / list / silent): silent files nothing; list files the entry only; alert also toasts. If the agent's own room is on
+// screen (and the glass is lit) any tier is read at once there. Returns true only when the caller must wake the glass and beep:
+// an alert, not on that agent's own screen. `text` NULL = the agent's recap; `question`: the entry is a question's (it goes when the
+// question closes).
+bool pod_ui_notify_text(pod_ui_t *, const char *agent_id, pod_tier_t tier, const char *text, bool question, bool awake, uint32_t now_ms);
+bool pod_ui_notify(pod_ui_t *, const char *agent_id, pod_tier_t tier, bool awake, uint32_t now_ms);
 // notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);
 void pod_ui_notif_row(pod_ui_t *, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms);

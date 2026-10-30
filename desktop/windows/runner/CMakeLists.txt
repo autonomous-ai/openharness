@@ -7,8 +7,13 @@ project(runner LANGUAGES CXX)
 #
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
+  "clipboard_image.cpp"
+  "community_links.cpp"
   "flutter_window.cpp"
+  "fonts.cpp"
   "main.cpp"
+  "single_instance.cpp"
+  "tray.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -34,6 +39,25 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# The single instance reads the user's SID (advapi32); the shell gives the
+# AUMID, the tray and CF_HDROP (shell32). Both are in MSVC's default set and
+# are named so the runner says what it uses.
+target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib" "shell32.lib")
+# Toasts (notifications.cpp) through C++/WinRT. Its headers ship with the
+# Windows SDK (Include\<version>\cppwinrt, on every Visual Studio include
+# path). windowsapp.lib is the WinRT umbrella library for x64 and arm64.
+# MSVC 14.51 rejects WinRT's experimental coroutine fallback in C++17.
+# Keep C++20 private to this source so WinRT selects standard coroutines;
+# the runner and Flutter plugins retain their existing C++17 settings.
+add_library(harness_notifications OBJECT "notifications.cpp")
+apply_standard_settings(harness_notifications)
+target_compile_features(harness_notifications PRIVATE cxx_std_20)
+target_compile_definitions(harness_notifications PRIVATE "NOMINMAX")
+target_link_libraries(harness_notifications PRIVATE flutter flutter_wrapper_app)
+target_link_libraries(${BINARY_NAME} PRIVATE harness_notifications "windowsapp.lib")
+# WIC encodes/decodes clipboard PNGs and keeps them in a COM stream.
+target_link_libraries(${BINARY_NAME} PRIVATE "windowscodecs.lib" "ole32.lib")
+set_source_files_properties("notifications.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj;/permissive-")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

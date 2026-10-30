@@ -14,6 +14,8 @@ import { runServiceProcess, type ServiceProcessOptions } from './process.js'
 
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
 // The SQLite binding, faked: an OpenCode store with one turn in it, and a count of the times it was loaded.
+// `ses_handoff1` is an OpenCode 1 conversation (message and part rows, nothing in session_message) and
+// `ses_handoff2` an OpenCode 2 one (session_message rows only).
 const binding = vi.hoisted(() => ({ loads: 0, reads: [] as Array<{ path: string; sql: string; params: unknown[] }> }))
 vi.mock('../lib/sqliteBuiltin.js', () => {
   binding.loads++
@@ -22,6 +24,14 @@ vi.mock('../lib/sqliteBuiltin.js', () => {
     builtinSqlite: () => class {},
     readBuiltin: (_database: unknown, path: string, sql: string, params: unknown[]) => {
       binding.reads.push({ path, sql, params })
+      if (sql.includes('FROM session_message')) {
+        const v2 = (id: string, type: string, seq: number, data: Record<string, unknown>) => ({ mid: id, mtype: type, mseq: seq, mtc: seq, mdata: JSON.stringify(data) })
+        return { ok: true, via: 'builtin', rows: params[0] === 'ses_handoff2' ? [
+          v2('msg_1', 'user', 0, { text: 'add a search box' }),
+          v2('msg_2', 'assistant', 1, { content: [{ type: 'text', text: 'Added the search box.' }], finish: 'stop' }),
+          v2('msg_3', 'idle', 2, { outcome: 'succeeded' }),
+        ] : [] }
+      }
       return { ok: true, via: 'builtin', rows: [
         { mid: 'msg_1', mtc: 1, mdata: JSON.stringify({ role: 'user' }), pid: 'prt_1', pdata: part('text', 'add a login page') },
         { mid: 'msg_2', mtc: 2, mdata: JSON.stringify({ role: 'assistant' }), pid: 'prt_2', pdata: part('text', 'Added the login page.') },
@@ -99,6 +109,7 @@ describe('the handoff in the edge host', () => {
       start: core => { api = core; return { agent_handoff_prepare: async () => ({ value: await core.conversations.resolve('a') }) } },
     })
     expect(options).toMatchObject({ name: 'handoff', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
+    expect(api.daemon.machineId()).toBe('m')
     await expect(api.conversations.resolve('a')).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     const query = vi.fn(async () => ({ value: { agentId: 'a' } }))
     options.onConnected!({ query })
@@ -112,6 +123,16 @@ describe('the handoff in the edge host', () => {
     expect(Object.keys(vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests)).toEqual([...HANDOFF_REQUESTS])
   })
 
+  // HARNESS_SWARM: a member's replacement is recorded by the Swarm's side, which its process loads only while it is on.
+  it('hands the change-agent handoff the Swarm\'s record while it is on, and none without it', () => {
+    const start = vi.fn((..._args: Parameters<typeof startHandoff>) => ({}))
+    const recordReplacement = vi.fn()
+    const base = { dataDir: '/data', socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), start }
+    runHandoffService({ ...base, swarm: { recordReplacement } })
+    runHandoffService(base)
+    expect(start.mock.calls.map(call => call[3])).toEqual([recordReplacement, undefined])
+  })
+
   it('reads SQLite only for a store-backed conversation and hands that one over', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'handoff-store-'))
     try {
@@ -119,6 +140,7 @@ describe('the handoff in the edge host', () => {
       const agents: Record<string, Record<string, unknown>> = {
         claude: { agentId: 'claude-1', sessionId: 's1', engine: 'claude', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
         opencode: { agentId: 'opencode-1', sessionId: 'ses_handoff1', engine: 'opencode', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
+        opencode2: { agentId: 'opencode-2', sessionId: 'ses_handoff2', engine: 'opencode', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
       }
       const publicationErrors: unknown[] = []
       const commit = createHandoffPublisher({ directory: join(ws, 'daemon-data'),
@@ -139,13 +161,24 @@ describe('the handoff in the edge host', () => {
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([])
-      // OpenCode reads through the same binding and hands over the turn the store holds.
+      // OpenCode reads through the same binding and hands over the turn the store holds: OpenCode 2's
+      // session_message first, and for an OpenCode 1 conversation, which has no rows there, its message rows.
+      const database = join(env.OPENCODE_DATA_DIR, 'opencode.db')
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
-      expect(binding.reads).toEqual([{ path: join(env.OPENCODE_DATA_DIR, 'opencode.db'), sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] }])
+      expect(binding.reads).toEqual([
+        { path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff1'] },
+        { path: database, sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] },
+      ])
       expect(publicationErrors).toEqual([])
       expect(handed).toMatchObject({ file: expect.any(String) })
       expect(readFileSync(join(ws, handed.file!), 'utf8')).toContain('add a login page')
+      // An OpenCode 2 conversation is handed over from session_message alone.
+      binding.reads.length = 0
+      const handed2 = await prepare({ agentId: 'opencode-2', changeId: 'b'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
+      expect(binding.reads).toEqual([{ path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff2'] }])
+      expect(publicationErrors).toEqual([])
+      expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 })
@@ -159,6 +192,10 @@ it('refuses malformed read/publication replies and never sends a revoked publica
   expect(ask).not.toHaveBeenCalled()
   expect(await core.conversations.publish(prepared, { requestId: 'routed', current: () => true })).toEqual(result)
   expect(ask).toHaveBeenLastCalledWith('publish', { prepared, originRequestId: 'routed' })
+  // A compaction summary the record could not include is reported, not refused (lib/compactSummary.ts).
+  const unsummarized = { ...result, degraded: ['summary'] }
+  ask.mockResolvedValueOnce({ value: unsummarized })
+  expect(await core.conversations.publish(prepared, { requestId: 'routed', current: () => true })).toEqual(unsummarized)
   for (const value of [null, {}, { ...result, cwd: '/other' }, { ...result, file: 'other' }, { ...result, gitRepo: null }, { ...result, degraded: null }, { ...result, degraded: ['unknown'] }]) {
     ask.mockResolvedValueOnce({ value })
     await expect(core.conversations.publish(prepared, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })

@@ -28,6 +28,8 @@ import {
   permissionFlagToVerify,
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
+  engineUpdateCommand,
+  unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
   ENGINE_INPUT_DRAIN_SH,
@@ -41,7 +43,13 @@ import {
   unreadableCwdGuard,
   ZSH_GUARD_ZSHENV,
   zshNewUserGuard,
+  engineLaunchEnv,
+  buildEngineInstallationArgv,
 } from './engineLaunch.js'
+import { isHeldStartCommand, NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
+import { WindowsStartupUnverified } from './windows/engineStart.js'
+import { defaultWindowsShell } from './windows/shell.js'
+import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallRecipe, type EngineInstallRecipe } from './engineInstall.js'
@@ -51,7 +59,7 @@ import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
-import { resumeSessionId } from './tmux.js'
+import { resumeSessionId } from './processTable.js'
 
 // What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
 // zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
@@ -671,6 +679,126 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     expect(buildEngineLaunchArgv('claude', {}, 'zsh')).toEqual([engineBin('claude')])
   })
 
+  // Windows 11's default execution policy refuses npm's codex.ps1, which PowerShell would pick for a bare `codex`, and
+  // cmd.exe would re-read the first message if the .cmd shim ran it (lib/windows/launch.ts): node runs the script.
+  it('runs an npm engine on Windows as node on its script, never its .ps1 or .cmd', () => {
+    const npm = mkdtempSync(join(tmpdir(), 'engine-launch-npm-'))
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      for (const name of ['codex', 'codex.ps1', 'node.exe']) writeFileSync(join(npm, name), '')
+      writeFileSync(join(npm, 'codex.cmd'), readFileSync(join(import.meta.dirname, 'windows', 'fixtures', 'npm-codex.cmd')))
+      const script = join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+      mkdirSync(join(script, '..'), { recursive: true })
+      writeFileSync(script, '')
+      vi.stubEnv('PATH', npm)
+      vi.stubEnv('CODEX_PATH', '')
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      // The owned-process flag Codex's help listed (nativeLaunch.ts `startupArgs`) goes first, after the script.
+      const native = { startupArgs: ['--no-daemon'] } as unknown as NativeLaunch
+      expect(buildEngineCommandArgv('codex', { native, bypassPermission: true, firstPrompt: 'fix&calc "%PATH%"\n\nnext' }))
+        .toEqual([join(npm, 'node.exe'), script, '--no-daemon', '--approve-for-me', ...CODEX_SCREEN, ...firstPromptArgs('codex', 'fix&calc "%PATH%"\n\nnext')])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+      rmSync(npm, { recursive: true, force: true })
+    }
+  })
+
+  // Windows has no /usr/bin/env: the variables it carried ride in the pane's env (engineLaunchEnv).
+  it('never puts /usr/bin/env in front of a Windows launch, and gives its variables as env instead', () => {
+    const native = { token: 'native-token' } as NativeLaunch
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    let windows: string[][]
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      windows = [buildEngineLaunchArgv('claude', {}, ''), buildEngineLaunchArgv('claude', { native }, '')]
+    } finally { Object.defineProperty(process, 'platform', platform) }
+    // The engine itself first: its name here, its resolved exe on a real Windows (windows/launch.ts).
+    expect(windows[0][0]).toMatch(/(?:^|[\\/])claude(?:\.exe)?$/)
+    for (const argv of windows) expect(argv).not.toContain('/usr/bin/env')
+    expect(engineLaunchEnv('claude', native, 'win32')).toEqual({ [NATIVE_LAUNCH_MARKER]: 'native-token' })
+    expect(engineLaunchEnv('codex', undefined, 'win32')).toBeUndefined()
+    // Elsewhere the prefix stays in the argv, as before, and there is no env to add.
+    if (process.platform !== 'win32') expect(buildEngineLaunchArgv('claude', { native }, '').slice(0, 2)).toEqual(['/usr/bin/env', `${NATIVE_LAUNCH_MARKER}=native-token`])
+    expect(engineLaunchEnv('claude', native, 'darwin')).toBeUndefined()
+  })
+
+  describe('on Windows, which has no POSIX shell (lib/windows/engineStart.ts)', () => {
+    const POSIX_ONLY = /^(?:\/bin\/(?:sh|dash|bash|zsh)|\/usr\/bin\/env)$/
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const onWindows = <T>(run: () => T): T => {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      try { return run() } finally { Object.defineProperty(process, 'platform', platform) }
+    }
+    const executable = (current = true) => ({ command: '/fixture/codex', identity: 'fixture', current: () => current })
+    const native = (overrides: Partial<NativeLaunch> = {}): NativeLaunch => ({
+      token: '0f0e0d0c-0b0a-4908-8706-050403020100', executable: executable(), opencodeMajor: null, environment: {}, proofs: [],
+      ready: () => true, current: () => true, prepareHooks: async () => true, permission: async () => 'supported',
+      startupArgs: ['--no-daemon'], ...overrides,
+    })
+
+    it('has no interactive shell, whatever SHELL says (OpenSSH sets cmd.exe)', () => {
+      for (const shell of ['c:\\windows\\system32\\cmd.exe', '/bin/zsh', '/usr/bin/bash', undefined]) {
+        expect(onWindows(() => interactiveEngineShell(shell))).toBeNull()
+      }
+    })
+
+    it('starts a plain engine as itself: no script, no POSIX program', () => {
+      for (const shell of ['/bin/zsh', 'c:\\windows\\system32\\cmd.exe', '']) {
+        const argv = onWindows(() => buildEngineLaunchArgv('claude', { cwd: '/work', installIfMissing: engineInstallRecipe('claude'), clearEnv: ['A'] }, shell))
+        expect(argv).toEqual(onWindows(() => buildEngineCommandArgv('claude', {})))
+        expect(argv.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+      }
+    })
+
+    it('starts Codex, whose startup contract needs a script elsewhere, with the flag its help listed', () => {
+      const withFlag = onWindows(() => buildEngineLaunchArgv('codex', { native: native(), resumeSessionId: 'abc' }, '/bin/zsh'))
+      expect(withFlag).toEqual(['/fixture/codex', '--no-daemon', 'resume', 'abc', ...CODEX_SCREEN])
+      // An older Codex, whose help has no --no-daemon: none.
+      expect(onWindows(() => buildEngineLaunchArgv('codex', { native: native({ startupArgs: [] }) }, '')))
+        .toEqual(['/fixture/codex', ...CODEX_SCREEN])
+      for (const argv of [withFlag]) expect(argv.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+    })
+
+    it('refuses a Codex launch nobody probed, as the script ends one whose probe could not answer', () => {
+      for (const opts of [{}, { native: native({ startupArgs: undefined }) }]) {
+        expect(() => onWindows(() => buildEngineLaunchArgv('codex', opts, ''))).toThrow(WindowsStartupUnverified)
+        expect(() => onWindows(() => buildEngineCommandArgv('codex', opts))).toThrow('Could not verify Codex startup options. Please try opening this session again.')
+      }
+      // An engine with no startup probe needs none.
+      expect(onWindows(() => buildEngineCommandArgv('opencode', {}))).toHaveLength(1)
+      // Elsewhere the script probes, and the command carries no flag of its own.
+      if (process.platform !== 'win32') expect(buildEngineCommandArgv('codex', {})).toEqual([engineBin('codex'), ...CODEX_SCREEN])
+    })
+
+    it('runs a confirmed native launch as its engine, and holds one whose evidence changed', () => {
+      const confirmed = onWindows(() => buildEngineLaunchArgv('codex', { native: native() }, ''))
+      expect(confirmed).toEqual(['/fixture/codex', '--no-daemon', ...CODEX_SCREEN])
+      const token = native().token!
+      for (const changed of [
+        native({ executable: executable(false) }),
+        native({ ready: () => false }),
+        native({ proofs: [{ files: [], current: () => false }] as unknown as NativeLaunch['proofs'] }),
+      ]) {
+        const held = onWindows(() => buildEngineLaunchArgv('codex', { native: changed }, ''))
+        expect(held.slice(1, 2)).toEqual(['-e'])
+        expect(held.slice(3)).toEqual(['harness-held', 'Waiting for native launch preparation to be confirmed.', token])
+        expect(isHeldStartCommand(held.join(' '), token)).toBe(true)
+        expect(held.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+      }
+      // A native launch with no executable (a terminal's) has nothing to guard.
+      expect(onWindows(() => buildEngineLaunchArgv('claude', { native: native({ executable: undefined }) }, '')))
+        .toEqual(onWindows(() => buildEngineCommandArgv('claude', {})))
+    })
+
+    it('opens a terminal as the default Windows shell, and installs nothing through a POSIX shell', () => {
+      expect(onWindows(() => buildEngineLaunchArgv('terminal', { cwd: '/work', terminalHint: { machineName: 'box' } }, '/bin/zsh')))
+        .toEqual(defaultWindowsShell())
+      expect(() => onWindows(() => buildEngineInstallationArgv('codex', engineInstallRecipe('codex')!, { HOME: '/h' })))
+        .toThrow('Harness cannot install codex on Windows yet')
+    })
+  })
+
   it('appends the confirmed flag for engines with a known bypass flag', () => {
     expect(buildEngineCommandArgv('claude', { bypassPermission: true }))
       .toEqual([engineBin('claude'), '--permission-mode', 'auto'])
@@ -696,6 +824,14 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
+    // A Claude Buddy: what its guard does not allow is refused, never asked (Ken, 10-29).
+    // It reads only its own folder's settings and starts no MCP server: a teammate's committed hook or server would run
+    // with its person's credentials (Lead, 10-29).
+    expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
+      .toEqual([engineBin('claude'), '--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'])
+    // A Codex Buddy: reads in the sandbox, and asks the person at the terminal before anything outside it (Lead, 10-29).
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
+      .toEqual([engineBin('codex'), '--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"', ...CODEX_SCREEN])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
@@ -816,6 +952,23 @@ describe('a login shell that is not POSIX', () => {
   })
 })
 
+describe('a model and effort on launch', () => {
+  it('gives Claude Code its model and effort as flags of that session, ahead of the first prompt', () => {
+    expect(buildEngineCommandArgv('claude', { launchModel: { model: 'opus', effort: 'high' }, extraArgs: ['--x'], firstPrompt: 'go' }))
+      .toEqual([engineBin('claude'), '--x', '--model', 'opus', '--effort', 'high', 'go'])
+    expect(buildEngineCommandArgv('claude', { launchModel: { model: 'default', effort: 'default' } })).toEqual([engineBin('claude')])
+  })
+
+  it('keeps a model with shell characters one argv item, never part of a shell string', () => {
+    const argv = buildEngineCommandArgv('claude', { launchModel: { model: 'a$(id)', effort: null } })
+    expect(argv).toEqual([engineBin('claude'), '--model', 'a$(id)'])
+  })
+
+  it('leaves an engine without the flags as it was', () => {
+    expect(buildEngineCommandArgv('codex', { launchModel: { model: 'gpt-5', effort: 'high' } })).toEqual(buildEngineCommandArgv('codex'))
+  })
+})
+
 describe('a first prompt on launch', () => {
   const PROMPT = 'Start a local model on this machine'
 
@@ -852,7 +1005,13 @@ describe('a first prompt on launch', () => {
     try { buildEngineCommandArgv('cursor', { firstPrompt: PROMPT }) } catch (error) { refusal = error }
     expect(refusal).toBeInstanceOf(FirstPromptUnsupportedError)
     expect((refusal as FirstPromptUnsupportedError).code).toBe('PROMPT_UNSUPPORTED')
-    expect((refusal as FirstPromptUnsupportedError).message).toContain('cursor')
+    expect((refusal as FirstPromptUnsupportedError).message).toContain('Cursor')
+  })
+
+  // prompt_unsupported, 4 in the Oct 21–27 report: the refusal named the engine but not what to do instead.
+  it('says what to do instead: leave the first message out, or use an agent that takes one', () => {
+    expect(new FirstPromptUnsupportedError('cursor').message).toBe('Cursor cannot start with a first message. Start it without one '
+      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one.')
   })
 
   it('leaves the argv unchanged with no prompt, or an empty one', () => {
@@ -992,14 +1151,37 @@ exec ${ZSH} -c "$script" "$@"
 }
 
 describe('commandAvailableInInteractiveShell', () => {
+  it('reports a shell failure as unverified rather than a missing command', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-failed-probe-'))
+    dirs.push(dir)
+    const shell = join(dir, 'bash')
+    writeFileSync(shell, '#!/bin/sh\nexit 9\n')
+    chmodSync(shell, 0o700)
+    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
+    expect(result).toMatchObject({ status: 'unverified', detail: expect.stringContaining('9') })
+  })
+  it('bounds a hung shell probe and reports a timeout as unverified', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-slow-probe-'))
+    dirs.push(dir)
+    const shell = join(dir, 'bash')
+    writeFileSync(shell, '#!/bin/sh\nexec /bin/sleep 30\n')
+    chmodSync(shell, 0o700)
+    const started = Date.now()
+    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
+    expect(result).toEqual({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
+    expect(Date.now() - started).toBeLessThan(7_000)
+  }, 8_000)
   it('uses the same bash interactive PATH that launches a new engine', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-bin-'))
     dirs.push(binDir)
     executable(binDir, 'kilo')
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
-    await expect(commandAvailableInInteractiveShell('kilo', bashProbeShell())).resolves.toBe(true)
-    await expect(commandAvailableInInteractiveShell('missing-engine', bashProbeShell())).resolves.toBe(false)
+    const shell = bashProbeShell()
+    await expect(commandAvailableInInteractiveShell('kilo', shell)).resolves.toBe(true)
+    await expect(commandAvailableInInteractiveShell('missing-engine', shell)).resolves.toBe(false)
+    await expect(commandAvailableInInteractiveShell('kilo', shell, undefined, true)).resolves.toEqual({ status: 'available' })
+    await expect(commandAvailableInInteractiveShell('missing-engine', shell, undefined, true)).resolves.toEqual({ status: 'missing' })
   })
 
   it('recognizes an installed vendor path before the shell profile has it on PATH', async () => {
@@ -1043,6 +1225,22 @@ describe('the permission gates', () => {
     expect(refusal?.detail).toContain('--auto')
   })
 
+  // The install lines are POSIX shell: on Windows only an npm line runs as written (in PowerShell too).
+  it('names an update command only where it runs as written', () => {
+    expect(engineUpdateCommand('opencode', 'darwin')).toBe('curl -fsSL https://opencode.ai/install | bash')
+    expect(engineUpdateCommand('opencode', 'win32')).toBeNull()
+    expect(engineUpdateCommand('codex', 'win32')).toBe('npm install -g @openai/codex')
+    expect(engineUpdateCommand('terminal', 'darwin')).toBeNull()
+  })
+
+  // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how.
+  it('gives the command that updates the engine', async () => {
+    const shell = withFakeOpencode('--auto-update')
+    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
+    expect(refusal?.detail).toBe('The opencode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
+      + 'Update opencode by running curl -fsSL https://opencode.ai/install | bash, then try again, or choose Ask permissions for this harness.')
+  })
+
   it('lets a create through when the flag is there, and when there is no flag to check', async () => {
     const shell = withFakeOpencode('--auto')
     await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)).resolves.toBeNull()
@@ -1068,14 +1266,58 @@ describe('the permission gates', () => {
     }
     // A create in Ask is told to update, never to choose the Ask it chose.
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
-    expect(refusal?.detail).toContain('Update claude and try again.')
+    expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
+  })
+
+  it('holds a Buddy\'s relaunch rather than starting it without its mode (security review 1 of #2087)', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'codex', '--sandbox')
+    const held = await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'readOnlyAsk', bypassPermission: false }, bashProbeShell())
+    expect(held.choice).toEqual({ permissionMode: 'readOnlyAsk', bypassPermission: false })
+    expect(held.droppedFlag).toBeNull()
+    expect(held.nativeHold).toContain('does not support --ask-for-approval')
+    // A Claude Buddy's, too: a Claude Code with no --permission-mode is not relaunched in its own default.
+    fakeEngine(binDir, 'claude', '--resume')
+    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'buddy', bypassPermission: false }, bashProbeShell())
+    expect([claude.choice.permissionMode, claude.droppedFlag]).toEqual(['buddy', null])
+    expect(claude.nativeHold).toContain('does not support --permission-mode')
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {
     const shell = withFakeOpencode('--auto')
     const kept = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
     expect(kept).toEqual({ choice: { permissionMode: 'auto', bypassPermission: true }, droppedFlag: null })
+  })
+})
+
+describe('the launch model gate', () => {
+  function withFakeClaude(help: string): string {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'claude', help)
+    return bashProbeShell()
+  }
+
+  it('names the first flag a build of the engine lacks', async () => {
+    const shell = withFakeClaude('--model <model>')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBe('--effort')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: null }, shell)).resolves.toBeNull()
+  })
+
+  it('does not read a longer flag as the one it needs', async () => {
+    const shell = withFakeClaude('--model <model>\n--effort-hint')
+    await expect(unsupportedLaunchModelFlag('claude', { model: null, effort: 'high' }, shell)).resolves.toBe('--effort')
+  })
+
+  it('lets a build that has both flags through, and asks nothing for default or an engine without flags', async () => {
+    const shell = withFakeClaude('--model <model>\n--effort <level>')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBeNull()
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'default', effort: 'default' }, shell)).resolves.toBeNull()
+    await expect(unsupportedLaunchModelFlag('codex', { model: 'x', effort: 'high' }, shell)).resolves.toBeNull()
   })
 })
 

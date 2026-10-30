@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { CommanderMirror, type CommanderFrame } from './commander.js'
+import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts, type TierTurn } from './commander.js'
+import type { Tier } from './notifyTier.js'
 import { isLocalOnly, withoutUpdate } from './cardUpdate.js'
 import type { LiveEvent } from './normalize.js'
 import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
@@ -977,4 +978,119 @@ it('isLocalOnly marks only the shell result card', () => {
   expect(isLocalOnly({ type: 'commander_event', payload: { kind: 'tool' } })).toBe(false)
   expect(isLocalOnly({ type: 'commander_event' })).toBe(false)
   expect(isLocalOnly({ type: 'agent_deleted', payload: { kind: 'tool_end' } })).toBe(false)
+})
+
+describe('CommanderMirror decides each finished turn\'s tier once, for every screen', () => {
+  let dir = ''
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    dir = mkdtempSync(join(tmpdir(), 'adapter-commander-tier-'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const make = (decideTier: (turn: TierTurn) => Promise<Tier | null>, over: Partial<CommanderMirrorOpts> = {}) => {
+    const cards: CommanderFrame[] = []
+    const web: Record<string, unknown>[] = []
+    const mirror = new CommanderMirror({ send: (f) => cards.push(f), sendWeb: (f) => web.push(f), hasDevice: () => true,
+      summarize: async () => 'Deployed\n\nThe site is live.', summarizeIsLocal: true, dataDir: dir, decideTier, ...over })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const summaries = () => cards.filter((f) => f.payload.kind === 'summary').map((f) => f.payload)
+    const recaps = () => web.filter((f) => f.type === 'turn_summary').map((f) => f.payload as Record<string, unknown>)
+    return { mirror, cards, summaries, recaps }
+  }
+  const turnOf = (...events: Array<Record<string, unknown>>) => events as unknown as LiveEvent[]
+  const started = { type: 'turn_started', payload: { userMessage: 'ship it' } }
+  const reply = { type: 'text_delta', payload: { content: 'The site is live.' } }
+  const ended = { type: 'turn_ended', payload: {} }
+
+  it('carries the tier on the summary card and the apps\' recap, told the turn\'s duration, tests and commits', async () => {
+    const decideTier = vi.fn(async (_turn: TierTurn): Promise<Tier | null> => 'alert')
+    const { mirror, cards, summaries, recaps } = make(decideTier)
+    mirror.ingest(turnOf(started), 's')
+    vi.setSystemTime(125_000)
+    mirror.ingest(turnOf(
+      { type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: { command: 'npm test' } } },
+      { type: 'tool_end', payload: { id: 't1', tool: 'Bash', output: '', outputTail: ' Tests  3 passed (3)', isError: false, summary: '' } },
+      { type: 'tool_start', payload: { id: 'c1', tool: 'Bash', input: { command: 'git commit -m ship' } } },
+      { type: 'tool_end', payload: { id: 'c1', tool: 'Bash', output: '', outputTail: '[main 1a2b] ship', isError: false, summary: '' } },
+      reply, ended,
+    ), 's')
+    await vi.runAllTimersAsync()
+    expect(decideTier).toHaveBeenCalledExactlyOnceWith({ sessionId: 's', recap: 'Deployed', durationS: 125,
+      stats: { testsPassed: 3, testsFailed: 0, commits: 1 } })
+    expect(cards.map((f) => f.payload.kind).slice(-2)).toEqual(['done', 'summary'])
+    expect(summaries()).toEqual([{ kind: 'summary', text: 'The site is live.', recap: 'Deployed',
+      notification: { id: expect.any(String), kind: 'done' }, tier: 'alert' }])
+    expect(recaps()).toEqual([{ summary: 'Deployed\n\nThe site is live.', sessionId: 's',
+      notification: { id: expect.any(String), kind: 'done' }, tier: 'alert' }])
+  })
+
+  it('tells the decider the recap, or the body when the recap is empty; the card the body, or the recap', async () => {
+    const decideTier = vi.fn(async (_turn: TierTurn): Promise<Tier | null> => 'list')
+    // A recap with an empty body after it, then a body with no recap before it.
+    let summary = 'Deployed\n\n'
+    const { mirror, summaries } = make(decideTier, { summarize: async () => summary })
+    mirror.ingest(turnOf(started, reply, ended), 's')
+    await vi.runAllTimersAsync()
+    summary = '\n\nThe site is live.'
+    mirror.ingest(turnOf(started, reply, ended), 's')
+    await vi.runAllTimersAsync()
+    expect(decideTier.mock.calls.map(([turn]) => turn.recap)).toEqual(['Deployed', 'The site is live.'])
+    expect(summaries().map((card) => [card.text, card.recap])).toEqual([['Deployed', 'Deployed'], ['The site is live.', '']])
+  })
+
+  it('asks nobody about a turn that is not news: a sub-agent\'s is silent', async () => {
+    const decideTier = vi.fn(async (): Promise<Tier | null> => 'alert')
+    const { mirror, summaries, recaps } = make(decideTier, { isSubagent: () => true })
+    mirror.ingest(turnOf(started, reply, ended), 's')
+    await vi.runAllTimersAsync()
+    expect(decideTier).not.toHaveBeenCalled()
+    expect(summaries()).toEqual([expect.objectContaining({ subagent: true, notification: null, tier: 'silent' })])
+    expect(recaps()).toEqual([expect.objectContaining({ notification: null, tier: 'silent' })])
+  })
+
+  it('puts no tier on either frame when nobody is there to tell', async () => {
+    const { mirror, summaries, recaps } = make(async () => null)
+    mirror.ingest(turnOf(started, reply, ended), 's')
+    await vi.runAllTimersAsync()
+    expect(summaries()).toHaveLength(1)
+    expect(summaries()[0]).not.toHaveProperty('tier')
+    expect(recaps()[0]).not.toHaveProperty('tier')
+  })
+
+  it('does not hold a recap for a newer turn: it goes out at the fallback\'s tier before that turn\'s first card', async () => {
+    let answer: (tier: Tier | null) => void = () => {}
+    const decideTier = vi.fn(() => new Promise<Tier | null>((resolve) => { answer = resolve }))
+    const { mirror, cards, summaries, recaps } = make(decideTier)
+    mirror.ingest(turnOf(started), 's')
+    vi.setSystemTime(130_000)
+    mirror.ingest(turnOf(reply, ended), 's')
+    await vi.runAllTimersAsync()
+    expect(decideTier).toHaveBeenCalledTimes(1)
+    expect(summaries()).toEqual([])
+    mirror.ingest(turnOf(started), 's')
+    expect(cards.map((f) => f.payload.kind).slice(-4)).toEqual(['done', 'summary', 'turn_started', 'processing'])
+    expect(summaries()).toEqual([expect.objectContaining({ tier: 'list' })])
+    // The decision that arrives afterwards changes nothing: the recap was told once.
+    answer('alert')
+    await vi.runAllTimersAsync()
+    expect(summaries()).toHaveLength(1)
+    expect(recaps()).toEqual([expect.objectContaining({ tier: 'list' })])
+  })
+
+  it('falls back to the rule when the decider fails, and knows no duration for a turn picked up mid-way', async () => {
+    const decideTier = vi.fn(async (_turn: TierTurn): Promise<Tier | null> => { throw new Error('no decision') })
+    const { mirror, summaries } = make(decideTier)
+    // Attached mid-turn: its start is a replay, the rest of it is live and still news.
+    mirror.ingest(turnOf(started), 's', { replay: true })
+    vi.setSystemTime(600_000)
+    mirror.ingest(turnOf(reply, ended), 's')
+    await vi.runAllTimersAsync()
+    expect(decideTier.mock.calls[0][0]).toMatchObject({ durationS: null, stats: {} })
+    expect(summaries()).toEqual([expect.objectContaining({ tier: 'silent' })])
+  })
 })

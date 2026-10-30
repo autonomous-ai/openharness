@@ -32,6 +32,7 @@ import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
+import { MACHINE_KINDS_READ_TIMEOUT_MS, MachineKinds, machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -131,11 +132,26 @@ const PAIR_STATUS: Record<string, number> = {
 export function startGateway(host: GatewayHost): StartedGateway {
   let account = host.account
   let reachable: Set<string> | null = null
+  // Which of the account's machines are team machines, whose rosters the trust group never takes (lib/e2ee/machineKinds.ts).
+  // Its own read, apart from the machine list the apps get: it changes neither that list nor which machines are reachable,
+  // and a backend that hangs holds a roster round up for seconds, not the proxy's whole bound.
+  const machineKinds = new MachineKinds({
+    read: async () => {
+      const answer = await accountHttp.backend('GET', '/api/machines', undefined, MACHINE_KINDS_READ_TIMEOUT_MS)
+      return answer.status === 200 && account.machineId ? answer.body : null
+    },
+  })
   const accountHttp = createAccountHttp({
     tokens: host.tokens, account: () => account,
     computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
     changed: host.machines,
     reachable: (ids) => { reachable = ids ? new Set(ids) : null },
+    listed: (body) => {
+      if (!body) { machineKinds.clear(); return }
+      machineKinds.adopt(body)
+      // A machine marked gone (deleted, remoteRelay.ts) that the list names again is back: pin it again from the roster now.
+      if (relayPeers.restore(machineKindsOf(body)?.keys() ?? [])) groupSyncer?.resume()
+    },
     log: (line) => console.log(`[gateway] ${line}`),
   })
   const gateway = new RelayGateway({
@@ -148,7 +164,9 @@ export function startGateway(host: GatewayHost): StartedGateway {
     context: { surface: 'cli', release: VERSION, platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'other', channel: host.autonomousEnv === 'prod' && IS_RELEASE_BUILD ? 'production' : 'development' },
     sample: gatewayResourceSample(),
   }) : null
-  if (usage) { gateway.productUsage = usage; void usage.sync() }
+  // The choice is read at once, so collection starts with the gateway; its first report waits for its first
+  // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.
+  if (usage) { gateway.productUsage = usage; void usage.sync(false) }
 
   /** The identity this machine was removed under is never used again: the next start mints a new one. */
   const spendIdentity = (): void => {
@@ -197,12 +215,12 @@ export function startGateway(host: GatewayHost): StartedGateway {
   )
   // The Share relay: a window here watching a harness someone shared with this account, over its own
   // socket to the backend (`/api/observer-ws`), signed in with the account's token. It finds the share
-  // among those the backend lists for this account first.
+  // among those the backend lists for this account first, a list kept a minute for this sign-in (sharing/relay.ts).
   const shareRelay = new HarnessShareRelay(host.tokens, env.BACKEND_WS_URL, host.autonomousEnv, async () => {
     const result = await accountHttp.backend('GET', '/api/harness-shares')
     if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
-  })
+  }, () => JSON.stringify([account.machineId, account.autonomousEnv ?? null, account.signIn?.epoch ?? null, account.signIn?.acct ?? null]))
   const windowRelay: Required<WindowRelay> = {
     acquire: (...args) => relayPool.acquire(...args),
     acquireIsolated: (...args) => relayPool.acquireIsolated(...args),
@@ -230,6 +248,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Only a list the backend answered says who is offline; otherwise try every member.
     reachable: () => reachable,
     shared: (pub) => isSharedKey(gateway.pairedPeers(), pub),
+    machineKinds,
     ready: () => devLogSyncer?.current() ?? false,
     log: (line) => console.log(line),
   })
@@ -517,6 +536,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
       // under a new sign-in, even when both accounts happen to have the same preference revision.
       if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv
           || next.signIn?.epoch !== account.signIn?.epoch || next.signIn?.acct !== account.signIn?.acct) void usage?.stop(true)
+      // Another account's machine list says nothing of this one's machines.
+      if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv) machineKinds.clear()
       account = next
       startGroup()
       registerAndSweep()
@@ -558,8 +579,11 @@ export function startGateway(host: GatewayHost): StartedGateway {
     ops,
     windowRelay,
     stop: async () => {
-      // Shutdown never waits for the optional disk queue. The stopped collector cannot upload.
-      void usage?.stop()
+      // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
+      // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write
+      // already on its way can still rename an older snapshot over it and put the final state back after: waited for
+      // below, at most half a second, so an exit in between does not read as an unclean restart (review of #1393).
+      const usageStopped = usage?.stop()
       clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
@@ -569,6 +593,10 @@ export function startGateway(host: GatewayHost): StartedGateway {
       tabKey.clear()
       tabRelay.closeAll()
       await gateway.stop()
+      if (usageStopped) {
+        await Promise.race([usageStopped.catch(() => false),
+          new Promise<void>(resolve => { setTimeout(resolve, 500).unref?.() })])
+      }
     },
   }
 }

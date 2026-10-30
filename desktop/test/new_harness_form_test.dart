@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
@@ -51,6 +53,18 @@ class _Git extends WsConn {
     }
     return {};
   }
+}
+
+/// A controller whose list is what the test gives it: the form draws whatever
+/// a controller lists, including shapes today's lists do not have (headings
+/// outside Model, a folder on another machine in the desktop chooser).
+class _Listed extends NewHarnessController {
+  _Listed(super.app, {required super.machineId, super.folder});
+
+  List<NewHarnessOption>? listed;
+
+  @override
+  List<NewHarnessOption> get options => listed ?? super.options;
 }
 
 void main() {
@@ -894,5 +908,86 @@ void main() {
     await type(tester, 'harness');
     expect(harnessChoicesActive(tester), isTrue);
     expect(find.text('Select Item'), findsNothing);
+  });
+
+  testWidgets(
+    'the desktop chooser heads any grouped list in small type, and names another machine\'s folder',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1100, 800);
+      addTearDown(tester.view.reset);
+      final app = createApp(connectionForTest: (_) => _Git(), connected: true);
+      app.machineStates['other'] = MachineState(
+        const Machine(
+          machineId: 'other',
+          name: 'Other Mac',
+          authMode: MachineAuthMode.remote,
+        ),
+      );
+      addTearDown(app.dispose);
+      final box = _Listed(app, machineId: 'm', folder: '/work/repo');
+      addTearDown(box.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NewHarnessForm(
+              controller: box,
+              onClose: () {},
+              onCreated: () {},
+              desktop: true,
+              embedded: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
+      await tester.pumpAndSettle();
+      expect(box.field, isNot(NewHarnessField.model));
+      box.listed = const [
+        NewHarnessOption(
+          id: 'project:here',
+          title: 'repo',
+          detail: 'Test host:~/work/repo',
+          group: 'This computer',
+          project: NewHarnessProject.folder('/work/repo'),
+          machineId: 'm',
+        ),
+        NewHarnessOption(
+          id: 'project:other',
+          title: 'site',
+          detail: 'Other Mac:~/site',
+          group: 'Other Mac',
+          project: NewHarnessProject.folder('/Users/lee/site'),
+          machineId: 'other',
+        ),
+      ];
+      // A search redraws the list; this one lists the same two whatever is typed.
+      box.setQuery('s');
+      await tester.pumpAndSettle();
+      for (final heading in ['This computer', 'Other Mac']) {
+        final text = tester.widget<Text>(find.text(heading));
+        expect(text.style?.fontSize, 11);
+      }
+      // This machine's folder by its path; another's with that machine's name.
+      expect(find.text('~/work/repo'), findsOneWidget);
+      expect(find.text('Other Mac · ~/site'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a dismiss sent to the query field does what Escape does', (
+    tester,
+  ) async {
+    final box = await mount(tester, engine: 'codex');
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.projectMenu);
+    final query = find.byKey(const ValueKey('new-harness-query'));
+    Actions.invoke(tester.element(query), const DismissIntent());
+    await tester.pumpAndSettle();
+    final dismissed = box.field;
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.projectMenu);
+    await press(tester, LogicalKeyboardKey.escape);
+    expect(box.field, dismissed);
   });
 }

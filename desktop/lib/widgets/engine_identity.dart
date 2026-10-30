@@ -116,6 +116,16 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://pi.dev',
     blurb: "A small, extensible coding agent for the terminal.",
   ),
+  'omp': EngineIdentity(
+    id: 'omp',
+    label: 'Oh My Pi',
+    category: 'Code',
+    tagline: 'Terminal coding agent, built on Pi',
+    creator: 'can1357',
+    color: Colors.white,
+    homepage: 'https://github.com/can1357/oh-my-pi',
+    blurb: "A batteries-included coding agent for the terminal, built on Pi.",
+  ),
   'hermes': EngineIdentity(
     id: 'hermes',
     label: 'Hermes',
@@ -861,6 +871,23 @@ const EngineIdentity _terminal = EngineIdentity(
   color: Color(0xffa8b0b8),
 );
 
+/// A Finder tile's id in New Harness's agent list (`lib/finder/`): a folder
+/// browsed in place — its files, previews and Git changes — with no process
+/// behind it. Like [kTerminalEngine] it is not in [_engines]: nothing to
+/// probe, install or launch, and the daemon never hears this id.
+const String kFinderEngine = 'finder';
+
+const EngineIdentity _finder = EngineIdentity(
+  id: kFinderEngine,
+  label: 'Finder',
+  category: 'Files',
+  tagline: 'Browse files, previews and Git changes',
+  blurb:
+      'A folder as a tree, with each file previewed beside it and the '
+      'folder’s Git changes shown as diffs. Nothing runs, nothing to install.',
+  color: Color(0xff7fb4e8),
+);
+
 /// The cloud agents (CLI lib/cloudAgents.ts): agents that run on their maker's
 /// servers, reached through its API, with no terminal here. A SEPARATE map from
 /// [_engines] for the reason [_harnesses] is one: never probed as an engine
@@ -926,6 +953,12 @@ EngineIdentity get terminalIdentity => _terminal;
 /// Whether [engine] is the shell rather than an agent.
 bool isTerminalEngine(String? engine) => engine == kTerminalEngine;
 
+/// The Finder's face, for New Harness's agent list.
+EngineIdentity get finderIdentity => _finder;
+
+/// Whether [engine] is the Finder: a folder to browse, not a process to start.
+bool isFinderEngine(String? engine) => engine == kFinderEngine;
+
 /// All known engines, in declaration order — for the New Agent engine picker.
 List<EngineIdentity> get allEngines => _engines.values.toList(growable: false);
 
@@ -944,7 +977,11 @@ EngineIdentity engineIdentity(String? engine, {String? displayName}) {
       _cloudAgents[id] ??
       _harnesses[canonicalHarnessId(id)] ??
       _linkedHarnesses[id] ??
-      (id == kTerminalEngine ? _terminal : null);
+      switch (id) {
+        kTerminalEngine => _terminal,
+        kFinderEngine => _finder,
+        _ => null,
+      };
   if (known != null) return known;
   final raw = displayName?.trim().isNotEmpty == true
       ? displayName!.trim()
@@ -1031,6 +1068,13 @@ class EngineMark extends StatelessWidget {
             // The shell's pale steel is 1.8:1 on a light workspace; there it
             // takes the secondary ink (5.0:1).
             color: dark ? identity.color : AppColors.mutedStrong,
+          )
+        : identity.id == kFinderEngine
+        ? Icon(
+            AppIcons.folderOpen,
+            key: const ValueKey('engine-icon-finder'),
+            size: size,
+            color: dark ? identity.color : AppColors.accent,
           )
         : _InitialMark(
             key: ValueKey('engine-fallback-${identity.id}'),

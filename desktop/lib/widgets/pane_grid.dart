@@ -1,3 +1,8 @@
+// A browser leaves the Finder out of main.dart.js until a Finder tile is drawn.
+import '../finder/widgets/finder_pane_panel.dart'
+    if (dart.library.js_interop) '../web/parts/finder_pane_panel.dart';
+import '../super_tabs/pane.dart';
+import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -13,7 +18,7 @@ import 'window_chrome.dart';
 import '../clipboard/image_bytes.dart';
 import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
-import '../core/models.dart' show Agent, kUntitledPane;
+import '../core/models.dart' show Agent, ConnectionStatus, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
@@ -25,7 +30,9 @@ import '../state/app_state.dart';
 import '../state/harness_sessions.dart' show heldLaunchDetail;
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
+import 'pane_fixed_width.dart';
 import '../state/terminal_pane.dart';
+import '../state/workspace_chrome.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_session.dart';
@@ -312,6 +319,9 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   Size? _viewportSize;
   bool _focusRevealPending = false;
 
+  /// The most columns the host draws at this window's width, read at build.
+  int? _maxColumns;
+
   /// The view drawn alone: the real zoom, or [soloPaneId] when solo.
   int? get _shownZoom => widget.soloFocused
       ? soloPaneId(widget.notifier)
@@ -427,7 +437,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       preset: app.presetFor(panes.length),
       minimum: _MinTile.of(),
       sizes: app.activeSwarm.paneSizes,
-    );
+    ).within(_maxColumns, viewport: viewport, minimum: _MinTile.of());
     final rect = geometry.rectangles[index];
     void reveal(
       ScrollController scroll,
@@ -500,6 +510,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       machine: machine?.machine,
       local: machine?.isLocalMachine,
       online: machine?.nodeOnline,
+      // The web words a computer on its way back; the pane follows it.
+      connection: machine?.connectionStatus,
       needsLink: machine?.needsLink,
       localTransport: machine?.usesLocalTransport,
       agent: agent,
@@ -573,9 +585,25 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           );
         }
         if (layout.columns != null) app.gridColumns = layout.columns;
+        _maxColumns = WorkspaceChrome.of(context)
+            .maxPaneColumnsAt(MediaQuery.sizeOf(context).width);
+        final drawn = layout.within(
+          _maxColumns,
+          viewport: constraints.biggest,
+          minimum: _MinTile.of(),
+        );
+        // A tile that asks for its own width (a Finder showing only its
+        // files) takes it; its divider is not dragged while it does.
+        final pinned = pinFixedColumn(
+          drawn.rectangles,
+          [for (final pane in visible) pane.fixedWidth],
+          Size(drawn.width, drawn.height),
+          gap: kPaneGap,
+          minOther: _MinTile.of().width,
+        );
+        final tiles = pinned ?? drawn.rectangles;
         final rectangles = {
-          for (var i = 0; i < visible.length; i++)
-            visible[i].id: layout.rectangles[i],
+          for (var i = 0; i < visible.length; i++) visible[i].id: tiles[i],
         };
         final retainedIds = app.allPanes.map((pane) => pane.id).toSet();
         _inputLayers.removeWhere((id, _) => !retainedIds.contains(id));
@@ -588,7 +616,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           child: Scrollbar(
             key: const ValueKey('swarm-horizontal-scrollbar'),
             controller: _horizontalScroll,
-            thumbVisibility: layout.width > constraints.maxWidth,
+            thumbVisibility: drawn.width > constraints.maxWidth,
             scrollbarOrientation: ScrollbarOrientation.bottom,
             notificationPredicate: (notification) =>
                 notification.depth == 1 &&
@@ -605,8 +633,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                   child: ScrollConfiguration(
                     behavior: scrollBehavior,
                     child: SizedBox(
-                      width: layout.width,
-                      height: layout.height,
+                      width: drawn.width,
+                      height: drawn.height,
                       child: Stack(
                         children: [
                           if (visible.isEmpty)
@@ -651,7 +679,11 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                   ),
                                 ),
                               ),
+                          // Dividers resize the recorded layout, so none
+                          // while a narrower drawing stands in for it.
                           if (_shownZoom == null &&
+                              pinned == null &&
+                              identical(drawn, layout) &&
                               layout.arrangement?.dividers.isNotEmpty == true)
                             Positioned.fill(child: _resizeLayer(layout)),
                         ],
@@ -838,22 +870,67 @@ class _SwarmGeometry {
         double.infinity,
       );
     }
-    rectangles = [
-      for (final tile in arrangement!.tiles)
-        Rect.fromLTWH(
-          tile.left * (width + kPaneGap),
-          tile.top * (height + kPaneGap),
-          (tile.width * (width + kPaneGap) - kPaneGap).clamp(
-            0,
-            double.infinity,
-          ),
-          (tile.height * (height + kPaneGap) - kPaneGap).clamp(
-            0,
-            double.infinity,
-          ),
-        ),
-    ];
+    rectangles = _pixels(arrangement!.tiles, width, height);
   }
+
+  /// [tiles] across [viewport]'s width, each row at least [minimum] tall:
+  /// taller than the viewport, and scrolled, when the rows need it.
+  _SwarmGeometry._balanced(
+    List<Rect> tiles, {
+    required Size viewport,
+    required Size minimum,
+  }) : width = viewport.width,
+       height = viewport.height {
+    final rows = {for (final tile in tiles) tile.top}.length;
+    height = (rows * minimum.height + kPaneGap * (rows - 1)).clamp(
+      viewport.height,
+      double.infinity,
+    );
+    arrangement = PaneArrangement(tiles);
+    rectangles = _pixels(tiles, width, height);
+  }
+
+  /// This layout drawn at most [maxColumns] wide, the tiles in balanced rows:
+  /// a tablet browser's grid ([WorkspaceChrome.maxPaneColumnsAt]). Only the
+  /// drawing — what the tab records stays this layout, so the same desk keeps
+  /// its grid on a computer. Itself when it is no wider than that.
+  _SwarmGeometry within(
+    int? maxColumns, {
+    required Size viewport,
+    required Size minimum,
+  }) {
+    final tiles = arrangement?.tiles;
+    if (maxColumns == null || tiles == null) return this;
+    final columns = {for (final tile in tiles) tile.left}.length;
+    if (columns <= maxColumns) return this;
+    final shape = switch (maxColumns) {
+      <= 2 => PanePreset.balanced2,
+      3 => PanePreset.balanced3,
+      4 => PanePreset.balanced4,
+      _ => PanePreset.balanced5,
+    };
+    return _SwarmGeometry._balanced(
+      shape.tilesFor(tiles.length),
+      viewport: viewport,
+      minimum: minimum,
+    );
+  }
+
+  /// Unit [tiles] in pixels on a [width] by [height] canvas. A boundary at
+  /// fraction f lands at f * (extent + gap), less one gap per tile.
+  static List<Rect> _pixels(List<Rect> tiles, double width, double height) => [
+    for (final tile in tiles)
+      Rect.fromLTWH(
+        tile.left * (width + kPaneGap),
+        tile.top * (height + kPaneGap),
+        (tile.width * (width + kPaneGap) - kPaneGap).clamp(0, double.infinity),
+        (tile.height * (height + kPaneGap) - kPaneGap).clamp(
+          0,
+          double.infinity,
+        ),
+      ),
+  ];
+
   String? key;
   PaneArrangement? arrangement;
   double width, height;
@@ -1549,11 +1626,25 @@ class _PaneContent extends StatelessWidget {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
     final swarmId = notifier.activeSwarmId;
-    void close() {
+    void closeView() {
       // A tab switch can precede the frame that replaces this callback. Shared
       // panes keep their identity, so the pane id alone cannot identify its tab.
       if (notifier.activeSwarmId != swarmId) return;
       unawaited(notifier.requestClosePane(pane.id));
+    }
+
+    final superPane = SuperPane.maybeOf(context);
+    final VoidCallback? close = superPane == null ? closeView : null;
+    final failure = superPane?.failures[(pane.machineId, pane.agentId)];
+    if (failure != null) {
+      return _PaneStatus(
+        title:
+            superPane?.titleFor(pane.machineId, pane.agentId ?? '') ?? 'Agent',
+        icon: AppIcons.terminal,
+        message: failure,
+        actionLabel: 'Retry',
+        onAction: superPane?.onRetry,
+      );
     }
 
     VoidCallback? split(PaneResizeAxis axis) =>
@@ -1576,6 +1667,17 @@ class _PaneContent extends StatelessWidget {
         hasAccess:
             machine?.machine.sharedHarnesses.any((s) => s.id == grant.id) ==
             true,
+      );
+    }
+
+    // A folder browsed in place: no agent and no terminal behind it.
+    if (pane.finderRoot case final root? when pane.isFinder) {
+      return FinderPanePanel(
+        key: ValueKey('finder-pane-${pane.id}'),
+        root: root,
+        onGuardClose: (guard) => pane.beforeClose = guard,
+        onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
+        compactHeader: swarmMode,
       );
     }
 
@@ -1602,7 +1704,10 @@ class _PaneContent extends StatelessWidget {
         onClose: close,
         compactHeader: swarmMode,
         zoomed: notifier.zoomedPaneId == pane.id,
-        onToggleZoom: swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+        onToggleZoom:
+            superPane == null &&
+                swarmMode &&
+                (!single || notifier.zoomedPaneId == pane.id)
             ? () {
                 notifier.focusPane(pane.id);
                 notifier.toggleZoomPane();
@@ -1646,6 +1751,14 @@ class _PaneContent extends StatelessWidget {
         machine != null &&
         (machine.nodeOnline == false ||
             (machine.isLocalMachine && !machine.usesLocalTransport));
+    // On its way back rather than gone: worded where the host labels pane
+    // states (the web), and not typed into until it is back.
+    final dialing =
+        WorkspaceChrome.of(context).labelsPaneStatus &&
+        machine != null &&
+        !machine.machine.isShared &&
+        (machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting);
 
     // Availability changes the header and input permission, never the renderer's
     // ancestry. Retained output, selection, scroll and Find stay in this view.
@@ -1740,17 +1853,42 @@ class _PaneContent extends StatelessWidget {
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
+      } else if (dialing) {
+        final again = machine.connectionStatus == ConnectionStatus.reconnecting;
+        notice = terminalNotice(
+          label: again ? 'Reconnecting…' : 'Connecting…',
+          icon: AppIcons.refreshCw,
+          detail:
+              '${again ? 'Reconnecting' : 'Connecting'} to ${machine.machine.displayName}. Keys typed now are not sent.',
+          dimsScreen: true,
+        );
       } else if (agent?.isStopped == true) {
         final opening = notifier.pendingAgentRestart(
           pane.machineId,
           wantedAgentId!,
         );
+        final resume = superPane?.onResume;
+        final canResume = resume != null && !machine.belongsToOtherAccount;
         notice = terminalNotice(
           label: opening?.busy == true ? 'Opening' : 'Stopped',
           icon: AppIcons.terminal,
-          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
-          actionLabel: opening?.busy == true ? null : 'Open',
-          onAction: () => notifier.openSavedPane(pane.id).ignore(),
+          detail:
+              opening?.result?.error ??
+              (superPane != null
+                  ? 'This agent is stopped. Retained output is read only.'
+                  : 'Open to continue your saved conversation. Retained output is read only.'),
+          actionLabel: opening?.busy == true
+              ? null
+              : superPane == null
+              ? 'Open'
+              : canResume
+              ? 'Resume'
+              : null,
+          onAction: superPane == null
+              ? () => notifier.openSavedPane(pane.id).ignore()
+              : canResume
+              ? () => resume(pane.machineId, wantedAgentId)
+              : null,
           banner: true,
         );
       } else if (agent != null && agent.launchState == 'held') {
@@ -1800,8 +1938,13 @@ class _PaneContent extends StatelessWidget {
         notice = null;
       }
       // Joining a shared tab: dimmed until the tab's owner's computer answers.
-      final joining = wantedAgentId != null &&
-          sharedPaneChipState(notifier, pane.machineId, wantedAgentId).joining !=
+      final joining =
+          wantedAgentId != null &&
+          sharedPaneChipState(
+                notifier,
+                pane.machineId,
+                wantedAgentId,
+              ).joining !=
               null;
       final panel = LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
@@ -1825,6 +1968,10 @@ class _PaneContent extends StatelessWidget {
           visible: visible,
           compactHeader: swarmMode,
           composerVisible: pane.composerVisible,
+          firstTask: pane.firstTask,
+          onFirstTaskSubmitted: pane.firstTask == null
+              ? null
+              : () => pane.firstTask = '',
           // Launch progress/failure describes the engine, not permission to
           // type into its terminal. Connection and control ownership still
           // gate input independently in TerminalPanel/TerminalSession.
@@ -1834,6 +1981,7 @@ class _PaneContent extends StatelessWidget {
               machine == null ||
               needsLink ||
               offline ||
+              dialing ||
               agent == null ||
               !agent.terminalAvailable,
           notice: notice,
@@ -1860,7 +2008,9 @@ class _PaneContent extends StatelessWidget {
                 ),
           zoomed: notifier.zoomedPaneId == pane.id,
           onToggleZoom:
-              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+              superPane == null &&
+                  swarmMode &&
+                  (!single || notifier.zoomedPaneId == pane.id)
               ? () {
                   notifier.focusPane(pane.id);
                   notifier.toggleZoomPane();
@@ -1992,6 +2142,31 @@ class _PaneContent extends StatelessWidget {
       );
     }
     if (agent?.isStopped == true) {
+      if (superPane != null) {
+        final resume = superPane.onResume;
+        return Column(
+          children: [
+            _PaneHeader(
+              title:
+                  superPane.titleFor(pane.machineId, wantedAgentId) ??
+                  agentName,
+              activity: activityMark,
+            ),
+            Divider(height: 1, color: AppColors.border),
+            Expanded(
+              child: SuperTabSavedSession(
+                key: ValueKey((pane.machineId, wantedAgentId)),
+                app: notifier,
+                machineId: pane.machineId,
+                harnessId: wantedAgentId,
+                onResume: resume != null && !machine.belongsToOtherAccount
+                    ? () => resume(pane.machineId, wantedAgentId)
+                    : null,
+              ),
+            ),
+          ],
+        );
+      }
       final opening = notifier.pendingAgentRestart(
         pane.machineId,
         wantedAgentId,
@@ -2418,7 +2593,7 @@ class _Guide extends StatelessWidget {
   });
 
   final bool single;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   final String title;
   final Widget? activity;
   final String compactMessage;

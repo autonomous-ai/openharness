@@ -2,7 +2,8 @@ import { emitKeypressEvents } from 'node:readline'
 
 /** The accounts a browser sign-in goes straight to (backend `SIGN_IN_PROVIDERS`). */
 export type SignInProvider = 'google' | 'apple'
-export type SignInMethod = SignInProvider | 'qr'
+/** `code`: a short code said aloud, for a device with no screen (#1410) — a flag only, never picked. */
+export type SignInMethod = SignInProvider | 'qr' | 'code'
 
 const OPTIONS: Array<{ method: SignInMethod; label: string }> = [
   { method: 'google', label: 'Google in your browser' },
@@ -10,9 +11,9 @@ const OPTIONS: Array<{ method: SignInMethod; label: string }> = [
   { method: 'qr', label: 'Scan a QR with Harness on your phone' },
 ]
 
-/** `harness login --google|--apple|--qr`: the method a flag names, so nothing is asked. */
+/** `harness login --google|--apple|--qr|--code`: the method a flag names, so nothing is asked. */
 export const signInMethodFlag = (flags: readonly string[]): SignInMethod | undefined =>
-  OPTIONS.find((option) => flags.includes(`--${option.method}`))?.method
+  OPTIONS.find((option) => flags.includes(`--${option.method}`))?.method ?? (flags.includes('--code') ? 'code' : undefined)
 
 /** How a provider is written for a person: `Google`, `Apple`. */
 export const signInProviderName = (provider: SignInProvider): string =>

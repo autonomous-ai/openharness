@@ -6,13 +6,17 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
+import { localCredentialHeaders } from '../lib/localCredential.js'
 import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
+import { savedDaemonPort } from '../lib/daemonEndpoint.js'
+import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
+import { pipeWebSocket } from '../lib/windows/pipeClient.js'
 import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
-import { localSocketPath } from '../lib/localSocket.js'
-import { paneOwner } from '../messages/command.js'
+import { unixSocketPath } from '../lib/localSocket.js'
+import { paneOwner, sendPane } from '../messages/command.js'
 
 export class AgentClientError extends Error {
   /** [reason]: which limit or rule refused, for a refusal (`SPAWN_LIMIT`'s `OPEN_LIMIT`, `TURNED_OFF`'s `SWITCH_OFF`). */
@@ -24,7 +28,7 @@ export interface Where {
   port: number
   dataDir: string
   machineId: string
-  /** The caller's pane is one a Harness daemon made (it carries the daemon's tag). */
+  /** The caller's pane is one a Harness daemon made (tmux owner tag or native host name). */
   harnessPane?: boolean
 }
 
@@ -45,7 +49,7 @@ export interface ClientSocket {
   on(event: 'error', listener: (error: Error) => void): unknown
 }
 
-export type Connect = (where: Where) => ClientSocket
+export type Connect = (where: Where) => ClientSocket | Promise<ClientSocket>
 
 /** The daemon that made [pane], else the one this CLI's settings name. */
 export function whereFor(pane: string | undefined, owner: typeof paneOwner = paneOwner): Where {
@@ -53,22 +57,32 @@ export function whereFor(pane: string | undefined, owner: typeof paneOwner = pan
   // What the daemon runs as (`wantedDaemonIdentity` in cli.ts): signed out, this computer's id. Signed out, the app made
   // harnesses and `harness new` refused to.
   const machineId = readAuthSession()?.machineId || computerId()
-  return { port: found?.port ?? env.PORT, dataDir: found?.dataDir ?? env.ADAPTER_DATA_DIR, machineId, harnessPane: !!found }
+  return { port: found?.port ?? env.PORT, dataDir: found?.dataDir ?? env.ADAPTER_DATA_DIR, machineId,
+    harnessPane: !!found || (!!pane && pane.startsWith('p') && sendPane({ HARNESS_PANE: pane }) === pane) }
 }
 
-/** The Unix socket when the daemon has one (file permissions are its lock), else loopback TCP. */
-export const connectSocket: Connect = (where) => {
-  const path = localSocketPath(where.dataDir, where.port)
-  return path && existsSync(path) ? new WebSocket(`ws+unix://${path}:/api/local-ws`) : new WebSocket(`ws://127.0.0.1:${where.port}/api/local-ws`)
+/** The Unix socket on macOS/Linux, or the authenticated daemon pipe on Windows. The Unix legacy
+ *  fallback uses loopback TCP and the local credential; Windows never sends that credential to a
+ *  port whose listener may belong to another OS user or outlive a stale daemon record. */
+export async function connectSocket(where: Where, options: LocalDaemonOptions = {}): Promise<ClientSocket> {
+  if ((options.platform ?? process.platform) === 'win32') {
+    const target = await (options.pipe ?? daemonPipe)(where.dataDir, where.port)
+    if (!target) throw new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(null, where.dataDir))
+    return pipeWebSocket(target)
+  }
+  const path = unixSocketPath(where.dataDir, where.port)
+  return path && existsSync(path)
+    ? new WebSocket(`ws+unix://${path}:/api/local-ws`)
+    : new WebSocket(`ws://127.0.0.1:${savedDaemonPort(where.dataDir, where.port)}/api/local-ws`, { headers: localCredentialHeaders(where.dataDir) })
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000
 
 /** Opens a line to [machineId] (this machine when left out) through [where]'s daemon. */
-export function openDaemon(where: Where, machineId: string = where.machineId, connect: Connect = connectSocket): Promise<Daemon> {
-  if (!where.machineId) return Promise.reject(new AgentClientError('NOT_SIGNED_IN', 'This computer has no Harness machine id yet. Run `harness login`.'))
+export async function openDaemon(where: Where, machineId: string = where.machineId, connect: Connect = connectSocket): Promise<Daemon> {
+  if (!where.machineId) throw new AgentClientError('NOT_SIGNED_IN', 'This computer has no Harness machine id yet. Run `harness login`.')
+  const socket = await connect(where)
   return new Promise((resolveOpen, rejectOpen) => {
-    const socket = connect(where)
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false, closed = false
     const failAll = (error: AgentClientError): void => {

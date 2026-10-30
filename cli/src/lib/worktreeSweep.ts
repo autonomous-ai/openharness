@@ -8,7 +8,8 @@ const exec = promisify(execFile)
 /** A week without a commit, a checkout or an index write. */
 export const WORKTREE_IDLE_MS = 7 * 24 * 3600_000
 
-async function git(cwd: string, args: string[]): Promise<string> {
+/** git as itself: none of the repository settings a parent process left in the environment. */
+export async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
   return (await exec('git', ['-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
@@ -66,7 +67,9 @@ export async function sweepWorktrees(input: {
   return removed
 }
 
-async function sweepOne(path: string, now: number, idleMs: number): Promise<boolean> {
+/** Removes one worktree under the rule above: true when it went. The Swarm's host calls it with no idle wait for a worker
+ *  it just stopped (superTabs/machines.ts `removeStoppedWorktree`). */
+export async function sweepOne(path: string, now: number, idleMs: number): Promise<boolean> {
   const gitDir = resolve(path, await git(path, ['rev-parse', '--git-dir']))
   const common = resolve(path, await git(path, ['rev-parse', '--git-common-dir']))
   if (gitDir === common || basename(common) !== '.git') return false

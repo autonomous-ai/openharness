@@ -36,8 +36,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { homedir, uptime } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 const BOOT_TOLERANCE_SEC = 120
 const HOOK_STARTED_AT = performance.now()
@@ -331,6 +332,14 @@ function post(port, path, body, onResponse) {
   })
 }
 
+/** Mirrors syncStateDirectory in src/lib/secureState.ts: Windows cannot flush a directory handle (EPERM), and NTFS
+ *  journals the rename itself. */
+function syncStateDirectory(directory) {
+  if (process.platform === 'win32') return
+  const fd = openSync(directory, 'r')
+  try { fsyncSync(fd) } finally { closeSync(fd) }
+}
+
 function secureStateDirectory(directory, create = true) {
   if (create) mkdirSync(directory, { recursive: true, mode: 0o700 })
   const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
@@ -392,6 +401,7 @@ function readHookCredential() {
   let fd = null
   try {
     const dataDir = paths().dataDir
+    if (process.platform === 'win32') return readWindowsHookCredential(dataDir, join(dataDir, 'hook-credential'))
     secureStateDirectory(dataDir, false)
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     const file = join(dataDir, 'hook-credential')
@@ -406,9 +416,49 @@ function readHookCredential() {
   }
 }
 
+/**
+ * NTFS gives Node no owner or mode bits, so on Windows the hook trusts its own data folder (the --data-dir it was
+ * installed with) and the profile. Below the data folder, the credential must be a plain file, not a link or
+ * junction (lstat does not call one a file): that check is what protects it. Its real path must also lie inside the
+ * profile or the data folder, as defence in depth. The file is opened and must be the very file lstat saw, so it
+ * cannot be swapped between the check and the read.
+ */
+function readWindowsHookCredential(dataDir, file) {
+  const roots = [homedir(), dataDir].flatMap((root) => { try { return [realpathSync.native(root)] } catch { return [] } })
+  const inside = (target) => roots.some((root) => {
+    const rel = win32.relative(root, target)
+    return rel === '' || (rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel))
+  })
+  const link = lstatSync(file, { bigint: true })
+  if (!link.isFile() || link.size > 128n || !inside(realpathSync.native(file))) return ''
+  let fd = null
+  try {
+    fd = openSync(file, 'r')
+    const opened = fstatSync(fd, { bigint: true })
+    if (!opened.isFile() || opened.dev !== link.dev || opened.ino !== link.ino) return ''
+    const value = readFileSync(fd, 'utf8').trim()
+    return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
+/**
+ * A Harness pty host pane names itself `HARNESS_PANE=<instance>:%N` (pty/src/panes.rs), as a tmux pane has
+ * `TMUX_PANE`. It is read only when there is no TMUX_PANE: a tmux pane inside a pty host pane is still the tmux pane.
+ * The instance is `p<protocol>` or `p<protocol>-<build>`, as cli/src/lib/ptyHost/instance.ts `PTY_HOST_INSTANCE`.
+ */
+function ptyHostPane(environment = process.env) {
+  if (environment.TMUX_PANE) return null
+  const match = /^(p\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\d{1,9})$/.exec(environment.HARNESS_PANE || '')
+  return match ? { instance: match[1], paneId: match[2] } : null
+}
+const PTY_PANE = ptyHostPane()
+
 function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
+  else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
   return { tmuxPane, runtimeHints, callerPid: process.ppid }
 }
 
@@ -416,7 +466,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function execFileText(cmd, args, timeout, env) {
+function execFileText(cmd, args, timeout, env, options = {}) {
   return new Promise((resolve) => {
     // Whole milliseconds. What is left of the budget is a fraction off the whole (performance.now()),
     // and `execFile` throws ERR_OUT_OF_RANGE on a fractional timeout: once less was left than a step's
@@ -424,7 +474,7 @@ function execFileText(cmd, args, timeout, env) {
     // step threw, and the offline registration it was part of was dropped.
     const budget = Math.floor(Math.min(stepLimit(timeout), remainingBudget()))
     if (budget < 50) { resolve(null); return }
-    execFile(cmd, args, { timeout: budget, ...(env && { env }) }, (err, stdout) => {
+    execFile(cmd, args, { timeout: budget, ...(env && { env }), ...options }, (err, stdout) => {
       resolve(err ? null : stdout)
     })
   })
@@ -604,15 +654,27 @@ function argvTokens(args) {
   })
 }
 
+/**
+ * Mirrors programName in src/lib/processTable.ts: the file name, lower-cased, without a Windows image's `.exe` or
+ * `.com` (`claude.exe`, `node.exe` read as `claude`, `node`; a `.cmd`/`.bat`/`.ps1` script is never a process image),
+ * either separator ending a folder; `cmd.exe` keeps its, since it is the Windows command processor, not Command
+ * Code's `cmd`.
+ */
+function programName(token) {
+  const path = String(token || '').replace(/[\\/]+$/, '')
+  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1).toLowerCase()
+  return name === 'cmd.exe' ? name : name.replace(/\.(?:exe|com)$/, '')
+}
+
 function processEntrypoint(args) {
   const tokens = argvTokens(args)
   if (!tokens.length) return ''
   let index = 0
-  let command = basename(tokens[index]).toLowerCase()
+  let command = programName(tokens[index])
   if (command === 'env') {
     index++
     while (index < tokens.length && (tokens[index].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]))) index++
-    command = basename(tokens[index] || '').toLowerCase()
+    command = programName(tokens[index] || '')
   }
   if (!/^(?:node|nodejs|bun|deno|python(?:\d+(?:\.\d+)*)?|bash|zsh|sh)$/.test(command)) return tokens[index] || ''
   index++
@@ -641,7 +703,7 @@ function unvisArgs(args) {
 
 function hermesInlineLauncher(row) {
   const args = unvisArgs(row.args).trim()
-  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvTokens(args)[0] ?? '').toLowerCase())) return false
+  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(programName(argvTokens(args)[0] ?? ''))) return false
   const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
   if (!prefix) return false
   const source = args.slice(prefix[0].length).replace(/^["']/, '')
@@ -724,15 +786,16 @@ function commTruncatedPrefixOf(seen, want) {
 }
 
 function processMatchScore(row, engine, ownership, allowAgentHint = false) {
-  const executable = basename(row.executable).toLowerCase()
+  const executable = programName(row.executable)
   const entrypoint = processEntrypoint(row.args).toLowerCase()
-  const entrybase = basename(entrypoint).toLowerCase()
+  const entrybase = programName(entrypoint)
   const explicit = process.env[ENGINE_PATH_ENV[engine]]
   const configured = String(explicit || ENGINE_COMMANDS[engine] || '').toLowerCase()
-  const configuredBase = basename(configured).toLowerCase()
+  const configuredBase = programName(configured)
+  // Linux's `comm` cap is in bytes of the name as the kernel holds it: compared unstripped.
   if (configuredBase && configuredBase !== 'agent' && (row.executable.toLowerCase() === configured
     || entrypoint === configured || executable === configuredBase || entrybase === configuredBase
-    || commTruncatedPrefixOf(executable, configuredBase))) return 4
+    || commTruncatedPrefixOf(basename(row.executable).toLowerCase(), basename(configured).toLowerCase()))) return 4
   if (engine === 'codex') return /@openai[\/\\]codex[\/\\]bin[\/\\]codex(?:\.js)?$/.test(entrypoint) ? 2 : 0
   if (engine === 'cursor') {
     if (executable === 'cursor-agent' || entrybase === 'cursor-agent') return 3
@@ -774,7 +837,57 @@ function processMatchScore(row, engine, ownership, allowAgentHint = false) {
   return /@anthropic-ai[\/\\]claude-code[\/\\]cli\.js$/.test(entrypoint) ? 2 : 0
 }
 
+/** Mirrors compareVersions in src/lib/ptyHost/launch.ts. */
+/**
+ * Mirrors ptyHostBinary in src/lib/ptyHost/launch.ts: `HARNESS_PTY_BIN` as it is, else
+ * `<runtime>/pty/<version>/harness-pty.exe` for the version `<runtime>/pty/current-pty` names (the installed CLI's;
+ * a version name alone), else the one in `pty/` beside this script (the bundle's).
+ */
+function ptyHostBinary() {
+  const override = process.env.HARNESS_PTY_BIN?.trim()
+  if (override) return override
+  const binary = 'harness-pty.exe'
+  const root = join(process.env.ADAPTER_RUNTIME_DIR || join(homedir(), '.harness', 'runtime'), 'pty')
+  let version = ''
+  try { version = readFileSync(join(root, 'current-pty'), 'utf8').trim() } catch { /* none installed */ }
+  if (/^\d+(\.\d+)*$/.test(version)) {
+    const file = join(root, version, binary)
+    try { accessSync(file, constants.F_OK); return file } catch { /* the bundle's, then */ }
+  }
+  const beside = join(dirname(fileURLToPath(import.meta.url)), 'pty', binary)
+  try { accessSync(beside, constants.F_OK); return beside } catch { return null }
+}
+
+/**
+ * Windows has no `ps`: the PTY host lists the processes (`harness-pty ps --json`, pty/src/ps.rs), and the rows
+ * map as the daemon maps them (src/lib/windows/processTable.ts). A row without a start marker (a process the
+ * host could not open) can never be an identity and is dropped; a read that names nobody failed.
+ */
+async function windowsProcessRows() {
+  const binary = ptyHostBinary()
+  if (!binary) return null
+  // A busy machine's table is a few hundred KB of JSON: the daemon's own limit (src/lib/windows/processTable.ts).
+  const stdout = await execFileText(binary, ['ps', '--json'], 3000, undefined, { maxBuffer: 64 * 1024 * 1024, windowsHide: true })
+  if (stdout === null) return null
+  let table
+  try { table = JSON.parse(stdout) } catch { return null }
+  if (!table || !Array.isArray(table.rows)) return null
+  const rows = []
+  for (const row of table.rows) {
+    if (!row || typeof row !== 'object') continue
+    const { pid, parentPid, executable, startMarker, args, nativeArgv } = row
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(parentPid) || parentPid < 0) continue
+    if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string' || !startMarker) continue
+    rows.push({
+      pid, parentPid, executable, startMarker, args,
+      ...(Array.isArray(nativeArgv) && nativeArgv.every((item) => typeof item === 'string') ? { nativeArgv } : {}),
+    })
+  }
+  return rows.length ? rows : null
+}
+
 async function processRows() {
+  if (process.platform === 'win32') return windowsProcessRows()
   const stdout = await execFileText('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], 3000, psEnv())
   if (stdout === null) return null
   const rows = []
@@ -793,8 +906,8 @@ async function processRows() {
 }
 
 function aliasRows(rows) {
-  return rows.filter((row) => basename(row.executable).toLowerCase() === 'agent'
-    || basename(processEntrypoint(row.args)).toLowerCase() === 'agent')
+  return rows.filter((row) => programName(row.executable) === 'agent'
+    || programName(processEntrypoint(row.args)) === 'agent')
 }
 
 async function enrichProcessImages(rows) {
@@ -973,8 +1086,7 @@ function writeBoot(bootFile) {
     try { writeFileSync(fd, currentBootId()); fsyncSync(fd) } finally { closeSync(fd) }
     renameSync(tmp, bootFile)
     renamed = true
-    const directoryFd = openSync(dirname(bootFile), 'r')
-    try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+    syncStateDirectory(dirname(bootFile))
   } catch {
     // best effort
   } finally {
@@ -1196,8 +1308,7 @@ function writeRegistry(file, sessions, current = () => true) {
     if (!current()) return false
     renameSync(tmp, file)
     renamed = true
-    const directoryFd = openSync(dirname(file), 'r')
-    try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+    syncStateDirectory(dirname(file))
     return true
   } finally {
     if (!renamed) {
@@ -1281,7 +1392,7 @@ function mergeRuntimes(current, observed) {
 // as damaged, and a hook while the daemon was down then registered nothing at all: `terminal` was
 // missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
-  'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
+  'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
   'agy', 'copilot', 'terminal',
 ])
 
@@ -1550,7 +1661,9 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  if (!tmuxPane) return
+  // A pane is required: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry
+  // fallback read tmux; from a pty host pane they find nothing and the daemon's own scan reconciles.
+  if (!tmuxPane && !PTY_PANE) return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }

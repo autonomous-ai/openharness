@@ -125,6 +125,8 @@ void main() {
     await pump(tester);
     expect(find.text(OnboardingCopy.goToHeadline), findsOneWidget);
     expect(find.text('autonomous.ai/go'), findsOneWidget);
+    // (1) under the address says it is the download (owner, 2026-10-19).
+    expect(find.text('Download and install Harness'), findsOneWidget);
     expect(
       find.textContaining(OnboardingCopy.looking, findRichText: true),
       findsOneWidget,

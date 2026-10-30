@@ -878,9 +878,28 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   mkdirSync(join(home, 'sessions'))
   if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
   const result = processSessionOf('claude', mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)
-  if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id', 'missing history'].includes(mode)) {
+  if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id'].includes(mode)) {
     await expect(result).rejects.toThrow('Conversation identity is held')
   } else await expect(result).resolves.toBeNull()
+})
+
+// Claude Code names its session in the record at once but writes the transcript only with the first prompt: a
+// harness opened and never used held its binding, and Change agent waited on it forever (2026-10-21). Its own
+// record is the whole answer: no conversation yet. A sibling's newer file in the same folder never stands in.
+it('reads a Claude process whose conversation is not written yet as having none, never as a sibling\'s', async () => {
+  const home = tempRoot(); const root = join(home, 'projects')
+  const id = '11111111-2222-4333-8444-555555555556'
+  writeTranscript(root, 'project', '11111111-2222-4333-8444-555555555557', CWD, STARTED_AT + 5_000)
+  mkdirSync(join(home, 'sessions'))
+  writeFileSync(join(home, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart: new Date(STARTED_AT).toUTCString() }))
+  const { findLiveSession, processSessionEvidence, processSessionOf } = await load(root)
+  const proof = await processSessionEvidence('claude', 77, CWD, STARTED_AT)
+  expect(proof).toMatchObject({ session: null, unwritten: id })
+  expect(() => proof.verify()).not.toThrow()
+  await expect(processSessionOf('claude', 77, CWD, STARTED_AT)).resolves.toBeNull()
+  await expect(findLiveSession('claude', CWD, STARTED_AT, { pid: 77, bornOnly: true })).resolves.toBeNull()
+  // Without the process's own record the folder scan still finds the newer file: that is the guess refused above.
+  await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toMatchObject({ sessionId: '11111111-2222-4333-8444-555555555557' })
 })
 
 /**
@@ -913,6 +932,49 @@ describe('database session repair', () => {
       `INSERT INTO ${table} VALUES ('child','${CWD}',NULL,${time},${time - 1});`
       + `INSERT INTO ${table} VALUES ('sibling','${CWD}',NULL,${time},${time - 2});`])
     await expect(find()).resolves.toBeNull()
+  })
+})
+
+/**
+ * OpenCode 2 keeps its sessions in `session_v2` (same columns) and no longer writes `session`, which stays in a
+ * store 1.x made and holds only what 1.x wrote; a fresh store has no `session` at all.
+ */
+describe('OpenCode 2 session repair', () => {
+  const t = hasSqlite ? it : it.skip
+  const time = STARTED_AT + 5
+
+  async function find(statements: string[], options: { excludedSessionId?: string } = {}) {
+    const data = tempRoot()
+    vi.stubEnv('XDG_DATA_HOME', data)
+    mkdirSync(join(data, 'opencode'), { recursive: true })
+    execFileSync('sqlite3', [join(data, 'opencode', 'opencode.db'), statements.join(';')])
+    const { findLiveSession } = await load(tempRoot())
+    return findLiveSession('opencode', CWD, STARTED_AT, { bornOnly: true, ...options })
+  }
+  const table = (name: string) => `CREATE TABLE ${name} (id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER)`
+  const row = (name: string, id: string, parent: string | null = null, updated = time) =>
+    `INSERT INTO ${name} VALUES ('${id}','${CWD}',${parent ? `'${parent}'` : 'NULL'},${time},${updated})`
+
+  t('finds the session a process started in a store that has only OpenCode 2 tables', async () => {
+    await expect(find([table('session_v2'), row('session_v2', 'ses_new')])).resolves.toEqual({ sessionId: 'ses_new' })
+  })
+
+  t('reads session_v2 alone when the store has both, never the v1 rows that stopped being written', async () => {
+    // The stale v1 row of a session v2 took over would be a second candidate, and a v1-only one a wrong answer.
+    await expect(find([table('session'), row('session', 'ses_stale'), table('session_v2'), row('session_v2', 'ses_new')]))
+      .resolves.toEqual({ sessionId: 'ses_new' })
+    await expect(find([table('session'), row('session', 'ses_stale'), table('session_v2')])).resolves.toBeNull()
+  })
+
+  t('keeps the rules it has: top-level sessions only, and nothing ambiguous', async () => {
+    await expect(find([table('session_v2'), row('session_v2', 'ses_parent'), row('session_v2', 'ses_child', 'ses_parent')]))
+      .resolves.toEqual({ sessionId: 'ses_parent' })
+    await expect(find([table('session_v2'), row('session_v2', 'ses_a'), row('session_v2', 'ses_b', null, time - 1)])).resolves.toBeNull()
+    await expect(find([table('session_v2'), row('session_v2', 'ses_a')], { excludedSessionId: 'ses_a' })).resolves.toBeNull()
+  })
+
+  t('still reads OpenCode 1\'s session table in a store without session_v2', async () => {
+    await expect(find([table('session'), row('session', 'ses_v1')])).resolves.toEqual({ sessionId: 'ses_v1' })
   })
 })
 

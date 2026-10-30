@@ -147,7 +147,7 @@ class SetupTest(ScriptTest):
         ])
         self.assertEqual([c for c in self.calls() if c.startswith("uv ")], [
             "uv venv --quiet --seed --python 3.12 --python-preference only-managed .venv",
-            "uv pip install --quiet --python .venv/bin/python cadgen==0.5.1",
+            "uv pip install --quiet --python .venv/bin/python cadgen==0.5.1 cadquery-ocp==7.9.3.1.1 build123d==0.11.1",
         ])
         self.assertTrue((self.pkg / ".pane-client-0.5.1" / ".harness-pane").is_file())
 

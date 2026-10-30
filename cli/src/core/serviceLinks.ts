@@ -6,7 +6,8 @@
  * alike, so no other local process can stand in for one. The core then routes the requests the service
  * answers to it and relays each answer back to the client that asked; a request that finds the service
  * down, or not answering in time, is answered SERVICE_UNAVAILABLE with `retryable: true` — the core never
- * waits on a service in line. A routed request carries the connection it came over (`Asker.connection`),
+ * waits on a service in line. A service on demand is waited for as it starts, and the Store as it comes back
+ * too, each request for a bounded time and none of them in line (`onDemand`, `waitsThroughRestart`). A routed request carries the connection it came over (`Asker.connection`),
  * and the core says when that connection closes (`closeConnection`). The core tells a service what it
  * needs to know with `notify`, and answers the few questions a service may ask it (`service_query`),
  * nothing more.
@@ -66,8 +67,12 @@ export interface ServiceLinksOptions {
    *  devices (core/devicesWake.ts), models (core/modelsWake.ts) and the viewers and the Store (core/viewersWake.ts). A request for one that has not connected yet
    *  asks for it (`want`) and waits for it to connect, for its own wait or `startWaitMs`, whichever is shorter,
    *  and then for its answer, for its own wait. One that has connected and is down again is answered as any
-   *  service is, at once; so is one that did not connect in time, until it does. */
+   *  service is, at once, unless it is in `waitsThroughRestart`; so is one that did not connect in time, until it does. */
   onDemand?: ReadonlySet<string>
+  /** Of those, the ones whose requests also wait for them to come back after they connected and went (a crash, a
+   *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
+   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's (core/main.ts). */
+  waitsThroughRestart?: ReadonlySet<string>
   /** How long a request waits for its service on demand to connect (`ON_DEMAND_START_MS`). */
   startWaitMs?: number
   /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
@@ -107,6 +112,11 @@ export const HELD_MAX = 1_000
  *  set-up, a download), which a request for a models that cannot start must not wait on its connection. */
 export const ON_DEMAND_START_MS = 20_000
 
+/** The most requests held at once for one service to come back after it went (`waitsThroughRestart`); past it,
+ *  a request is answered SERVICE_UNAVAILABLE at once, as before. A window asks the Store a few things at a time
+ *  (its list, an install): this is many windows' worth, and all a service that does not come back can pile up. */
+export const RESTART_HELD_MAX = 100
+
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
 
@@ -125,7 +135,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const seen = new Set<string>()
   /** Asked for and not connected within a request's wait: the master could not start it (it ends as it starts,
    *  and is parked). Its requests are answered at once, as a service that is down is, instead of each waiting
-   *  the whole wait again (⌘K's 25 s, found end to end with the devices crashing on every start). */
+   *  the whole wait again (⌘K's 25 s, found end to end with the devices crashing on every start), until it connects. */
   const unstarted = new Set<string>()
   const waiting = new Map<string, Waiting>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
@@ -146,6 +156,14 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     entry.reply(result)
   }
 
+  /** How many requests wait for `service`, which is down: all of them wait for it to connect, since what was sent to
+   *  it was answered as it went (`closed`, and `accept` for a replaced connection). */
+  const heldFor = (service: string): number => {
+    let count = 0
+    for (const entry of waiting.values()) if (entry.service === service) count++
+    return count
+  }
+
   /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
   const waitFor = (service: string, type: string): number => {
     const waits = options.waits?.[service]
@@ -156,7 +174,15 @@ export function createServiceLinks(options: ServiceLinksOptions) {
    *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
     const link = links.get(service)
-    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service) && !unstarted.has(service)
+    const awaited = !link && !!options.onDemand?.has(service) && !unstarted.has(service)
+    // Coming back after it connected: the Store, while the master restarts the viewers' process (a crash, an update's
+    // handover), answered the windows' Store list SERVICE_UNAVAILABLE at once (7 times on 2026-10-16, a day of six
+    // updates). Held as a first start is, in time and in number: a process that does not come back holds at most
+    // RESTART_HELD_MAX requests for one start wait, and none after it (`unstarted`). The other services are refused at
+    // once while down, as their callers expect: a viewer's rendered frame, an engine worker's answer, ⌘K's route
+    // (e2e/viewersProcess, engineQuestionControl and devicesProcess).
+    const starting = awaited && (!seen.has(service)
+      || (!!options.waitsThroughRestart?.has(service) && heldFor(service) < RESTART_HELD_MAX))
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
@@ -187,6 +213,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       const connected: Connected = { sink, close }
       links.set(service, connected)
       seen.add(service)
+      // Back: the next time it goes, it is waited for again.
+      unstarted.delete(service)
       log(`[services] ${service} connected`)
       // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
       // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.

@@ -12,6 +12,18 @@ import 'dart:io';
 /// caller can act on.
 Future<bool> revealFolder(String path) async {
   if (!Directory(path).existsSync()) return false;
+  return _openWithSystem(path);
+}
+
+/// Opens the file at [path] in the app the system gives its kind — Preview
+/// for a PDF, the person's player for a video. For what a Finder tile cannot
+/// draw itself.
+Future<bool> openFile(String path) async {
+  if (!File(path).existsSync()) return false;
+  return _openWithSystem(path);
+}
+
+Future<bool> _openWithSystem(String path) async {
   final executable = Platform.isMacOS
       ? '/usr/bin/open'
       : Platform.isWindows

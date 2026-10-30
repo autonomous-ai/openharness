@@ -26,8 +26,13 @@ Full key list, in the order the Pro sends it:
 | `swarms` | `"members-v1"` | capability |
 | `recap` | `"long-v1"` | capability |
 | `activity` | `"steps-v1"` | capability |
+| `stats` | `"turn-v1"` | capability |
 | `player` | `"library-v1"` | capability |
+| `superTab` | `"wait-v1"` | capability: Super Tab waits on `question` (below) |
+| `swarmCard` | `"v1"` | capability: the Swarm cards and the Lead view (frames below) |
+| `ota` | `"v1"` | capability: the Pro takes firmware offers |
 | `mac` | `aa:bb:...` | existing |
+| `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
 
 Dropped from the branch's hello: `speech` (`pcm16-v1`). The Pro does not take speech output.
 
@@ -42,6 +47,8 @@ Capabilities are per session: they reset on a new port and on close, like the br
 | `recap: "long-v1"` | `full` on `summary` (live and `restore:true`) | `{t:"summary", agentId, recap, text, full?:string, restore?:true, ...}`. `full` is the whole answer's prose: markdown stripped, whitespace collapsed, at most **1200 chars**, at most **3600 UTF-8 bytes**, cut on a word boundary with `…`. Omitted (not empty) when the answer has no text. Firmware recap buffer is 2048 B. `recap` and `text` are unchanged. |
 | `activity: "steps-v1"` | `step`, `action`, `elapsedSeconds` on `turn.activity` | `{t:"turn.activity", agentId, text, action?:string, elapsedSeconds?:int, step?:string}`. `step`: one tool card as `"Tool · arg"` (a path argument keeps its last segment), at most **120 chars**, sent as `{text:"", step}` the moment the tool starts; the firmware cuts at 400. `action`: latest assistant-written progress paragraph, whitespace collapsed, at most **188 bytes** (firmware keeps 192 B). `elapsedSeconds`: integer **0..2592000**, parsed from the engine footer (`1h 2m 3s`); anything else is omitted. `action` also rides on the first `turn.activity` right after `turn.started`. |
 | `player: "library-v1"` | feature `player.library` in `welcome.features`; the `player.library.get` request and the `player.library` reply | Request (device to host): `{t:"player.library.get", offset:int 0..1000000, request:int 0..4294967295}`; anything else is ignored. Reply: `{t:"player.library", request, offset, total, machines, rows:[...]}`. `rows` has at most **6** (page size); `offset` is clamped to `max(0, total-6)`; the page is never re-sorted (desktop order). Row: `{id, machineId, name, engine, status, ageSeconds}`; `id`, `machineId` non-empty and < 48 B; `name` <= 95 B, `engine` <= 15 B (control chars to spaces, UTF-8 safe); `status` one of `idle working question finished failed paused offline`; `ageSeconds` is -1 (unknown) or 0..315360000. The firmware rejects the whole page if `count != min(6, total - offset)`. `request` echoes the latest request; a reply for an older request is dropped. Resent at most every 10 s unless the page changed. |
+| `superTab: "wait-v1"` | `question` frames for Super Tab waits | `{t:"question", agentId, id:"supertab:…", questions:[{q}], superTab:string ≤48 B, attention:"decision"\|"stuck"}`; see "Super Tab waits on `question`". Without it the daemon sends none. |
+| `swarmCard: "v1"` | `supertabs`, `supertab`, `supertab.recap`, `supertab.focus` to the Pro; `supertab.recap.get`, `supertab.open`, `supertab.select` from it | See "Swarm cards". No such frame reaches a device that does not send it (the round dial, older Pro firmware). |
 
 Order of arrival the firmware tolerates: any. Every field above is optional on the device side; a missing one
 leaves the Pod showing an empty body, never an error.
@@ -109,7 +116,7 @@ separately), every `speech.*` and the speech PCM frame (`0x05`), `models`, `noti
 `question.state`, `answer.receipt`, `draft.state`, `voice.draft`, `voice.question`, `voice.search`, `voice.form`,
 `selection.state`, `carry.state`, `form.state`, `visit.state`, `metrics.state` (and `metrics.get`),
 `player.overview`, `player.context` (parsed in the shared firmware but unused by Pod), `machine.selected`,
-`machine.error`, `toast`, and the notification fields of `summary` (`silent`, `quiet`, `name`, `machine`).
+`machine.error`, `toast`, and the notification fields of `summary` (`silent`, `quiet`, `name`, `machine`), though it reads `tier` (below).
 The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, `swarms`, `focus`,
 `turn.started/activity/done/error`, `summary`, `question`, `question.close`, `player.library`, `voice.transcript`,
 `voice.error`; and sends `hello`, `machines.list`, `agents.list`, `player.library.get`, `agent.open`, `scroll`,
@@ -129,3 +136,100 @@ The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, 
    changes behavior before porting `latestUpdate` (see the Player activity row).
 
 Firmware offers: a hello with `board:"pro"` gets no `fw.offer` (no manifest lookup, no transfer) until the Pro has its own OTA channel; a hello without `board` is offered as before.
+
+## 7. Losing bytes on the USB path: `seq` and `resync`
+
+The Pro's USB-Serial/JTAG path loses bytes host to device, each loss under one 64-byte packet. A small frame
+(`ping`, `turn.done`, `focus`, `question.close`...) can vanish whole and nothing notices. Three layers catch it:
+
+- **Count below the driver.** The firmware carries a copy of ESP-IDF 5.5.4's `esp_driver_usb_serial_jtag`
+  (`firmware/components/`) with two atomic counters; the `alive` heartbeat prints `isr_rx` (bytes the ISR pulled from
+  the hardware FIFO) and `ring_drop` (ring-buffer pushes that failed). If `isr_rx` is short of what the daemon wrote,
+  the loss is on the wire; if `ring_drop` moves, the reader is too slow.
+- **Partial frames.** A frame that stops arriving mid-way (its tail lost) is dropped after 300 ms of silence, counted as
+  corrupt and resynced at once, so the next frame is not swallowed by its pending length.
+- **`seq`.** The daemon adds an integer `seq` to every JSON frame it sends to a device whose hello says `board:"pro"`.
+  Each `welcome` restarts the count at 0 (the welcome itself carries `seq:0`), so a keepalive hello restarts it too.
+  Round dials get no `seq`: their frames are byte-identical to before. The Pro takes the first `seq` of a session as
+  the base and expects each next one to be exactly +1; anything else is a gap (a frame was lost) and counts in
+  `seq_gaps` on the heartbeat. A frame without `seq` (an older daemon) is not checked.
+
+A gap, or a frame that failed its CRC, makes the Pro send `{t:"resync"}`, at most once per 2 s (and not during a
+firmware transfer, which has its own resend). The daemon answers with a full snapshot, also rate-limited to once per
+2 s: `machines.*`, `swarms`, `agents.*`, `notif.replace` (the notices, including question rows), and a `question`
+frame for each question still open. It does not replay recent `summary` history (the attach push does); a lost
+`summary` is not repaired by a resync. The welcome of a Pro lists `resync` in `features`; a Pro whose welcome does not (an older daemon) sends the old
+`swarms.list` and `agents.list` instead. A welcome without `seq` turns the gap check off for that session.
+
+## `summary.tier`
+
+`summary` carries `tier`: `"alert"` (beep, wake, toast, Notices entry), `"list"` (Notices entry only: no beep,
+wake or toast) or `"silent"` (the card updates, nothing else). The host still sends the older flags beside it
+for firmware that predates `tier`: `alert` sets neither, `list` sets `quiet: true`, `silent` sets `silent: true`.
+`question` and `turn.error` carry no `tier`; treat both as `alert`.
+
+## Super Tab waits on `question`
+
+When a Super Tab member running on this machine needs a person (its assignment's `work.status` is `needs_human` or
+`blocked`), the daemon sends it as a `question` with two optional fields: `superTab` (the tab's name, at most 48 bytes)
+and `attention` (`"decision"` or `"stuck"`). Only a device whose hello says `superTab: "wait-v1"` (the Pro) is sent
+one; the round dial would open a question screen that cannot load. `questions[0].q` is the decision asked for, or
+`Stuck: <reason>`; the question has no `key` or `options` and is not answered on a device (`question.read` says so; an
+`answer` or `answer.reviewed` for its id is dropped), and it does not hold Talk back: talking to the agent is how a
+person unblocks it. Its `id` is `supertab:<assignment>:<status>`, under 64 bytes. It is closed with `question.close`
+when the status moves on, the attempt or agent changes, or the tab is paused.
+
+The Pro keeps such a question through the agent's turns (`turn.started`, `turn.done`, `turn.error`, a `summary`, a
+library sweep), so it alerts once: a finished turn meanwhile neither beeps nor replaces its Notices entry or toast, a
+failed one still alerts. Closed, the agent takes the state its turns left it in (idle or done, working only mid-turn).
+A link drop ends it as it ends any question (it becomes a plain one the next turn ends); the daemon asks it again when
+the Pro's session comes back (its `agents.list`) and on a resync. The library page reports a waiting agent as
+`question`. An engine's own question for the same agent replaces it (the daemon closes the wait first) and the daemon
+asks the wait again once that question closes.
+
+## Swarm cards (`swarmCard: "v1"`)
+
+The account's Swarms (the shared multi-agent projects of the Super Tab) as Home cards, each with its project Leads as pets; a Lead opens on its last message in the Swarm
+chat (the Lead view). The daemon reads the Swarms from the backend; the Pro only draws them and reports what the person picks. Limits: at most **16** Swarms
+(`SWARMS_CARD_MAX`), **12** Leads per Swarm (`SWARM_LEADS_MAX`); ids `[A-Za-z0-9_-]`, < 48 B; names cut to 48 bytes; message text to **1,500** bytes (`SWARM_TEXT_MAX` - 1) on a
+UTF-8 boundary. A frame over 512 JSON tokens is refused by the Pro's guard, so the list goes as `supertabs` plus one `supertab` per Swarm (12 Leads is about 200 tokens).
+
+Daemon to Pro:
+
+```
+{"t":"supertabs","ids":["<superTabId>",...]}                      the set and order of the Swarms (at most 16); a Swarm not listed is dropped
+{"t":"supertab","id":"<superTabId>","tab":"<desk tab id or empty>","name":"openharness","count":4,
+  "leads":[{"id":"<leadAgentId>","projectId":"<projectId>","project":"mobile","engine":"claude","owner":"","local":"<harnessId or empty>",
+            "state":"ask|stuck|work|done","order":1,"since":134}]} one per Swarm, replacing it; `leads` in card order
+{"t":"supertab.recap","tab":"<superTabId>","lead":"<leadAgentId>","text":"...","at":1792560000,"none":false}   a Lead's last message (answers recap.get, and is pushed while that Lead is open)
+{"t":"supertab.focus","tab":"<superTabId>","lead":"<leadAgentId>"}   the desktop opened this Swarm project
+```
+
+- `tab` links a Swarm to the desk tab of the same Swarm (empty: the desktop has none open); a linked desk tab shows the Swarm's card, an unlinked Swarm is one more Home page after the tabs.
+- `leads` come most urgent first (`ask`, `stuck`, `work`, `done`), ties in project order, and only the 12 most urgent are sent. `order` (optional) is the project's
+  0-based place in the Swarm as the app lists it (an old Swarm without projects is 0), so the round dial can show the Leads in the app's order; values may skip
+  where a project has no Lead or was cut. The Pro puts the Leads in `order` (ties, and a Lead without one, keep their place as sent): the card, its pages and
+  the Lead view's swipe all follow it, whatever each Lead's state. The capsule still counts stuck, needs you and working.
+- `state`: `ask` (needs you), `stuck`, `work`, `done`. `since` is the seconds into the project's earliest turn on the daemon's machine (the Lead's or a worker's; at least 1, and the Pro counts on from it). A Lead at work without one (remote, or working only from open assignments) shows "working" with no clock; a `supertab` is re-sent when that turn's start moves.
+- `local` is the harness id of a Lead that runs on this account's machine, else empty. A Lead with `local` offers the usual talk control in its view; a remote one (`owner` names the
+  person whose machine) has none.
+- `supertab.recap` with `none:true` (or no text) is "No message yet". A recap for a Swarm or Lead the Pro does not hold is dropped.
+- `supertab.focus` is acted on like `focus` for an agent: not while recording or updating, not within the touch quiet window (0.8 s on Home, 4 s elsewhere), and a Lead the
+  Swarm list does not hold yet waits 5 s for it. It opens that Lead's view and sends no `supertab.select` (the desktop is already there).
+- A link drop clears the Swarm list and any pending focus; the daemon sends `supertabs` and the `supertab` frames again on attach.
+
+Pro to daemon:
+
+```
+{"t":"supertab.recap.get","tab":"<superTabId>","lead":"<leadAgentId>"}   the Lead's last message (sent when its view opens and its text is not LOADED)
+{"t":"supertab.open","tab":"<superTabId>","lead":"<leadAgentId or empty>"}   the recap on screen; the lead is empty (tab names the Swarm it was in) when it closes
+{"t":"supertab.select","tab":"<superTabId>","lead":"<leadAgentId>"}   the person picked this Lead on the Pro: the desktop opens that Swarm tab and project
+```
+
+- Tapping a Lead's pet on the card, or swiping the Lead view to the previous / next Lead (card order, wrapping), sends `supertab.select`, then `supertab.open` (and
+  `supertab.recap.get` unless the text is already there; its state goes LOADING, drawn as "..."). A `supertab.focus` sends `supertab.open` and `supertab.recap.get` only.
+- What the daemon believes is open follows what is on screen: leaving the view (back, Home, Notices, the Lead removed with none left) sends `supertab.open` with an empty `lead`; Notices over
+  the view closes it and Back from Notices opens it again. A closed Lead's cached text is dropped (only the open Lead gets pushes, so it would go stale).
+- After a link drop nothing is sent until the Swarm list is back; then an open view sends `supertab.open` and `supertab.recap.get` again.
+- A Lead that leaves the list while its view is open moves the view to the Lead that took its place (the next, else the last); with none left, or the Swarm gone, the view goes Home.
+- Frames are sent without waiting: a busy link loses one.

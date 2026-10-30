@@ -12,9 +12,13 @@ class _HeldConn extends EdgeConn {
   bool redials = true;
   DateTime? heard;
   int redialled = 0;
+  int parkedRechecksPaused = 0;
 
   @override
   bool get isReady => ready;
+
+  @override
+  void pauseParkedRecheck() => parkedRechecksPaused++;
 
   @override
   bool get canForceReconnect => redials;
@@ -198,6 +202,16 @@ void main() {
       // Only the person's own retry may win it back — see `transportLost`.
       expect(session.status, TerminalSessionStatus.takenOver);
       expect(app.stateOf('m')!.pendingOfflineAgentId, isNull);
+    });
+
+    test('going to the background stops a socket waiting on a machine that is '
+        'off from dialling it on its own', () {
+      app.handleAppPaused();
+      expect(conn.parkedRechecksPaused, 1);
+      // The OS repeating itself pauses again: harmless, nothing is dialled.
+      app.handleAppPaused();
+      expect(conn.parkedRechecksPaused, 2);
+      expect(conn.redialled, 0);
     });
   });
 

@@ -1,11 +1,18 @@
 // What a machine accepts as a harness's first task (`prompt` on `agent_create`) — the desktop's
 // rule, kept to the same answer as `desktop/lib/core/first_task.dart`.
 
+/// The first tasks offered by New Harness and the phone's first session.
+const firstTaskIdeas = [
+  'Explain this project to me',
+  'Find a bug and fix it',
+  'Run the tests',
+];
+
 /// The engines that can be opened with a first message: the non-null entries of the CLI's
 /// `FIRST_PROMPT_ARGS` (cli/src/lib/engineLaunch.ts). A machine refuses a first message for any
 /// other engine (`PROMPT_UNSUPPORTED`). test/first_task_test.dart holds the two lists to the same
 /// answer: one missing here is an engine whose first task New drops without a word.
-const kFirstTaskEngines = {'claude', 'codex', 'opencode', 'hermes'};
+const kFirstTaskEngines = {'claude', 'codex', 'opencode', 'omp', 'hermes'};
 
 /// Whether a harness on [engine] can start on a first task.
 bool takesFirstTask(String engine) => kFirstTaskEngines.contains(engine);

@@ -34,6 +34,7 @@ beforeAll(async () => {
     vi.stubEnv(name, path(name))
     mkdirSync(path(name), { recursive: true })
   }
+  vi.stubEnv('USERPROFILE', path('HOME'))
   vi.stubEnv('CLAUDE_PROJECTS_DIR', path('CLAUDE_CONFIG_DIR', 'projects'))
   vi.stubEnv('TZ', 'UTC')
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })

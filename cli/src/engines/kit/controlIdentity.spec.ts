@@ -20,10 +20,16 @@ it('reads identity after bookkeeping and ignores sidechain body records after th
   expect(controlIdentity(Buffer.from(line({ ...opening, isSidechain: true })), claude).delegated).toBe(true)
 })
 
+it('reads identity after a resumed session\'s long run of bookkeeping', () => {
+  const prefix = line({ type: 'ai-title', sessionId: opening.sessionId }) + line({ type: 'file-history-snapshot' }).repeat(60)
+  expect(controlIdentity(Buffer.from(prefix + line(opening)), claude)).toEqual({ id: opening.sessionId, cwd: opening.cwd,
+    delegated: false, bytes: Buffer.byteLength(prefix + line(opening)) })
+})
+
 it.each([
   '', '{partial', line(null), line([]), line({ ...opening, sessionId: 8 }), line({ ...opening, sessionId: '' }),
   line({ ...opening, cwd: 'relative' }), line({ ...opening, cwd: 9 }), line({ ...opening, isSidechain: 'false' }),
-  line({ type: 'bookkeeping' }).repeat(20) + line(opening),
+  line({ type: 'bookkeeping', padding: 'x'.repeat(1000) }).repeat(1100) + line(opening),
   line({ sessionId: 'first' }) + line(opening), line({ cwd: '/other' }) + line(opening),
   line({ sessionId: 'native-conversation', isSidechain: false }) + line({ cwd: '/fixture/work', isSidechain: true }),
   line({ sessionId: 'native-conversation', isSidechain: false }) + line({ cwd: '/fixture/work', isSidechain: 'false' }),

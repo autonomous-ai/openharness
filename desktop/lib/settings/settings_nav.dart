@@ -6,6 +6,7 @@ import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
+import '../widgets/finger_target.dart';
 import 'settings_section.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
@@ -17,6 +18,7 @@ class SettingsNav extends StatefulWidget {
     required this.onSelect,
     this.railWidth = SettingsNav.width,
     this.autofocusSearch = true,
+    this.compact = false,
   });
 
   final SettingsSection section;
@@ -29,6 +31,10 @@ class SettingsNav extends StatefulWidget {
   /// Whether the filter takes the keys on open. Not on a phone, where focus
   /// raises the on-screen keyboard over half the list.
   final bool autofocusSearch;
+
+  /// True on a phone: the way back is a finger's size, and Keyboard
+  /// shortcuts is left out.
+  final bool compact;
 
   /// The machine rail's own default width, so Settings opens without the left
   /// column jumping.
@@ -88,6 +94,16 @@ class _SettingsNavState extends State<SettingsNav> {
     return KeyEventResult.handled;
   }
 
+  static List<SettingsGroup> _withoutKeyboardShortcuts(
+    List<SettingsGroup> groups,
+  ) => [
+    for (final group in groups)
+      SettingsGroup(group.title, [
+        for (final section in group.sections)
+          if (section != SettingsSection.shortcuts) section,
+      ]),
+  ];
+
   /// The groups, narrowed to the query. Matching is a plain case-insensitive
   /// substring of the label or a row's keywords ([SettingsSection.matches]) —
   /// this list is short, so anything cleverer would be machinery no one can
@@ -96,8 +112,11 @@ class _SettingsNavState extends State<SettingsNav> {
   List<SettingsGroup> get _visible {
     final query = _query.trim().toLowerCase();
     // The list this build actually has: [settingsGroups] drops the developer
-    // rows a release build does not ship.
-    final all = settingsGroups;
+    // rows a release build does not ship. A phone has no keyboard to learn
+    // (audit finding S8).
+    final all = widget.compact
+        ? _withoutKeyboardShortcuts(settingsGroups)
+        : settingsGroups;
     if (query.isEmpty) return all;
     final groups = <SettingsGroup>[];
     for (final group in all) {
@@ -135,13 +154,19 @@ class _SettingsNavState extends State<SettingsNav> {
             // highlights and aligns exactly like them instead of being a
             // shrink-wrapped button in its own grey.
             SizedBox(
-              height: SectionScaffold.headingHeight(context),
+              height: fingerHeight(
+                SectionScaffold.headingHeight(context),
+                enabled: widget.compact,
+              ),
               child: Center(
-                child: SidebarItem(
-                  key: const Key('settings-back-button'),
-                  icon: AppIcons.arrowLeft,
-                  label: 'Back to app',
-                  onTap: () => Navigator.of(context).maybePop(),
+                child: fingerTarget(
+                  enabled: widget.compact,
+                  SidebarItem(
+                    key: const Key('settings-back-button'),
+                    icon: AppIcons.arrowLeft,
+                    label: 'Back to app',
+                    onTap: () => Navigator.of(context).maybePop(),
+                  ),
                 ),
               ),
             ),
@@ -177,11 +202,15 @@ class _SettingsNavState extends State<SettingsNav> {
           else if (group != visible.first)
             const SizedBox(height: 8),
           for (final target in group.sections)
-            SidebarItem(
-              icon: target.icon,
-              label: target.label,
-              selected: target == widget.section,
-              onTap: () => widget.onSelect(target),
+            // On a phone a row is a finger's height; a mouse keeps 38.
+            fingerTarget(
+              enabled: widget.compact,
+              SidebarItem(
+                icon: target.icon,
+                label: target.label,
+                selected: target == widget.section,
+                onTap: () => widget.onSelect(target),
+              ),
             ),
         ],
       ],

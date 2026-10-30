@@ -117,8 +117,13 @@ export function createLiveSessions(deps: LiveSessionDeps) {
     if (stopped || retries.has(id)) return
     retries.set(id, setTimeout(() => {
       retries.delete(id)
-      if (identity !== transcriptReadIdentity(deps.bySession(id))) return
-      void deps.reattach(session).catch(error => { report(id, error); retry(session) })
+      // Retry with the row as it is now. A snapshot from before the runtime learned the CLI version
+      // fails the same staleness check every time (2026-10-19: 7 of 42 new Claude agents, once a second).
+      const latest = deps.bySession(id)
+      if (!latest || identity !== transcriptReadIdentity(latest)) return
+      // A copy: the registry mutates rows in place, and the next retry must compare against this attempt's identity.
+      const attempt = { ...latest }
+      void deps.reattach(attempt).catch(error => { report(id, error); retry(attempt) })
     }, 1_000))
   }
   function schedule(id: string, delay = 40): void {

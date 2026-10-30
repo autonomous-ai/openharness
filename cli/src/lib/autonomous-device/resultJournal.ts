@@ -1,7 +1,7 @@
 import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from '../secureState.js'
+import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../secureState.js'
 const MAX_BYTES = 32 * 1024 * 1024
 /** Atomic local transaction: reservations and immutable results survive together.
  * Never log content. Corrupt/unwritable state fails closed instead of losing dedupe.
@@ -31,8 +31,7 @@ export class DeviceResultJournal {
       const fd = openSync(temporary, 'wx', 0o600)
       try { writeFileSync(fd, data); fsyncSync(fd) } finally { closeSync(fd) }
       renameSync(temporary, this.path)
-      const directory = openSync(dirname(this.path), 'r')
-      try { fsyncSync(directory) } finally { closeSync(directory) }
+      syncStateDirectory(dirname(this.path))
     } finally { rmSync(temporary, { force: true }) }
   }
 }

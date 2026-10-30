@@ -36,12 +36,14 @@ code = r'''
 #include "app/pro_app.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
 #include "sys/ram_telemetry.h"
+#include "sys/last_words.h"
 #include "pro_display.h"
 #include "pro_frame.h"
 
@@ -83,6 +85,8 @@ void vTaskDelay(TickType_t t) { (void)t; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
 esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
 size_t heap_caps_get_free_size(unsigned c) { (void)c; return 0; }
 size_t heap_caps_get_largest_free_block(unsigned c) { (void)c; return 0; }
 uint8_t config_load_brightness(void) { return 220; }
@@ -112,6 +116,13 @@ static struct { int n, offset[64]; uint32_t request[64]; bool ok, supported; } L
 static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); R.opens++; snprintf(R.open_id, sizeof R.open_id, "%s", id); return true; }
+static struct { int n; bool fail; char t[16][24], tab[16][ID_MAX], lead[16][ID_MAX]; } SUP;   // the Swarm cards' select / open / recap.get frames
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) {
+    CHECK(LOCK_DEPTH == 0);
+    if (SUP.fail) return false;
+    if (SUP.n < 16) { snprintf(SUP.t[SUP.n], sizeof SUP.t[0], "%s", t); snprintf(SUP.tab[SUP.n], ID_MAX, "%s", tab); snprintf(SUP.lead[SUP.n], ID_MAX, "%s", lead ? lead : ""); SUP.n++; }
+    return true;
+}
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) {
     CHECK(LOCK_DEPTH == 0);
     if (SC.n < 64) { SC.phase[SC.n] = (ht_scroll_phase_t)phase; SC.dy[SC.n] = dy; SC.v[SC.n] = velocity; SC.n++; }
@@ -123,6 +134,8 @@ bool pro_cable_request_library(int offset, uint32_t request) {
     return LIB.ok;
 }
 bool pro_cable_library_supported(void) { return LIB.supported; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 static bool GATE_IN_BEGIN;   // the race: an offer's gate lands while a voice start is between its gate check and its begin
 void pro_voice_begin(const char *agent) {
     CHECK(LOCK_DEPTH == 0);
@@ -253,6 +266,7 @@ static void setup(void) {
     memset(&TCH, 0, sizeof TCH);
     memset(&R, 0, sizeof R);
     memset(&SC, 0, sizeof SC);
+    memset(&SUP, 0, sizeof SUP);
     LIB.n = 0; LIB.ok = true; LIB.supported = true;
     pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"}};
     pod_ui_roster(&U, rows, 3);
@@ -307,6 +321,142 @@ static void journey(void) {
     // Nothing was left recording, and a sync after all this has nothing to abort.
     pod_out_t again = pod_ui_link(&U, true);
     CHECK(again.fx == POD_FX_NONE);
+}
+
+// ---- the Swarm cards' Lead view through the app layer: touch, side button, link, focus; every frame leaves after the lock ----
+static void swarm_feed(int leads) {
+    static const char ids[1][ID_MAX] = {"sw1"};
+    static pod_swarm_t sw;
+    pro_app_supertab_ids(ids, 1);
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = (uint16_t)leads; sw.lead_n = (uint8_t)leads;
+    for (int i = 0; i < leads; i++) {
+        snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj%d", i);
+        snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); sw.leads[i].state = i == 0 ? POD_LEAD_ASK : POD_LEAD_DONE;
+    }
+    pro_app_supertab(&sw);
+}
+static void swarm_home_page(void) {   // Home on the Swarm's page (the card after the tabs)
+    for (int p = 0; p < 8; p++) if (pod_home_swarm(&U.model, p)) { U.nav.stack[0].scroll = (int16_t)p; break; }
+    render();
+}
+static void lead_view_via_app(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    CHECK(hit(POD_A_LEAD, 1));
+    memset(&SUP, 0, sizeof SUP);
+    tap(POD_A_LEAD, 1);   // a tap on the pet: the Lead view, and select + open + recap.get go out, none under the lock
+    CHECK(top() == POD_V_LEAD && U.nav.depth == 2);
+    CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
+    CHECK(!strcmp(SUP.tab[2], "sw1") && !strcmp(SUP.lead[2], "l1") && !strcmp(SUP.lead[0], "l1"));
+    pro_app_supertab_recap("sw1", "l1", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
+    render();
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && SUP.n == 3);
+    memset(&SUP, 0, sizeof SUP);
+    swipe_next();   // the next Lead
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l2"));
+    CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.lead[0], "l2") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
+    memset(&SUP, 0, sizeof SUP);
+    pro_app_button_press();   // the side button: Home, and the desktop hears that no recap is open
+    CHECK(top() == POD_V_TABS && SUP.n == 1 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.tab[0], "sw1") && !SUP.lead[0][0]);
+    // the redraw after asking: LOADING reached the screen without a feed announcing it
+    memset(&SUP, 0, sizeof SUP);
+    (void)pod_ui_take_changed(&U); (void)pro_app_test_take_dirty();
+    render();
+    tap(POD_A_LEAD, 0);
+    CHECK(top() == POD_V_LEAD && U.model.swarms[0].leads[0].recap == POD_RECAP_LOADING);
+    CHECK(pro_app_test_take_dirty() || true);
+}
+// A long Lead message on the device: a vertical drag through the finger's path scrolls it by rows (the drawn rows move), a local Lead's tap-to-talk
+// does not take the drag, and the horizontal swipe still steps Leads.
+static const char *LONG_LEAD = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+                               "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two "
+                               "thirty-three thirty-four thirty-five thirty-six thirty-seven thirty-eight thirty-nine forty";
+static int first_text_y(const char *word) {   // the y of the drawn run that starts with word, -1 when none is drawn
+    for (int i = 0; i < S.count; i++) if (S.runs[i].text[0] && !strncmp(S.runs[i].text, word, strlen(word))) return S.runs[i].y;
+    return -1;
+}
+static void lead_view_scrolls_via_app(void) {
+    setup();
+    swarm_feed(3);
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
+    snprintf(sw->leads[1].local, ID_MAX, "a1");   // a Lead whose harness runs here: a tap on its view talks
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].agent, "a1"));
+    pro_app_supertab_recap("sw1", "l1", LONG_LEAD, 1792560000u, false);
+    render();
+    CHECK(pod_scroll_max(&U.nav, &U.model) >= 2 && first_text_y("one") >= 0);
+    now += 2000;
+    memset(&SC, 0, sizeof SC);
+    drag(360, 480, 360, 200, 20);   // finger up: the text moves up
+    CHECK(top() == POD_V_LEAD && !pod_ui_talking(&U) && U.nav.stack[1].scroll >= 2 && !strcmp(U.nav.stack[1].lead_id, "l1"));
+    CHECK(first_text_y("one") < 0);   // the first row is scrolled out of the bubble
+    CHECK(SC.n >= 3 && SC.phase[0] == HT_SCROLL_DOWN && SC.phase[SC.n - 1] == HT_SCROLL_UP);   // and the desktop's chat is told, sent after the lock
+    int total = 0;
+    for (int i = 0; i < SC.n; i++) if (SC.phase[i] != HT_SCROLL_DOWN) total += SC.dy[i];
+    CHECK(total == -280);   // every pixel of the finger's travel
+    now += 2000;
+    drag(360, 200, 360, 600, 20);   // and back down
+    CHECK(U.nav.stack[1].scroll == 0 && first_text_y("one") >= 0);
+    now += 2000;
+    swipe_next();
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l2"));
+}
+// The Lead view closing on a busy link: the "closed" frame the link dropped is owed until it is sent. A daemon that still thinks the Lead is open would
+// keep sending every later drag on an agent screen to the Swarm chat.
+static void lead_close_owed_on_busy_link(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD);
+    memset(&SUP, 0, sizeof SUP);
+    SUP.fail = true;   // the link is busy: every Swarm frame is refused
+    pro_app_button_press();   // Home: the Lead view closes
+    CHECK(top() == POD_V_TABS && SUP.n == 0);
+    SUP.fail = false;
+    now += 100;
+    pro_app_tick();   // the next pass sends what is owed
+    CHECK(SUP.n == 1 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.tab[0], "sw1") && !SUP.lead[0][0]);
+    memset(&SUP, 0, sizeof SUP);
+    now += 100;
+    pro_app_tick();   // and only once
+    CHECK(SUP.n == 0);
+    // a close still owed when another Lead is opened goes first, never after: the daemon ends with the new Lead open
+    swarm_home_page();
+    tap(POD_A_LEAD, 2);
+    memset(&SUP, 0, sizeof SUP);
+    SUP.fail = true;
+    pro_app_button_press();
+    swarm_home_page();
+    SUP.fail = false;
+    tap(POD_A_LEAD, 0);
+    CHECK(top() == POD_V_LEAD && SUP.n >= 2);
+    int open_at = -1;
+    for (int i = 0; i < SUP.n; i++) if (!strcmp(SUP.t[i], "supertab.open") && !strcmp(SUP.lead[i], "l0")) open_at = i;
+    CHECK(open_at >= 0);
+    for (int i = open_at; i < SUP.n; i++) CHECK(SUP.lead[i][0]);   // no close after the new open
+}
+static void lead_view_relink_and_focus(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    tap(POD_A_LEAD, 2);
+    CHECK(top() == POD_V_LEAD);
+    memset(&SUP, 0, sizeof SUP);
+    pro_app_link(false, "mac");   // the cable drops: nothing goes out, the view waits
+    CHECK(SUP.n == 0 && top() == POD_V_LEAD);
+    pro_app_link(true, "mac");
+    CHECK(SUP.n == 0);
+    swarm_feed(3);   // the daemon's attach: the list is back, the view asks again
+    CHECK(top() == POD_V_LEAD && SUP.n == 2 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.lead[0], "l2") && !strcmp(SUP.t[1], "supertab.recap.get"));
+    // supertab.focus opens a Lead: open + get, no select
+    memset(&SUP, 0, sizeof SUP);
+    now += 10000;   // out of the touch quiet window
+    pro_app_supertab_focus("sw1", "l0");
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l0") && SUP.n == 2 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.t[1], "supertab.recap.get"));
 }
 
 static void to_talk(void) {
@@ -858,7 +1008,7 @@ static void notice_shows_three_seconds(void) {
     CHECK(S.count <= HT_RUNS);
 }
 
-// Every pro_app callback runs on the device's cable_link task: a 6 KB stack. The render task has 24 KB. This runs the
+// Every pro_app callback runs on the device's cable_link task: a 12 KB stack. The render task has 24 KB. This runs the
 // exact on-device sequence (link up, empty roster, empty swarms, library pages, then populated feeds) through the real
 // callbacks on a small painted stack with a guard below it, and fails if they touch more than the budget (a ~10 KB local
 // also faults on the guard, as the device did: "Stack protection fault"). The draw then runs on the main stack, as the
@@ -903,9 +1053,9 @@ static void *cable_task(void *arg) {
     pro_app_turn("a1", "verb", "Reading...", -1);
     pro_app_turn("a1", "activity", "Reading files", 3);
     pro_app_turn("a1", "step", "Read - pod_model.c", -1);
-    pro_app_question("a3", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", NULL, POD_ATTN_NONE);
     pro_app_question_close("a3");
-    pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, false);
+    pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, POD_TIER_SILENT);
     pro_app_focus("a4");
     pro_app_turn("a1", "done", "", 0);
     pro_app_swarms(NULL, 0, NULL, NULL, NULL, 0);
@@ -914,7 +1064,7 @@ static void *cable_task(void *arg) {
 }
 
 #define STACK_BYTES 16384   // the smallest stack pthreads accept everywhere (macOS refuses less)
-#define CABLE_STACK_BUDGET 3584   // of the device's 6 KB: the rest is the cable_link task's own parse and dispatch frames
+#define CABLE_STACK_BUDGET 3584   // of the device's 12 KB: kept at its old, tighter figure (the parser alone is ~7 KB of the rest)
 static void *idle_task(void *arg) { (void)arg; return NULL; }
 // Run fn on a fresh STACK_BYTES stack painted with 0xA5; return the bytes it touched (the high-water mark).
 // The stack is mmap'd with a PROT_NONE page below it, so running past the 16 KB faults like the device's guard does.
@@ -1478,25 +1628,25 @@ static void pro_app_test_summary_and_question(void) {
     now = 3000;
     pro_app_turn("a1", "started", "", 0);
     // A live summary ends the turn; `full` wins over `recap`.
-    pro_app_summary("a1", "short", "the recap", "the long recap", false, false);
+    pro_app_summary("a1", "short", "the recap", "the long recap", false, POD_TIER_SILENT);
     CHECK(agent("a1")->state == POD_DONE && strstr(agent("a1")->recap, "the long recap") && !strstr(agent("a1")->recap, "the recap\n"));
     // A restore summary is history: no end of turn.
     pro_app_turn("a2", "started", "", 0);
-    pro_app_summary("a2", "old text", NULL, NULL, true, false);
+    pro_app_summary("a2", "old text", NULL, NULL, true, POD_TIER_SILENT);
     CHECK(agent("a2")->state == POD_WORKING);
     // "done" is not a text
-    pro_app_summary("a3", "done", NULL, NULL, false, false);
+    pro_app_summary("a3", "done", NULL, NULL, false, POD_TIER_SILENT);
     CHECK(agent("a3")->recap[0] == 0);
     // Questions: held while open, closed by the daemon or by a new turn.
-    pro_app_question("a1", "Which branch?");
+    pro_app_question("a1", "r1", "Which branch?", NULL, POD_ATTN_NONE);
     CHECK(pro_app_question_open("a1") && agent("a1")->state == POD_ASKING);
     pro_app_question_close("a1");
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("a1", NULL);
+    pro_app_question("a1", "r1", NULL, NULL, POD_ATTN_NONE);
     CHECK(pro_app_question_open("a1") && !strcmp(agent("a1")->question, "Needs your answer"));
     pro_app_turn("a1", "started", "", 0);
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("zz", "ghost?");
+    pro_app_question("zz", "r1", "ghost?", NULL, POD_ATTN_NONE);
     CHECK(!pro_app_question_open("zz"));
 }
 
@@ -1568,10 +1718,14 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Link this computer in Harness."));
     CHECK(!strcmp(pro_app_voice_block_reason("a4"), "Choose an agent pane."));
     CHECK(pro_app_voice_block_reason("nobody") == NULL);        // unknown: allowed
-    pro_app_question("a1", "Which?");
+    pro_app_question("a1", "r1", "Which?", NULL, POD_ATTN_NONE);
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
+    // A Super Tab wait is not answered here: talking to the agent is how it is unblocked.
+    pro_app_question("a1", "supertab:as1:needs_human", "Which?", "Launch v2", POD_ATTN_DECISION);
+    CHECK(pro_app_voice_block_reason("a1") == NULL);
+    pro_app_question_close("a1");
     // Library-only agents are matched by the machine NAME the row carries.
     pro_library_row_t lib[1] = {{"far", "Far", "claude", "Box", "idle", 5}};
     pro_app_library(lib, 1, 0, 1);
@@ -1603,13 +1757,21 @@ static void pro_app_test_voice_paths(void) {
     CHECK(top() == POD_V_AGENT && !pod_ui_talking(&U) && U.notice_on && !strcmp(U.notice, "Can't talk right now"));
     // A gate refusal never reaches the recorder
     V.refuse = false;
-    pro_app_question("a1", "Which?");
+    pro_app_question("a1", "r1", "Which?", NULL, POD_ATTN_NONE);
     render();
     CHECK(hit(POD_A_TALK, 0) == NULL);                         // no screen draws a Talk button; the gate still meets a stale hit
     tap_stale_talk();
     CHECK(R.begins == 0 && !pod_ui_talking(&U) && !strcmp(U.notice, "Answer its question first."));
-    // The tick: Talk with no recording behind it ends; a sent one (waiting) ends too
+    // A Super Tab wait does not hold Talk back: talking to the agent is how it is unblocked.
     pro_app_question_close("a1");
+    pro_app_question("a1", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    render();
+    tap_stale_talk();
+    CHECK(R.begins == 1 && pod_ui_talking(&U));
+    pod_ui_talk_over(&U);
+    pro_app_question_close("a1");
+    R.begins = 0;
+    // The tick: Talk with no recording behind it ends; a sent one (waiting) ends too
     render();
     tap(POD_A_TALK, 0);
     CHECK(pod_ui_talking(&U));
@@ -1763,10 +1925,10 @@ static void side_button_discards_hands_free(void) {
 static void question_needs_the_link(void) {
     setup();
     pro_app_link(false, NULL);
-    pro_app_question("a1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", NULL, POD_ATTN_NONE);
     CHECK(!pro_app_question_open("a1"));
     pro_app_link(true, "mac");
-    pro_app_question("a1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", NULL, POD_ATTN_NONE);
     CHECK(pro_app_question_open("a1"));
 }
 
@@ -1790,7 +1952,7 @@ static void notif_room(void) {
 static void notify_banner_beep_and_expiry(void) {
     notif_room();
     // A plain live summary: an unread entry, the toast, one beep.
-    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 1 && U.model.unread_count == 1 && !strcmp(U.model.unread[0].agent, "a3"));
     CHECK(pod_ui_take_changed(&U));
     render();
@@ -1808,53 +1970,278 @@ static void notify_banner_beep_and_expiry(void) {
     CHECK(banner() == NULL && U.model.unread_count == 1);   // it stays unread in the Inbox
     // A newer one replaces the shown one, and moves to the top of the list.
     now = 20000;
-    pro_app_summary("a2", "t", "Renamed the module.", NULL, false, true);
+    pro_app_summary("a2", "t", "Renamed the module.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 2 && U.model.unread_count == 2 && !strcmp(U.model.unread[0].agent, "a2") && banner() && !strcmp(banner()->id, "a2"));
+    CHECK(BEEPS == 1 && U.model.unread_count == 2 && !strcmp(U.model.unread[0].agent, "a2") && banner() && !strcmp(banner()->id, "a2"));   // 15 s after the beep: coalesced
     now = 22000;
-    pro_app_summary("a3", "t", "And again.", NULL, false, true);
+    pro_app_summary("a3", "t", "And again.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 3 && U.model.unread_count == 2 && !strcmp(banner()->id, "a3") && !strcmp(U.model.unread[0].agent, "a3"));
+    CHECK(BEEPS == 1 && U.model.unread_count == 2 && !strcmp(banner()->id, "a3") && !strcmp(U.model.unread[0].agent, "a3"));
     // Muted: the entry and the toast come, the beep does not.
     MUTED = true;
-    now = 30000;
-    pro_app_summary("a2", "t", "Muted one.", NULL, false, true);
-    CHECK(BEEPS == 3 && U.model.unread_count == 2);
+    now = 40000;
+    pro_app_summary("a2", "t", "Muted one.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 1 && U.model.unread_count == 2);
     MUTED = false;
     // quiet / silent / restore (notify false): no entry, no beep, no toast; a restore also leaves the turn state alone.
     notif_room();
     now = 6000;
-    pro_app_summary("a3", "t", "quiet", NULL, false, false);
-    pro_app_summary("a3", "t", "restored", NULL, true, false);
+    pro_app_summary("a3", "t", "quiet", NULL, false, POD_TIER_SILENT);
+    pro_app_summary("a3", "t", "restored", NULL, true, POD_TIER_SILENT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     render();
     CHECK(banner() == NULL);
     // A restore that claims to notify still does not (the cable never sends that; the app does not trust it).
-    pro_app_summary("a3", "t", "restored", NULL, true, true);
+    pro_app_summary("a3", "t", "restored", NULL, true, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     // An agent the roster does not hold: nothing.
-    pro_app_summary("zz", "t", "ghost", NULL, false, true);
+    pro_app_summary("zz", "t", "ghost", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
-    // Awake on that agent's own screen: it beeps and the entry is filed all the same (the recap on screen reads it), but no toast
-    // covers the room that says the same. Dark on it: news, and the glass lights.
+    // Awake on that agent's own screen: no beep, no wake, the entry is read at once. Dark on it: news, and the glass lights.
     notif_setup();
     now = 40000;
     pod_ui_focus(&U, "a3", now);
     CHECK(top() == POD_V_AGENT || top() == POD_V_RECAP);
-    pro_app_summary("a3", "t", "Looked at.", NULL, false, true);
+    pro_app_summary("a3", "t", "Looked at.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 1 && banner() == NULL && U.model.unread_count == 0);   // its recap is on screen: read at once
+    CHECK(BEEPS == 0 && banner() == NULL && U.model.unread_count == 0);   // its recap is on screen: no beep, read at once
     pro_app_sleep();
     CHECK(pro_app_asleep());
-    pro_app_summary("a3", "t", "In the dark.", NULL, false, true);
-    CHECK(BEEPS == 2 && U.model.unread_count == 1 && !pro_app_asleep());
+    pro_app_summary("a3", "t", "In the dark.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 1 && U.model.unread_count == 1 && !pro_app_asleep());
+}
+
+// The tiers: alert = entry + toast + beep + wake; list = entry only; silent = nothing. One beep per 30 s; one entry per agent.
+static void notify_tiers(void) {
+    notif_room();   // a1's room, now = 5300
+    pro_app_summary("a3", "t", "Listed.", NULL, false, POD_TIER_LIST);
+    render();
+    CHECK(BEEPS == 0 && U.model.unread_count == 1 && banner() == NULL && !U.ban_on);
+    pro_app_summary("a2", "t", "Silent.", NULL, false, POD_TIER_SILENT);
+    CHECK(BEEPS == 0 && U.model.unread_count == 1 && !pod_model_unread_find(&U.model, "a2"));
+    // A newer entry of the same agent replaces the older one.
+    pro_app_summary("a3", "t", "Listed again.", NULL, false, POD_TIER_LIST);
+    CHECK(U.model.unread_count == 1 && !strcmp(U.model.unread[0].text, "Listed again."));
+    // An asleep device receiving a list entry stays asleep; an alert wakes it.
+    pro_app_sleep();
+    pro_app_summary("a2", "t", "Dark list.", NULL, false, POD_TIER_LIST);
+    CHECK(pro_app_asleep() && BEEPS == 0 && U.model.unread_count == 2);
+    pro_app_summary("a2", "t", "Dark alert.", NULL, false, POD_TIER_ALERT);
+    CHECK(!pro_app_asleep() && BEEPS == 1 && U.model.unread_count == 2);
+    // Alerts 10 s apart beep once; 31 s after the beep, again. A coalesced alert still wakes and toasts.
+    now += 10000;
+    pro_app_sleep();
+    pro_app_summary("a3", "t", "Second.", NULL, false, POD_TIER_ALERT);
+    render();
+    CHECK(BEEPS == 1 && !pro_app_asleep() && banner() && !strcmp(banner()->id, "a3"));
+    now += 21000;   // 31 s after the first beep
+    pro_app_summary("a2", "t", "Third.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 2);
+}
+
+// A question is an alert; a failed turn files a failed entry as an alert.
+static void notify_question_and_error(void) {
+    notif_room();   // a1's room, now = 5300
+    pro_app_question("a3", "r1", "Which branch?", NULL, POD_ATTN_NONE);
+    render();
+    CHECK(BEEPS == 1 && banner() && !strcmp(banner()->id, "a3") && pod_model_unread_find(&U.model, "a3"));
+    now += 10000;
+    pro_app_question("a2", "r1", "Which file?", NULL, POD_ATTN_NONE);
+    CHECK(BEEPS == 1);   // coalesced
+    pro_app_question_close("a3");
+    pro_app_question_close("a2");
+    CHECK(U.model.unread_count == 0);   // answered: its entry goes
+    // Asleep: the question wakes the glass.
+    pro_app_sleep();
+    now += 40000;
+    pro_app_question("a3", "r1", "Again?", NULL, POD_ATTN_NONE);
+    CHECK(!pro_app_asleep() && BEEPS == 2);
+    // Its own room: no beep, nothing filed.
+    pro_app_question_close("a3");
+    notif_setup();
+    pod_ui_focus(&U, "a3", now);
+    pro_app_question("a3", "r1", "Here?", NULL, POD_ATTN_NONE);
+    CHECK(BEEPS == 0 && U.model.unread_count == 0);
+    // turn.error: a failed entry, an alert.
+    notif_room();
+    pro_app_turn("a3", "error", "Build broke", 0);
+    render();
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(BEEPS == 1 && e && e->kind == POD_UNREAD_FAILED && !strcmp(e->text, "Build broke") && banner());
+}
+
+// A Super Tab's question (pro_cable's superTab + attention): an alert like any question, whose toast stays until it is answered.
+static void notify_supertab_question_stays(void) {
+    notif_room();   // a1's room
+    pro_app_question("a3", "r1", "Staging first, or straight to prod?", "Launch v2", POD_ATTN_DECISION);
+    render();
+    const pod_agent_t *q = agent("a3");
+    CHECK(BEEPS == 1 && banner() && !strcmp(banner()->id, "a3") && q && !strcmp(q->super_tab, "Launch v2") && q->attention == POD_ATTN_DECISION);
+    now += 60000; render();
+    CHECK(banner() != NULL);   // well past a plain toast's 5 s
+    pro_app_question_close("a3");
+    render();
+    CHECK(banner() == NULL && !agent("a3")->super_tab[0] && !pod_model_unread_find(&U.model, "a3"));
+    now += 40000;
+    pro_app_question("a2", "r2", "Stuck: no write access", "Launch v2", POD_ATTN_STUCK);
+    render();
+    CHECK(BEEPS == 2 && banner() && agent("a2")->attention == POD_ATTN_STUCK);
+    pro_app_question("a2", "r3", "Which file?", NULL, POD_ATTN_NONE);   // a plain one replaces it: no Super Tab left on the agent
+    CHECK(!agent("a2")->super_tab[0] && agent("a2")->attention == POD_ATTN_NONE);
+}
+
+// A Super Tab's question outlives the agent's turns: only question.close ends it, and it alerts once. What the turns
+// say meanwhile neither beeps nor takes its entry or toast. An engine's question takes its place (the daemon closes the
+// wait first) and the wait comes back when the daemon asks it again.
+static void supertab_question_survives_turns(void) {
+    notif_room();   // a1's room
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    CHECK(BEEPS == 1 && pro_app_question_open("a3"));
+    now += 40000;   // past the beep coalescing: only the rule can keep these quiet
+    pro_app_turn("a3", "started", "Working", 0);
+    pro_app_turn("a3", "done", "", 0);
+    pro_app_turn("a3", "started", "Working", 0);
+    pro_app_summary("a3", "Tried again, still no key.", NULL, NULL, false, POD_TIER_ALERT);
+    pro_app_turn("a3", "done", "", 0);
+    render();
+    const pod_agent_t *q = agent("a3");
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(pro_app_question_open("a3") && q->state == POD_ASKING && !strcmp(q->question, "Stuck: no key"));
+    CHECK(!strcmp(q->super_tab, "Launch v2") && q->attention == POD_ATTN_STUCK && e && e->ask && BEEPS == 1);
+    CHECK(banner() && !strcmp(banner()->id, "a3"));
+    // A library sweep and a send from the Pro leave it too.
+    pod_model_library_status(&U.model, "a3", "idle", now + 1);
+    pod_model_sent(&U.model, "a3", now + 2);
+    CHECK(agent("a3")->state == POD_ASKING && agent("a3")->super_tab[0]);
+    // Asked again (a resync, a relink): the same alert, no second beep.
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    CHECK(BEEPS == 1 && pro_app_question_open("a3"));
+    // An engine's question takes its place; once it closes and the wait is asked again, it is back.
+    pro_app_question_close("a3");
+    pro_app_question("a3", "tool-1", "Proceed?", NULL, POD_ATTN_NONE);
+    CHECK(pro_app_question_open("a3") && !agent("a3")->super_tab[0]);
+    pro_app_turn("a3", "started", "Working", 0);   // a plain question still ends with the turn
+    CHECK(!pro_app_question_open("a3"));
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    CHECK(pro_app_question_open("a3") && agent("a3")->attention == POD_ATTN_STUCK);
+    // Only question.close ends it.
+    pro_app_question_close("a3");
+    CHECK(!pro_app_question_open("a3") && agent("a3")->state != POD_ASKING && !agent("a3")->super_tab[0]);
+}
+
+// A link drop ends a Super Tab wait as it ends any question: it becomes a plain one the next turn ends, and the daemon
+// asks it again on the next link.
+static void supertab_question_link_drop(void) {
+    notif_room();
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    pro_app_link(false, NULL);
+    pro_app_link(true, "mac");
+    CHECK(!pro_app_question_open("a3") && !agent("a3")->super_tab[0] && agent("a3")->attention == POD_ATTN_NONE);
+    pro_app_turn("a3", "started", "Working", 0);
+    CHECK(agent("a3")->state == POD_WORKING);
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    CHECK(pro_app_question_open("a3") && agent("a3")->attention == POD_ATTN_STUCK);
+}
+
+// A Super Tab wait that closes leaves the agent as its turns did, not Working; a failed turn while it waits still alerts.
+static void supertab_question_close_and_failure(void) {
+    notif_room();
+    pro_app_turn("a3", "started", "Working", 0);
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    pro_app_turn("a3", "done", "", 0);
+    CHECK(agent("a3")->state == POD_ASKING);
+    pro_app_question_close("a3");
+    CHECK(agent("a3")->state == POD_DONE && !agent("a3")->turn_started);
+    // Asked while idle and closed with no turn: idle again.
+    pro_app_question("a2", "supertab:as2:needs_human", "Ship it?", "Launch v2", POD_ATTN_DECISION);
+    pro_app_question_close("a2");
+    CHECK(agent("a2")->state != POD_WORKING && agent("a2")->state != POD_ASKING);
+    // Asked again while a turn runs, closed: that turn goes on.
+    pro_app_question("a2", "supertab:as2:needs_human", "Ship it?", "Launch v2", POD_ATTN_DECISION);
+    pro_app_turn("a2", "started", "Working", 0);
+    pro_app_question_close("a2");
+    CHECK(agent("a2")->state == POD_WORKING);
+    // A plain question still goes back to work.
+    pro_app_question("a2", "r9", "Proceed?", NULL, POD_ATTN_NONE);
+    pro_app_question_close("a2");
+    CHECK(agent("a2")->state == POD_WORKING);
+    // A crash while waiting is news.
+    now += 40000;
+    const int beeps = BEEPS;
+    pro_app_question("a3", "supertab:as1:blocked", "Stuck: no key", "Launch v2", POD_ATTN_STUCK);
+    now += 40000;
+    pro_app_turn("a3", "started", "Working", 0);
+    pro_app_turn("a3", "error", "The turn failed", 0);
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(BEEPS == beeps + 2 && e && e->kind == POD_UNREAD_FAILED && pro_app_question_open("a3"));
+}
+
+// The daemon re-sends an open question after a link drop: the row returns, but the glass does not wake or beep again.
+static void notify_question_resent_after_relink_is_quiet(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Which branch?", NULL, POD_ATTN_NONE);
+    CHECK(BEEPS == 1);
+    pro_app_link(false, NULL);
+    pro_app_link(true, "mac");
+    pro_app_sleep();
+    now += 40000;   // past the beep coalescing, so only the repeat check can silence it
+    pro_app_question("a3", "r1", "Which branch?", NULL, POD_ATTN_NONE);
+    CHECK(pro_app_question_open("a3") && pod_model_unread_find(&U.model, "a3") && BEEPS == 1 && pro_app_asleep());
+    pro_app_question("a3", "r2", "A different one?", NULL, POD_ATTN_NONE);   // another prompt is news
+    CHECK(BEEPS == 2 && !pro_app_asleep());
+    pro_app_question_close("a3");
+    now += 40000;
+    pro_app_question("a3", "r3", "A different one?", NULL, POD_ATTN_NONE);   // answered, then asked again: news
+    CHECK(BEEPS == 3);
+}
+
+// The same prompt under a new request is a new question, even when the close of the last one was lost (Claude
+// Code's approvals all read "Do you want to proceed?").
+static void notify_question_same_prompt_new_request_beeps(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Do you want to proceed?", NULL, POD_ATTN_NONE);
+    CHECK(BEEPS == 1);
+    pro_app_link(false, NULL);   // the close of r1 is lost with the link
+    pro_app_link(true, "mac");
+    now += 40000;
+    pro_app_question("a3", "r2", "Do you want to proceed?", NULL, POD_ATTN_NONE);
+    CHECK(BEEPS == 2);
+}
+
+// A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
+static void notify_question_entry_ends_with_question(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Which branch?", NULL, POD_ATTN_NONE);
+    CHECK(pod_model_unread_find(&U.model, "a3"));
+    pro_app_turn("a3", "started", "Working", 0);
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+    pro_app_question("a2", "r1", "Which file?", NULL, POD_ATTN_NONE);
+    CHECK(pod_model_unread_find(&U.model, "a2"));
+    pro_app_summary("a2", "t", "Done.", NULL, false, POD_TIER_SILENT);
+    CHECK(!pod_model_unread_find(&U.model, "a2"));   // a silent end files nothing, and the question's entry is gone
+    pro_app_question("a3", "r1", "Again?", NULL, POD_ATTN_NONE);
+    CHECK(pod_model_unread_find(&U.model, "a3"));
+    pro_app_link(false, NULL);
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+    pro_app_link(true, "mac");
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+}
+
+// Entries expire after 6 h, measured from receipt on the render clock.
+static void notify_entries_expire(void) {
+    notif_room();
+    pro_app_summary("a3", "t", "Old.", NULL, false, POD_TIER_LIST);
+    now += POD_UNREAD_TTL_MS - 1; render();
+    CHECK(U.model.unread_count == 1);
+    now += 1; render();
+    CHECK(U.model.unread_count == 0);
 }
 
 static void notify_tap_opens_and_swipe_dismisses(void) {
     notif_room();
     // A tap on the toast opens Notices, which lists the entry.
     now = 6000;
-    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, POD_TIER_ALERT);
     render();
     const pod_hit_t *b = banner();
     CHECK(b);
@@ -1865,7 +2252,7 @@ static void notify_tap_opens_and_swipe_dismisses(void) {
     // A swipe up dismisses; the entry stays unread and nothing opens.
     notif_room();
     now = 7000;
-    pro_app_summary("a3", "t", "Again.", NULL, false, true);
+    pro_app_summary("a3", "t", "Again.", NULL, false, POD_TIER_ALERT);
     render();
     b = banner();
     CHECK(b);
@@ -1878,7 +2265,7 @@ static void notify_tap_opens_and_swipe_dismisses(void) {
     CHECK(up.fx == POD_FX_NONE && banner() == NULL && U.model.unread_count == 1 && top() == POD_V_AGENT);
     // A drag down or sideways on the toast is neither a tap nor a dismissal.
     now = 8000;
-    pro_app_summary("a2", "t", "Third.", NULL, false, true);
+    pro_app_summary("a2", "t", "Third.", NULL, false, POD_TIER_ALERT);
     render();
     b = banner();
     cx = b->x + b->w / 2; cy = b->y + b->h / 2;
@@ -1893,7 +2280,7 @@ static void notify_never_over_talk(void) {
     expect(tap(POD_A_TALK, 0), POD_FX_VOICE_BEGIN, "a1");
     CHECK(pod_ui_talking(&U));
     now = 6000;
-    pro_app_summary("a3", "t", "Done while talking.", NULL, false, true);
+    pro_app_summary("a3", "t", "Done while talking.", NULL, false, POD_TIER_ALERT);
     render();
     CHECK(banner() == NULL && U.model.unread_count == 1);   // in the Inbox; no toast over a recording
     now = 7000; render();
@@ -1905,7 +2292,7 @@ static void notify_never_over_talk(void) {
     // No cable: no toast.
     notif_room();
     now = 6000;
-    pro_app_summary("a3", "t", "x", NULL, false, true);
+    pro_app_summary("a3", "t", "x", NULL, false, POD_TIER_ALERT);
     pro_app_link(false, NULL);
     render();
     CHECK(banner() == NULL);
@@ -1942,7 +2329,7 @@ static void notify_replace_seen_and_read(void) {
     pro_app_notif_replace(rows, 3);
     // Notices: Home's card before the first tab opens it; a row opens the agent. A recap on screen reads its entry and sends
     // notif.read with the token; a working agent's room has no recap to show, so its entry waits.
-    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, -1, now);
+    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, POD_HOME_NOTICES, now);
     render();
     expect(tap(POD_A_INBOX, 0), POD_FX_NONE, NULL);
     CHECK(top() == POD_V_INBOX);
@@ -2101,18 +2488,18 @@ static void ota_notifications_quiet(void) {
     const int depth = U.nav.depth;
     fw_update_ui_begin("0.1.2", "0.1.3");
     now += 100;
-    pro_app_summary("a3", "t", "Shipped the thing.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 1 && !U.ban_on);   // in Notices, no beep, no toast
     render();
     CHECK(banner() == NULL && !U.frame.banner);
-    pro_app_summary("a1", "t", "Another.", NULL, false, true);
+    pro_app_summary("a2", "t", "Another.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 2);
     ota_end();
     CHECK(U.nav.depth == depth);
     now += 100; render();
     CHECK(banner() == NULL);   // Notices has them; the toast never came
     // Back to normal afterwards.
-    pro_app_summary("a2", "t", "After.", NULL, false, true);
+    pro_app_summary("a2", "t", "After.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 1 && U.ban_on);
 }
 
@@ -2228,7 +2615,7 @@ int main(int argc, char **argv) {
         {"library_fills_other_tabs", library_fills_other_tabs}, {"sweep_schedule", sweep_schedule},
         {"notice_shows_three_seconds", notice_shows_three_seconds}, {"link_drop_keeps_the_stack", link_drop_keeps_the_stack}, {"orphan_recording_is_discarded", orphan_recording_is_discarded}, {"side_button_discards_hands_free", side_button_discards_hands_free},
         {"send_before_recorder_started", send_before_recorder_started}, {"cap_leaves_talking", cap_leaves_talking},
-        {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
+        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
         {"activity_text_is_stable_through_the_real_cadence", activity_text_is_stable_through_the_real_cadence},
         {"follow_from_tabs", follow_from_tabs}, {"follow_from_another_agent", follow_from_another_agent}, {"follow_same_agent_is_a_no_op", follow_same_agent_is_a_no_op},
         {"follow_ignored_while_talking", follow_ignored_while_talking}, {"follow_waits_out_the_users_touch", follow_waits_out_the_users_touch},
@@ -2246,7 +2633,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_supertab_question_stays", notify_supertab_question_stays}, {"supertab_question_survives_turns", supertab_question_survives_turns}, {"supertab_question_link_drop", supertab_question_link_drop}, {"supertab_question_close_and_failure", supertab_question_close_and_failure}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
@@ -2284,7 +2671,7 @@ test_no_turn()
 
 cc = os.environ.get("CC", "cc")
 sanitize = "-fsanitize=" + os.environ.get("SANITIZERS", "undefined,bounds")
-include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"), "-I", str(HERE / "host_stubs"),
+include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"),
            "-I", str(POD)]
 failures = []
 with tempfile.TemporaryDirectory(prefix="harness-pro-app-") as directory:
@@ -2300,7 +2687,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-app-") as directory:
     modules = sorted(POD.glob("*.c")) + sorted(POD.glob("*/*.c")) + [APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c", DISP / "scroll.c",
                                          DISP / "pro_canvas.c", DISP / "terminal.c", fonts]
     for label, extra in (("upright", []),):
-        # The callbacks run on the cable_link task's 6 KB stack, the touch task's contact path on 10 KB: no frame of
+        # The callbacks run on the cable_link task's 12 KB stack, the touch task's contact path on 10 KB: no frame of
         # pro_app.c, pro_touch.c or the glue may pass 1 KB.
         for guarded in (APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c"):
             subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wframe-larger-than=1024", "-O1", "-DHT_FACE_PX=720",

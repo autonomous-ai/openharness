@@ -6,12 +6,15 @@
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "last_words.h"
+#include "task_stacks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "hal/usb_serial_jtag_ll.h"
 
 static const char *TAG = "cable";
 
@@ -35,7 +38,7 @@ static const char *TAG = "cable";
 //
 // So the rule this file keeps: RX_BUF ≥ the largest number of bytes the peer may have in flight while
 // this task is blocked. The firmware transfer is the only sender that can saturate the link, and its
-// credit window is 16 KB (docs/specs/cable-protocol.md, "Firmware update"). 32 KB is that window twice
+// credit window is 16 KB (docs/cable.md, "Firmware update"). 32 KB is that window twice
 // over, for scheduling jitter. Changing either number without the other reintroduces exactly this bug.
 #define USJ_RX_BUF (32 * 1024)
 
@@ -52,10 +55,11 @@ static const char *TAG = "cable";
 // anything arrives. It only bounds how long the task sleeps with nothing to do.
 #define READ_WAIT_MS 100
 
-// A stopped host can leave a legal-length header followed by only half its
-// payload. Magic inside the next welcome cannot escape that pending payload.
-// Expire only an idle gap, not the total duration of a slowly fragmented frame.
-#define FRAME_IDLE_US INT64_C(15000000)
+// The host writes a frame in one go, so a frame whose bytes stop for this long has lost its tail (the USB path drops
+// whole 64-byte packets) or the host stopped mid-write. Waiting for the rest would swallow the next frame instead:
+// a legal-length header holds the decoder until its payload length is met. Only an idle gap counts, not the total
+// duration of a slowly fragmented frame, and the clock starts after the callbacks (a flash erase blocks this task).
+#define FRAME_IDLE_US INT64_C(300000)
 
 // How long a write waits for the host to make room. Finite, and that is the point: an unplugged cable or
 // an unopened port fills the TX FIFO and never drains it, and portMAX_DELAY there parks whatever task
@@ -69,15 +73,15 @@ static const char *TAG = "cable";
 // the screen.
 #define LOG_WRITE_WAIT_MS 5
 
-// Reader task stack. The frame callback runs on this task, so it carries whatever the message layer
-// eventually does — JSON parsing, LVGL updates, and during a firmware install esp_ota_write() plus a
-// SHA-256 over the image read back out of flash.
-//
-// 12 KiB. The host proxy (test_pro_cable.c) measured the parser at 6.9 KB on Linux clang-18 with sanitizers, past
-// the old 6 KiB; ram_telemetry_periodic() reports this task's real high-water mark by name ("cable_link"), and
-// that is the figure to tune from. The failure this margin is against is real — the OTA path on this board's own
-// earlier firmware overflowed an 8 KiB stack and shipped devices that could not update themselves.
-#define READER_STACK 12288
+// How long cable_link_replug holds D+ low. A host sees a detach within microseconds and debounces the attach for 100 ms,
+// so this is a sure unplug without being a long one.
+#define REPLUG_LOW_MS 100
+
+// Reader task stack: STACK_CABLE_LINK (task_stacks.h). The frame callback runs on this task, so it carries whatever
+// the message layer does — JSON parsing, Pod's feeds, and during a firmware install esp_ota_write() plus a SHA-256
+// over the image read back out of flash. The host proxy (test_pro_cable.c) measured the parser at 6.9 KB on Linux
+// clang-18 with sanitizers; the failure the margin is against is real — the OTA path on this board's own earlier
+// firmware overflowed an 8 KiB stack and shipped devices that could not update themselves.
 
 // One log line's worth of formatted text. Anything longer is truncated rather than split: a log line is
 // diagnostic, and half of one that arrives is worth more than a mechanism that could deadlock producing
@@ -89,6 +93,7 @@ static cable_frame_cb  s_cb;
 static cable_tick_cb   s_tick;
 static void           *s_ctx;
 static atomic_bool     s_running;
+static atomic_uint     s_rx_bytes, s_frames_ok;   // written on the reader, read by the heartbeat
 
 // Serialises the shared encode buffer AND the write, so two tasks sending at once cannot interleave
 // halves of two frames onto the wire. A frame split down the middle by a second sender is not something
@@ -166,24 +171,39 @@ void cable_link_set_log_framing(bool on)
 
 // ── link ────────────────────────────────────────────────────────────────────────────────────────────
 
+// Counts each decoded frame, then hands it on.
+static void count_frame(uint8_t version, uint8_t type, const uint8_t *payload, size_t payload_len, void *ctx)
+{
+    atomic_fetch_add_explicit(&s_frames_ok, 1, memory_order_relaxed);
+    s_cb(version, type, payload, payload_len, ctx);
+}
+
+static int64_t s_last_rx_us;   // reader only
+
+// One read's worth: expire a stale partial frame, then feed. Split from the loop for the host test.
+static void reader_step(const uint8_t *chunk, int n)
+{
+    // This task owns the decoder. Expire before feeding a newly arrived read too: scheduling need not provide an
+    // intervening empty read.
+    if (s_decoder.len && esp_timer_get_time() - s_last_rx_us >= FRAME_IDLE_US) {
+        cable_decoder_expire(&s_decoder, count_frame, s_ctx);
+        s_last_rx_us = esp_timer_get_time();
+    }
+    // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
+    // every boot, and the only useful response to a byte that makes no sense is to step over it.
+    if (n > 0) {
+        atomic_fetch_add_explicit(&s_rx_bytes, (unsigned)n, memory_order_relaxed);
+        cable_decoder_feed(&s_decoder, chunk, (size_t)n, count_frame, s_ctx);
+        s_last_rx_us = esp_timer_get_time();   // after the callbacks, which may block
+    }
+}
+
 static void reader_task(void *arg)
 {
     (void)arg;
     uint8_t chunk[READ_CHUNK];
-    int64_t last_rx_us = 0;
     while (1) {
-        int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_WAIT_MS));
-        const int64_t now = esp_timer_get_time();
-        // This task owns the decoder. Reset before feeding a newly arrived
-        // read too: scheduling need not provide an intervening empty read.
-        if (s_decoder.len && now - last_rx_us >= FRAME_IDLE_US)
-            cable_decoder_reset(&s_decoder);
-        // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
-        // every boot, and the only useful response to a byte that makes no sense is to step over it.
-        if (n > 0) {
-            cable_decoder_feed(&s_decoder, chunk, (size_t)n, s_cb, s_ctx);
-            last_rx_us = now;
-        }
+        reader_step(chunk, usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_WAIT_MS)));
         if (s_tick) s_tick(s_ctx);
     }
 }
@@ -218,12 +238,19 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
         return false;
     }
 
+    // The console writes through the driver from here on, so the driver's ISR is the only writer of the TX FIFO. The
+    // no-driver console wrote the FIFO directly and raced the ISR, which skips its "FIFO empty" interrupt when it finds
+    // the FIFO full: a candidate for the cold-start link that sent nothing until a replug. Bounded like before: a host
+    // that is not reading costs one 50 ms wait, then the console drops until the FIFO moves again.
+    usb_serial_jtag_vfs_use_driver();
+
     // The new task may receive a welcome before xTaskCreate returns. Make the
     // installed driver/send path visible before that callback can run.
     s_running = true;
-    if (xTaskCreate(reader_task, "cable_link", READER_STACK, NULL, 5, NULL) != pdPASS) {
+    if (xTaskCreate(reader_task, "cable_link", STACK_CABLE_LINK, NULL, 5, NULL) != pdPASS) {
         s_running = false;
         ESP_LOGE(TAG, "reader task create failed — no link to the daemon");
+        usb_serial_jtag_vfs_use_nonblocking();   // back off the driver before it goes
         usb_serial_jtag_driver_uninstall();
         vSemaphoreDelete(s_tx_lock);
         s_tx_lock = NULL;
@@ -279,13 +306,42 @@ bool cable_link_host_present(void)
     return s_running && usb_serial_jtag_is_connected();
 }
 
+void cable_link_replug(void)
+{
+    if (!s_running) return;
+    // D+ without its pull-up is no device on the bus; the pull-downs stay off and leave the lines to the host's own.
+    const usb_serial_jtag_pull_override_vals_t off = { .dp_pu = false, .dm_pu = false, .dp_pd = false, .dm_pd = false };
+    usb_serial_jtag_ll_phy_enable_pull_override(&off);
+    vTaskDelay(pdMS_TO_TICKS(REPLUG_LOW_MS));
+    usb_serial_jtag_ll_phy_disable_pull_override();
+}
+
+bool cable_link_rx_pending(void)
+{
+    return s_decoder.len != 0;   // the reader's own state, read on the reader (the tick)
+}
+
 void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
 {
     if (corrupt_frames) *corrupt_frames = s_decoder.corrupt_frames;
     if (discarded_bytes) *discarded_bytes = s_decoder.discarded_bytes;
 }
 
-uint32_t cable_link_dropped_logs(void) { return atomic_load(&s_dropped_logs); }
+cable_link_stats_t cable_link_stats(void)
+{
+    // The decoder's two counters are plain words that only the reader writes; a 32-bit read is not torn.
+    uint32_t isr_rx = 0, ring_drop = 0;
+    usb_serial_jtag_rx_stats(&isr_rx, &ring_drop);
+    return (cable_link_stats_t){
+        .isr_rx = isr_rx,
+        .ring_drop = ring_drop,
+        .rx_bytes = atomic_load_explicit(&s_rx_bytes, memory_order_relaxed),
+        .frames_ok = atomic_load_explicit(&s_frames_ok, memory_order_relaxed),
+        .corrupt_frames = s_decoder.corrupt_frames,
+        .discarded_bytes = s_decoder.discarded_bytes,
+        .dropped_logs = atomic_load_explicit(&s_dropped_logs, memory_order_relaxed),
+    };
+}
 
 void cable_link_reset_decoder(void)
 {

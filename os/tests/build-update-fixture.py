@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSION = '999.0.1'
 BASE_URL = 'http://127.0.0.1:19447/'
 FILES = {'harness-tui', 'cli.js', 'notify.mjs'}
+# Beside them, for the package only (build-runtime.sh): never part of a fast update.
+PACKAGE_ONLY = {'playwright-mcp'}
 TARGETS = {'x86_64': ('linux-x64', 'x64', 62), 'aarch64': ('linux-arm64', 'arm64', 183)}
 
 
@@ -49,7 +51,7 @@ def verify_elf(path, architecture):
 
 
 def validate_runtime(runtime, commit, architecture, versions, baselines):
-    if {path.name for path in runtime.iterdir()} != FILES | {'source.json'}:
+    if {path.name for path in runtime.iterdir()} - PACKAGE_ONLY != FILES | {'source.json'}:
         raise ValueError('Use the complete, unmodified baseline runtime directory.')
     if (runtime / 'source.json').is_symlink():
         raise ValueError('The baseline identity cannot be a symlink.')
@@ -80,13 +82,17 @@ def probe_versions(folder, architecture, expected, cli_name):
 
 
 def copy_tui(source, destination):
-    # Compile tracked source only; ignored files cannot quietly enter a fixture.
-    paths = subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z', '--', 'tui'], timeout=30)
+    # Compile tracked source only; ignored files cannot quietly enter a fixture. The crates tui
+    # depends on by path (`../term`, #1470) go beside it, where its Cargo.toml looks for them.
+    paths = subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z', '--', 'tui', 'term'], timeout=30)
     for value in paths.split(b'\0'):
         if not value:
             continue
         relative = Path(os.fsdecode(value))
-        target = destination / relative.relative_to('tui')
+        if relative.parts[0] == 'tui':
+            target = destination / relative.relative_to('tui')
+        else:
+            target = destination.parent / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, target, follow_symlinks=False)
     manifest, lock = destination / 'Cargo.toml', destination / 'Cargo.lock'
@@ -132,8 +138,9 @@ def main(argv=None):
         parser.error('Node must match the native Linux build architecture.')
     started = time.time()
     commit = clean_source(ROOT)
+    # As build-runtime.sh names them: the CLI as the newest published one this source contains.
     versions = {'hn': tomllib.loads((ROOT / 'tui/Cargo.toml').read_text())['package']['version'],
-                'cli': json.loads((ROOT / 'cli/package.json').read_text())['version']}
+                'cli': command(sys.executable, ROOT / 'os/tools/runtime-baseline.py', '--cli-version')}
     baselines = json.loads(command(sys.executable, ROOT / 'os/tools/runtime-baseline.py'))
     baseline = baselines.get('cli', {}).get('version')
     if not isinstance(baseline, str) or not re.fullmatch(r'\d+\.\d+\.\d+', baseline):

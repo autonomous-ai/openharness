@@ -92,7 +92,17 @@ export function createAgentList({
     payload: Record<string, unknown>,
     sessionRole: () => string | null,
     reply: (result: Record<string, unknown>) => void,
+    guest?: string,
   ): Promise<void> => {
+    // A guest sees the harnesses it started and nothing of the owner's (core/guestPolicy.ts): no stopped
+    // conversations, no cloud harnesses, no monitor readings.
+    if (guest !== undefined) {
+      const own = registry.advertised().filter((s) => !!guest && s.guest === guest)
+      const frames = await Promise.all(own.map((s) => toProject(s)))
+      frames.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
+      reply({ agents: frames })
+      return
+    }
     const sessions = registry.advertised()
     const projects: Array<AgentFrame | CloudAgentFrame> = await Promise.all(sessions.map((s) => toProject(s)))
     // Older clients/devices keep their live-only contract. The desktop picker

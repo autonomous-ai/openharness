@@ -3,6 +3,9 @@ import 'dart:convert';
 enum KeymapContext {
   workspace,
   terminal,
+
+  /// Swarm chat navigation; a focused terminal keeps its own scope.
+  swarmChat,
   picker,
 
   /// Project-menu bindings layer over picker bindings (for example, o opens
@@ -151,6 +154,7 @@ class KeyBinding {
     required this.command,
     this.context = KeymapContext.workspace,
     this.custom = false,
+    this.outsideTerminal = false,
   }) : keys = List.unmodifiable(keys) {
     if (this.keys.isEmpty || this.keys.length > 4) {
       throw const FormatException('Use one to four keys in a sequence');
@@ -163,6 +167,9 @@ class KeyBinding {
   final String? command;
   final KeymapContext context;
   final bool custom;
+
+  /// A default alias that dispatch skips while the terminal view has focus.
+  final bool outsideTerminal;
   String get sequence => keys.join(' ');
 }
 
@@ -254,15 +261,21 @@ class KeymapConfig {
 }
 
 class KeymapMatch {
-  const KeymapMatch({this.command, this.prefix = false});
+  const KeymapMatch({
+    this.command,
+    this.prefix = false,
+    this.outsideTerminal = false,
+  });
   final String? command;
   final bool prefix;
+  final bool outsideTerminal;
   bool get matched => command != null || prefix;
 }
 
 class _KeyNode {
   final children = <KeyStroke, _KeyNode>{};
   String? command;
+  bool outsideTerminal = false;
 }
 
 /// Immutable lookup tables for each input context. Workspace commands are
@@ -271,10 +284,43 @@ class ResolvedKeymap {
   ResolvedKeymap(Iterable<KeyBinding> defaults, KeymapConfig config) {
     for (final context in KeymapContext.values) {
       final effective = <String, KeyBinding>{};
-      void apply(Iterable<KeyBinding> entries, KeymapContext scope) {
+      void apply(
+        Iterable<KeyBinding> entries,
+        KeymapContext scope, {
+        bool custom = false,
+      }) {
         for (final entry in entries.where(
           (binding) => binding.context == scope,
         )) {
+          if (custom) {
+            // New conditional defaults must not invalidate an existing user's
+            // sequence. Ordinary defaults retain their ambiguity checks.
+            effective.removeWhere(
+              (key, value) =>
+                  value.outsideTerminal &&
+                  entry.command != null &&
+                  entry.sequence.startsWith('$key '),
+            );
+            if (entry.command == null) {
+              // The old recorder only knew the ordinary defaults. Its null
+              // rows also retire aliases introduced for those commands later.
+              final removedCommands = defaults
+                  .where(
+                    (binding) =>
+                        !binding.outsideTerminal &&
+                        effective[binding.sequence] == binding &&
+                        (binding.sequence == entry.sequence ||
+                            binding.sequence.startsWith('${entry.sequence} ')),
+                  )
+                  .map((binding) => binding.command)
+                  .toSet();
+              effective.removeWhere(
+                (_, value) =>
+                    value.outsideTerminal &&
+                    removedCommands.contains(value.command),
+              );
+            }
+          }
           if (entry.command == null) {
             effective.removeWhere(
               (key, _) =>
@@ -294,12 +340,12 @@ class ResolvedKeymap {
       }
       apply(defaults, context);
       if (context != KeymapContext.workspace) {
-        apply(config.bindings, KeymapContext.workspace);
+        apply(config.bindings, KeymapContext.workspace, custom: true);
       }
       if (context == KeymapContext.project) {
-        apply(config.bindings, KeymapContext.picker);
+        apply(config.bindings, KeymapContext.picker, custom: true);
       }
-      apply(config.bindings, context);
+      apply(config.bindings, context, custom: true);
       _bindings[context] = List.unmodifiable(effective.values);
       final root = _KeyNode();
       for (final entry in effective.values) {
@@ -310,6 +356,7 @@ class ResolvedKeymap {
         }
         if (node.children.isNotEmpty) _ambiguous(entry, context);
         node.command = entry.command;
+        node.outsideTerminal = entry.outsideTerminal;
       }
       _roots[context] = root;
     }
@@ -343,7 +390,11 @@ class ResolvedKeymap {
       if (next == null) return const KeymapMatch();
       node = next;
     }
-    return KeymapMatch(command: node.command, prefix: node.children.isNotEmpty);
+    return KeymapMatch(
+      command: node.command,
+      prefix: node.children.isNotEmpty,
+      outsideTerminal: node.outsideTerminal,
+    );
   }
 }
 

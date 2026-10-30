@@ -136,9 +136,16 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.3 (65)` | 2026-10-13 | TestFlight. A harness's sign-in page (Claude Code's `/login`) opens on the phone and the sign-in goes back to it; the welcome's scan button reads "Scan QR from computer"; Computers shows a refresh button and Settings sits only at home. Built from `feat/mobile-ios-android` at `3dcd4a6f` |
 | `1.0.4 (66)` | 2026-10-14 | TestFlight. A simpler welcome (Continue with Google or Apple, then "Continue with email · QR code" as words), a welcome message and pictures; download and sign-in steps under the QR camera; a dropped P2P channel redialled within seconds; a dismissed keyboard stays down; one word per machine state; Privacy settings tidied. ASC refused it as `1.0.3 (66)`: 1.0.3 had been approved, so it went up as 1.0.4. Built from `feat/mobile-ios-android` at `1399b887` |
 | `1.0.5 (67)` | 2026-10-15 | TestFlight. The terminal stays on screen while it reconnects, and a socket or stream that goes quiet is redialled or resynced; control is taken before a tapped answer or Interrupt; MCP Accept/Decline dialogs answered; a harness made from Find lands in the tab picked on the chips; the QR camera's first step matches "On your computer, go to"; onboarding stall counting; Phone set-up for a device with no screen. ASC refused it as `1.0.4 (67)`: 1.0.4 had been approved, so it went up as 1.0.5. Built from `feat/mobile-ios-android` at `cf9e70d8` |
+| `1.0.6 (68)` | 2026-10-16 | TestFlight. Phone tracking: app_start, page opens, phone requests, connect (user/auto) and resume recovery counted; account sign-in sends `app=harness-mobile`; setup sharing on by default. ASC refused it as `1.0.5 (68)`: 1.0.5 had been approved, so it went up as 1.0.6. Built from `feat/mobile-ios-android` at `92152439` |
+| `1.0.7 (69)` | 2026-10-19 | TestFlight. Desktop's harness actions on the phone: clone, fork, change agent, delete with its conversation, stop once its task is done; the New form attaches files, starts a Terminal and says what a held creation waits on; find in terminal; any file sent from the key bar; native-style key caps; hardware-keyboard paste; media previews in the app; remote panes recover after their stream dies; Settings ▸ About links the privacy policy. Went up as 1.0.7 straight away, since 1.0.6 had been submitted. Built from `feat/mobile-ios-android` at `1d2466de` |
+| `1.0.7 (70)` | 2026-10-19 | TestFlight, then submitted for App Store review as 1.0.7. The first set-up step reads "Download and install Harness"; terminal menu rows lose their trailing …. Built from `feat/mobile-ios-android` at `1d4ca45c` |
+| `1.0.8 (71)` | 2026-10-20 | TestFlight. A + after Find's tab chips opens a new harness in a tab of its own; a held New Harness stops asking once Cancel is pressed, and a launch back to work says what it waited on; a locked Harness OS computer set up on its hotspot in one stay; a spoken sign-in code for devices with no screen; parked machines rechecked less often and not in the background; counts flushed on background, first open, new accounts and testers measured. 1.0.7 had been approved, so it went up as 1.0.8. Built (by another session) from `feat/mobile-ios-android` at `7849fd00`. Approved and on sale on the App Store: released 2026-10-20 22:09 UTC (App Store Connect: 1.0.8 `READY_FOR_SALE`, build 71) |
+| `1.0.9 (72)` | 2026-10-21 | TestFlight, then submitted as 1.0.9. The system banner shows while the app is open, and agent questions and turn tiers reach phones over the relay; faster terminal typing over P2P; Change agent hands over the conversation and can switch a busy Claude harness; a Harness OS computer's Version page, its update's restart and Unlock after one; Set up a device under Add computer; a desk tab renamed or closed by holding its chip in Find. Built from `feat/mobile-ios-android` at `9c329760`, the merge of local `main` with origin's #1499 |
+| `1.0.10 (73)` | 2026-10-23 | TestFlight. The phone's first session: task chips, one suggestion with a Send button, the keyboard over its task and a mic that sends the prompt, and Desktop's engine choice; a Harness OS computer signed out, its password changed, SSH turned on; Version lists releases and takes a newer OS release only; a pasted image waits for its transcode before uploading. 1.0.9 had been submitted, so it went up as 1.0.10. Built from `feat/mobile-ios-android` at `3c024672` |
+| `1.0.11 (74)` | 2026-10-26 | TestFlight. Claude Code scroll keeps up with the finger. 1.0.10 is approved, so it went up as 1.0.11 to carry refreshed App Store screenshots. Built from `feat/mobile-ios-android` at `13b9b38b` |
 
-`pubspec.yaml` is now at `1.0.5+68`, the next build number. Build 67 (1.0.5) is the last iOS upload and 66
-the last to both TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.4 are approved, so their trains are closed: new builds go up as 1.0.5. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.11+75`, the next build number. Build 74 (1.0.11) is the last TestFlight build and
+build 73 (1.0.10) the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved, so new builds go up as 1.0.11 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -216,7 +223,7 @@ terminal,tmux,ssh,claude,codex,cursor,coding,agent,developer,remote,shell,devops
 | --- | --- |
 | Support URL | `https://www.autonomous.ai/harness` |
 | Marketing URL | `https://www.autonomous.ai/harness` |
-| Privacy Policy URL | **required — use the real Autonomous policy URL; there is none in this repo to copy** |
+| Privacy Policy URL | `https://www.autonomous.ai/privacy` — the address every Harness listing names, and the one Settings ▸ About ▸ Privacy Policy opens (`lib/phone/privacy_policy.dart`) |
 
 **What's New** — leave empty for 1.0.0; it is only shown for updates.
 
@@ -324,7 +331,8 @@ team's password manager.**
 
 1. **Create app** (Play Console ▸ *Create app*): name `OpenHarness`, default language, *App*, *Free*.
 2. **App content** — Play will not publish anything to production while one of these is open:
-   - *Privacy policy*: required (the app asks for the camera and microphone). Same URL as iOS.
+   - *Privacy policy*: required (the app asks for the camera and microphone). Same URL as iOS:
+     `https://www.autonomous.ai/privacy`.
    - *App access*: sign-in is required → give the demo account from the iOS review notes, and keep a
      machine paired to it online, for the same reason as [App Review notes](#app-review-notes--the-part-that-gets-10-rejected).
    - *Ads*: no. *Content rating*: fill the questionnaire (a utility, no user-generated content shown
@@ -360,3 +368,9 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `64` (1.0.3) | 2026-10-13 | Built, same code as iOS 1.0.3 (64), with the pubspec briefly set back to `+64`; whether it was uploaded to Play is not recorded, so treat 64 as used |
 | `65` (1.0.3) | 2026-10-13 | Internal testing. Same code as iOS 1.0.3 (65): the new phone onboarding, Settings ▸ Connectors, a harness's sign-in page opened on the phone, refresh on Computers. Production, published 2026-10-13 |
 | `66` (1.0.4) | 2026-10-14 | Production, sent for review 2026-10-14. iOS 1.0.4 (66)'s code plus `51ee54c3` (a copy of the agent memo sorted in `terminal_page.dart`), which landed between the two builds |
+| `67` (1.0.5) | 2026-10-15 | Built, same code as iOS 1.0.5 (67), with the pubspec briefly set back to `+67`; uploaded by hand, the track it went to is not recorded |
+| `68` (1.0.6) | 2026-10-16 | Built, same code as iOS 1.0.6 (68); to be uploaded by hand |
+| `70` (1.0.7) | 2026-10-19 | Production, sent for review. Same code as iOS 1.0.7 (70): desktop's harness actions (clone, fork, change agent, delete), files in the New form and from the key bar, find in terminal, hardware-keyboard paste, panes that recover after their stream dies |
+| `71` (1.0.8) | 2026-10-20 | Built by another session, same code as iOS 1.0.8 (71); uploaded by hand to Production (reported by the release owner on 2026-10-21) |
+| `72` (1.0.9) | 2026-10-21 | Built, same code as iOS 1.0.9 (72); uploaded by hand, the track it went to is not recorded |
+| `73` (1.0.10) | 2026-10-23 | Built, same code as iOS 1.0.10 (73); to be uploaded by hand |

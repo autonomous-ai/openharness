@@ -8,7 +8,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { shellContextReply } from '../lib/shellContextReply.js'
 import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
-import { tmuxPaneState } from '../lib/tmux.js'
+import type { TerminalPaneRead, TerminalRuntimeRef } from '../lib/terminalTypes.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { SHELL_REQUESTS, startShell } from './shell.js'
 import { createTerminalSessions } from '../core/terminals/sessions.js'
@@ -18,7 +18,8 @@ vi.mock('node:fs/promises', async importOriginal => ({
 }))
 vi.mock('../lib/shellContextReply.js', () => ({ shellContextReply: vi.fn(() => true) }))
 vi.mock('../lib/deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
-vi.mock('../lib/tmux.js', () => ({ tmuxPaneState: vi.fn() }))
+/** The pane's state as its own backend reads it (`TerminalBackend.paneState`), asked with the row's runtime. */
+const tmuxPaneState = vi.fn<(runtime: TerminalRuntimeRef) => Promise<TerminalPaneRead>>()
 const OWNER = { local: false, owner: true }
 let dataDir: string
 function setup() {
@@ -114,11 +115,11 @@ describe('shells through a service', () => {
   })
   it('returns a shell view only after independent exit evidence for the same ready process', async () => {
     const { core, ask } = setup()
-    const row = { agentId: 'agent', active: true, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
+    const row = { agentId: 'agent', active: true, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', runtimes: [{ backend: 'tmux', paneId: '%2' }], launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
     for (const agentId of [undefined, '', 4, 'x'.repeat(257)]) expect(await ask('shell_visit_status', { agentId })).toEqual({ error: 'INVALID_AGENT_ID' })
     for (const current of [undefined, { ...row, engine: 'terminal' },
-      { ...row, launch: { state: 'starting' } }, { ...row, launch: { state: 'failed' } }, { ...row, tmuxPane: '' }, { ...row, processIdentity: undefined },
+      { ...row, launch: { state: 'starting' } }, { ...row, launch: { state: 'failed' } }, { ...row, tmuxPane: '', runtimes: [] }, { ...row, processIdentity: undefined },
       { ...row, processIdentity: { ...row.processIdentity!, startMarker: '' } }]) {
       vi.mocked(core.agents.byAgent).mockReturnValue(current as RegisteredSession | undefined)
       expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: false })
@@ -126,8 +127,10 @@ describe('shells through a service', () => {
     expect(tmuxPaneState).not.toHaveBeenCalled()
     vi.mocked(core.agents.byAgent).mockReturnValue(row)
     for (const pane of ['gone', 'unknown', { dead: false }]) {
+      tmuxPaneState.mockClear()
       vi.mocked(tmuxPaneState).mockResolvedValueOnce(pane as Awaited<ReturnType<typeof tmuxPaneState>>)
       expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: false })
+      expect(tmuxPaneState).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: '%2' })
     }
     expect(checkPidRuntime).not.toHaveBeenCalled()
     vi.mocked(tmuxPaneState).mockResolvedValue({ dead: false, engineExit: 0 } as Awaited<ReturnType<typeof tmuxPaneState>>)
@@ -146,9 +149,20 @@ describe('shells through a service', () => {
     expect(core.terminals.open).not.toHaveBeenCalled()
     expect(core.agents.sync).not.toHaveBeenCalled()
   })
+  it('asks a ptyhost row\'s own runtime for its pane, never a tmux pane of the same id', async () => {
+    const { core, ask } = setup()
+    const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%2' }
+    const row = { agentId: 'agent', active: true, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', runtimes: [pty], launch: { state: 'ready' },
+      processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
+    vi.mocked(core.agents.byAgent).mockReturnValue(row)
+    tmuxPaneState.mockResolvedValue({ dead: false, engineExit: 0 } as TerminalPaneRead)
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'gone', reason: 'fixture' })
+    expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: true })
+    expect(tmuxPaneState).toHaveBeenCalledExactlyOnceWith(pty)
+  })
   it('verifies an inactive resumed engine instead of stranding its parked shell', async () => {
     const { core, ask } = setup()
-    const row = { agentId: 'agent', active: false, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
+    const row = { agentId: 'agent', active: false, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', runtimes: [{ backend: 'tmux', paneId: '%2' }], launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'resumed', executable: '/bin/claude' } } as RegisteredSession
     vi.mocked(core.agents.byAgent).mockReturnValue(row)
     vi.mocked(tmuxPaneState).mockResolvedValue({ dead: false, engineExit: 0 } as Awaited<ReturnType<typeof tmuxPaneState>>)
@@ -161,7 +175,7 @@ describe('shells through a service', () => {
   })
   it('coalesces exit probes, keeps a value snapshot and releases failed probes', async () => {
     const { core, ask } = setup()
-    const row = { agentId: 'agent', active: true, engine: 'claude', tmuxPane: '%2', launch: { state: 'ready' },
+    const row = { agentId: 'agent', active: true, engine: 'claude', tmuxPane: '%2', runtimes: [{ backend: 'tmux', paneId: '%2' }], launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
     vi.mocked(core.agents.byAgent).mockReturnValue(row)
     let finish!: (value: Awaited<ReturnType<typeof tmuxPaneState>>) => void

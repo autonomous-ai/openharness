@@ -6,6 +6,8 @@ import ImageIO
 /// Controls share one optical size; hover changes ink, never the silhouette.
 enum HarnessControlSymbols {
   static let size: CGFloat = 16
+  /// The close mark's ink at rest, as a share of the foreground (AppIcons.closeInk).
+  static let closeInk: CGFloat = 1
   static let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
   /// The same, in one ink. Device symbols such as `iphone` also carry a filled
   /// screen layer that the default rendering tints grey, so beside the plain
@@ -80,7 +82,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     })
     strip.emit = { [weak self] method, args in
       guard let self else { return }
-      self.sendTabAction(method, arguments: args)
+      self.sendTabAction(method, arguments: args, fromRow: true)
     }
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { result(nil); return }
@@ -110,8 +112,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.statusMenu?.update(state)
+        // What needs the person in their Swarms; none, or no workspace, clears it.
+        let badge = state["dockBadge"] as? Int ?? 0
+        let label: String? = badge > 0 ? String(badge) : nil
+        if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
         self.statusBarHeight?.constant = self.strip.preferredStatusBarHeight
-        self.window?.backgroundColor = self.strip.palette.tabBar
+        // A new background repaints the whole window, title bar included: only on a change.
+        if let window = self.window, window.backgroundColor != self.strip.palette.tabBar {
+          window.backgroundColor = self.strip.palette.tabBar
+        }
         result(nil)
       case "machinesState":
         let state = call.arguments as? [String: Any] ?? [:]
@@ -161,16 +170,26 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     observers.forEach(NotificationCenter.default.removeObserver)
   }
 
-  private func sendTabAction(_ method: String, arguments: Any?) {
+  private func sendTabAction(_ method: String, arguments: Any?, fromRow: Bool = false) {
+    // Menus off with the row still live means Settings is up (Dart's `stripEnabled`). The row's
+    // actions then arrive as `rowAction`, so Dart closes Settings before acting, while anything
+    // else stays dropped behind it.
+    var name = method, payload = arguments
+    if fromRow && !actionsEnabled {
+      var wrapped: [String: Any] = ["method": method]
+      if let arguments { wrapped["arguments"] = arguments }
+      name = "rowAction"
+      payload = wrapped
+    }
     guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "resourceMonitor", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "devices", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "toggleLeader", "toggleTabActivity", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
-      channel.invokeMethod(method, arguments: arguments)
+      channel.invokeMethod(name, arguments: payload)
       return
     }
     tabActionGeneration += 1
     let generation = tabActionGeneration
     // Keyboard/VoiceOver activation can leave a button as responder. Wait for
     // Flutter to apply the action before giving the next key to its content.
-    channel.invokeMethod(method, arguments: arguments) { [weak self, weak responder = window?.firstResponder] result in
+    channel.invokeMethod(name, arguments: payload) { [weak self, weak responder = window?.firstResponder] result in
       guard let self, let window = self.window, generation == self.tabActionGeneration,
             !(result is FlutterError), result as? NSObject !== FlutterMethodNotImplemented,
             window.firstResponder === responder || window.firstResponder === window else { return }
@@ -1007,11 +1026,20 @@ private class SwarmIconButton: NSButton {
   var showsHoverFill: Bool { true }
   override var acceptsFirstResponder: Bool { isEnabled }
   override var mouseDownCanMoveWindow: Bool { false }
+  // Dart restates the titlebar's whole state on every update. Only a change
+  // repaints, so an update never flickers a control off and on.
   override var isEnabled: Bool {
-    didSet {
+    get { super.isEnabled }
+    set {
+      guard newValue != super.isEnabled else { return }
+      super.isEnabled = newValue
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
     }
+  }
+  override var font: NSFont? {
+    get { super.font }
+    set { if newValue != super.font { super.font = newValue } }
   }
 
   override func updateTrackingAreas() {
@@ -1076,9 +1104,11 @@ private let workspaceBarSpacing = try! NSRegularExpression(pattern: " {3}| ")
 
 /// Plain toolbar icons emphasize the glyph without a button well.
 private class SwarmPlainIconButton: SwarmIconButton {
-  var foreground = NSColor.white { didSet { needsDisplay = true } }
-  var restingOpacity: CGFloat = 0.75 { didSet { needsDisplay = true } }
-  var highContrastRestingOpacity: CGFloat? { didSet { needsDisplay = true } }
+  var foreground = NSColor.white { didSet { if foreground != oldValue { needsDisplay = true } } }
+  var restingOpacity: CGFloat = 0.75 { didSet { if restingOpacity != oldValue { needsDisplay = true } } }
+  var highContrastRestingOpacity: CGFloat? {
+    didSet { if highContrastRestingOpacity != oldValue { needsDisplay = true } }
+  }
 
   override func draw(_ dirtyRect: NSRect) {
     let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
@@ -1104,7 +1134,7 @@ private class SwarmPlainIconButton: SwarmIconButton {
 /// title stays for accessibility and the tooltip; it is not drawn.
 private final class SwarmStoreButton: SwarmIconButton {
   var markSize: CGFloat = 18
-  var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
+  var palette = SwarmNativePalette() { didSet { if palette != oldValue { needsDisplay = true } } }
   /// The search icon's slot.
   var preferredWidth: CGFloat { 32 }
 
@@ -1132,10 +1162,10 @@ private final class SwarmStoreButton: SwarmIconButton {
 /// (WorkspaceSignInButton / WorkspaceAvatarButton in Flutter).
 private final class SwarmAccountButton: SwarmIconButton {
   enum Kind { case signIn, avatar }
-  var kind = Kind.signIn { didSet { needsDisplay = true } }
+  var kind = Kind.signIn { didSet { if kind != oldValue { needsDisplay = true } } }
   /// One letter, or empty while the profile has not been read.
-  var initial = "" { didSet { needsDisplay = true } }
-  var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
+  var initial = "" { didSet { if initial != oldValue { needsDisplay = true } } }
+  var palette = SwarmNativePalette() { didSet { if palette != oldValue { needsDisplay = true } } }
   static let label = "Sign in"
   static let avatarDiameter: CGFloat = 24
   private var labelFont: NSFont { NSFont.systemFont(ofSize: 13, weight: .medium) }
@@ -1230,7 +1260,31 @@ private final class SwarmShareButton: SwarmIconButton {
   }
 }
 
-private final class SwarmStripScrollView: NSScrollView {
+/// The tab row scrolls only sideways. A trackpad swipe's vertical part would otherwise
+/// rubber-band the tabs up and down, since AppKit's default vertical elasticity applies
+/// even to a document no taller than the row.
+final class SwarmStripScrollView: NSScrollView {
+  /// Pins the row's vertical offset at 0. Wheel and elastic scrolling ask constrainBoundsRect;
+  /// scroll(to:), which scrollToVisible uses, bypasses it.
+  private final class ClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+      var bounds = super.constrainBoundsRect(proposedBounds)
+      bounds.origin.y = 0
+      return bounds
+    }
+    override func scroll(to newOrigin: NSPoint) {
+      super.scroll(to: NSPoint(x: newOrigin.x, y: 0))
+    }
+  }
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    contentView = ClipView()
+    verticalScrollElasticity = .none
+    horizontalScrollElasticity = .automatic
+  }
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
   override func scrollWheel(with event: NSEvent) {
     let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
     guard abs(dy) > abs(dx), let document = documentView,
@@ -2040,6 +2094,10 @@ private final class SwarmTabStrip: NSView {
   private var motionObserver: NSObjectProtocol?
   private var modifierMonitor: Any?
   private var shortcutHintsVisible = false
+  /// Whether the menu shortcuts work (Dart's `enabled`). The tabs' ⌘1… hints teach them, so they
+  /// follow these, not the row's `actionsEnabled`, which stays on over Settings.
+  private var shortcutsEnabled = false
+  private var showsShortcutHints: Bool { shortcutHintsVisible && shortcutsEnabled }
   private var lastBackgroundClick: (time: TimeInterval, point: NSPoint)?
   // Dragging is explicit below. AppKit must not also start a titlebar gesture.
   override var mouseDownCanMoveWindow: Bool { false }
@@ -2276,7 +2334,7 @@ private final class SwarmTabStrip: NSView {
 
   private func setShortcutHintsVisible(_ visible: Bool) {
     shortcutHintsVisible = visible
-    for tab in tabs { tab.showsShortcutHint = visible && actionsEnabled }
+    for tab in tabs { tab.showsShortcutHint = showsShortcutHints }
   }
 
   /// Tabs whose status slot moves: a working spinner.
@@ -2334,7 +2392,10 @@ private final class SwarmTabStrip: NSView {
   func update(_ state: [String: Any]) {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
-    actionsEnabled = state["enabled"] as? Bool == true
+    // The row stays live over Settings, which its actions close first (Dart's `stripEnabled`);
+    // menus and shortcuts follow `enabled`.
+    actionsEnabled = (state["stripEnabled"] ?? state["enabled"]) as? Bool == true
+    shortcutsEnabled = state["enabled"] as? Bool == true
     // The footer is a sibling above Flutter. Let Flutter's modal backdrop
     // cover this area too, including hit testing and accessibility.
     statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false || state["footerCovered"] as? Bool == true
@@ -2497,7 +2558,7 @@ private final class SwarmTabStrip: NSView {
         : displayLabel
       tab.shortcutHint = row.keys.contains("shortcutHint")
         ? row["shortcutHint"] as? String : (index < 9 ? "⌘\(index + 1)" : nil)
-      tab.showsShortcutHint = shortcutHintsVisible && actionsEnabled
+      tab.showsShortcutHint = showsShortcutHints
       tab.foreground = palette.navigationForeground
       tab.selected = id == activeId
       tab.keyboardFocus = tabsFocused && id == activeId
@@ -2506,6 +2567,7 @@ private final class SwarmTabStrip: NSView {
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
       tab.canInvitePeople = row["canInvitePeople"] as? Bool == true
+      tab.superTabPaused = row["superTabPaused"] as? Bool
       tab.applyShared(row["shared"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
         guard let self, let tab, self.actionsEnabled,
@@ -2513,15 +2575,16 @@ private final class SwarmTabStrip: NSView {
         self.emit?(method, args)
       }
       tab.hoverChanged = { [weak self] in self?.updateDividers() }
+      // Each property above repaints the tab when it changes; an unchanged row leaves it be.
       if tab.superview == nil { document.addSubview(tab) }
-      tab.needsDisplay = true
       return tab
     }
     updateDividers()
     // Moving frames alone leaves AppKit's child traversal in insertion order.
     document.setAccessibilityChildren(tabs)
     newButton.isEnabled = actionsEnabled
-    needsDisplay = true
+    // No repaint of the whole row: its own drawing follows the palette
+    // (updatePalette), and each control repaints only when it changes.
     needsLayout = true
     layoutSubtreeIfNeeded()
     syncActivityAnimation()
@@ -2683,7 +2746,6 @@ private final class SwarmTabStrip: NSView {
     var x: CGFloat = 0
     for (tab, width) in zip(tabs, widths) {
       tab.frame = NSRect(x: x, y: 0, width: width, height: bounds.height)
-      tab.contentCenterY = bounds.midY
       x += width
     }
     newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - toolHeight) / 2,
@@ -2822,7 +2884,9 @@ private final class SwarmTabStrip: NSView {
     if actionsEnabled && searchButton.isEnabled { emit?("sessions", nil) }
   }
   @objc private func openAddPhone() {
-    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", nil) }
+    // Named, so Add Phone is counted as the title bar's rather than Harness ▸ Add Phone…'s,
+    // which sends the same action with no arguments (`AddPhoneOpening` in product_measurement.dart).
+    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", ["from": "titlebar"]) }
   }
   @objc private func openStore() {
     if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
@@ -2873,25 +2937,46 @@ private final class SwarmTabStrip: NSView {
   }
 }
 
+/// Where a tab's body, content and × sit in its bounds (AppKit's y-up coordinates).
+enum SwarmTabGeometry {
+  // Mirrors AppDesktop.tabTopInset: the body starts this far below the strip's top.
+  static let topInset: CGFloat = 6
+  // Mirrors AppDesktop.tabShoulder: the body's straight sides stand this far in.
+  static let shoulder: CGFloat = 8
+  // × as the pane's close button (PaneCloseButton), the owner's reference: a 28pt
+  // square target (AppDesktop.tabCloseSize) inside the curved tab body, shown
+  // only on hover; at rest the name and status have the whole tab. 16pt was
+  // "really easy to click by mistake" (owner, 2026-10-12). Agent Messages' 💬 that
+  // sat left of it went the same day: easy to hit by mistake, it turned the tab off
+  // and failed a message that was waiting. Settings ▸ Experimental holds that switch now.
+  static let closeSide: CGFloat = 28
+  /// The visible, filled tab body.
+  static func shapeRect(in bounds: NSRect) -> NSRect {
+    NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: max(0, bounds.height - topInset))
+  }
+  /// The name, status and × centre on the body, as Flutter's do below its top padding,
+  /// not on the whole tab, which would set them topInset / 2 high.
+  static func contentCenterY(in bounds: NSRect) -> CGFloat { shapeRect(in: bounds).midY }
+  /// The × target: a square as large as the body allows up to closeSide, with one gap above, below
+  /// and to the body's straight right side (AppDesktop.tabCloseInset is shoulder + that gap at 40pt).
+  static func closeFrame(in bounds: NSRect) -> NSRect {
+    let body = shapeRect(in: bounds)
+    let side = min(closeSide, body.height)
+    let gap = (body.height - side) / 2
+    return NSRect(x: max(0, bounds.maxX - shoulder - gap - side), y: body.minY + gap, width: side, height: side)
+  }
+  /// Room the revealed × takes from the tab's right edge.
+  static func closeInset(in bounds: NSRect) -> CGFloat { bounds.maxX - closeFrame(in: bounds).minX }
+}
+
 private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidation {
   // Mirrors AppDesktop.tabMinWidth/tabMaxWidth. Labels never size the tabs.
   static let minimumLayoutWidth: CGFloat = 128
   static let maximumLayoutWidth: CGFloat = 256
   // Mirrors AppDesktop.tabRadius/tabShoulder in desktop-design-system.md.
   private static let upperRadius: CGFloat = 10
-  private static let shoulder: CGFloat = 8
-  private static let topInset: CGFloat = 6
-  // Mirror AppDesktop.tabCloseInset and DesktopWorkspaceTab: × as a 32pt-tall
-  // target inside the curved tab body, shown only on hover; at rest the name
-  // and status have the whole tab. A 20pt target: 16pt was "really easy to
-  // click by mistake" (owner, 2026-10-12). Agent Messages' 💬 that sat left of
-  // it went the same day: easy to hit by mistake, it turned the tab off and
-  // failed a message that was waiting. Settings ▸ Experimental holds that switch now.
-  private static let trailingInset: CGFloat = 8
-  private static let accessoryHeight: CGFloat = 32
-  private static let closeWidth: CGFloat = 20
+  private static let shoulder = SwarmTabGeometry.shoulder
   private static let restingInset: CGFloat = shoulder + 6
-  private static let revealedInset: CGFloat = trailingInset + closeWidth
   private static let gap: CGFloat = 6
   private static let activityWidth: CGFloat = 16
 
@@ -2922,6 +3007,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var canInvitePeople = false {
     didSet { if canInvitePeople != oldValue { updateMessagesItems() } }
   }
+  var superTabPaused: Bool? { didSet { updateMessagesItems() } }
+  private var pauseSuperTabItem: NSMenuItem?
   func applyShared(_ shared: [String: Any]?) {
     let count = shared?["count"] as? Int
     let role = count == nil ? nil : shared?["role"] as? String
@@ -2980,7 +3067,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// The name, centered with its status. Revealed, it moves left only as far
   /// as × needs, then gives up its tail; a name with room never moves.
   private func titleRect(revealed: Bool) -> NSRect {
-    let right = revealed ? Self.revealedInset : Self.restingInset
+    let right = revealed ? SwarmTabGeometry.closeInset(in: bounds) : Self.restingInset
     let width = min(naturalTitleWidth, max(0, bounds.width - Self.restingInset - right - trailingSpace))
     let group = width + trailingSpace
     let x = max(Self.restingInset, min((bounds.width - group) / 2, bounds.width - right - group))
@@ -3006,7 +3093,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// Flutter holds the keyboard after Close; accessibility explains Return.
   var keyboardFocus = false { didSet { if keyboardFocus != oldValue { needsDisplay = true; updateAccessibility() } } }
   var showsDivider = false { didSet { if showsDivider != oldValue { needsDisplay = true } } }
-  var contentCenterY: CGFloat = 20
+  private var contentCenterY: CGFloat { SwarmTabGeometry.contentCenterY(in: bounds) }
   var emit: ((String, Any?) -> Void)?
   var hoverChanged: (() -> Void)?
   var isHovered: Bool { hovered && actionsEnabled }
@@ -3039,6 +3126,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private var cachedSharedLabel: MeasuredLabel?
   var actionsEnabled = true {
     didSet {
+      guard actionsEnabled != oldValue else { return }
       selectButton.isEnabled = actionsEnabled
       closeButton.isEnabled = actionsEnabled
       updateAccessoryVisibility()
@@ -3066,11 +3154,13 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     closeButton.title = ""
     closeButton.isBordered = false
     closeButton.image = HarnessControlSymbols.image("xmark")
-    // The pane's close mark, 12pt Lucide x: 7pt across with a 1.07pt stroke. 9pt semibold xmark draws 7.2pt
-    // with 1.04pt (measured); 8pt regular drew 6.2pt with half the stroke, "too small" beside it (owner, 2026-10-12).
-    closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
-    closeButton.restingOpacity = 0.45
-    closeButton.highContrastRestingOpacity = 0.7
+    // A symbol beside text takes the text's point size and weight (HIG): the title's 13pt regular, at
+    // the small scale. Measured (2026-10-20) it is 8.8pt across with a 1.0pt stroke beside the title's
+    // 1.1pt stems; the pane's and the Flutter tab's × (AppIcons.closeSize, 14pt Lucide x) is 8.2pt with
+    // 1.1. Full ink at rest (closeInk); emphasis is the glyph's own, never a fill around it.
+    closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: labelFont.pointSize,
+      weight: .regular, scale: .small)
+    closeButton.restingOpacity = HarnessControlSymbols.closeInk
     closeButton.imagePosition = .imageOnly
     closeButton.foreground = foreground
     closeButton.target = self
@@ -3085,6 +3175,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       return item
     }
     _ = item("Rename Tab…", #selector(renameSwarm))
+    pauseSuperTabItem = item("Pause new work", #selector(pauseSuperTab))
     let separator = NSMenuItem.separator()
     menu.addItem(separator)
     messagesSeparator = separator
@@ -3105,9 +3196,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func layout() {
     super.layout()
     selectButton.frame = bounds
-    let closeX = max(0, bounds.width - Self.trailingInset - Self.closeWidth)
-    closeButton.frame = NSRect(x: closeX, y: contentCenterY - Self.accessoryHeight / 2,
-      width: min(Self.closeWidth, bounds.width), height: Self.accessoryHeight)
+    closeButton.frame = SwarmTabGeometry.closeFrame(in: bounds)
     let fullName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     var hints: [String] = []
     // A tooltip shows under the pointer, where the name has its revealed room.
@@ -3154,6 +3243,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// The menu's Show Agent Messages (only where the tab has a log), its sharing rows, and their separator when any
   /// of them shows.
   private func updateMessagesItems() {
+    pauseSuperTabItem?.isHidden = superTabPaused == nil
+    pauseSuperTabItem?.title = superTabPaused == true ? "Resume new work" : "Pause new work"
     for item in messagesItems { item.isHidden = !canShowAgentMessages }
     for (action, item) in shareItems { item.isHidden = !offers(action) }
     messagesSeparator?.isHidden = (messagesItems + Array(shareItems.values)).allSatisfy(\.isHidden)
@@ -3232,7 +3323,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   private var tabShape: NSBezierPath {
     let path = NSBezierPath()
-    let top = max(0, bounds.maxY - Self.topInset)
+    let top = SwarmTabGeometry.shapeRect(in: bounds).maxY
     let shoulder = min(Self.shoulder, bounds.width / 4, top / 3)
     let radius = min(Self.upperRadius, max(0, bounds.width / 2 - shoulder), max(0, (top - shoulder) / 2))
     let left = bounds.minX + shoulder, right = bounds.maxX - shoulder
@@ -3271,7 +3362,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if actionsEnabled && selectButton.hasKeyboardFocus {
       NSColor.controlAccentColor.setStroke()
       let focus = NSBezierPath(roundedRect: NSRect(x: Self.shoulder + 2, y: 3,
-        width: max(0, bounds.width - 2 * (Self.shoulder + 2)), height: max(0, bounds.height - Self.topInset - 6)),
+        width: max(0, bounds.width - 2 * (Self.shoulder + 2)), height: max(0, bounds.height - SwarmTabGeometry.topInset - 6)),
         xRadius: Self.upperRadius - 2, yRadius: Self.upperRadius - 2)
       focus.lineWidth = 1.5
       focus.stroke()
@@ -3369,6 +3460,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   @objc private func selectSwarm() { if actionsEnabled { emit?("select", ["id": swarmId]) } }
   @objc private func closeSwarm() { if actionsEnabled { emit?("close", ["id": swarmId]) } }
   @objc private func renameSwarm() { if actionsEnabled { emit?("rename", ["id": swarmId]) } }
+  @objc private func pauseSuperTab() {
+    if actionsEnabled && superTabPaused != nil { emit?("pauseSuperTab", ["id": swarmId]) }
+  }
   @objc private func showMessages() {
     if actionsEnabled && canShowAgentMessages { emit?("showAgentMessages", ["id": swarmId]) }
   }

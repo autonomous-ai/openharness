@@ -4,7 +4,7 @@
 #   make install-cli ARGS="--no-restart"
 #   make release-cli ARGS="--dry-run"
 
-.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh release-cli mcpb release-backend release-desktop release-web remote-machine upload-circle upload-pro device-test
+.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh upload-cli-install-ps1 release-cli mcpb release-backend release-desktop release-web remote-machine upload-circle upload-pro device-test
 
 ## validate: bounded independent checks with logs and a source/timing receipt.
 ## See docs/validation-and-release.md. ARGS="path/to/plan.json".
@@ -76,6 +76,13 @@ install-cli:
 ## serves the new bytes afterwards (the script prints the command).
 upload-cli-install-sh:
 	bash cli/scripts/upload-install-sh.sh
+
+## upload-cli-install-ps1: publish cli/scripts/install.ps1, the Windows installer (`irm ... | iex`), to STAGING:
+## harness/staging/cli/install.ps1, which reads the staging manifests. ARGS="--production" is the owner's step once
+## the staging E2E has passed (harness/cli/install.ps1 -> https://cdn.autonomous.ai/harness/cli/install.ps1).
+## ARGS="--print" shows what would be uploaded.
+upload-cli-install-ps1:
+	bash cli/scripts/upload-install-ps1.sh $(ARGS)
 
 ## remote-machine: drive a SECOND harness machine in Docker, so the app's remote path (relay ->
 ## another machine's daemon) can be tested from one laptop. ARGS picks the step:

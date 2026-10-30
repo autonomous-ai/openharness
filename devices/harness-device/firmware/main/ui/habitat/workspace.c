@@ -82,7 +82,7 @@ int ht_tab_carousel_index(const ht_tab_carousel_t *c)
 }
 void ht_tab_carousel_reset(ht_tab_carousel_t *c, int count, int index)
 {
-    count = bounded(count, 0, 24);
+    count = bounded(count, 0, HT_TAB_PAGES_MAX);
     *c = (ht_tab_carousel_t){.count=count};
     c->position = c->target = count ? bounded(index, 0, count - 1) * HT_TAB_PITCH : 0;
 }

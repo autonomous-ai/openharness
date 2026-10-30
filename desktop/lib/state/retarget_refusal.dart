@@ -1,7 +1,9 @@
 /// What the app says when the daemon refuses to move an agent to another model.
 ///
-/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown: it is
-/// written for its log and names the grid, and the user's vocabulary is "Subscription" and "Local".
+/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown, except for
+/// `API_UNAVAILABLE` and `ENGINE_LAUNCH_REFUSED`: elsewhere it is written for its log and names the
+/// grid, and the user's vocabulary is "Subscription" and "Local". Those two details are written for
+/// the person, so they are shown.
 /// Every code the daemon's `agent_retarget` can answer with is here, and an unknown one still gets a
 /// sentence rather than the code — a new refusal in a newer daemon must not surface as `SOME_CODE`.
 ///
@@ -37,6 +39,12 @@ String retargetRefusalMessage(
     'TMUX_TOO_OLD_FOR_GRID' => "This machine's tmux is too old to move a harness to a Local model. Update tmux there.",
     'TMUX_UNAVAILABLE' || 'TMUX_FAILED' =>
       "This machine's tmux did not answer. Try again in a moment.",
+    'PTY_HOST_UNAVAILABLE' =>
+      "This machine's terminals did not answer. Run harness start there, then try again.",
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail != null && detail.isNotEmpty
+      ? detail
+      : "$engineLabel cannot start on this machine with the new model.",
     // Changing model restarts the agent's process, which would cut off the
     // reply it is writing — so the daemon waits for the person, and the
     // sentence says what to do rather than naming the state ("mid-turn" read
@@ -54,6 +62,9 @@ String retargetRefusalMessage(
       "This machine's Local models could not be resolved. Sign in again on it.",
     'UNSUPPORTED_ON_REMOTE' ||
     'UNSUPPORTED' => 'Update the harness CLI on this machine to change models.',
+    // A guest's harness runs on its owner's plans and is never relaunched
+    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    'GUEST_NOT_ALLOWED' || 'GUEST_HARNESS' => 'On a computer shared with you, a harness keeps the model it started with. Start a new one to use another.',
     _ => "Couldn't change this harness's model.",
   };
 }

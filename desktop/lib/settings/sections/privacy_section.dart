@@ -152,9 +152,11 @@ class _ProductUsagePreferenceState extends State<ProductUsagePreference> {
 
   @override
   Widget build(BuildContext context) => widget.compact
+      // One row of Settings ▸ Experimental, drawn like the experiments around it: a title over one line of what it
+      // does. A bare title with its switch beside it, above the page, read as something apart (owner, 2026-10-17).
       ? SettingRow(
           title: 'Share product usage data',
-          inlineControl: true,
+          detail: productUsageDetail,
           controlSemanticLabel: 'Share product usage data',
           control: _control,
         )
@@ -164,9 +166,7 @@ class _ProductUsagePreferenceState extends State<ProductUsagePreference> {
             children: [
               SettingRow(
                 title: 'Share product usage data',
-                detail:
-                    'Help improve Harness by sharing usage counts and duration statistics. '
-                    'Your prompts, code, files, and conversations are never included.',
+                detail: productUsageDetail,
                 controlSemanticLabel: 'Share product usage data',
                 control: _control,
                 footer: const Text(

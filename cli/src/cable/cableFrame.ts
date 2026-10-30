@@ -121,6 +121,8 @@ export class CableDecoder {
    */
   discardedBytes = 0
   corruptFrames = 0
+  /** Sees the bytes about to be stepped over, in order, before they go (a panic's text rides in here). */
+  onDiscard?: (bytes: Uint8Array) => void
 
   /**
    * Forget any partial frame. Call when the port is reopened: leftover bytes belong to a session that has
@@ -170,7 +172,9 @@ export class CableDecoder {
    * noise" on a link that is working perfectly.
    */
   private discard(count: number): void {
-    this.discardedBytes += Math.min(count, this.len)
+    const n = Math.min(count, this.len)
+    this.discardedBytes += n
+    if (n > 0) this.onDiscard?.(this.buf.subarray(0, n))
     this.consume(count)
   }
 

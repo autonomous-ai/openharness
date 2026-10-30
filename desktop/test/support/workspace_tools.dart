@@ -12,7 +12,7 @@ Future<void> openWorkspaceTool(WidgetTester tester, String tool) async {
     'store' => LogicalKeyboardKey.keyS,
     _ => LogicalKeyboardKey.keyP,
   };
-  await key(tester, shortcut, cmd: true);
+  await key(tester, shortcut, cmd: true, ctrl: tool == 'store');
   await tester.pump(const Duration(milliseconds: 350));
 }
 
@@ -20,7 +20,7 @@ Future<void> openWorkspaceTool(WidgetTester tester, String tool) async {
 Future<void> openWorkspaceManagement(WidgetTester tester, String tool) async {
   final command = switch (tool) {
     'machines' => 'Machine connection settings',
-    'models' => 'Manage models',
+    'models' => 'Your models',
     _ => 'Manage harnesses',
   };
   await key(tester, LogicalKeyboardKey.keyP, cmd: true);

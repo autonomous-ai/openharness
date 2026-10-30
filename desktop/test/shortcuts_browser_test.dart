@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +18,72 @@ import 'keymap_host_test.dart' show key;
 import 'support/real_fonts.dart';
 
 void main() {
+  testWidgets('Swarm conversation shortcut explains its focus scope', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: const Scaffold(body: ShortcutsBrowser()),
+      ),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('shortcuts-search')),
+      'Switch conversation',
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(TextButton, 'Switch conversation'),
+      findsOneWidget,
+    );
+    expect(find.text('In a Swarm tab, outside a terminal'), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets(
+    'Windows New Tab lists the everywhere key before its marked alias',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: const Scaffold(body: ShortcutsBrowser()),
+        ),
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('shortcuts-search')),
+        'New Tab',
+      );
+      await tester.pumpAndSettle();
+      final row = find
+          .ancestor(of: find.text('New Tab'), matching: find.byType(TextButton))
+          .first;
+      final chords = tester
+          .widgetList<KeyChordView>(
+            find.descendant(of: row, matching: find.byType(KeyChordView)),
+          )
+          .toList();
+      expect(chords.expand((view) => view.chords).toList(), [
+        ['Ctrl', 'Shift', 'T'],
+        ['Ctrl', 'T'],
+      ]);
+      expect(
+        find.descendant(of: row, matching: find.text('Outside a terminal')),
+        findsOneWidget,
+      );
+      final semantics = tester.widget<Semantics>(
+        find.ancestor(of: row, matching: find.byType(Semantics)).first,
+      );
+      expect(
+        semantics.properties.label,
+        contains('Ctrl+T (outside a terminal)'),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
   for (final (size, scale, brightness) in [
     (const Size(1000, 700), 1.0, Brightness.dark),
     (const Size(1000, 700), 1.0, Brightness.light),

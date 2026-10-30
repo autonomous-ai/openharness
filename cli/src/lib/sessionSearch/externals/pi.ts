@@ -24,7 +24,7 @@ import { PI_FOLDER, PI_HEADER } from '../../../engines/pi/contract.js'
 import { readSessionHeader, sessionFolder, type NativeSessionHead } from '../../../engines/kit/sessionIdentity.js'
 
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
+import { engineProcessMatch, resumeSessionId } from '../../processTable.js'
 import { forEachLine } from '../../transcriptLines.js'
 import { entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
 import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'

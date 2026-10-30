@@ -396,9 +396,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
         builder: (context, _) => LayoutBuilder(
           builder: (context, bounds) {
             // Keep saved identities for reconnection, but only present devices
-            // whose host has answered. Other machines do not belong in this UI.
+            // that are plugged in now, on a host that has answered. A device
+            // seen once and unplugged since comes back when it is plugged in.
             final devices = widget.controller.devices
-                .where((device) => device.hostOnline && device.hostAvailable)
+                .where(
+                  (device) =>
+                      device.hostOnline &&
+                      device.hostAvailable &&
+                      device.status.attached,
+                )
                 .toList();
             final selected =
                 devices.where((d) => d.key == _selectedKey).firstOrNull ??

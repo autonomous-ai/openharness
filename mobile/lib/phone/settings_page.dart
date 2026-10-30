@@ -11,12 +11,14 @@ import 'package:harness_mobile/demo/sample_mode.dart'
     show SampleMode, SampleSession, openSampleMode;
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmIntroPage;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -26,11 +28,13 @@ import 'connectors_page.dart';
 import 'devices_page.dart';
 import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
+import 'out_of_sight.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
 import 'privacy_page.dart';
+import 'privacy_policy.dart';
 import 'welcome/how_it_works.dart';
 import 'welcome/focus_hints.dart';
 import 'tty_controls.dart';
@@ -76,18 +80,29 @@ import 'voice_language_store.dart';
 /// rail footer — on a phone there is no rail, so this is the only way to reach either.
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.notifier, this.large = true});
+  const SettingsPage({
+    super.key,
+    required this.notifier,
+    this.large = true,
+    this.experiments,
+  });
 
   final AppNotifier notifier;
+
+  /// What Experimental switches: [experimentalFeaturesStore] unless a test hands in its own, so a
+  /// tap there never writes to the developer's own state file.
+  final ExperimentalFeaturesStore? experiments;
 
   /// The tab's big title. Off when the page is pushed from a terminal's menu, where it needs the
   /// back chevron a large header does not draw.
   final bool large;
 
+  // While out of sight (the You tab under another), it follows the app no more, and catches up
+  // once shown.
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => ListenWhileInSight(
     listenable: notifier,
-    builder: (context, _) {
+    builder: (context) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
       return Scaffold(
@@ -132,7 +147,12 @@ class SettingsPage extends StatelessWidget {
                       weight: FontWeight.w600,
                     ),
                   ),
-                  Expanded(child: _Body(notifier: notifier)),
+                  Expanded(
+                    child: _Body(
+                      notifier: notifier,
+                      experiments: experiments ?? experimentalFeaturesStore,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -144,9 +164,10 @@ class SettingsPage extends StatelessWidget {
 }
 
 class _Body extends StatelessWidget {
-  const _Body({required this.notifier});
+  const _Body({required this.notifier, required this.experiments});
 
   final AppNotifier notifier;
+  final ExperimentalFeaturesStore experiments;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -234,7 +255,7 @@ class _Body extends StatelessWidget {
           // this account through its setup hotspot.
           SettingsRow(
             key: const Key('settings-add-device'),
-            title: 'Set up a device',
+            title: 'Set up Intern 3',
             onTap: () => Navigator.of(context).push(
               phoneRoute((_) => AddDevicePage(notifier: notifier)),
             ),
@@ -267,6 +288,15 @@ class _Body extends StatelessWidget {
       SettingsGroup(children: [_VoiceLanguageRow()]),
       const SettingsCaption('Appearance'),
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
+      // The desktop's Labs ▸ Experimental, and in the same place: after how the app looks, before
+      // Help. Features still being built, each off until turned on here.
+      const SettingsCaption('Experimental'),
+      SettingsGroup(
+        children: [
+          for (final experiment in PhoneExperiment.values)
+            _ExperimentRow(experiment: experiment, store: experiments),
+        ],
+      ),
       const SettingsCaption('Help'),
       SettingsGroup(
         children: [
@@ -295,7 +325,17 @@ class _Body extends StatelessWidget {
         ],
       ),
       const SettingsCaption('About'),
-      SettingsGroup(children: const [_VersionRow(), _BuildRow()]),
+      SettingsGroup(
+        children: [
+          const _VersionRow(),
+          const _BuildRow(),
+          // The stores want the policy reachable from inside the app — see [kPrivacyPolicyUrl].
+          SettingsRow(
+            title: 'Privacy Policy',
+            onTap: () => unawaited(openPrivacyPolicy(context)),
+          ),
+        ],
+      ),
     ],
   );
 
@@ -625,6 +665,50 @@ class _NotificationsRowState extends State<_NotificationsRow>
       onTap: () => unawaited(_tap()),
     );
   }
+}
+
+/// One [PhoneExperiment] and its switch. The whole row toggles it, as a phone's own settings do;
+/// the switch only shows which way it is.
+class _ExperimentRow extends StatelessWidget {
+  const _ExperimentRow({required this.experiment, required this.store});
+
+  final PhoneExperiment experiment;
+  final ExperimentalFeaturesStore store;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: store,
+    builder: (context, _, _) {
+      AppTheme.watch(context);
+      final on = store.isOn(experiment);
+      void toggle(bool next) {
+        HapticFeedback.selectionClick();
+        // Swarm is turned on from its page, which says first what it does; off, it goes at once.
+        if (next && experiment == PhoneExperiment.swarm) {
+          unawaited(
+            Navigator.of(context).push(phoneRoute((_) => SwarmIntroPage(features: store))),
+          );
+          return;
+        }
+        unawaited(store.set(experiment, next));
+      }
+
+      // One control to a screen reader: "Swarm, switch, off", not a button and a switch.
+      return MergeSemantics(
+        child: SettingsRow(
+          key: ValueKey('settings-experiment-${experiment.id}'),
+          title: experiment.label,
+          detail: experiment.description,
+          trailing: Switch.adaptive(
+            value: on,
+            activeTrackColor: Tty.of(context).green,
+            onChanged: toggle,
+          ),
+          onTap: () => toggle(!on),
+        ),
+      );
+    },
+  );
 }
 
 /// What this phone is called on another screen's "took control" banner —

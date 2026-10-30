@@ -290,7 +290,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await settle(tester, const Duration(milliseconds: 500));
-    await tester.tap(find.text('Rename…'));
+    await tester.tap(find.text('Rename'));
     await settle(tester, const Duration(milliseconds: 500));
     await tester.enterText(find.byType(TextField).last, 'docs-dark-mode');
     await tester.testTextInput.receiveAction(TextInputAction.done);
@@ -305,7 +305,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await settle(tester, const Duration(milliseconds: 500));
-    await tester.tap(find.text('Stop this harness…'));
+    await tester.tap(find.text('Stop this harness'));
     await settle(tester, const Duration(milliseconds: 500));
     await tester.tap(find.text('Stop').last);
     await settle(tester, const Duration(seconds: 2));

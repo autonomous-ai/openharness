@@ -44,6 +44,7 @@ it('follows an hn-only release over HTTP, preserves the old binary on failure an
   if (!address || typeof address === 'string') throw new Error('fixture did not listen')
   base = `http://127.0.0.1:${address.port}`
   vi.stubEnv('HOME', home)
+  vi.stubEnv('USERPROFILE', home)
   vi.stubEnv('HARNESS_TUI_BIN', undefined)
   vi.stubEnv('HARNESS_TUI_MANIFEST_URL', `${base}/metadata.json`)
   vi.resetModules()

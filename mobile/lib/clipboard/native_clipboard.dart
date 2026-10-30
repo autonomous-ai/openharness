@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 /// Flutter's own `Clipboard` (package:flutter/services.dart) only ever exposes `text/plain` — see
-/// `widgets/terminal_panel.dart`'s `_paste()`. Reading a real IMAGE off the clipboard (a
+/// `phone/terminal_paste.dart`'s `pasteClipboard()`. Reading a real IMAGE off the clipboard (a
 /// screenshot, "Copy Image" from a browser, ...) needs a native round trip instead: NSPasteboard on
 /// macOS (`macos/Runner/MainFlutterWindow.swift`), the GTK clipboard on Linux
 /// (`linux/runner/my_application.cc`), UIPasteboard on iOS (`ios/Runner/AppDelegate.swift`, read

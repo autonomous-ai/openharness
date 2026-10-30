@@ -12,6 +12,7 @@
 #include "app/pro_app.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
@@ -22,6 +23,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
+#include "sys/last_words.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -43,6 +45,8 @@ void vTaskDelay(TickType_t t) { (void)t; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
 esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
 size_t heap_caps_get_free_size(unsigned c) { (void)c; return 0; }
 size_t heap_caps_get_largest_free_block(unsigned c) { (void)c; return 0; }
 uint8_t config_load_brightness(void) { return 220; }
@@ -58,11 +62,15 @@ void pro_display_set_brightness(uint8_t l) { (void)l; }
 void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; return true; }
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) { CHECK(LOCK_DEPTH == 0); (void)t; (void)tab; (void)lead; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) { (void)phase; (void)dy; (void)velocity; return true; }
 static int lib_req_offset = -1;
 static uint32_t lib_req_id;
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); lib_req_offset = offset; lib_req_id = request; return true; }
 bool pro_cable_library_supported(void) { return true; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+uint32_t pro_cable_seq_gaps(void) { return 0; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 void pro_voice_begin(const char *agent) { (void)agent; }
 void pro_voice_end(bool send) { (void)send; }
 bool pro_voice_open(void) { return false; }

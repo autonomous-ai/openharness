@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { readProcessEnv } from '../../lib/processEnv.js'
-import { processLaunchArgs } from '../../lib/tmux.js'
+import { processLaunchArgs } from '../../lib/processTable.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { createGridAssignments } from './gridAssignments.js'
 
 vi.mock('../../lib/processEnv.js', () => ({ readProcessEnv: vi.fn(async () => ({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })) }))
-vi.mock('../../lib/tmux.js', () => ({ processLaunchArgs: vi.fn(async () => '') }))
+vi.mock('../../lib/processTable.js', () => ({ processLaunchArgs: vi.fn(async () => '') }))
 const assignment = { baseUrl: 'https://grid.example/relay', model: 'chosen' }
 const row = (id = 'a'): RegisteredSession => ({ agentId: id, engine: 'claude', sessionId: 'session', registeredAt: 1, boundAt: 2,
   active: true, primaryRuntimeKey: 'tmux:%1', processIdentity: { pid: 123, startMarker: 'start', executable: 'claude' },

@@ -26,6 +26,8 @@ LIVE_PAYLOADS = (Path('/run/archiso/copytoram/airootfs.sfs'),
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
+# On a USB built with HARNESS_OS_KEEP_LOGS: what it installs keeps its journal on disk.
+KEEP_LOGS = Path('/etc/harness-os/keep-logs')
 LAST_LOG = None
 
 
@@ -291,6 +293,22 @@ def trial_source(config):
     return source, account
 
 
+# The password as installed, for `harness factory-reset` to put back (setup.py restore_initial_password).
+# Root's alone, on the installed root: inside the encrypted disk where there is one.
+INITIAL_ACCOUNT = '/var/lib/harness-os/initial-account.json'
+
+
+def save_initial_password(target, config):
+    """The account's password hash, and on an encrypted disk the password itself: the disk's key
+    slots can only be changed with a passphrase that opens one, and a reset puts back this one."""
+    shadow = next((line.split(':')[1] for line in (target / 'etc/shadow').read_text().splitlines()
+                   if line.split(':', 1)[0] == config['username']), None)
+    record = {'username': config['username'], 'shadow': shadow}
+    if config['encrypt']:
+        record.update(initial=config['password'], current=config['password'])
+    write(target, INITIAL_ACCOUNT, json.dumps(record) + '\n', 0o600)
+
+
 def preserve_trial(trial, target, home):
     if trial is None:
         return None
@@ -456,6 +474,7 @@ def install_image(config, source, target, progress, resources):
             chroot(target, 'userdel', '-r', 'me')
         chroot(target, 'useradd', '-m', '-G', 'wheel,video,audio', '-s', '/bin/bash', config['username'])
         chroot(target, 'chpasswd', input=f"{config['username']}:{config['password']}\n".encode())
+        save_initial_password(target, config)
         chroot(target, 'passwd', '-l', 'root')
         (target / 'var/lib/systemd/linger/me').unlink(missing_ok=True)
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
@@ -469,10 +488,13 @@ def install_image(config, source, target, progress, resources):
         write(target, '/etc/hostname', config['hostname'] + '\n')
         write(target, '/etc/hosts', f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {config['hostname']}\n")
         write(target, '/etc/machine-id', '')
+        # Encrypted: the setup hotspot comes up while the disk waits for its password, for a phone to
+        # send it (harness-unlock), beside the screen's own prompt.
         write(target, '/etc/mkinitcpio.conf',
               'HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole '
               + ('plymouth ' if config['encrypt'] else '')
-              + 'block sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
+              + 'block ' + ('harness-unlock ' if config['encrypt'] else '')
+              + 'sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
         if platform['modules']:
             write(target, '/etc/mkinitcpio.conf.d/20-harness-platform.conf',
                   'MODULES+=(' + ' '.join(platform['modules']) + ')\n')
@@ -492,9 +514,17 @@ def install_image(config, source, target, progress, resources):
         if config['encrypt']:
             write(target, '/etc/systemd/system/getty@tty1.service.d/autologin.conf',
                   '[Service]\nExecStart=\n' + f'ExecStart=-/usr/bin/agetty --autologin {config["username"]} --noclear %I $TERM\n')
+        else:
+            # The one account is known: only its password is asked, as the disk's would be.
+            write(target, '/etc/systemd/system/getty@tty1.service.d/password.conf',
+                  '[Service]\nExecStart=\n' + f"ExecStart=-/usr/bin/agetty --skip-login --login-options '-p -- {config['username']}' --noclear %I $TERM\n")
+        # A USB built with HARNESS_OS_KEEP_LOGS (build.sh) installs computers that keep their logs
+        # across restarts, to read what went wrong after one. For testing; not set for a release.
+        if KEEP_LOGS.is_file():
+            write(target, '/etc/systemd/journald.conf.d/90-harness-keep-logs.conf', '[Journal]\nStorage=persistent\n')
         # An encrypted root cannot appear until its owner returns to unlock it.
         # Do not send a person who paused at the prompt into emergency mode.
-        root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
+        root_flags ='subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
         kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
         if platform['parameters']:
             kernel_args += ' ' + ' '.join(platform['parameters'])
@@ -504,7 +534,9 @@ def install_image(config, source, target, progress, resources):
             # setup delays before Plymouth can display its unlock prompt.
             kernel_args += ' console=ttyS0,115200 console=tty0 plymouth.ignore-serial-consoles'
         if luks_uuid:
-            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot splash'
+            # tries=0: asked again however often it is wrong, as an open hotspot lets anyone try
+            # (the page slows them down); three wrong ones used to stop the computer starting.
+            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot rd.luks.options={luks_uuid}=tries=0 splash'
         write(target, '/etc/default/grub',
               'GRUB_DEFAULT=0\nGRUB_TIMEOUT=1\nGRUB_DISTRIBUTOR="Harness"\n'
               'GRUB_DISABLE_OS_PROBER=true\n' + f'GRUB_CMDLINE_LINUX="{kernel_args}"\n')
@@ -520,6 +552,9 @@ def install_image(config, source, target, progress, resources):
         chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd',
                'harness-setup.service')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
+        # Its account's daemon from the start (the user lingers), not only with a session at the
+        # screen: a computer set up and unlocked from a phone may have no screen, or nobody at it.
+        chroot(target, 'systemctl', '--global', 'enable', 'harness-daemon.service')
         report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')
         # Keep the live marker through this initial optional package transaction,

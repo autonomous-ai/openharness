@@ -6,6 +6,16 @@ import type { FolderSetting } from './hooks.js'
  * and lib/sessionRepair.ts. Binding a session never waits on an engine worker
  * (docs/design/2026-10-08-engine-launch.md, (c4)).
  */
+/** Where an engine writes the summary of a conversation it compacted: a record whose `flag` field is `true`,
+ *  its text at `text` (a string, or an array of `{ type: 'text', text }` blocks). `wrapper`: the engine's own words
+ *  around the summary, which are not part of it: a first paragraph starting with one of `opening`, and everything
+ *  from the first line starting with one of `closing`. */
+export interface CompactSummaryRule {
+  flag: string
+  text: readonly string[]
+  wrapper?: { opening: readonly string[]; closing: readonly string[] }
+}
+
 export interface SessionStoreContract {
   /** How the daemon's log and its own hook events name the engine (`[registry] repaired Codex parent …`,
    *  `ClaudeContinuation`). */
@@ -29,6 +39,9 @@ export interface SessionStoreContract {
    *  depth, at most `walk` entries looked at, for an id `id` accepts. `projects`: `<id><suffix>` in any one folder
    *  directly below a sessions folder. */
   byId: { layout: 'walk'; suffix: string; id: RegExp; walk: number } | { layout: 'projects'; suffix: string }
+  /** Cold histories keep their logical path while the engine replaces the file with this archive.
+   * Opening a stopped harness materializes only that history before earning control identity. */
+  compression?: { suffix: string; format: 'zstd' }
   /**
    * What a session file's first record says about it, read within `maxBytes`: its `type`, and where it keeps
    * the id, the folder, the field whose presence marks a session another one delegated to, and that one's parent.
@@ -56,6 +69,9 @@ export interface SessionStoreContract {
    * turn (a record of `turns`, within `headBytes`, or a file at least that long).
    */
   continuation?: { type: string; field: string; suffix: string; tailBytes: number; turns: readonly string[]; headBytes: number }
+  /** The summary the engine writes when it compacts a long conversation, for Change agent's handoff
+   *  (lib/compactSummary.ts). Absent: the engine keeps none that can be read (Codex's is encrypted). */
+  compactSummary?: CompactSummaryRule
   /** A parent's binding, overwritten by its delegated session's hook, is put back as the registry loads. */
   repairsOverwrittenParent?: boolean
   /**

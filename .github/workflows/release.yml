@@ -83,6 +83,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       metadata_path: ${{ steps.resolve.outputs.metadata_path }}
+      staging_prefix: ${{ steps.resolve.outputs.staging_prefix }}
     steps:
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a ref
@@ -105,6 +106,10 @@ jobs:
           meta="${INPUT_METADATA_PATH:-harness/cli/metadata.json}"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "metadata_path=$meta" >> "$GITHUB_OUTPUT"
+          # Where the Windows bits go (sub-project B): a real release's staging, or a dry run's own. A dry run's
+          # 9.9.9 must never appear in the staging manifest the E2E installs from.
+          if [ "$meta" = harness/cli/metadata.json ]; then staging=harness/staging; else staging=harness/staging-dry-run; fi
+          echo "staging_prefix=$staging" >> "$GITHUB_OUTPUT"
           echo "Publishing **$ver** to \`$meta\`" >> "$GITHUB_STEP_SUMMARY"
 
   # Proving the credential now means a broken one costs seconds instead of a whole bundle+upload.
@@ -299,6 +304,97 @@ jobs:
             https://cdn.autonomous.ai/harness/cli/install.sh \
             -o "$RUNNER_TEMP/cli-install.sh"
           cmp cli/scripts/install.sh "$RUNNER_TEMP/cli-install.sh"
+
+  # The Windows half (sub-project B). The pty payload (harness-pty.exe, harness-launch.exe, harness.exe and ConPTY)
+  # is built on each architecture's own runner by the Windows workflow. The payload, this release's `cli` entry
+  # and install.ps1 then go to STAGING, never to production: production is the owner's step after the staging E2E
+  # (docs/testing/windows-cli-e2e.md). These jobs are separate from `publish`, so a Windows failure never holds up
+  # the macOS and Linux fleet's release. Like `publish`, they fail loudly, and the next version fixes them.
+  pty-build:
+    needs: version
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      release: true
+
+  windows-staging:
+    needs: [version, preflight, publish, pty-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      STAGING_PREFIX: ${{ needs.version.outputs.staging_prefix }}
+      CLI_METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: harness-pty-windows-*
+          path: .pty
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Publish the pty payload to staging
+        # The zips under the staging prefix as well: production names these same objects (promote-pty-payload.sh),
+        # and a dry run's go under harness/staging-dry-run, never a real version's immutable harness/pty/<version>/.
+        run: OBJECT_PREFIX="$STAGING_PREFIX" METADATA_PATH="$STAGING_PREFIX/pty/metadata.json" bash cli/scripts/publish-pty-payload.sh "$VERSION" .pty/harness-pty-windows-x64 .pty/harness-pty-windows-arm64
+      - name: Point the staging CLI manifest at this release
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://storage.googleapis.com/${GCS_BUCKET}/${CLI_METADATA_PATH}" -o released.json
+          node --input-type=commonjs - <<'JS'
+            const fs = require("node:fs")
+            const cli = JSON.parse(fs.readFileSync("released.json", "utf8")).cli
+            if (!cli || cli.version !== process.env.VERSION) throw new Error(`the released manifest is not ${process.env.VERSION}`)
+            fs.writeFileSync("cli-entry.json", JSON.stringify(cli))
+          JS
+          # The existing staging manifest, or {} only when it is confirmed absent: any other failure aborts, so the
+          # merge never drops the keys of a manifest it could not read (cli/scripts/lib/gcs.sh).
+          source cli/scripts/lib/gcs.sh
+          fetch_manifest "gs://${GCS_BUCKET}/${STAGING_PREFIX}/cli/metadata.json" staging.json "${STAGING_PREFIX}/cli/metadata.json"
+          node cli/scripts/lib/runtimeManifest.mjs key staging.json staging.next.json cli cli-entry.json
+          gcloud storage cp --cache-control="no-cache, no-store, must-revalidate" --content-type=application/json \
+            staging.next.json "gs://${GCS_BUCKET}/${STAGING_PREFIX}/cli/metadata.json"
+      - name: Publish install.ps1 to staging
+        run: bash cli/scripts/upload-install-ps1.sh
+      - name: Read staging back the way install.ps1 will
+        run: |
+          set -euo pipefail
+          node --input-type=commonjs - <<'JS'
+            const crypto = require("node:crypto")
+            const base = `https://storage.googleapis.com/${process.env.GCS_BUCKET}/${process.env.STAGING_PREFIX}/`
+            const json = async (path) => {
+              const response = await fetch(base + path, { cache: "no-store" })
+              if (!response.ok) throw new Error(`GET ${base + path} -> ${response.status}`)
+              return response.json()
+            }
+            const main = async () => {
+              const cli = (await json("cli/metadata.json")).cli
+              if (!cli || cli.version !== process.env.VERSION) throw new Error(`staging cli is ${cli && cli.version}`)
+              const pty = (await json("pty/metadata.json")).pty || {}
+              for (const key of ["win32-x64", "win32-arm64"]) {
+                const entry = pty[key]
+                if (!entry || entry.version !== process.env.VERSION) throw new Error(`${key} pty is ${entry && entry.version}`)
+                const response = await fetch(entry.url, { cache: "no-store" })
+                if (!response.ok) throw new Error(`${key}: GET ${entry.url} -> ${response.status}`)
+                const bytes = Buffer.from(await response.arrayBuffer())
+                if (crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256 || bytes.length !== entry.size) throw new Error(`${key}: served pty bytes differ`)
+              }
+              const runtime = await fetch(base + "runtime/metadata.json", { cache: "no-store" })
+              const node = runtime.ok ? (await runtime.json()).node || {} : {}
+              if (!node["win32-x64"] || !node["win32-arm64"]) console.log("::warning::staging has no Windows Node yet: run the Node runtime for Windows workflow")
+              const script = await (await fetch(`https://cdn.autonomous.ai/${process.env.STAGING_PREFIX}/cli/install.ps1`, { cache: "no-store" })).text()
+              if (!script.includes(`$HarnessManifestBase = '${base}'`)) console.log("::warning::the CDN does not serve the staging install.ps1 yet")
+              console.log(`staging ${process.env.VERSION}: cli, pty x64 + arm64 verified`)
+            }
+            main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
+          JS
 
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule the desktop repo
   # follows. CI generates nothing: what a human wrote and reviewed at tag time is exactly what

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/crash_log.dart';
 import 'package:harness/core/harness_cli_runner.dart';
 import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/cli_log.dart';
 import 'package:harness/logging/error_burst_filter.dart';
 import 'package:harness/logging/log_export.dart';
 import 'package:harness/logging/log_append.dart';
@@ -146,11 +147,17 @@ void main() {
   test('an invalid NUL path never appends to its valid prefix', () {
     final output = File('${dir.path}/existing');
     output.writeAsStringSync('preserved');
-    expect(
-      () => appendDurableLog(File('${output.path}\u0000suffix'), 'bad'),
-      throwsArgumentError,
-    );
-    expect(output.readAsStringSync(), 'preserved');
+    for (final append in [appendDurableLog, appendLog]) {
+      Object? error;
+      try {
+        append(File('${output.path}\u0000suffix'), 'bad');
+      } catch (caught) {
+        error = caught;
+      }
+      // Check the side effect even when the invalid path did not throw.
+      expect(output.readAsStringSync(), 'preserved');
+      expect(error, isA<ArgumentError>());
+    }
   });
 
   test('opening a directory as a log fails without altering it', () {
@@ -243,7 +250,7 @@ void main() {
   });
 
   for (final level in [AppLogLevel.info, AppLogLevel.warn, AppLogLevel.error]) {
-    test('$level makes its preceding debug context durable immediately', () {
+    test('$level writes its preceding debug context immediately', () {
       final sink = file();
       final log = FileAppLog(sink, bufferDebug: true);
       log.debug('ws', 'preceding context');
@@ -262,6 +269,125 @@ void main() {
       expect(text, contains('    frame one'));
     });
   }
+
+  // An fsync on the UI isolate waits for an ext4 journal commit on Linux
+  // (10–500+ ms under I/O), and INFO/WARN fsynced every record: the best fit
+  // for production's long frames, ~69 of 72 of them on two Linux computers.
+  group('fsync', () {
+    late List<(String, bool)> writes;
+
+    DailyLogFile recorded() {
+      writes = [];
+      final result = DailyLogFile(
+        dir,
+        'app',
+        clock: () => DateTime(2026, 10, 1, 12),
+        appendFile: (file, contents) {
+          writes.add((contents, true));
+          appendDurableLog(file, contents);
+        },
+        appendFileUnsynced: (file, contents) {
+          writes.add((contents, false));
+          appendLog(file, contents);
+        },
+      );
+      files.add(result);
+      return result;
+    }
+
+    test('INFO and WARN write at once without one; an admitted ERROR has one, '
+        'with its context and stack', () {
+      final at = DateTime(2026, 10, 1, 12);
+      final sink = recorded();
+      final log = FileAppLog(
+        sink,
+        bufferDebug: true,
+        clock: () => at,
+        burst: ErrorBurstFilter(clock: () => at),
+      );
+      log.debug('ws', 'context');
+      log.info('app', 'started');
+      log.warn('ws', 'poll failed');
+      log.debug('ws', 'more context');
+      log.failure(
+        'flutter',
+        'threw',
+        stackTrace: StackTrace.fromString('frame one'),
+      );
+      log.failure('flutter', 'threw'); // suppressed by the burst filter
+      expect(writes, [
+        (
+          '[2026-10-01 12:00:00] DEBUG ws      context\n'
+              '[2026-10-01 12:00:00] INFO  app     started\n',
+          false,
+        ),
+        ('[2026-10-01 12:00:00] WARN  ws      poll failed\n', false),
+        (
+          '[2026-10-01 12:00:00] DEBUG ws      more context\n'
+              '[2026-10-01 12:00:00] ERROR flutter threw\n'
+              '    frame one\n',
+          true,
+        ),
+      ]);
+      expect(
+        sink.currentFile.readAsStringSync(),
+        writes.map((w) => w.$1).join(),
+      );
+    });
+
+    test('a durable flush syncs the pending batch, or else what was written '
+        'unsynced, and does nothing twice', () {
+      final sink = recorded();
+      sink.flush(durable: true);
+      expect(writes, isEmpty, reason: 'nothing written, nothing to sync');
+      sink.append('immediate');
+      sink.flush(durable: true);
+      sink.flush(durable: true);
+      expect(writes, [('immediate\n', false), ('', true)]);
+      sink.append('batched', buffered: true);
+      sink.flush(durable: true);
+      sink.flush(durable: true);
+      expect(writes.skip(2), [('batched\n', true)]);
+      sink.append('routine', buffered: true);
+      sink.flush();
+      expect(writes.skip(3), [('routine\n', false)]);
+      expect(
+        sink.currentFile.readAsStringSync(),
+        'immediate\nbatched\nroutine\n',
+      );
+    });
+
+    test('flushAppLog fsyncs only when asked to', () {
+      final sink = recorded();
+      appLog = FileAppLog(sink, bufferDebug: true);
+      appLog.debug('ws', 'one');
+      flushAppLog();
+      appLog.debug('ws', 'two');
+      flushAppLog(durable: true);
+      expect(writes.map((w) => w.$2), [false, true]);
+    });
+
+    test('a CLI transcript is written line by line without one', () {
+      final sink = recorded();
+      FileCliLog(sink).begin('harness auth status --json')
+        ..output('{"signedIn":true}')
+        ..end(exitCode: 0);
+      expect(writes, hasLength(3));
+      expect(writes.every((w) => !w.$2), isTrue);
+    });
+
+    test('the unsynced append keeps every byte, as the durable one does', () {
+      final output = File('${dir.path}/log 日本語 🦋.txt');
+      appendLog(output, 'first\n');
+      appendDurableLog(output, '');
+      appendLog(output, 'second 🦋\n');
+      expect(output.readAsStringSync(), 'first\nsecond 🦋\n');
+      expect(
+        () => appendLog(File(dir.path), 'bad'),
+        throwsA(isA<FileSystemException>()),
+      );
+    });
+  });
 
   test(
     'duplicate errors preserve burst protection with interleaved debug context',

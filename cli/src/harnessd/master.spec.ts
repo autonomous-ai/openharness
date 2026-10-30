@@ -1,18 +1,30 @@
 import { EventEmitter } from 'node:events'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
+  LOG_TRIM_INTERVAL_MS, coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
   readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
 } from './master.js'
 import { ignoreLogWriteErrors } from '../lib/log.js'
 import { LEAN_CORE_ENTRY, folderFingerprint } from './leanBundle.js'
-import { PROBE_ANSWER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readMarker, writeMarker } from './reexec.js'
+import {
+  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readHandoverClaimant, readMarker, takeBackHandover, takeHandover, writeMarker,
+} from './reexec.js'
 import { HARNESSD_PROTOCOL, LEAN_CORE_SCRIPT_ENV } from './protocol.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
+
+/** This test's Node at [path]: a hard link of the running one, or a copy where the temp folder is on
+ *  another filesystem than the Node install (EXDEV: the Linux CI runner's toolcache, 2026-10-22). */
+function placeNode(path: string) {
+  try { linkSync(process.execPath, path) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+    copyFileSync(process.execPath, path)
+    chmodSync(path, 0o755)
+  }
+}
 
 describe('supervisorOptions', () => {
   it('reads valid overrides and keeps the defaults for anything unset or invalid', () => {
@@ -171,7 +183,9 @@ describe('the probe a re-executing master asks a bundle', () => {
     expect(probeMaster({ env: {}, execArgv: [], version: '9.9.9' }, (line) => said.push(line))).toBe(0)
     const resume: ResumeState = { restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 }
     expect(probeMaster({ env: { [RESUME_ENV]: encodeResume(resume) }, execArgv: [], version: '9.9.9' }, (line) => said.push(line))).toBe(0)
-    expect(said).toEqual([`${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9`, `${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9`])
+    // Saying it takes a handover (Windows, ./reexec.ts): a master from before would run beside the one handing over.
+    const answer = `${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9 · ${PROBE_HANDOVER}`
+    expect(said).toEqual([answer, answer])
   })
 
   it('refuses a state it cannot read, and says so on stdout by default', () => {
@@ -308,7 +322,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const bin = join(runtime, 'node-v1', 'bin')
     mkdirSync(bin, { recursive: true })
     const node = join(bin, 'node')
-    linkSync(process.execPath, node)
+    placeNode(node)
     const ran = join(dir, 'ran')
     const core = join(dir, 'core.cjs')
     writeFileSync(core, `
@@ -333,11 +347,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core and a service to be running', () => supervisor.status().state === 'running' && existsSync(ran) && existsSync(`${ran}search`))
-    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi`))
+    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi,machineAddons`))
     const libexec = join(realpathSync(runtime), 'node-v1', 'libexec', 'harnessd')
     expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
     expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
-    expect(readFileSync(`${ran}devices,wifi`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
+    expect(readFileSync(`${ran}devices,wifi,machineAddons`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
   })
@@ -517,6 +531,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         process.send({ type: 'harnessd:bound', protocol: 3, port: 1 }); process.send({ type: 'harnessd:ready' })
         process.on('message', (message) => { if (message.type === 'harnessd:update') { say('asked for ' + message.version); process.exit(75) } })
       }
+      if (role === 'service:updater') say('judges pty ' + process.env.HARNESSD_JUDGES_PTY)
       if (role === 'service:updater' && process.env.HARNESSD_RESTARTS === '0') setTimeout(() => process.send({ type: 'harnessd:staged', version: '9.9.9' }), 100)
       setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
       process.on('SIGTERM', () => process.exit(0))
@@ -534,8 +549,10 @@ describe('runMaster', { timeout: 60_000 }, () => {
       })
       const said = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core to hand over and a new one to start', () => said().filter((line) => line.role === '__run' && line.what === 'started').length === 2)
-      expect(said().filter((line) => line.role.startsWith('service:')).map((line) => line.role)).toEqual(['service:updater'])
+      expect(said().filter((line) => line.role.startsWith('service:') && line.what === 'started').map((line) => line.role)).toEqual(['service:updater'])
       expect(said()).toContainEqual({ role: '__run', what: 'asked for 9.9.9', restarts: '0' })
+      // The updater hears that this master judges a terminal host it stages (Windows).
+      expect(said()).toContainEqual({ role: 'service:updater', what: 'judges pty 1', restarts: '0' })
       expect(lines.some((line) => line.endsWith('[harnessd] the updater staged 9.9.9 — asking the core to hand over'))).toBe(true)
       expect(lines.some((line) => line.endsWith('[harnessd] core exited (code 75) for an update — restarting'))).toBe(true)
       signals.get('SIGTERM')!()
@@ -761,6 +778,335 @@ describe('runMaster', { timeout: 60_000 }, () => {
     await until('the master to finish', () => exits.length > 0)
     expect(readFileSync(pidFile, 'utf8')).toBe('1\n')
     expect(readFileSync(servicesFile, 'utf8')).toBe('')
+  })
+
+  it('starts the core from the build it is told is current, read before every start, and from its own without one (Windows: cli\\current)', async () => {
+    const ran = join(dir, 'ran')
+    const write = (name: string) => {
+      const file = join(dir, name)
+      writeFileSync(file, `
+        require('node:fs').appendFileSync(${JSON.stringify(ran)}, ${JSON.stringify(name)} + '\\n')
+        process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
+        process.send({ type: 'harnessd:ready' })
+        setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }), 50)
+        process.on('SIGTERM', () => process.exit(0))
+        if (process.env.HARNESSD_RESTARTS === '0') setTimeout(() => process.exit(1), 100)
+      `)
+      return file
+    }
+    const own = write('own.cjs')
+    let current: string | null = null
+    const signals = new Map<string, () => void>()
+    const exits: number[] = []
+    const supervisor = runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: own, pidFile: join(dir, 'adapter.pid'), restoreUpdate: () => {}, confirmUpdate: () => {},
+      env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
+      currentScript: () => current,
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    await until('the first core', () => existsSync(ran))
+    current = write('second.cjs')
+    await until('the core started again', () => readFileSync(ran, 'utf8').split('\n').length >= 3)
+    expect(readFileSync(ran, 'utf8')).toBe('own.cjs\nsecond.cjs\n')
+    await until('running', () => supervisor.status().state === 'running')
+    signals.get('SIGTERM')!()
+    await until('the master to finish', () => exits.length > 0)
+  })
+
+  it('starts the services and the core from the current build when it has one, never from the lean bundle', async () => {
+    // Windows: cli\current names the build. A service process runs from it too (spawnService's currentScript branch),
+    // and is not recorded as a lean start; the core is told no lean CLI.
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const body = (who: string) => `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)}, cli: process.env.${LEAN_CORE_SCRIPT_ENV} ?? null }) + '\\n')
+      if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 }); process.send({ type: 'harnessd:ready' }) }
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `
+    const own = join(dir, 'cli.cjs')
+    const lean = join(dir, 'lean.cjs')
+    const current = join(dir, 'current.cjs')
+    writeFileSync(own, body('own'))
+    writeFileSync(lean, body('lean'))
+    writeFileSync(join(dir, LEAN_CORE_ENTRY), body('lean core').replace("require('node:fs')", "await import('node:fs')"))
+    writeFileSync(current, body('current'))
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: own, serviceScriptPath: lean, pidFile,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search' }, currentScript: () => current,
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      const roles = (): Array<Record<string, string>> => jsonLines(seen)
+      await until('the core and the service', () => roles().length >= 2)
+      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([
+        { role: '__run', from: 'current', cli: null }, { role: 'service:search', from: 'current', cli: null },
+      ])
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
+  it('on Windows, stops its core and its services by message, and stops everything when the core asks, writing its children\'s output where told', async () => {
+    const heard = join(dir, 'heard')
+    const serviceUp = join(dir, 'service-up')
+    const output = join(dir, 'output.log')
+    const core = join(dir, 'core.cjs')
+    writeFileSync(core, `
+      const fs = require('node:fs')
+      const who = process.argv[2] === '__service' ? 'service ' : ''
+      process.on('SIGTERM', () => { fs.appendFileSync(${JSON.stringify(heard)}, who + 'SIGTERM\\n'); process.exit(0) })
+      process.on('message', (m) => { if (m.type === 'harnessd:shutdown') { fs.appendFileSync(${JSON.stringify(heard)}, who + 'shutdown\\n'); process.exit(0) } })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      if (who) fs.writeFileSync(${JSON.stringify(serviceUp)}, '')
+      else {
+        console.log('the core speaks')
+        process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
+        process.send({ type: 'harnessd:ready' })
+        // harness stop, once the service listens for the master's word.
+        const asking = setInterval(() => { if (fs.existsSync(${JSON.stringify(serviceUp)})) { clearInterval(asking); process.send({ type: 'harnessd:stop' }) } }, 20)
+      }
+    `)
+    const fd = openSync(output, 'a')
+    const exits: number[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'), restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search' }, stopByMessage: true, output: fd,
+        exit: (code) => exits.push(code), onSignal: () => {},
+      })
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore(); closeSync(fd) }
+    expect(exits).toEqual([0])
+    expect(readFileSync(heard, 'utf8').split('\n').filter(Boolean).sort()).toEqual(['service shutdown', 'shutdown'])
+    expect(readFileSync(output, 'utf8')).toContain('the core speaks')
+  })
+
+  describe('handing over, where there is no exec (Windows)', () => {
+    const marker = () => join(dir, 'harnessd-reexec.json')
+    /** A core that binds, is ready and beats, or one that never binds. */
+    const coreScript = (binds = true) => {
+      const file = join(dir, 'core.cjs')
+      writeFileSync(file, `
+        ${binds ? `process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
+        process.send({ type: 'harnessd:ready' })` : ''}
+        setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }), 50)
+        process.on('SIGTERM', () => process.exit(0))
+      `)
+      return file
+    }
+    const handedTo = (token: string, update: 'pending' | null = null, from = 999999): ResumeState => ({
+      restarts: 0, lastExit: null, lastExitReason: null, update, claimed: true, reexecs: 1, unproven: 1, handover: { from, token },
+    })
+    /** The log trimmer's interval (`trimLogEvery`): started by a master that serves, never by one that leaves. */
+    const trimmers = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([, ms]) => ms === LOG_TRIM_INTERVAL_MS).length
+
+    it('takes over from the master that handed over: the handover and the pid file this process\'s from its start', async () => {
+      const pidFile = join(dir, 'adapter.pid')
+      const core = coreScript()
+      writeFileSync(pidFile, '999999\n')
+      // The marker names the master that handed over, gone by now: no failed re-execution to roll back for all that.
+      const handed = { pid: 999999, from: 'a', to: fingerprint(core)!, at: Date.now(), handover: 'tok' }
+      writeMarker(marker(), handed)
+      // Decisions of handovers over and done, swept; this one's kept.
+      takeBackHandover(marker(), 'old', 999999)
+      const signals = new Map<string, () => void>()
+      const exits: number[] = []
+      const updates: string[] = []
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      const intervals = vi.spyOn(globalThis, 'setInterval')
+      try {
+        runMaster({
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
+          restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
+          env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
+          exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+        })
+        expect(readHandoverClaimant(marker(), 'tok')).toBe(process.pid)
+        expect(readFileSync(pidFile, 'utf8')).toBe(`${process.pid}\n`)
+        // Left as it was: the master that handed over reads it until it leaves.
+        expect(readMarker(marker())).toEqual(handed)
+        expect(readdirSync(dir).filter((name) => name.endsWith('.handover'))).toEqual(['harnessd-reexec.json.tok.handover'])
+        expect(lines.some((line) => line.endsWith('[harnessd] took over from the master before it (pid 999999)'))).toBe(true)
+        expect(lines.some((line) => line.includes('master re-executed'))).toBe(false)
+        expect(trimmers(intervals)).toBe(1)
+        await until('its core to come up, which ends the marker', () => !existsSync(marker()))
+        expect(updates).toEqual([])
+        signals.get('SIGTERM')!()
+        await until('the master to finish', () => exits.length > 0)
+        expect(existsSync(pidFile)).toBe(false)
+      } finally { log.mockRestore(); intervals.mockRestore() }
+    })
+
+    it('takes the marker of the handover it took with it when stopped before its first core is up', async () => {
+      // The marker names the master that handed over: matched by the handover's token, not by the pid.
+      const pidFile = join(dir, 'adapter.pid')
+      const core = coreScript(false)
+      writeMarker(marker(), { pid: process.ppid, from: 'a', to: fingerprint(core)!, at: Date.now(), handover: 'tok' })
+      const signals = new Map<string, () => void>()
+      const exits: number[] = []
+      const supervisor = runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      await until('its core', () => supervisor.status().corePid !== null)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+      expect(readMarker(marker())).toBeNull()
+      expect(existsSync(pidFile)).toBe(false)
+    })
+
+    it('leaves at once, starting nothing and touching neither the pid file nor the marker, when it may not take over', async () => {
+      const pidFile = join(dir, 'adapter.pid')
+      const ran = join(dir, 'ran')
+      const core = join(dir, 'core.cjs')
+      writeFileSync(core, `require('node:fs').writeFileSync(${JSON.stringify(ran)}, '')`)
+      const unwritable = join(dir, 'missing', 'adapter.pid')
+      const now = Date.now()
+      const cases: Array<{ why: string; token: string; marker: Record<string, unknown> | null; pidFile?: string; before?: () => void }> = [
+        { why: 'no marker', token: 'a', marker: null },
+        { why: 'another handover\'s marker', token: 'b', marker: { handover: 'other' } },
+        { why: 'past its cutoff', token: 'c', marker: { handover: 'c', at: 1 } },
+        { why: 'taken back', token: 'd', marker: { handover: 'd' }, before: () => takeBackHandover(marker(), 'd', 999999) },
+        { why: 'a pid file that will not write', token: 'e', marker: { handover: 'e' }, pidFile: unwritable },
+      ]
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      // Two trimmers would rewrite the one log at once: the master that handed over keeps its own.
+      const intervals = vi.spyOn(globalThis, 'setInterval')
+      try {
+        for (const { why, token, marker: over, pidFile: file = pidFile, before } of cases) {
+          rmSync(marker(), { force: true })
+          const written = over ? { pid: 999999, from: 'a', to: fingerprint(core)!, at: now, ...over } : null
+          if (written) writeMarker(marker(), written as never)
+          before?.()
+          const exits: number[] = []
+          const updates: string[] = []
+          runMaster({
+            nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: file, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
+            restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
+            env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo(token, 'pending')) },
+            exit: (code) => exits.push(code), onSignal: () => {},
+          })
+          expect(exits, why).toEqual([0])
+          expect(updates, why).toEqual([])
+          expect(readMarker(marker()), why).toEqual(written)
+          expect(existsSync(file), why).toBe(false)
+        }
+        expect(lines.filter((line) => line.endsWith('[harnessd] the master that started this one (pid 999999) stopped waiting for it — leaving'))).toHaveLength(4)
+        expect(lines.some((line) => line.includes('[harnessd] could not take over from pid 999999 (ENOENT'))).toBe(true)
+        // Handed over to, with no marker file to take over at all.
+        const alone: number[] = []
+        runMaster({
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, restoreUpdate: () => {}, confirmUpdate: () => {},
+          env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('f')) },
+          exit: (code) => alone.push(code), onSignal: () => {},
+        })
+        expect(alone).toEqual([0])
+        // Refused right after it wrote the pid file (here the pid file is the marker, which that write ends): it serves
+        // nothing. The master that handed over finds the pid file naming a process that ended, and stays.
+        writeMarker(marker(), { pid: 999999, from: 'a', to: fingerprint(core)!, at: now, handover: 'g' })
+        const late: number[] = []
+        runMaster({
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: marker(), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+          env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('g')) },
+          exit: (code) => late.push(code), onSignal: () => {},
+        })
+        expect(late).toEqual([0])
+        expect(lines.some((line) => line.endsWith('[harnessd] the master that started this one (pid 999999) stopped waiting for it as this one took over — leaving'))).toBe(true)
+        // That master gone: the pid file names this process, which leaves, and so a process that ended.
+        expect(readFileSync(marker(), 'utf8')).toBe(`${process.pid}\n`)
+        // That master still running, having settled on the pid file before this one overwrote it: the file is its again,
+        // or `harness start --if-down` would take the machine for one with no master and start a second.
+        writeMarker(marker(), { pid: process.ppid, from: 'a', to: fingerprint(core)!, at: now, handover: 'h' })
+        const back: number[] = []
+        runMaster({
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: marker(), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+          env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('h', null, process.ppid)) },
+          exit: (code) => back.push(code), onSignal: () => {},
+        })
+        expect(back).toEqual([0])
+        expect(readFileSync(marker(), 'utf8')).toBe(`${process.ppid}\n`)
+        expect(trimmers(intervals)).toBe(0)
+      } finally { log.mockRestore(); intervals.mockRestore() }
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(existsSync(ran)).toBe(false)
+      expect(existsSync(pidFile)).toBe(false)
+    })
+
+    /** A master on [own] whose current build is another, which hands over through a launcher [launch] plays. */
+    const handingOver = (launch: (env: NodeJS.ProcessEnv, sleeper: number, stop: () => void) => void) => {
+      const pidFile = join(dir, 'adapter.pid')
+      const own = join(dir, 'own.cjs')
+      const next = join(dir, 'next.cjs')
+      writeFileSync(own, '// this master\'s bundle')
+      writeFileSync(next, `if (process.argv[2] === '__harnessd-probe') { console.log(${JSON.stringify(`${PROBE_ANSWER} · ${PROBE_HANDOVER}`)}); process.exit(0) }`)
+      const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+      const launched: NodeJS.ProcessEnv[] = []
+      const exits: number[] = []
+      const signals = new Map<string, () => void>()
+      const env = { ...process.env, HARNESSD_SERVICES: 'none' }
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: own, pidFile, reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+        env, currentScript: () => next, execve: null,
+        handOver: {
+          lock: async () => () => {},
+          launch: async (handed) => { launched.push(handed); launch(handed, sleeper.pid!, () => signals.get('SIGTERM')!()); return null },
+          readPid: () => Number(readFileSync(pidFile, 'utf8')) || null,
+          alive: (pid) => pid === sleeper.pid,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          token: () => 'tok',
+        },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      return { pidFile, next, sleeper, launched, exits, env }
+    }
+
+    it('hands over through the launcher when the bundle on disk is another, and leaves once the new master holds the pid file', async () => {
+      const master = handingOver((_, sleeper) => {
+        // The new master: takes the handover, then the pid file.
+        expect(takeHandover(marker(), 'tok', sleeper)).toBe(true)
+        writeFileSync(master.pidFile, `${sleeper}\n`)
+      })
+      try {
+        await until('the old master to leave', () => master.exits.length > 0)
+        expect(master.exits).toEqual([0])
+        expect(decodeResume(master.launched[0]![RESUME_ENV])?.handover).toEqual({ from: process.pid, token: 'tok' })
+        // ./AGENTS.md rule 11: this master's own environment, and the state handed on.
+        expect(Object.keys(master.launched[0]!).sort()).toEqual([...Object.keys(master.env), RESUME_ENV].sort())
+        expect(readMarker(marker())).toMatchObject({ pid: process.pid, to: fingerprint(master.next), handover: 'tok' })
+        expect(readFileSync(master.pidFile, 'utf8')).toBe(`${master.sleeper.pid}\n`)
+      } finally { master.sleeper.kill() }
+    })
+
+    it('stopped as it hands over, leaves the pid file and the marker to a new master that took over, and takes them back otherwise', async () => {
+      // Taken by the new master, which writes the pid file next: neither is this master's to remove.
+      const taken = handingOver((_, sleeper, stop) => { takeHandover(marker(), 'tok', sleeper); stop() })
+      try {
+        await until('the master to finish', () => taken.exits.length > 0)
+        expect(taken.exits).toEqual([0])
+        expect(readFileSync(taken.pidFile, 'utf8')).toBe(`${process.pid}\n`)
+        expect(readMarker(marker())).toMatchObject({ handover: 'tok' })
+      } finally { taken.sleeper.kill() }
+      rmSync(`${marker()}.tok.handover`)
+      // Not taken: taken back, and both go with this master.
+      const back = handingOver((_, __, stop) => stop())
+      try {
+        await until('the master to finish', () => back.exits.length > 0)
+        expect(back.exits).toEqual([0])
+        expect(existsSync(back.pidFile)).toBe(false)
+        expect(readMarker(marker())).toBeNull()
+      } finally { back.sleeper.kill() }
+    })
   })
 
   // The defaults act on the process itself, so they are exercised in a real one: a master on its own,

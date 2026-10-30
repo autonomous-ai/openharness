@@ -90,6 +90,11 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_arc_bounds"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_arc_inner" "$here/test_arc_inner.c" \
+   "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/fonts.c"
+"$out/test_arc_inner"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -I "$here/../main/ui/habitat" -o "$out/test_arc_ring" "$here/test_arc_ring.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 "$out/test_arc_ring"
@@ -125,6 +130,10 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_workspace" "$here/test_workspace.c" "$here/../main/ui/habitat/workspace.c"
 "$out/test_workspace"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_supertab" "$here/test_supertab.c" "$here/../main/ui/habitat/supertab.c"
+"$out/test_supertab"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_tim" "$here/test_tim.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
@@ -246,6 +255,7 @@ if [[ -n "${IDF_PATH:-}" ]]; then
     python3 "$here/test_cable_json_parse.py"
     python3 "$here/test_companion_protocol.py"
     python3 "$here/test_cable_identity.py"
+    python3 "$here/test_cable_supertab.py"
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"
 fi

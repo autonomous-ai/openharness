@@ -521,7 +521,11 @@ void main() {
         expect(tester.getRect(inbox).right, 464);
         expect(tester.getRect(inbox).top, 56);
         expect(tester.getSize(inbox).width, 440);
-        expect(find.byType(DesktopDialogSurface), findsOneWidget);
+        // A titlebar dropdown: the shared menu surface is its one rim, with
+        // no Dialog route around it.
+        expect(find.byKey(const ValueKey('pane-menu-surface')), findsOneWidget);
+        expect(find.byType(DesktopDialogSurface), findsNothing);
+        expect(find.byType(Dialog), findsNothing);
         expect(app.agentUnread.count, 2);
         final title = tester.widget<Text>(
           find.text('Choose a homepage direction'),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
@@ -40,6 +41,8 @@ typedef FontLister = Future<List<InstalledFont>> Function();
 /// - macOS: `NSFontManager` over `harness/fonts` (`macos/Runner/MainFlutterWindow.swift`), which
 ///   also says which families are monospaced. (`system_profiler`, what Orca uses, takes ~10s and
 ///   cannot.)
+/// - Windows: `EnumFontFamiliesExW` over the same channel (`windows/runner/fonts.cpp`), monospaced by
+///   each face's own fixed pitch.
 /// - Linux: `fc-list : family spacing`, where `spacing=100` is monospaced.
 /// - Web and anything else: nothing — the browser build draws only the font it bundles.
 Future<List<InstalledFont>> listInstalledFonts() {
@@ -70,11 +73,7 @@ Future<List<InstalledFont>> _load() async {
         debugFontLister ??
         (kUnderTest
             ? null
-            : RuntimePlatform.isMacOS
-            ? _listMacFonts
-            : RuntimePlatform.isLinux
-            ? _listLinuxFonts
-            : null);
+            : platformFontLister(RuntimePlatform.operatingSystem));
     if (lister == null) return const [];
     return sortInstalledFonts(
       await lister().timeout(const Duration(seconds: 10)),
@@ -84,9 +83,19 @@ Future<List<InstalledFont>> _load() async {
   }
 }
 
+/// How the OS lists fonts: runner channels on macOS and Windows, `fc-list` on
+/// Linux, and nothing in a browser.
+@visibleForTesting
+FontLister? platformFontLister(String operatingSystem) =>
+    switch (operatingSystem) {
+      'macos' || 'windows' => _listChannelFonts,
+      'linux' => _listLinuxFonts,
+      _ => null,
+    };
+
 const _channel = MethodChannel('harness/fonts');
 
-Future<List<InstalledFont>> _listMacFonts() async {
+Future<List<InstalledFont>> _listChannelFonts() async {
   final raw = await _channel.invokeListMethod<Object?>('listFonts') ?? const [];
   return [
     for (final entry in raw)

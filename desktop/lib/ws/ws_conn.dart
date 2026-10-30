@@ -7,13 +7,17 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
+import '../core/test_run.dart';
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
 import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
+import 'trusted_pipe.dart';
+import 'windows_pipe.dart';
 
 typedef AccessTokenProvider = Future<String> Function(
   bool forceRefresh,
@@ -21,6 +25,65 @@ typedef AccessTokenProvider = Future<String> Function(
 );
 
 enum WsTransportKind { cloudE2ee, localPlaintext }
+
+/// Opens a backend socket ([WsConn.cloudSocket]).
+typedef CloudSocketFactory = WebSocketChannel Function(
+  Uri uri,
+  Iterable<String>? protocols,
+);
+
+/// How long [WsConn] waits before its [attempt]th reconnect: a window that doubles from 1 s to a
+/// 30 s ceiling, the wait somewhere in its second half. The jitter spreads the tabs a backend
+/// restart dropped together; the half that is not random is what keeps a socket that fails at once
+/// to a handful of dials a minute, which no draw can undercut.
+Duration reconnectDelay(int attempt, Random random) {
+  final exponent = min(max(attempt - 1, 0), 5);
+  final window = min(30000, 1000 * (1 << exponent));
+  return Duration(
+    milliseconds: window ~/ 2 + (random.nextDouble() * (window / 2)).round(),
+  );
+}
+
+/// How long a connection has to stay up before its next drop starts the backoff over. Resetting it
+/// the moment a socket was up made a socket the backend dropped right after its handshake redial
+/// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
+const connectionStableAfter = Duration(minutes: 1);
+
+/// This build's version, which every backend socket it dials says (`?v=`), read once at start-up
+/// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
+String? declaredAppVersion;
+
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
+/// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
+}
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
+
+/// The backend's refusals of a `machine_select` that no redial can change: the machine left the
+/// account or was never shared with it, it belongs to another environment, or its subscription stops
+/// it (`backend/src/lib/webWs.ts`). Through this computer's daemon they arrive as the relay's close,
+/// with the code for its reason (`cli/src/localWsServer.ts`). Prod, 2026-10-28: a laptop removed in
+/// September was still selected every few seconds.
+const finalSelectRefusals = {
+  'NOT_YOUR_MACHINE',
+  'MACHINE_ENV_MISMATCH',
+  'MACHINE_PAYMENT_PENDING',
+  'MACHINE_SUBSCRIPTION_REQUIRED',
+};
 
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
@@ -88,8 +151,13 @@ class WsConn {
 
   /// How the local daemon is reached (see [LocalDaemonTransport]). When it
   /// names a socket, a local connection dials [localWsUri]'s path over it and
-  /// falls back to [localWsUri] itself if the socket cannot be reached.
+  /// falls back to the port. Windows uses only the authenticated pipe.
   final LocalDaemonTransport? localTransport;
+
+  /// A loopback WebSocket fixture has no daemon pipe. This opt-in works only
+  /// under flutter test; installed Windows builds always require the pipe.
+  @visibleForTesting
+  final bool allowLocalTcpFixture;
 
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
   final String? localApiKey;
@@ -100,6 +168,12 @@ class WsConn {
 
   /// An auxiliary local client must not count as an active desktop window.
   final bool localToolClient;
+
+  /// This computer's own window connection: the one the daemon takes its
+  /// `daemon_*` frames on, and only over its own socket. On Windows that is
+  /// its pipe ([LocalDaemonTransport.trustedPipe]), so this connection dials
+  /// the pipe first. Elsewhere it changes nothing.
+  final bool trustedLocal;
 
   /// A flat delay between reconnect attempts instead of the exponential backoff (1s→30s). Set for
   /// the socket to THIS computer's daemon: a refused connect on the loopback costs microseconds and
@@ -118,6 +192,13 @@ class WsConn {
   /// machine), built per connect once the codec exists. Null — the desktop, the
   /// local transport, the dev fixture — means every frame rides the socket.
   final TerminalTransportPluginFactory? transportPlugins;
+
+  /// Opens the backend socket. Null dials a real one; tests pass a fake.
+  @visibleForTesting
+  final CloudSocketFactory? cloudSocket;
+
+  /// The reconnect jitter's source. Null is a fresh [Random].
+  final Random _random;
 
   Future<Map<String, dynamic>> Function(
     String type,
@@ -140,8 +221,13 @@ class WsConn {
   bool _ready = false;
   int _attempt = 0;
   Timer? _reconnectTimer;
+  Timer? _stableTimer;
   Timer? _observerHandshakeTimer;
   String? _tokenUsed;
+
+  /// The token a 4401 refresh just handed over, until a connection is up on it. The backend
+  /// refusing that one too means the sign-in itself is gone; refreshing again only loops.
+  String? _refreshedToken;
   bool _forceRelayReconnect = false;
   final _pending = <String, _PendingRpc>{};
   final _readinessWaiters = <Completer<void>>{};
@@ -150,6 +236,56 @@ class WsConn {
   Future<void> _inboundTail = Future<void>.value();
 
   bool get isReady => _ready && _channel != null;
+
+  /// Waiting for its machine, which the daemon's relay said is off ([_park]).
+  bool get isParked => _parked;
+  bool _parked = false;
+
+  /// The rechecks dialled in a row on their own, each parked again: what doubles the next wait.
+  int _parkedRechecks = 0;
+  static const _recheck = 'recheck';
+
+  /// The wait before a parked connection dials again on its own after [rechecks] of them in a
+  /// row: 30 s, then a minute, 2, 4, 8, and 15 at most. Anything that says the machine is back
+  /// [wake]s it. The first is the relay's own retry-after for an offline machine (backend
+  /// `OFFLINE_RETRY_AFTER_MS`): a wake that reaches the daemon while it still answers from that
+  /// refusal parks again, and a machine back online must not then wait a minute more.
+  static Duration parkedRecheckAfter(int rechecks) {
+    final wait = const Duration(seconds: 30) * (1 << min(max(rechecks, 0), 5));
+    return wait > const Duration(minutes: 15)
+        ? const Duration(minutes: 15)
+        : wait;
+  }
+
+  /// The daemon's relay refused this machine as off (`MACHINE_OFFLINE`): wait for it.
+  ///
+  /// ⚠️ **Why (prod, 2026-10-28).** Daemon relays made 2,304 of 2,308 backend socket opens in 15
+  /// minutes, living a median 0.4 s. A relayed machine that was off was redialled on the 15–30 s
+  /// backoff for as long as the app ran, and each dial cost the daemon a backend socket refused at
+  /// once: about 2.7 a minute for every machine that was off, in every window.
+  void _park() {
+    _parked = true;
+    _reconnectTimer?.cancel();
+    final wait = parkedRecheckAfter(_parkedRechecks);
+    _reconnectTimer = Timer(wait, () => wake(_recheck));
+    onStatus(ConnectionStatus.reconnecting);
+    appLog.info(
+      'ws',
+      'parked $machineId · the relay says it is off; recheck in ${wait.inSeconds}s',
+    );
+  }
+
+  /// Dial a parked connection now: the machine is reported back, or somebody asks for it. Its own
+  /// recheck makes the next wait longer; anything else starts the waits over.
+  void wake(String reason) {
+    if (!_parked || _closing) return;
+    _parked = false;
+    _parkedRechecks = reason == _recheck ? _parkedRechecks + 1 : 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _attempt = 0;
+    unawaited(connect());
+  }
 
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
@@ -187,8 +323,17 @@ class WsConn {
   /// socket only when the two agree, and closes it otherwise. A key that could never match churned
   /// every socket on every `_conn()` call (measured: `agents_list` failing "WS closed" in a loop).
   String get endpointKey => isLocal
-      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}'
+      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}${trustedLocal ? ':trusted' : ''}'
       : 'cloud:$wsBaseUrl:$autonomousEnv';
+
+  bool _overPipe = false;
+
+  /// Whether the last connection attempt could not establish the private
+  /// pipe. The normal reconnect loop asks for the current pipe again.
+  bool get trustedPipeMissing =>
+      trustedLocal &&
+      (localTransport?.trustedPipe?.unavailable ?? false) &&
+      !_overPipe;
 
   WsConn({
     required this.wsBaseUrl,
@@ -202,15 +347,19 @@ class WsConn {
     this.transportKind = WsTransportKind.cloudE2ee,
     this.localWsUri,
     this.localTransport,
+    this.allowLocalTcpFixture = false,
     this.localApiKey,
     this.observerShareId,
     this.observerLink = false,
     this.localProtocolVersion = 1,
     this.localToolClient = false,
+    this.trustedLocal = false,
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
-  });
+    this.cloudSocket,
+    Random? random,
+  }) : _random = random ?? Random();
 
   /// The socket to dial, decided afresh on every connect: whether the file is
   /// there now, not whether it was the last time something looked. A dial
@@ -247,8 +396,41 @@ class WsConn {
     }
   }
 
+  /// The daemon's Windows pipe, or null when it is missing or unproven. The
+  /// pipe is looked up afresh on every reconnect, including after a restart.
+  Future<WebSocketChannel?> _connectTrustedPipe(
+    Uri uri,
+    TrustedPipe pipe,
+  ) async {
+    try {
+      return IOWebSocketChannel(await pipe.webSocket(uri.path));
+    } on PipeFailure {
+      return null;
+    }
+  }
+
+  /// The local WebSocket over the daemon's loopback port, showing its local
+  /// credential: the port takes any OS user's process, the socket only ours.
+  WebSocketChannel _connectLocalPort(Uri uri) {
+    if (Platform.isWindows && !(kUnderTest && allowLocalTcpFixture)) {
+      throw StateError('The local daemon pipe is unavailable');
+    }
+    final transport =
+        localTransport ??
+        LocalDaemonTransport(
+          credential: kUnderTest ? null : readDaemonCredential,
+        );
+    return IOWebSocketChannel.connect(uri, headers: transport.tcpHeaders());
+  }
+
   Future<void> connect() async {
     if (_closing || _connecting) return;
+    // A dial asked for while parked (a forced redial) is the recheck's too.
+    if (_parked) {
+      _parked = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    }
     _connecting = true;
     _ready = false;
     onStatus(
@@ -296,6 +478,17 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );
@@ -306,21 +499,32 @@ class WsConn {
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
             // The browser counts its person as on the web today (backend
-            // user_daily_client_presence). Not other viewer builds: they are not the web.
-            if (!_directObserver && kIsWeb) 'client': 'web',
+            // user_daily_client_presence). Other viewer builds say they are the desktop app,
+            // which counts no presence. Both say which build (WebSocket roadmap Phase 0).
+            'client': kIsWeb ? 'web' : 'desktop',
+            'v': ?declaredAppVersion,
           },
         );
       }
-      final socket = isLocal ? _localSocket() : null;
-      final channel = !isLocal
-          ? WebSocketChannel.connect(
-              uri,
-              protocols: token == null || token.isEmpty ? null : [token],
-            )
-          : socket != null
-          ? await _connectLocalSocket(uri, socket) ??
-                WebSocketChannel.connect(uri)
-          : WebSocketChannel.connect(uri);
+      final pipe = isLocal ? localTransport?.trustedPipe : null;
+      final overPipe = pipe == null
+          ? null
+          : await _connectTrustedPipe(uri, pipe);
+      if (pipe != null && overPipe == null) {
+        throw StateError('The local daemon pipe is unavailable');
+      }
+      final socket = isLocal && overPipe == null ? _localSocket() : null;
+      final channel =
+          overPipe ??
+          (!isLocal
+              ? (cloudSocket ?? _connectCloud)(
+                  uri,
+                  token == null || token.isEmpty ? null : [token],
+                )
+              : socket != null
+              ? await _connectLocalSocket(uri, socket) ?? _connectLocalPort(uri)
+              : _connectLocalPort(uri));
+      _overPipe = overPipe != null;
       if (_closing) {
         await channel.sink.close();
         return;
@@ -393,6 +597,7 @@ class WsConn {
     } catch (_) {
       return;
     }
+    if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
           .then((_) => _onRelayFrame(codec, message))
@@ -427,8 +632,11 @@ class WsConn {
 
   void _markReady() {
     _observerHandshakeTimer?.cancel();
+    _parkedRechecks = 0;
     _ready = true;
-    _attempt = 0;
+    _refreshedToken = null;
+    _stableTimer?.cancel();
+    _stableTimer = Timer(connectionStableAfter, () => _attempt = 0);
     onStatus(ConnectionStatus.connected);
     _flushQueue();
     _settleReadiness();
@@ -602,6 +810,8 @@ class WsConn {
     // Conversation-derived: file names and the project folder.
     'agent_handoff_prepare',
     'agent_handoff_prepare_result',
+    'agent_handoff_complete',
+    'agent_handoff_complete_result',
     'project_preview',
     'project_preview_result',
     // A name made from the panes' titles, asked again every few seconds
@@ -610,6 +820,8 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
+    'git_pull_requests_status',
+    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',
@@ -633,6 +845,7 @@ class WsConn {
       !type.startsWith('api_connections') &&
       !type.startsWith('connectors') &&
       !type.startsWith('orchestrator') &&
+      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use
@@ -640,6 +853,16 @@ class WsConn {
       type != 'pair' &&
       type != 'pair_result' &&
       !type.startsWith('observer_');
+
+  /// Refusals that are the daemon working as designed, logged at DEBUG: Agent
+  /// Messages off (the account default) and an action an older CLI does not
+  /// know. At WARN each was an immediate, fsync'd write to the app log on the
+  /// UI isolate — once a minute for `shares` alone, for every account that
+  /// never turned Agent Messages on — while saying nothing anyone acts on.
+  static const _expectedRefusals = {'MESSAGES_OFF', 'UNKNOWN_ACTION'};
+
+  static bool _expectedRefusal(Object error) =>
+      error is WsRequestFailure && _expectedRefusals.contains(error.code);
 
   Future<Map<String, dynamic>> request(
     String type, {
@@ -669,8 +892,12 @@ class WsConn {
       // becomes an unhandled rejection.
       completer.future.then(
         (value) => appLog.debug('ws', '← $type ${summariseForLog(value)}'),
-        onError: (Object error) =>
-            appLog.warn('ws', '← $type failed', error: error),
+        onError: (Object error) => appLog.record(
+          _expectedRefusal(error) ? AppLogLevel.debug : AppLogLevel.warn,
+          'ws',
+          '← $type failed',
+          error: error,
+        ),
       );
     }
     final frame = {
@@ -866,6 +1093,7 @@ class WsConn {
   void _onDone(WebSocketChannel channel) {
     if (!identical(_channel, channel)) return;
     _observerHandshakeTimer?.cancel();
+    _stableTimer?.cancel();
     _channel = null;
     _sub = null;
     _codec = null;
@@ -878,6 +1106,17 @@ class WsConn {
     }
     final code = channel.closeCode;
     if (isLocal) {
+      if (channel.closeReason == 'MACHINE_OFFLINE') {
+        _park();
+        return;
+      }
+      if (finalSelectRefusals.contains(channel.closeReason)) {
+        // The relay could not select the machine, for good: told as a 4404 is, never redialled.
+        _closing = true;
+        onLocalFailure?.call(code ?? 1011, channel.closeReason!);
+        onStatus(ConnectionStatus.disconnected);
+        return;
+      }
       if (code == 4404 || (observerShareId != null && code == 4403)) {
         _closing = true;
         // needsLink first: AppNotifier's onStatus handler reads machine.needsLink
@@ -901,9 +1140,17 @@ class WsConn {
       return;
     }
     if (code == 4401) {
+      final token = _tokenUsed;
+      if (token != null && token == _refreshedToken) {
+        _closing = true;
+        onStatus(ConnectionStatus.disconnected);
+        onAuthFailure('Your SSO session expired. Please sign in again.');
+        return;
+      }
       unawaited(_refreshAndReconnect());
       return;
     }
+    _refreshedToken = null;
     if (code == 4403) {
       _closing = true;
       onStatus(ConnectionStatus.disconnected);
@@ -917,11 +1164,37 @@ class WsConn {
     _scheduleReconnect();
   }
 
+  /// The backend refused this socket's select. The app still hears it ([onEvent]); a refusal no
+  /// redial can change also ends the connection, which would otherwise sit open and unselected.
+  void _selectRefused(Map<String, dynamic> message) {
+    final payload = message['payload'];
+    if (payload is! Map || payload['machineId'] != machineId) return;
+    if (_closing || _ready || !finalSelectRefusals.contains(payload['error'])) {
+      return;
+    }
+    _closing = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disposePlugin();
+    onStatus(ConnectionStatus.disconnected);
+    final channel = _channel;
+    _channel = null;
+    unawaited(channel?.sink.close().catchError((Object _) {}));
+  }
+
   Future<void> _refreshAndReconnect() async {
     onStatus(ConnectionStatus.reconnecting);
     try {
-      await accessTokenProvider(true, _tokenUsed);
-      if (!_closing) await connect();
+      _refreshedToken = await accessTokenProvider(true, _tokenUsed);
+      if (_closing) return;
+      // The first refusal in a run dials straight back with the new token; a run that keeps
+      // failing waits its turn like any other drop.
+      if (_attempt == 0) {
+        _attempt = 1;
+        await connect();
+      } else {
+        _scheduleReconnect();
+      }
     } catch (_) {
       _closing = true;
       onStatus(ConnectionStatus.disconnected);
@@ -934,12 +1207,12 @@ class WsConn {
     _attempt++;
     onStatus(ConnectionStatus.reconnecting);
     _reconnectTimer?.cancel();
-    final exponent = min(max(_attempt - 1, 0), 5);
-    final delay =
-        fixedReconnectDelay ??
-        Duration(milliseconds: min(30000, 1000 * (1 << exponent)));
+    final delay = fixedReconnectDelay ?? reconnectDelay(_attempt, _random);
     _reconnectTimer = Timer(delay, connect);
   }
+
+  static WebSocketChannel _connectCloud(Uri uri, Iterable<String>? protocols) =>
+      WebSocketChannel.connect(uri, protocols: protocols);
 
   void _rejectPending(String reason) {
     _settleReadiness(reason);
@@ -961,6 +1234,7 @@ class WsConn {
     _disposePlugin();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _stableTimer?.cancel();
     _rejectPending('WS closed');
     final sub = _sub;
     _sub = null;

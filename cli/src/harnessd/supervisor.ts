@@ -14,10 +14,12 @@ import {
   CORE_EXIT_STOP,
   CORE_EXIT_UPDATE,
   HARNESSD_PROTOCOL,
+  describeStaged,
   heartbeatGraceMs,
   isCoreMessage,
   type CoreMessage,
   type MasterMessage,
+  type StagedUpdate,
 } from './protocol.js'
 
 export interface CoreHandle {
@@ -70,6 +72,18 @@ export interface SupervisorDeps {
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
    */
   unasked?(protocol: number): void
+  /**
+   * Stop the core with `harnessd:shutdown` (./protocol.ts) rather than SIGTERM. Windows: Node's `kill` there is
+   * TerminateProcess, whatever the signal, and a core ended that way never flushes its registry or closes its
+   * servers. SIGKILL after the grace is TerminateProcess on the handle this master holds, so it can only end its
+   * own child. Left out, signals, as on macOS and Linux.
+   */
+  stopByMessage?: boolean
+  /**
+   * The core asked to stop everything (`harnessd:stop`: `harness stop` reached it over its pipe). The master stops
+   * its services beside the core, as on a signal (./master.ts); left out, the supervisor stops the core itself.
+   */
+  stopRequested?(why: string): void
 }
 
 /**
@@ -89,6 +103,9 @@ export interface ResumeState {
   /** Of those, how many since a core last came up: a master that keeps re-executing without one is
    *  in a loop, and stops (./reexec.ts `REEXEC_LIMIT`). */
   unproven: number
+  /** Windows, which has no exec: the master that handed over to this process, and the token its marker carries
+   *  (./reexec.ts `HandOverDeps`). This process claims the pid file and the marker as it starts (./master.ts). */
+  handover?: { from: number; token: string }
 }
 
 /**
@@ -188,8 +205,17 @@ type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | '
  */
 export const HAND_OVER_GRACE_MS = 45_000
 
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
+/**
+ * A child's exit code as its platform means it. Windows' is a DWORD, which Node gives unsigned: a process ended by
+ * TerminateProcess(-1) (Stop-Process, .NET's Process.Kill) showed as `code 4294967295`, and an NTSTATUS crash as a
+ * ten-digit number nobody looks up. Signed, they read as Windows' own tools print them. A Unix code is under 256.
+ */
+export const signedExitCode = (code: number | null): number | null =>
+  code !== null && code > 0x7fff_ffff ? code - 0x1_0000_0000 : code
+
+/** How a child ended, for the log and the status: `signal SIGKILL`, `code 1`, `code -1`. */
+export const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
+  signal ? `signal ${signal}` : `code ${signedExitCode(code)}`
 
 /**
  * Whether why a core could not start names the disk rather than the build: no space left, a quota
@@ -240,6 +266,8 @@ export class Supervisor {
   private unproven = 0
   /** The bundle on disk when the running core was started (`deps.bundle`). */
   private spawnedOn: string | null = null
+  /** The updater staged a terminal host while the running core ran (`updateStaged`). */
+  private ptyStagedSinceSpawn = false
 
   constructor(
     private readonly deps: SupervisorDeps,
@@ -317,27 +345,34 @@ export class Supervisor {
   }
 
   /**
-   * The updater (services/updaterProcess.ts) staged `version` on disk. The core used to stage it itself
-   * and exit 75; now the master asks it to (`harnessd:update`), and its exit is the update's, judged as
-   * before. A core that does not leave within `HAND_OVER_GRACE_MS` is stopped, and that exit counts as the
-   * update's too. With no core running (a restart's backoff, safe mode's), the next one starts on the new
-   * bundle at once, on probation, with a clean slate: whatever was crashing may be what it fixes.
+   * The updater (services/updaterProcess.ts) staged a CLI build, a terminal host (Windows) or both on disk.
+   * The core used to stage a build itself and exit 75; now the master asks it to (`harnessd:update`), and its
+   * exit is the update's, judged as before: one probation for whatever was staged, which the master's own
+   * rollback and keep cover both of (lib/windows/ptyUpdate.ts `rollBackStaged`, `keepStaged`). A core that
+   * does not leave within `HAND_OVER_GRACE_MS` is stopped, and that exit counts as the update's too. With no
+   * core running (a restart's backoff, safe mode's), the next one starts on the new bundle at once, on
+   * probation, with a clean slate: whatever was crashing may be what it fixes.
    */
-  updateStaged(version: string): void {
+  updateStaged(staged: StagedUpdate): void {
     if (this.state === 'stopping' || this.state === 'stopped') return
+    const what = describeStaged(staged)
     const core = this.core
     if (!core) {
       this.update = 'pending'
       this.crashes = []
       this.safeMode = null
-      this.deps.log(`[harnessd] the updater staged ${version} — the next core starts on it`)
+      this.deps.log(`[harnessd] the updater staged ${what} — the next core starts on it`)
       // Waiting out a backoff: no longer. Otherwise the next core is already being started (a
       // re-execution deciding), and starts on the bundle on disk.
       if (this.restartTimer !== null) this.scheduleSpawn(0)
       return
     }
+    if (staged.ptyVersion) this.ptyStagedSinceSpawn = true
     if (this.handOverTimer !== null) return
-    this.deps.log(`[harnessd] the updater staged ${version} — asking the core to hand over`)
+    this.deps.log(`[harnessd] the updater staged ${what} — asking the core to hand over`)
+    // A core of any version takes the message only with a version, which it says in its log: for a host alone, the
+    // host's, named as one.
+    const version = staged.version ?? what
     core.send({ type: 'harnessd:update', version })
     this.armTimer('handOverTimer', () => {
       this.handOverTimer = null
@@ -394,6 +429,7 @@ export class Supervisor {
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
     this.spawnedOn = this.deps.bundle?.() ?? null
+    this.ptyStagedSinceSpawn = false
     const core = this.deps.spawnCore(env)
     this.core = core
     core.onMessage((message) => { if (this.core === core && isCoreMessage(message)) this.onMessage(core, message) })
@@ -453,6 +489,12 @@ export class Supervisor {
         // none, before or after.
         this.deps.want?.(message.service)
         return
+      case 'harnessd:stop': {
+        const why = 'the core asked to stop (harness stop)'
+        if (this.deps.stopRequested) this.deps.stopRequested(why)
+        else this.stop(why)
+        return
+      }
       case 'harnessd:heartbeat': {
         if (!this.bound) return
         this.watchHeartbeat()
@@ -585,8 +627,10 @@ export class Supervisor {
     this.scheduleSpawn(delay)
   }
 
-  /** Whether the bundle on disk changed since the running core was started (`deps.bundle`). */
+  /** Whether something newer was staged since the running core was started: the bundle on disk changed
+   *  (`deps.bundle`), or the updater staged a terminal host, which leaves the bundle as it was. */
   private stagedSinceSpawn(): boolean {
+    if (this.ptyStagedSinceSpawn) return true
     const now = this.deps.bundle?.() ?? null
     return now !== null && now !== this.spawnedOn
   }
@@ -603,13 +647,16 @@ export class Supervisor {
     core.kill('SIGKILL')
   }
 
-  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. */
+  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. On Windows the SIGTERM is
+   *  `harnessd:shutdown` (`stopByMessage`). */
   private end(why: 'stop' | 'restart', signal: NodeJS.Signals): void {
     const core = this.core!
     this.ending = why
     this.clearTimer('heartbeatTimer')
     this.clearTimer('readyTimer')
-    core.kill(signal)
+    // Every caller ends a core with SIGTERM; a second stop is SIGKILL through `stop`, never through here.
+    if (this.deps.stopByMessage) core.send({ type: 'harnessd:shutdown' })
+    else core.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] core outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       core.kill('SIGKILL')

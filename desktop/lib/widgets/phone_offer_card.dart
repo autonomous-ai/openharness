@@ -22,12 +22,44 @@ import '../theme/app_theme.dart';
 /// go"), which a new computer has just shown. The button is named as the phone
 /// names it — "Open Add Phone on your computer" (mobile `set_up_computer.dart`)
 /// — so somebody the phone sent here finds the thing it told them about.
-class PhoneOfferCard extends StatelessWidget {
+class PhoneOfferCard extends StatefulWidget {
   const PhoneOfferCard({
     super.key,
     required this.onAdd,
     required this.onDismiss,
+    this.onShown,
+    this.away,
   });
+
+  /// The card's words after time away ([AppNotifier.phoneOfferAway]): what a harness did while the
+  /// person was gone, then what a phone would have done about it.
+  ///
+  /// ```
+  /// ┌──────────────────────────────────────┐
+  /// │ ▯  Codex waited 18 min for you.   ×  │
+  /// │    Answer from your phone next time. │
+  /// │    ( Add Phone )                     │
+  /// └──────────────────────────────────────┘
+  /// ```
+  ///
+  /// The minutes and "min" are held together by a no-break space: wrapped apart, the title read
+  /// "finished 21" on one line and "min ago." on the next (owner, 2026-10-21).
+  static ({String title, String detail}) awayWords({
+    required String agent,
+    required bool waited,
+    required int minutes,
+  }) => waited
+      ? (
+          title: '$agent waited $minutes\u00A0min for you.',
+          detail: 'Answer from your phone next time.',
+        )
+      : (
+          title: '$agent finished $minutes\u00A0min ago.',
+          detail: 'Know the moment it’s done, on your phone.',
+        );
+
+  /// Offered after time away, the harness and what it did ([awayWords]); null for the usual words.
+  final ({String agent, bool waited, int minutes})? away;
 
   /// Add Phone: the code a phone scans — or, for a guest, the sign-in first.
   final VoidCallback onAdd;
@@ -36,9 +68,37 @@ class PhoneOfferCard extends StatelessWidget {
   /// command palette.
   final VoidCallback onDismiss;
 
+  /// After the card's first frame on screen ([AppNotifier.phoneOfferShown]),
+  /// again each time it is built anew; the app counts one per offer.
+  final VoidCallback? onShown;
+
+  @override
+  State<PhoneOfferCard> createState() => _PhoneOfferCardState();
+}
+
+class _PhoneOfferCardState extends State<PhoneOfferCard> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onShown?.call();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final away = widget.away;
+    final words = away == null
+        ? (
+            title: 'Your agents in your pocket.',
+            detail: 'When an agent needs you, answer from anywhere.',
+          )
+        : PhoneOfferCard.awayWords(
+            agent: away.agent,
+            waited: away.waited,
+            minutes: away.minutes,
+          );
     return Container(
       key: const Key('phone-offer-card'),
       width: 288,
@@ -69,20 +129,24 @@ class PhoneOfferCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Your agents in your pocket.',
+                  words.title,
+                  key: const Key('phone-offer-title'),
+                  // A harness with a long name keeps the card its size.
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: AppType.body(color: AppColors.text)
                       .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
                 ),
                 const SizedBox(height: 1),
                 Text(
-                  'When an agent needs you, answer from anywhere.',
+                  words.detail,
                   style: AppType.body(color: AppColors.mutedStrong)
                       .copyWith(fontSize: 12),
                 ),
                 const SizedBox(height: 10),
                 FilledButton(
                   key: const Key('phone-offer-add'),
-                  onPressed: onAdd,
+                  onPressed: widget.onAdd,
                   child: const Text('Add Phone'),
                 ),
               ],
@@ -95,7 +159,7 @@ class PhoneOfferCard extends StatelessWidget {
             splashRadius: 14,
             visualDensity: VisualDensity.compact,
             tooltip: 'Dismiss',
-            onPressed: onDismiss,
+            onPressed: widget.onDismiss,
           ),
         ],
       ),

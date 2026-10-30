@@ -3,8 +3,10 @@ import type { PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
-import { createAgentLifecycle, createPurgeRequest, createStopRequest, type LifecycleDeps } from './lifecycle.js'
+import { createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({
@@ -32,7 +34,8 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     } as unknown as LifecycleDeps['registry'],
     stoppedAgents: { list: vi.fn(() => [row({ agentId: 'a2' })]), get: vi.fn(() => undefined) } as unknown as LifecycleDeps['stoppedAgents'],
     restartJobs: { busy: vi.fn(() => false) } as unknown as LifecycleDeps['restartJobs'],
-    tmuxBackend: null,
+    createBackend: null,
+    backendFor: vi.fn(() => undefined),
     agentReconciler: {} as never,
     forgetSession: vi.fn(),
     markDeleted: vi.fn(),
@@ -64,11 +67,11 @@ describe('stopping, purging and resuming an agent', () => {
     const { deps, lifecycle } = setup()
     expect(createStopAgentService).toHaveBeenCalledWith({
       registry: deps.registry, stoppedAgents: deps.stoppedAgents, restartJobs: deps.restartJobs, stopJobs: lifecycle.stopJobs,
-      tmuxBackend: null, agentReconciler: deps.agentReconciler, forgetSession: deps.forgetSession,
+      backendFor: deps.backendFor, agentReconciler: deps.agentReconciler, forgetSession: deps.forgetSession,
       markDeleted: deps.markDeleted, clearDeleted: deps.clearDeleted, stopNative: deps.stopNative,
     })
     expect(createResumeAgentService).toHaveBeenCalledWith({
-      registry: deps.registry, stoppedAgents: deps.stoppedAgents, tmuxBackend: null, restartJobs: deps.restartJobs,
+      registry: deps.registry, stoppedAgents: deps.stoppedAgents, createBackend: null, backendFor: deps.backendFor, restartJobs: deps.restartJobs,
       stopJobs: lifecycle.stopJobs, pinnedControls: deps.pinnedControls, retainExitedSession: deps.retainExitedSession,
       announceSession: deps.announceSession, relaunchOverrides: deps.relaunchOverrides, prepareSessionResume: deps.prepareSessionResume,
       refreshGridWebSearch: deps.refreshGridWebSearch, clearDeleted: deps.clearDeleted, attachDsh: deps.attachDsh,
@@ -96,6 +99,23 @@ describe('stopping, purging and resuming an agent', () => {
     await expect(setup().lifecycle.stopAgent('a1')).resolves.toBeUndefined()
   })
 
+  // The owner, 2026-10-23: the Lead of an active project is never stopped, in any case. Every stop goes through here (a
+  // window's close and Stop Harness, `harness close`, a purge, the cleanup), so one guard refuses them all.
+  it('refuses to stop a Swarm Lead, by agent or session id, and stops nothing', async () => {
+    const stopped = vi.fn(), leadProtected = vi.fn((agentId: string) => agentId === 'a1')
+    const { lifecycle } = setup({ stopped, leadProtected })
+    const stop = vi.mocked(createStopAgentService).mock.results[0].value as ReturnType<typeof vi.fn>
+    for (const target of ['a1', 's1']) {
+      const refusal = await lifecycle.stopAgent(target).catch((error: unknown) => error)
+      expect(refusal).toBeInstanceOf(LeadProtectedError)
+      expect(refusal).toMatchObject({ code: 'LEAD_PROTECTED', message: expect.stringContaining('Delete its project first') })
+    }
+    expect(stop).not.toHaveBeenCalled()
+    expect(stopped).not.toHaveBeenCalled()
+    await lifecycle.stopAgent('gone')
+    expect(stop).toHaveBeenCalledWith('gone', undefined)
+  })
+
   describe('purge', () => {
     it('sees live and stopped agents, stops through the stop service, and checkpoints where stop does', () => {
       const { deps, lifecycle, purge } = setup()
@@ -105,6 +125,14 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
+    })
+
+    it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {
+      const atFolderTrust = vi.fn(async () => true)
+      const atEmptyComposer = vi.fn(async () => true)
+      const { purge } = setup({ atFolderTrust, atEmptyComposer })
+      expect(purge.atFolderTrust).toBe(atFolderTrust)
+      expect(purge.atEmptyComposer).toBe(atEmptyComposer)
     })
 
     it('waits on an agent that is restarting or stopping', () => {
@@ -142,6 +170,33 @@ describe('stopping, purging and resuming an agent', () => {
       const resume = vi.mocked(createResumeAgentService).mock.results[0].value
       expect(resume).toHaveBeenCalledWith('a1', 'plan')
       expect(deps.stoppedAgents.get).toHaveBeenCalledWith('a1')
+    })
+
+    it('resumes no guest\'s harness, stopped or running: it would run as the owner', async () => {
+      const stopped = setup({ stoppedAgents: { list: () => [], get: vi.fn(() => row({ guest: 'kim@acme.io' })) } as never })
+      expect(await stopped.lifecycle.resumeAgent('a1')).toEqual(GUEST_HARNESS_REFUSAL)
+      const running = setup({ stoppedAgents: { list: () => [], get: vi.fn(() => undefined) } as never })
+      vi.spyOn(running.deps.registry, 'byAgent').mockReturnValue(row({ guest: 'kim@acme.io' }))
+      expect(await running.lifecycle.resumeAgent('a1')).toEqual(GUEST_HARNESS_REFUSAL)
+      expect(vi.mocked(createResumeAgentService).mock.results.every((r) => !vi.mocked(r.value).mock.calls.length)).toBe(true)
+    })
+
+    it('starts no engine for an agent a stopped move may still run beside, stopped or running, this start', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = setup({ moveHeld: (id) => id === 'a1', stoppedAgents: { list: () => [], get: vi.fn(() => row()) } as never })
+      expect(await held.lifecycle.resumeAgent('a1')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      expect(vi.mocked(createResumeAgentService).mock.results.at(-1)!.value).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith(moveHeldLine('a1'))
+      warn.mockRestore()
+    })
+
+    it('holds an id that no store knows by that id, as given', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = setup({ moveHeld: (id) => id === 'ghost', stoppedAgents: { list: () => [], get: vi.fn(() => undefined) } as never })
+      vi.spyOn(held.deps.registry, 'byAgent').mockReturnValue(undefined)
+      expect(await held.lifecycle.resumeAgent('ghost')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      expect(warn).toHaveBeenCalledWith(moveHeldLine('ghost'))
+      warn.mockRestore()
     })
 
     it('waits while the agent is being purged, or while a purge holds its folder', async () => {
@@ -188,6 +243,11 @@ describe('agent_delete', () => {
     expect(unconfirmed).toStrictEqual({ error: 'STOP_UNCONFIRMED', detail: 'The process could not be verified.' })
     expect(Object.keys(unconfirmed)).toEqual(['error', 'detail'])
     await expect(request(async () => { throw new Error('tmux gone') })({ agentId: 'a1' })).rejects.toThrow('tmux gone')
+  })
+
+  it('says why a Swarm Lead is not stopped', async () => {
+    const refused = await request(async () => { throw new LeadProtectedError() })({ agentId: 'a1' })
+    expect(refused).toStrictEqual({ error: 'LEAD_PROTECTED', detail: new LeadProtectedError().message })
   })
 
   it('returns an unavailable native identity as a retryable hold and permits the same Stop after recovery', async () => {

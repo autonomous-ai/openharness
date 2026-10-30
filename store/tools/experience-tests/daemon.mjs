@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experiences } from "../build-experiences.mjs";
+import { CREDENTIAL_REFUSED, localCredentialHeaders } from "../local-credential.mjs";
 
 const machineId = process.env.HARNESS_MACHINE_ID;
 if (!machineId)
@@ -21,7 +22,9 @@ const output = resolve(
   process.env.EXPERIENCE_OUTPUT || join(repo, "work/experience-evidence"),
 );
 await mkdir(output, { recursive: true });
-const socket = new WebSocket("ws://127.0.0.1:18473/api/local-ws");
+const bridge = "ws://127.0.0.1:18473/api/local-ws";
+const headers = localCredentialHeaders();
+const socket = new WebSocket(bridge, { headers });
 const pending = new Map(),
   frames = [],
   results = [];
@@ -65,7 +68,17 @@ socket.addEventListener("message", (event) => {
 });
 await new Promise((resolve, reject) => {
   socket.addEventListener("open", resolve, { once: true });
-  socket.addEventListener("error", reject, { once: true });
+  // A WebSocket cannot report the daemon's 401; the same headers over plain HTTP can.
+  socket.addEventListener(
+    "error",
+    () =>
+      fetch(bridge.replace(/^ws:/, "http:"), { headers })
+        .then((answer) => answer.status === 401, () => false)
+        .then((refused) =>
+          reject(new Error(refused ? CREDENTIAL_REFUSED : "Could not open the local Harness bridge.")),
+        ),
+    { once: true },
+  );
 });
 let browser;
 try {

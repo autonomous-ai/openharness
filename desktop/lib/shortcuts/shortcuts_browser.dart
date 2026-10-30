@@ -7,9 +7,11 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
+import '../widgets/key_hints.dart';
 import 'app_keymap.dart';
 import 'key_cap.dart';
 import 'keymap_commands.dart';
+import 'keymap.dart';
 import 'keymap_settings.dart';
 import 'keyboard_practice.dart';
 import 'shortcut_recorder.dart';
@@ -408,23 +410,27 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                         },
                       ),
               ),
-              Divider(height: 1, color: grid.AppGlass.hair),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+              // The keys that drive this page, where the host shows key
+              // hints; the mouse-first web does not (audit finding S8).
+              if (KeyHints.visibleOf(context)) ...[
+                Divider(height: 1, color: grid.AppGlass.hair),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  child: Wrap(
+                    spacing: 24,
+                    runSpacing: 8,
+                    children: [
+                      Text('↑↓ Browse', style: DesktopChrome.metadata()),
+                      Text('Return Practice', style: DesktopChrome.metadata()),
+                      if (widget.onClose != null)
+                        Text('Esc Close', style: DesktopChrome.metadata()),
+                    ],
+                  ),
                 ),
-                child: Wrap(
-                  spacing: 24,
-                  runSpacing: 8,
-                  children: [
-                    Text('↑↓ Browse', style: DesktopChrome.metadata()),
-                    Text('Return Practice', style: DesktopChrome.metadata()),
-                    if (widget.onClose != null)
-                      Text('Esc Close', style: DesktopChrome.metadata()),
-                  ],
-                ),
-              ),
+              ],
             ],
           ),
         );
@@ -470,8 +476,21 @@ class _ShortcutBrowserRow extends StatelessWidget {
   }
 
   Widget _practiceButton(BuildContext context) {
+    final bindings = [
+      ...lesson.bindings.where((binding) => !binding.outsideTerminal),
+      ...lesson.bindings.where((binding) => binding.outsideTerminal),
+    ];
+    final hasAliases = bindings.any((binding) => binding.outsideTerminal);
+    final spokenKeys = hasAliases
+        ? bindings
+              .map(
+                (binding) =>
+                    '${describeKeyBinding(binding)}${binding.outsideTerminal ? ' (outside a terminal)' : ''}',
+              )
+              .join(' / ')
+        : lesson.keys;
     final chords = [
-      for (final binding in lesson.bindings)
+      for (final binding in bindings)
         binding.keys.length == 1
             ? describeKeyStrokeKeys(binding.keys.single)
             : [describeKeyBinding(binding)],
@@ -480,7 +499,8 @@ class _ShortcutBrowserRow extends StatelessWidget {
       child: Semantics(
         button: true,
         selected: selected,
-        label: '${lesson.label}, ${lesson.keys}. Practice shortcut',
+        label:
+            '${lesson.label}, $spokenKeys${lesson.context == KeymapContext.swarmChat ? ', in a Swarm tab, outside a terminal' : ''}. Practice shortcut',
         child: TextButton(
           onPressed: onTap,
           style:
@@ -522,13 +542,58 @@ class _ShortcutBrowserRow extends StatelessWidget {
           child: ExcludeSemantics(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final keys = KeyChordView(
-                  chords: chords,
-                  textStyle: DesktopChrome.control(),
-                );
-                final label = Text(
-                  lesson.label,
-                  style: DesktopChrome.control(),
+                final aliases = bindings
+                    .where((binding) => binding.outsideTerminal)
+                    .toList();
+                final Widget keys = aliases.isEmpty
+                    ? KeyChordView(
+                        chords: chords,
+                        textStyle: DesktopChrome.control(),
+                      )
+                    : Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (bindings.length > aliases.length)
+                            KeyChordView(
+                              chords: chords
+                                  .take(bindings.length - aliases.length)
+                                  .toList(),
+                              textStyle: DesktopChrome.control(),
+                            ),
+                          for (
+                            var i = bindings.length - aliases.length;
+                            i < bindings.length;
+                            i++
+                          )
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                KeyChordView(
+                                  chords: [chords[i]],
+                                  textStyle: DesktopChrome.control(),
+                                ),
+                                Text(
+                                  'Outside a terminal',
+                                  style: DesktopChrome.metadata(),
+                                ),
+                              ],
+                            ),
+                        ],
+                      );
+                final label = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(lesson.label, style: DesktopChrome.control()),
+                    if (lesson.context == KeymapContext.swarmChat)
+                      Text(
+                        'In a Swarm tab, outside a terminal',
+                        style: DesktopChrome.metadata(),
+                      ),
+                  ],
                 );
                 if (constraints.maxWidth < 330 * grid.appTextScaleOf(context)) {
                   return Column(

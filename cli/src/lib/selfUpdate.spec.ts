@@ -5,9 +5,29 @@ import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore, runCanary, semverGt, settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
+  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
+  startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
+import { PTY_PROTOCOL } from './ptyHost/protocol.js'
+import { versionsOnDisk } from './windows/cliVersions.js'
+
+// The pointer file's writer (B1), with a switch to make it fail.
+const pointer = vi.hoisted(() => ({ fail: false }))
+vi.mock('./windows/installLayout.js', async (real) => {
+  const actual = await real<typeof import('./windows/installLayout.js')>()
+  return { ...actual, writePointer: (...args: Parameters<typeof actual.writePointer>) => { if (pointer.fail) throw new Error('EPERM'); actual.writePointer(...args) } }
+})
+
+// The cases below that pass no platform are about the macOS and Linux layout (files swapped in place, `.prev`
+// backups). Left to the default, `process.platform`, they took the Windows version-folder path when the suite
+// ran on Windows; pinned here, they test the same layout on every host. The Windows cases pass 'win32'.
+const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin'): void =>
+  stageOn(dir, cliBuf, notifyBuf, version, platform)
+const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): void => restoreOn(dir, platform)
+const settleRolledBack = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => settleRolledBackOn(dir, platform)
+const startSelfUpdater = (opts: Parameters<typeof startSelfUpdaterOn>[0]): ReturnType<typeof startSelfUpdaterOn> =>
+  startSelfUpdaterOn({ platform: 'darwin', ...opts })
 
 let dirs: string[] = []
 
@@ -55,6 +75,11 @@ describe('shouldAutoUpdate', () => {
     expect(semverGt('0.1.57', '0.1.56-dev.a1b2c3d')).toBe(true)
     expect(shouldAutoUpdate('0.1.57', '0.1.56-dev.a1b2c3d')).toBe(false)
     expect(shouldAutoUpdate('9.9.9', '0.1.56-dev.a1b2c3d.dirty')).toBe(false)
+  })
+
+  it('takes releases over a local build in the Harness Team account, which nobody develops in', () => {
+    expect(shouldAutoUpdate('0.1.57', '0.1.56-dev.a1b2c3d.dirty', true)).toBe(true)
+    expect(shouldAutoUpdate('0.1.56', '0.1.56-dev.a1b2c3d', true)).toBe(false)
   })
 
   it('leaves a released install on the release train', () => {
@@ -147,6 +172,34 @@ describe('startSelfUpdater', () => {
     await new Promise((r) => setTimeout(r, 10))
     poller.stop()
     expect(events).toEqual(['lock', 'staged:9.9.9', 'handoff-done', 'unlock'])
+  })
+
+  it('beforeStage runs under the lock before stage, and its version reaches onStaged', async () => {
+    serveUpdate()
+    const dir = tempDir()
+    const events: string[] = []
+    let locked = false
+    const staged: Array<[string, string | null]> = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      // The terminal host goes first, in the same lock hold: the CLI is not on disk yet.
+      beforeStage: async () => { events.push(`before ${locked ? 'locked' : 'unlocked'} ${existsSync(join(dir, 'cli.js')) ? 'staged' : 'unstaged'}`); return { version: '0.11.0', protocol: 2 } },
+      onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
+    })
+    await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
+    poller.stop()
+    expect(events).toEqual(['before locked unstaged'])
+    // Without one, the second argument is null.
+    serveUpdate()
+    const other = tempDir()
+    const alone: Array<[string, string | null]> = []
+    const plain = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: other, intervalMs: 20,
+      onStaged: (version, ptyVersion) => { alone.push([version, ptyVersion]) },
+    })
+    await vi.waitFor(() => expect(alone).toEqual([['9.9.9', null]]), { timeout: 5_000 })
+    plain.stop()
   })
 
   it('stopped while a check is under way, swaps nothing and hands nothing over', async () => {
@@ -554,7 +607,7 @@ describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
       const { stage: stageCopying } = await import('./selfUpdate.js')
       const dir = installed()
       const before = statSync(join(dir, 'cli.js')).ino
-      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0', 'darwin')
       expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v1')
       expect(statSync(join(dir, 'cli.js.prev')).ino).not.toBe(before)
       expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
@@ -613,8 +666,8 @@ describe('the canary\'s verdicts', () => {
 
   it('tells a build that failed or names another version from a canary that could not be written', async () => {
     const dir = tempDir()
-    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
-    expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
     expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
     expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
@@ -633,7 +686,7 @@ describe('the canary\'s verdicts', () => {
     let ticks = 0
     const timer = setInterval(() => { ticks++ }, 20)
     try {
-      expect(await runCanary(Buffer.from('setTimeout(() => console.log("9.9.9"), 600)\n'), tempDir(), '9.9.9')).toEqual({ ok: true })
+      expect(await runCanary(Buffer.from('setTimeout(() => console.log("9.9.9"), 600)\n'), tempDir(), '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     } finally { clearInterval(timer) }
     expect(ticks).toBeGreaterThan(10)
   })
@@ -663,6 +716,213 @@ describe('the canary\'s verdicts', () => {
       vi.doUnmock('./nodeRuntime.js')
       vi.resetModules()
     }
+  })
+})
+
+describe('the terminal host protocol a build needs (spec §5, the protocol rule)', () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const notify = Buffer.from('export {}\n')
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** A build that answers `version --json` as a G build does, and plain `version` as every build does. */
+  const build = (version: string, ptyProtocol: number): Buffer => Buffer.from(
+    `console.log(process.argv.includes('--json') ? JSON.stringify({ version: ${JSON.stringify(version)}, ptyProtocol: ${ptyProtocol} }) : ${JSON.stringify(version)})\n`,
+  )
+
+  it('plain version output counts as protocol 2', async () => {
+    const dir = tempDir()
+    // A build from before G prints its version alone, `--json` or not.
+    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(await runCanary(Buffer.from('console.log("{not json")\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
+    // One that is not the JSON a G build prints is read as plain output too.
+    expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.9" }))\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
+    // A G build says its protocol; its JSON version is the one checked.
+    expect(await runCanary(build('9.9.9', 3), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 3 })
+    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
+  })
+
+  it('a build needing a newer pty protocol waits, then stages once the host has it', async () => {
+    const cli = build('9.9.9', 3)
+    let downloads = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      if (url.endsWith('cli.js')) downloads++
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((line: string) => { errors.push(String(line)) })
+    let host: number | null = 2
+    const dir = tempDir()
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10,
+      installedPtyProtocol: () => host,
+      onStaged: (version) => { staged.push(version) },
+    })
+    const waiting = "[update] 9.9.9 needs pty protocol 3; this machine's host speaks 2 — waiting for its payload"
+    try {
+      await vi.waitFor(() => expect(logs).toContain(waiting), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(staged).toEqual([])
+      expect(existsSync(join(dir, 'cli.js')), 'nothing is staged').toBe(false)
+      expect(logs.filter((line) => line === waiting), 'said once').toHaveLength(1)
+      expect(downloads, 'the bytes stay verified for the next tick').toBe(1)
+      expect(errors).toEqual([])
+      // The payload arrives (the PTY check, or install.ps1): the build goes ahead with the bytes it already has.
+      host = 3
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(downloads).toBe(1)
+      expect(readFileSync(join(dir, 'cli.js'))).toEqual(cli)
+    } finally { poller.stop() }
+    // A host whose protocol cannot be read holds nothing back, and neither does a build at the host's protocol.
+    for (const [needs, speaks] of [[3, null], [2, 2]] as const) {
+      const other = tempDir()
+      const at = build('9.9.9', needs)
+      vi.stubGlobal('fetch', async (url: string) => {
+        if (url.endsWith('/metadata.json')) {
+          return new Response(JSON.stringify({ adapter: {
+            version: '9.9.9',
+            cli: { url: 'https://updates.test/cli.js', sha256: sha(at) },
+            notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+          } }))
+        }
+        return new Response(url.endsWith('cli.js') ? at : notify)
+      })
+      const done: string[] = []
+      const plain = startSelfUpdater({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: other, intervalMs: 10,
+        installedPtyProtocol: () => speaks,
+        onStaged: (version) => { done.push(version) },
+      })
+      try {
+        await vi.waitFor(() => expect(done).toEqual(['9.9.9']), { timeout: 5_000 })
+      } finally { plain.stop() }
+    }
+  })
+
+  /** A manifest naming [cli] as 9.9.9. */
+  function serve(cli: Buffer): void {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+  }
+
+  it('on Windows, a host whose protocol cannot be read counts as this CLI\'s own: a build that raises it waits', async () => {
+    // No current-pty, or a `harness-pty.exe version` that failed or timed out: unknown must not mean "anything goes".
+    serve(build('9.9.9', PTY_PROTOCOL + 1))
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10, platform: 'win32',
+      installedPtyProtocol: () => null,
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(logs).toContain(`[update] 9.9.9 needs pty protocol ${PTY_PROTOCOL + 1}; this machine's host speaks ${PTY_PROTOCOL} — waiting for its payload`), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(staged).toEqual([])
+    } finally { poller.stop() }
+  })
+
+  it('asks the rule again under the lock, after beforeStage: a host that went back meanwhile holds the build', async () => {
+    serve(build('9.9.9', 3))
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let locked = false
+    const asked: string[] = []
+    const staged: string[] = []
+    const needs: number[] = []
+    const dir = tempDir()
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10,
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      // Protocol 3 when the check asks; 2 under the lock, as after a rollback that landed in between.
+      installedPtyProtocol: () => { asked.push(locked ? 'locked' : 'unlocked'); return locked ? 2 : 3 },
+      beforeStage: async (protocol) => { needs.push(protocol); return null },
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(logs).toContain("[update] 9.9.9 needs pty protocol 3; this machine's host speaks 2 — waiting for its payload"), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(staged).toEqual([])
+      expect(existsSync(join(dir, 'cli.js'))).toBe(false)
+      expect(asked.slice(0, 2)).toEqual(['unlocked', 'locked'])
+      // beforeStage hears the protocol the build needs: a paired host goes in only for that one.
+      expect(needs[0]).toBe(3)
+    } finally { poller.stop() }
+  })
+
+  it('under the lock, trusts the protocol of the host that just went in from its canary, not a fresh read of it', async () => {
+    // A just-installed harness-pty.exe whose `version` fails or times out reads as null, which on Windows counts as 2:
+    // re-read, it would hold back the very build the paired host came for, with the host already in.
+    serve(build('9.9.9', 3))
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const staged: Array<[string, string | null]> = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10,
+      installedPtyProtocol: () => 2,
+      readyPtyProtocol: () => 3,
+      beforeStage: async () => ({ version: '0.11.0', protocol: 3 }),
+      onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
+    } finally { poller.stop() }
+  })
+
+  it('a paired host of the protocol the build needs lets it go ahead, the host first in the same lock hold', async () => {
+    serve(build('9.9.9', 3))
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    let host = 2
+    let ready: number | null = 2
+    const order: string[] = []
+    const staged: Array<[string, string | null]> = []
+    const dir = tempDir()
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10,
+      installedPtyProtocol: () => host,
+      // A payload of another protocol is no help; once one of protocol 3 is ready, it goes in first.
+      readyPtyProtocol: () => ready,
+      beforeStage: async (protocol) => {
+        if (ready !== protocol) return null
+        order.push(`host ${existsSync(join(dir, 'cli.js')) ? 'after' : 'before'} the build`)
+        host = 3
+        ready = null
+        return { version: '0.11.0', protocol: 3 }
+      },
+      onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
+    })
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(staged).toEqual([])
+      ready = 3
+      await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
+      expect(order).toEqual(['host before the build'])
+    } finally { poller.stop() }
   })
 })
 
@@ -1014,5 +1274,238 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
       expect(errors).toEqual(['[update] check failed (will retry): https://updates.test/cli.js sent nothing for 50 ms'])
     } finally { poller.stop() }
     expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
+  })
+})
+
+describe('self-update on Windows, over version folders', () => {
+  afterEach(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); dirs = []; pointer.fail = false })
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+  const read = (cli: string, ...parts: string[]) => readFileSync(join(cli, ...parts), 'utf8')
+  const layout = (current: string) => {
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, current), { recursive: true })
+    writeFileSync(join(cli, current, 'cli.js'), `cli ${current}`)
+    writeFileSync(join(cli, current, 'notify.mjs'), `notify ${current}`)
+    writeFileSync(join(cli, 'current'), `${current}\n`)
+    return cli
+  }
+  const stageWin = (cli: string, version: string) => stage(cli, Buffer.from(`cli ${version}`), Buffer.from(`notify ${version}`), version, 'win32')
+
+  it('stages a build into its own folder and points cli\\current at it, never touching the build that runs', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    expect(read(cli, '0.5.1', 'cli.js')).toBe('cli 0.5.1')
+    expect(read(cli, 'current').trim()).toBe('0.5.1')
+    expect(read(cli, 'notify.mjs')).toBe('notify 0.5.1')
+    expect(read(cli, '0.5.0', 'cli.js')).toBe('cli 0.5.0')
+    expect(existsSync(join(cli, 'cli.js'))).toBe(false)
+    expect(readdirSync(cli).filter((name) => name.startsWith('.'))).toEqual([])
+    // The bundle a master fingerprints is the one cli\current names: the update is still to be judged.
+    expect(unjudgedUpdate(cli, sha('cli 0.5.1'))).toBe('0.5.1')
+  })
+
+  it('rolls back by pointing cli\\current at the build before, and remembers the one that failed', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    expect(read(cli, 'notify.mjs')).toBe('notify 0.5.0')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+    // Nothing to go back to: the failure is still remembered.
+    const fresh = layout('0.6.0')
+    writeFileSync(join(fresh, 'update-pending.json'), JSON.stringify({ version: '0.6.0', sha256: sha('cli 0.6.0') }))
+    restore(fresh, 'win32')
+    expect(read(fresh, 'current').trim()).toBe('0.6.0')
+    expect(rejectedVersions(fresh)).toEqual(['0.6.0'])
+  })
+
+  it('keeps the pending note when the pointer cannot be moved back, so the next start judges and rolls back again', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    pointer.fail = true
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.1')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(unjudgedUpdate(cli, sha('cli 0.5.1'))).toBe('0.5.1')
+    expect(settleRolledBack(cli, 'win32')).toBeNull()
+    pointer.fail = false
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('rolls back to the last build kept when a newer one was staged during probation', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    stageWin(cli, '0.5.2')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    stageWin(cli, '0.5.3')
+    confirm(cli)
+    stageWin(cli, '0.5.4')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.3')
+  })
+
+  it('needs the version, and puts the pending note back when the pointer cannot be moved', () => {
+    const cli = layout('0.5.0')
+    expect(() => stage(cli, Buffer.from(''), Buffer.from(''), undefined, 'win32')).toThrow(/needs its version/)
+    pointer.fail = true
+    expect(() => stageWin(cli, '0.5.1')).toThrow('EPERM')
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+    writeFileSync(join(cli, 'update-pending.json'), '{"version":"0.4.9"}\n')
+    expect(() => stageWin(cli, '0.5.1')).toThrow('EPERM')
+    expect(read(cli, 'update-pending.json')).toBe('{"version":"0.4.9"}\n')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+  })
+
+  it('keeps the build in use and the one to roll back to, and retires the rest', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.4.1', '0.4.2']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    writeFileSync(join(cli, 'update-rejected.json'), '["0.4.2"]\n')
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    expect((await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).sort()).toEqual(['0.4.0', '0.4.2'])
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.4.1', '0.5.0'])
+    // On probation, the build to roll back to is the pending note's.
+    stageWin(cli, '0.5.1')
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual(['0.4.1'])
+    // No pointer: nothing proves which build is in use.
+    rmSync(join(cli, 'current'))
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual([])
+  })
+
+  it('judges what to keep after reading the process table: a stage meanwhile keeps the build it points at', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.3.0', '0.2.0']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    // The updater's own stage, inside the read (the spawn lock nests within a process): cli\current moves to 0.3.0,
+    // a build already on disk that was neither in use nor the one to roll back to.
+    const rows = async () => { stageWin(cli, '0.3.0'); return [] }
+    expect((await retireCliVersions(cli, { rows, remove, log: () => {} })).sort()).toEqual(['0.2.0', '0.4.0'])
+    expect(read(cli, 'current').trim()).toBe('0.3.0')
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.3.0', '0.5.0'])
+  })
+
+  it('settles a build rolled back without remembering it, against the build cli\\current names', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    expect(settleRolledBack(cli, 'win32')).toBeNull()
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    expect(settleRolledBack(cli, 'win32')).toBe('0.5.1')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    rmSync(join(cli, 'current'))
+    writeFileSync(join(cli, 'update-pending.json'), JSON.stringify({ version: '0.5.2', sha256: 'x' }))
+    expect(settleRolledBack(cli, 'win32')).toBe('0.5.2')
+  })
+})
+
+describe('the automatic updater on Windows, judged against the build cli\\current names', () => {
+  // A master superseded by a newer build (another process's update, or the installer) still runs from its
+  // old version folder. Its own version says nothing about what is installed: the pointer does.
+  const cliSource = Buffer.from('console.log("9.9.9")\n')
+  const notifySource = Buffer.from('export {}\n')
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  let manifestChecks = 0
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+    manifestChecks = 0
+  })
+
+  function serveUpdate(): void {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        manifestChecks++
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cliSource) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) },
+        } }))
+      }
+      return new Response(url.endsWith('cli.js') ? cliSource : notifySource)
+    })
+  }
+
+  const installed = (version: string): string => {
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, version), { recursive: true })
+    writeFileSync(join(cli, version, 'cli.js'), `cli ${version}`)
+    writeFileSync(join(cli, version, 'notify.mjs'), `notify ${version}`)
+    writeFileSync(join(cli, 'current'), `${version}\r\n`)
+    return cli
+  }
+
+  it('stages nothing older than the build cli\\current names, however old the running build is', async () => {
+    serveUpdate()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.10')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(manifestChecks).toBeGreaterThanOrEqual(3), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(staged).toEqual([])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.10\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('stages nothing when cli\\current moves past the build while it downloads, and says so once', async () => {
+    // The gate saw 9.9.8 installed; by the time the lock is held, the installer or another process put in 9.9.10.
+    serveUpdate()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.8')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      withLock: async (fn) => {
+        mkdirSync(join(cli, '9.9.10'))
+        writeFileSync(join(cli, '9.9.10', 'cli.js'), 'cli 9.9.10')
+        writeFileSync(join(cli, '9.9.10', 'notify.mjs'), 'notify 9.9.10')
+        writeFileSync(join(cli, 'current'), '9.9.10\r\n')
+        return fn()
+      },
+      onStaged: (version) => { staged.push(version) },
+    })
+    const said = (): unknown[][] => log.mock.calls.filter(([line]) => String(line).includes('is no longer an update'))
+    try {
+      await vi.waitFor(() => expect(said()).toHaveLength(1), { timeout: 5_000 })
+      const checks = manifestChecks
+      await vi.waitFor(() => expect(manifestChecks).toBeGreaterThanOrEqual(checks + 3), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(said()).toEqual([['[update] 9.9.9 is no longer an update: the installed build is now 9.9.10. Nothing was staged.']])
+    expect(staged).toEqual([])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.10\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('judges against its own version when cli\\current cannot be read', async () => {
+    serveUpdate()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.10')
+    writeFileSync(join(cli, 'current'), '..\r\n')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.9\r\n')
+    expect(readFileSync(join(cli, '9.9.9', 'cli.js'))).toEqual(cliSource)
   })
 })

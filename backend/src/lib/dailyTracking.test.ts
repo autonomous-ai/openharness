@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const record = vi.hoisted(() => vi.fn())
 const mark = vi.hoisted(() => vi.fn())
+const machineUpdate = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
-import { CLIENT_SURFACES, TUI_SURFACES, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
+vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate } } }))
+import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
-beforeEach(() => { record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined) })
+beforeEach(() => {
+  record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
+  machineUpdate.mockReset(); machineUpdate.mockResolvedValue({})
+})
 it('forwards only the choice identity and a fixed metric, never device, agent or location', async () => {
   const now = new Date('2026-10-13T12:00:00Z')
   await touchUserOnlineDay('account', 'PRIVATE_MACHINE', now, { isNewConnection: true })
@@ -17,6 +22,52 @@ it('forwards only the choice identity and a fixed metric, never device, agent or
   expect(JSON.stringify(record.mock.calls)).not.toContain('PRIVATE_')
   expect(JSON.stringify(record.mock.calls)).not.toContain('VN')
 })
+describe('a phone open, by release and apart for a debug or simulator build', () => {
+  const now = new Date('2026-10-20T12:00:00Z')
+  const open = (build?: Parameters<typeof touchClientOnlineDay>[3]['build']) =>
+    touchClientOnlineDay('account', 'mobile', now, { isNewConnection: true, ...(build ? { build } : {}) })
+
+  it('counts under its release, beside the unchanged total', async () => {
+    await open({ release: '1.0.8' })
+    expect(record.mock.calls).toEqual([['account', now, 'relay_mobile_opens', ['breakdown:release:phone:1.0.8:relay_mobile_opens']]])
+  })
+
+  it('counts a debug or simulator build apart, and not under a release', async () => {
+    await open({ release: '1.0.8', debug: true })
+    expect(record.mock.calls).toEqual([['account', now, 'relay_mobile_opens', ['relay_mobile_debug_opens']]])
+    expect(JSON.stringify(record.mock.calls)).not.toContain('1.0.8')
+  })
+
+  it('counts an app that sends neither as an unknown release, not a debug build', async () => {
+    await open()
+    await open({})
+    await open({ release: null, debug: false })
+    expect(record.mock.calls.map(c => [c[2], c[3]])).toEqual(
+      Array(3).fill(['relay_mobile_opens', ['breakdown:release:phone:unknown:relay_mobile_opens']]))
+  })
+
+  it.each(['', '1.0', '1.0.8+72', '1.0.8-dev', 'latest', '1.0.8.1', '01.0.8', '1000.0.0', ' 1.0.8', 'PRIVATE_BUILD'])(
+    'does not turn %j into a label', async release => {
+      await open({ release })
+      expect(record.mock.calls[0]![3]).toEqual(['breakdown:release:phone:unknown:relay_mobile_opens'])
+    })
+
+  it('adds a margin only to the phone, and only for an open', async () => {
+    for (const surface of ['tui', 'web', 'harness-os'] as const) {
+      await touchClientOnlineDay('account', surface, now, { isNewConnection: true, build: { release: '1.0.8', debug: true } })
+    }
+    expect(record.mock.calls.map(c => [c[2], c[3]])).toEqual([['relay_tui_opens', undefined], ['relay_web_opens', undefined], ['relay_harness-os_opens', undefined]])
+    record.mockClear()
+    await touchClientOnlineDay('account', 'mobile', now, { isNewConnection: false, build: { release: '1.0.8' } })
+    expect(record).not.toHaveBeenCalled()
+  })
+
+  it('names only fixed metrics and a public release', () => {
+    expect(mobileOpenMetrics({ release: '1.0.9' })).toEqual(['breakdown:release:phone:1.0.9:relay_mobile_opens'])
+    expect(mobileOpenMetrics({ debug: true })).toEqual(['relay_mobile_debug_opens'])
+    expect(mobileOpenMetrics()).toEqual(['breakdown:release:phone:unknown:relay_mobile_opens'])
+  })
+})
 it('idle heartbeats add no relay totals but keep the person active', async () => {
   const now = new Date()
   await touchUserOnlineDay('a', 'm', now, { isNewConnection: false })
@@ -25,6 +76,30 @@ it('idle heartbeats add no relay totals but keep the person active', async () =>
   await touchMachineOnlineDay('a', 'm', now, { isNewConnection: false })
   expect(record).not.toHaveBeenCalled()
   expect(mark.mock.calls).toEqual([['a', now, { surface: 'desktop' }], ['a', now, { surface: 'tui' }]])
+})
+
+describe('a machine\'s last-seen time', () => {
+  const now = new Date('2026-10-28T09:00:00Z')
+
+  it('is stamped on the machine\'s own record on a connect and on every write after it', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, countryCode: 'VN' })
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })
+    expect(machineUpdate.mock.calls).toEqual([
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+    ])
+  })
+
+  it('rejects when the stamp fails, so the socket\'s next heartbeat tries again', async () => {
+    machineUpdate.mockRejectedValue(new Error('mongo down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })).rejects.toThrow('mongo down')
+  })
+
+  it('is stamped even when the connect total fails', async () => {
+    record.mockRejectedValue(new Error('totals down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true })).rejects.toThrow('totals down')
+    expect(machineUpdate).toHaveBeenCalledWith({ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } })
+  })
 })
 
 it('marks the person, not the machine, agent or device', async () => {

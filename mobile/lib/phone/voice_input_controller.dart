@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -96,6 +97,22 @@ class VoiceInputController extends ChangeNotifier {
   /// mid-take is the one that take is heard in.
   final ValueListenable<String> _language;
 
+  /// What a take that reaches [maxTake] does instead of ending there: null ends it and transcribes
+  /// it ([stopListening]), its words kept for the next send — the terminal's way.
+  ///
+  /// The Swarm composer takes it over: it puts the words in the message box, and while a system
+  /// prompt covers the app it holds the take open, since nothing may be sent to be transcribed that
+  /// the person cannot see.
+  Future<void> Function()? onTakeLimit;
+
+  /// Asked once a take's recording is in hand, right before it goes to [transcriber]: until it
+  /// answers the take waits, and false drops it. Null sends every take — the terminal's way.
+  ///
+  /// The Swarm composer holds a take here while a system prompt covers the app: the microphone
+  /// takes a moment to close, a prompt can come up in it, and nothing may be sent to be transcribed
+  /// that the person cannot see.
+  Future<bool> Function()? mayTranscribe;
+
   VoiceInputStatus _status = VoiceInputStatus.idle;
   String _heard = '';
   String? _notice;
@@ -111,6 +128,16 @@ class VoiceInputController extends ChangeNotifier {
   /// [clear], where words arriving late would bring back what was dropped.
   int _take = 0;
 
+  /// The take in progress is a pretend one ([startListening]'s `pretend`), and this is what it will
+  /// be heard as.
+  String? Function()? _pretending;
+  final ValueNotifier<double> _pretendLevel = ValueNotifier(0);
+  Timer? _pretendMeter;
+  final Random _pretendRandom = Random(7);
+
+  /// Whether the take in progress is a pretend one: listening, with no microphone open.
+  bool get pretending => _pretending != null;
+
   bool get isSending => _isSending;
   VoiceInputStatus get status => _status;
   String get transcript => _heard;
@@ -119,10 +146,18 @@ class VoiceInputController extends ChangeNotifier {
   /// How loud the microphone is right now, 0…1 — what the waveform beside the
   /// mic draws while a take is recorded. Silence from a recorder that has no
   /// meter (see [VoiceLevelMeter]).
-  ValueListenable<double> get level => switch (_recorder) {
-    final VoiceLevelMeter meter => meter.level,
-    _ => _silence,
-  };
+  ///
+  /// ⚠️ **One object for the controller's life.** A widget adds its listener here as it mounts and
+  /// takes it off as it goes, and the take may have changed from recorded to pretend in between:
+  /// handing out whichever meter was live left the listener on the other.
+  late final ValueListenable<double> level = _TakeLevel(
+    recorded: switch (_recorder) {
+      final VoiceLevelMeter meter => meter.level,
+      _ => _silence,
+    },
+    pretended: _pretendLevel,
+    pretending: () => _pretending != null,
+  );
 
   static final ValueListenable<double> _silence = ValueNotifier(0);
 
@@ -153,13 +188,25 @@ class VoiceInputController extends ChangeNotifier {
     _setStatus(VoiceInputStatus.idle);
   }
 
-  Future<void> startListening() async {
+  /// Starts a take.
+  ///
+  /// With [pretend], and while it has something to say, the take opens no microphone and asks for no
+  /// permission: it shows as listening, its meter moving as if somebody spoke, and when it ends it is
+  /// heard as what [pretend] says then. The first session's mic (owner, 2026-10-23): speaking there
+  /// sends the task in the prompt, whatever was said — a microphone permission prompt in the middle
+  /// of the onboarding costs it more than the words are worth. [pretend] saying null — the first
+  /// send has gone, or a question is open — makes it an ordinary recording.
+  Future<void> startListening({String? Function()? pretend}) async {
     if (_isSending || _disposed) return;
     if (_status != VoiceInputStatus.idle &&
         _status != VoiceInputStatus.unavailable) {
       return;
     }
     final take = ++_take;
+    if (pretend != null && pretend() != null) {
+      _startPretending(pretend);
+      return;
+    }
     _setStatus(VoiceInputStatus.starting);
     if (!await _micAllowed()) {
       if (take != _take) return;
@@ -179,10 +226,13 @@ class VoiceInputController extends ChangeNotifier {
       unawaited(_recorder.cancel());
       return;
     }
-    _takeLimit = Timer(maxTake, () => unawaited(stopListening()));
+    _takeLimit = Timer(maxTake, _reachLimit);
     _takeClock = Stopwatch()..start();
     _setStatus(VoiceInputStatus.listening);
   }
+
+  /// [maxTake] has passed: the take ends, unless [onTakeLimit] takes it over.
+  void _reachLimit() => unawaited((onTakeLimit ?? stopListening)());
 
   /// Ends the take and transcribes it.
   Future<void> stopListening() async {
@@ -210,9 +260,12 @@ class VoiceInputController extends ChangeNotifier {
   /// So the hold is a fact of its own, held here, and the release is applied to
   /// whatever state the start has reached by then — including a start that has
   /// not finished yet, which [_holdReleased] makes it check for itself.
-  Future<void> startHold(Future<bool> Function(String text) deliver) async {
+  Future<void> startHold(
+    Future<bool> Function(String text) deliver, {
+    String? Function()? pretend,
+  }) async {
     _holdReleased = false;
-    await startListening();
+    await startListening(pretend: pretend);
     // Let go while the microphone was still opening: the take that just became
     // live has no thumb on it, so it is ended and sent from here — the release
     // could not do it itself, because at that moment there was no take to end.
@@ -250,6 +303,21 @@ class VoiceInputController extends ChangeNotifier {
   /// Whether the thumb has come up while a hold's [startListening] is still on
   /// its way to `listening`. See [startHold].
   bool _holdReleased = false;
+
+  /// A first-task chip takes the same send and feedback path as spoken words.
+  /// Never replaces an unfinished voice take.
+  Future<void> submitText(
+    String text,
+    Future<bool> Function(String) deliver,
+  ) async {
+    if (_isSending ||
+        _status != VoiceInputStatus.idle ||
+        transcript.isNotEmpty) {
+      return;
+    }
+    _heard = text;
+    await submit(deliver);
+  }
 
   /// Sends everything heard, and empties the transcript once it is sent — kept
   /// when delivery fails, so nothing said has to be said twice.
@@ -296,8 +364,15 @@ class VoiceInputController extends ChangeNotifier {
   ///
   /// Nothing while a send is on its way: those words are already the message,
   /// and handing them to the keyboard too would put them in the prompt twice.
+  ///
+  /// Nothing for a pretend take either: nothing was said in it, and what it stands for is the
+  /// prompt's own text, already there.
   Future<String> takeTranscript() async {
     if (_isSending) return '';
+    if (_pretending != null) {
+      clear();
+      return '';
+    }
     if (_status == VoiceInputStatus.listening) await _transcribeTake();
     final text = transcript;
     clear();
@@ -308,6 +383,7 @@ class VoiceInputController extends ChangeNotifier {
   void dispose() {
     _abandonTake();
     _noticeLimit?.cancel();
+    _pretendLevel.dispose();
     _disposed = true;
     unawaited(_recorder.dispose());
     super.dispose();
@@ -318,6 +394,30 @@ class VoiceInputController extends ChangeNotifier {
     final take = _take;
     _takeLimit?.cancel();
     _takeClock?.stop();
+    if (_pretending case final heard?) {
+      final length = _takeClock?.elapsed ?? Duration.zero;
+      _stopPretending();
+      // A brushed button, as with a recording: nothing to send.
+      if (length < minTake) {
+        _setStatus(VoiceInputStatus.idle);
+        return _Take.tap;
+      }
+      String words;
+      try {
+        words = (heard() ?? '').trim();
+      } catch (error) {
+        appLog.warn('voice', 'pretend take unread', error: error);
+        words = '';
+      }
+      // The prompt as it stands, and nothing held from an earlier send that failed: that was the same
+      // task, and joined it would be sent twice.
+      _heard = words;
+      _setStatus(
+        VoiceInputStatus.idle,
+        notice: words.isEmpty ? VoiceNotice.nothingHeard : null,
+      );
+      return words.isEmpty ? _Take.failed : _Take.heard;
+    }
     _setStatus(VoiceInputStatus.transcribing);
     try {
       final recording = await _recorder.stop();
@@ -339,6 +439,14 @@ class VoiceInputController extends ChangeNotifier {
       if (recording == null || recording.peak < silencePeak) {
         _setStatus(VoiceInputStatus.idle, notice: VoiceNotice.noSound);
         return _Take.failed;
+      }
+      if (mayTranscribe case final mayTranscribe?) {
+        final go = await mayTranscribe();
+        if (take != _take) return _Take.failed;
+        if (!go) {
+          _setStatus(VoiceInputStatus.idle);
+          return _Take.failed;
+        }
       }
       final language = _language.value;
       final words = await transcriber(recording.wav, language);
@@ -371,10 +479,37 @@ class VoiceInputController extends ChangeNotifier {
     }
   }
 
+  /// A pretend take: listening at once, with no microphone to open, and a meter shaped like speech —
+  /// a syllable's rise and fall, with some breath in it.
+  void _startPretending(String? Function() heard) {
+    _pretending = heard;
+    var beats = 0;
+    _pretendMeter = Timer.periodic(const Duration(milliseconds: 90), (_) {
+      beats++;
+      final syllable = (sin(beats * 0.9) + 1) / 2;
+      _pretendLevel.value =
+          0.15 + 0.6 * syllable * (0.6 + 0.4 * _pretendRandom.nextDouble());
+    });
+    _takeLimit = Timer(maxTake, _reachLimit);
+    _takeClock = Stopwatch()..start();
+    _setStatus(VoiceInputStatus.listening);
+  }
+
+  void _stopPretending() {
+    _pretending = null;
+    _pretendMeter?.cancel();
+    _pretendMeter = null;
+    _pretendLevel.value = 0;
+  }
+
   void _abandonTake() {
     _take++;
     _takeLimit?.cancel();
     _takeClock?.stop();
+    if (_pretending != null) {
+      _stopPretending();
+      return;
+    }
     if (_status == VoiceInputStatus.starting ||
         _status == VoiceInputStatus.listening) {
       unawaited(_recorder.cancel());
@@ -419,6 +554,35 @@ class VoiceInputController extends ChangeNotifier {
 
   void _notify() {
     if (!_disposed) notifyListeners();
+  }
+}
+
+/// [VoiceInputController.level]: the recorder's meter, or the pretend one while a pretend take is on —
+/// one listenable whichever it is, so a listener added and taken off lands on the same two.
+class _TakeLevel implements ValueListenable<double> {
+  _TakeLevel({
+    required this.recorded,
+    required this.pretended,
+    required this.pretending,
+  });
+
+  final ValueListenable<double> recorded;
+  final ValueListenable<double> pretended;
+  final bool Function() pretending;
+
+  @override
+  double get value => pretending() ? pretended.value : recorded.value;
+
+  @override
+  void addListener(VoidCallback listener) {
+    recorded.addListener(listener);
+    pretended.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    recorded.removeListener(listener);
+    pretended.removeListener(listener);
   }
 }
 

@@ -13,7 +13,7 @@ import 'dart:io';
 
 import 'ledger_types.dart';
 
-import '../../core/runtime_platform.dart';
+import '../../core/home_dir.dart';
 
 /// One file or database a scan read, and what came out of it.
 ///
@@ -112,13 +112,5 @@ abstract class LedgerScanner {
 /// Null rather than a throw: every caller here is a scanner, and a scanner with
 /// nowhere to look reports [LedgerStatus.unavailable] like any other machine
 /// that has nothing to read.
-String? homeDirectory([Map<String, String>? environment]) {
-  final env = environment ?? RuntimePlatform.environment;
-  final home = env['HOME'];
-  if (home != null && home.isNotEmpty) return home;
-  if (RuntimePlatform.isWindows) {
-    final profile = env['USERPROFILE'];
-    if (profile != null && profile.isNotEmpty) return profile;
-  }
-  return null;
-}
+String? homeDirectory([Map<String, String>? environment]) =>
+    maybeHomeDir(environment: environment);

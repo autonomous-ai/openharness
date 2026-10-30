@@ -50,6 +50,7 @@ class KeymapDispatch {
     required bool Function(String) canExecute,
     bool Function(String)? canRepeat,
     bool composing = false,
+    bool aliasesBlocked = false,
     bool modifier = false,
   }) {
     if (phase == KeymapKeyPhase.up) {
@@ -80,7 +81,10 @@ class KeymapDispatch {
       return const KeymapDispatchResult(handled: true);
     }
     final sequence = [..._prefix, stroke];
-    final match = _map.match(context, sequence);
+    final resolved = _map.match(context, sequence);
+    final match = aliasesBlocked && resolved.outsideTerminal
+        ? const KeymapMatch()
+        : resolved;
     if (match.prefix) {
       _prefix.add(stroke);
       _owner = owner;

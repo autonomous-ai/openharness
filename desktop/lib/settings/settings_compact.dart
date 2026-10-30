@@ -1,15 +1,18 @@
+import 'dart:math' as math;
+
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
+import '../widgets/finger_target.dart';
 import 'settings_nav.dart';
 import 'settings_section.dart';
 
 /// One settings section on a narrow screen (the web on a phone): the section
 /// takes the width, and the way back to the list of sections sits above it,
-/// shaped like the list's own "Back to app" row.
+/// shaped like the list's own "Back to app" row and as easy to hit.
 class SettingsCompactSection extends StatelessWidget {
   const SettingsCompactSection({
     super.key,
@@ -32,20 +35,64 @@ class SettingsCompactSection extends StatelessWidget {
           0,
         ),
         child: SizedBox(
-          height: SectionScaffold.headingHeight(context),
+          height: fingerHeight(
+            SectionScaffold.headingHeight(context),
+            enabled: true,
+          ),
           child: Center(
-            child: SidebarItem(
-              key: const Key('settings-compact-back'),
-              icon: AppIcons.arrowLeft,
-              label: 'Settings',
-              onTap: onBack,
+            child: fingerTarget(
+              enabled: true,
+              SidebarItem(
+                key: const Key('settings-compact-back'),
+                icon: AppIcons.arrowLeft,
+                label: 'Settings',
+                onTap: onBack,
+              ),
             ),
           ),
         ),
       ),
-      Expanded(child: child),
+      Expanded(child: _FingerButtons(child: child)),
     ],
   );
+}
+
+/// A phone's section: its buttons a finger tall, and as wide as they were.
+class _FingerButtons extends StatelessWidget {
+  const _FingerButtons({required this.child});
+
+  final Widget child;
+
+  static ButtonStyle _tall(ButtonStyle? style) {
+    final least = style?.minimumSize?.resolve(const {}) ?? Size.zero;
+    return (style ?? const ButtonStyle()).copyWith(
+      minimumSize: WidgetStatePropertyAll(
+        Size(
+          math.max(least.width, kFingerTarget),
+          math.max(least.height, kFingerTarget),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(
+        filledButtonTheme: FilledButtonThemeData(
+          style: _tall(theme.filledButtonTheme.style),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: _tall(theme.outlinedButtonTheme.style),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: _tall(theme.textButtonTheme.style),
+        ),
+      ),
+      child: child,
+    );
+  }
 }
 
 /// Settings on a phone: the list of sections, or one open section. The
@@ -86,6 +133,7 @@ class SettingsCompactScreen extends StatelessWidget {
                 onSelect: onSelect,
                 railWidth: double.infinity,
                 autofocusSearch: false,
+                compact: true,
               ),
       ),
     ),

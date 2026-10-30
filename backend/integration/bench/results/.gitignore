@@ -1,0 +1,5 @@
+# Runs land here. Only the committed baselines (main) and results (the integration branch) are kept in git.
+*
+!.gitignore
+!baseline-*.json
+!results-*.json

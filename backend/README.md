@@ -100,6 +100,48 @@ Redis side set it to at least `64mb 16mb 60` and alert on `client_recent_max_out
 app-proxy channels ride their own subscriber connection (`appSub` in `bus.ts`), so a disconnect there
 cannot take the chat / presence subscriptions down with it.
 
+### Liveness, readiness and drain
+
+`/api/health` is liveness: the process answers, with no dependency calls, so a Mongo or Redis outage
+never makes Kubernetes restart pods. `/api/ready` is readiness (`src/lib/readiness.ts`): 200 while Mongo
+answers a `ping` and Redis a `PING` (Redis only where `REDIS_URL` is set), each within 1 s; 503 naming
+the failed or timed-out one otherwise. One answer serves every probe for 1 s, so probes add at most one
+ping per dependency per second per process. From the moment a process gets SIGTERM, `/api/ready` answers
+503 `draining`, and it keeps serving for `DRAIN_DELAY_MS` (default 0, closing at once as before) before it
+closes its listeners, drains its WebSockets and disconnects Mongo and Redis.
+
+Set `DRAIN_DELAY_MS` only on the Kubernetes image (`Dockerfile.k8s`), never under pm2: in cluster mode a probe
+reaches whichever worker the master picks, so one worker's 503 says nothing, and pm2 kills a worker that has not
+exited within `kill_timeout` (10 s, `ecosystem.config.cjs`).
+
+Settings for the `api` Deployment (the `job` Deployment serves no HTTP and has no probes):
+
+```yaml
+terminationGracePeriodSeconds: 30   # DRAIN_DELAY_MS + up to ~10 s of socket drain and close, plus margin
+containers:
+  - name: backend
+    env:
+      - name: DRAIN_DELAY_MS
+        value: "15000"              # readiness needs up to 10 s to fail, then the ingress a few more to drop
+                                    # the pod. No preStop sleep: the process keeps serving on its own
+    startupProbe:
+      httpGet: { path: /api/health, port: 8085 }
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 30          # up to 60 s to start listening
+    livenessProbe:
+      httpGet: { path: /api/health, port: 8085 }
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3           # restart only after ~30 s without an answer (a stuck event loop)
+    readinessProbe:
+      httpGet: { path: /api/ready, port: 8085 }
+      periodSeconds: 5
+      timeoutSeconds: 2             # above the 1 s dependency timeout
+      successThreshold: 1
+      failureThreshold: 2           # out of rotation within ~10 s of an outage or a drain
+```
+
 ## Connector gateway
 
 `routes/connectors.ts`, `lib/connectorGateway.ts`: sign-in to GitHub, Slack, Asana, HubSpot, Gmail,
@@ -185,7 +227,7 @@ The product usage collections have distinct purposes:
 | --- | --- | --- |
 | `product_usage_preferences` | Account ID, enabled flag, revision | Saved account preference; no usage history |
 | `product_usage_totals` | UTC day, allowlisted metric, sum (plus DB primary key) | 396 days, approximately 13 months |
-| `product_usage_receipts` | Random report UUID and expiration date | Scheduled expiry 36 days from the report day |
+| `product_usage_receipts` | Random report UUID, expiration date and its life in days (required on every new write once the worker's receipt sweep installs the collection rule) | Scheduled expiry 4 days from the report day (36 until 2026-10-29) |
 | `product_usage_activity` | HMAC subject (`PRODUCT_USAGE_SUBJECT_KEY`), UTC day, surfaces, worked flag, sign-up day, staff flag, expiry | 10 days (TTL); deleted on opt-out and `/api/analytics/delete`; written only while sharing is on and the key is set |
 
 No individual report body or arrival timestamp is stored. Receipt insertion and increments share a
@@ -311,7 +353,10 @@ mix, completion rate, runtime, or token cost.
 The expanded measurement contract adds fixed app-flow and feature-use counts, D28 and calendar-month
 installation returns, and voluntary task outcomes. Native signed-out setup is a separate explicit
 session opt-in at `POST /api/product-usage/setup`; it rejects credentials and arbitrary fields and
-has a process-wide admission budget without storing IP addresses. Web signed-out reporting is disabled.
+has a process-wide admission budget without storing IP addresses. Web app signed-out setup reporting
+is disabled. Anonymous Hub totals, shared links' (`/s/:id`) included, arrive at `POST /api/product-usage/hub`, forwarded by the website's
+server without cookies or auth; the route accepts only the Hub vocabulary (`src/lib/hubMetricsContract.ts`)
+and has its own admission budget.
 Daily reports keep these populations separate, show unmatched outcomes and measurement loss, and
 compare only mature periods. See [measurement definitions and runtime bounds](../docs/product-measurement.md).
 Deploy this additive allowlist before releasing the new clients. This change does not add identity

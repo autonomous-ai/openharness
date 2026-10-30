@@ -28,6 +28,10 @@ Sources and visual-review notes are in [the asset guide](../../.github/assets/st
 
 Daemon-level checks over the same loopback WebSocket the desktop uses (`ws://127.0.0.1:18473/api/local-ws`).
 They need a running daemon with the harness installed on this machine, and `cli/node_modules` (for `ws`).
+Run them as the OS user Harness runs as: since Harness 0.4.21 the loopback API refuses (401) any
+request without the daemon's local credential, which they read from `hook-credential` in
+`ADAPTER_DATA_DIR` (default `~/.harness/cli/data`) and send as `X-Harness-Local`
+(`local-credential.mjs`).
 
 ```sh
 node store/tools/dsh-e2e.mjs <machineId> <dshId> <engine> <workspace> [--keep] [--restart] [--bypass] [--no-verdict]

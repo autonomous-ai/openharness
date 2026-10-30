@@ -35,3 +35,11 @@ AFTER (same machine, same method; ground as the scene background, corner_cover e
   tabs 160, recent 154, tabp:3 92, agent:fw 171, agent:cli 207, recap:desk 285, agent:fw:banner 230, talk:fw 259, talk:fw:send 277, inbox 126
 Animation steps: equaliser, spinner and working mark 66 ms (was 33), Talk wave 100 ms (was 66), toast stays 33 ms.
 Image: harness_pro.bin 0x2e3b30 bytes (63% of the app partition free), -DPROJECT_VER=0.0.99-pod.
+
+Codex HD, 2026-10-19 (same build flags, -DPROJECT_VER=0.0.99-pod; base 6acbd7a05 built side by side)
+harness_pro.bin 3,975,152 B (was 3,179,568; +795,584), 48% of the 8,257,536 B app partition.
+  pets_codex.c.obj   1,177,459  Codex from AI-upscaled HD frames, drawn 1:1 (scripts/upscale_codex.py, scripts/gen_pro_codex.py)
+  pets.c.obj           940,926 (was 1,321,004)  Codex pruned from the round's import
+Host raster us (test/ph_perf_baseline.txt): agent:cli 250 -> 96, agent:be 441 -> 158, talk:be 418 -> 117, talk:be:send 360 -> 104.
+Device e8:f6:0a:e7:64:61 first 3 minutes after boot: raster_max_us 13,803 / frame_max_us 14,883; heap 382,023 internal free;
+psram 27.35 MB free (rodata is mapped through PSRAM, so the larger image costs about 0.8 MB of it).

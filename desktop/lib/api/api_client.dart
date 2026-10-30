@@ -50,12 +50,16 @@ class ApiClient {
   final LocalDaemonTransport? localTransport;
   late final Dio _dio = _buildDio();
 
+  /// The time, for when harness shares are read again ([sharesReadInterval], [sharesRetryDelays]).
+  final DateTime Function() _clock;
+
   ApiClient({
     required this.config,
     required this.session,
     this.auth,
     this.localTransport,
-  });
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
 
   Dio _buildDio() {
     final dio = attachHttpLog(
@@ -118,10 +122,36 @@ class ApiClient {
     return dio;
   }
 
+  /// The header the local CLI's report proxy answers with: the revision of
+  /// the counter names it forwards (cli/src/lib/appProductUsageReport.ts).
+  static const usageVocabularyHeader = 'x-harness-usage-vocabulary';
+
+  /// [usageVocabularyHeader]'s value, or 1 — the names every proxy knows —
+  /// from a CLI that predates it (or the backend, which never sends it).
+  static int usageVocabulary(Headers headers) {
+    final values = headers[usageVocabularyHeader];
+    final value = int.tryParse(
+      values == null || values.isEmpty ? '' : values.first,
+    );
+    return value != null && value > 1 ? value : 1;
+  }
+
+  /// An answer's Retry-After in delta-seconds (the backend's busy answers and
+  /// the local CLI passing them on); null when absent or unreadable.
+  static Duration? retryAfter(Headers headers) {
+    final values = headers['retry-after'];
+    final value = values == null || values.isEmpty ? null : values.first.trim();
+    if (value == null || !RegExp(r'^\d{1,9}$').hasMatch(value)) return null;
+    return Duration(seconds: int.parse(value));
+  }
+
   // -- auth (proxied by the local CLI — no credential on this leg) --
+  /// [onVocabulary] hears [usageVocabulary] from every answer, a refusal
+  /// included; a request that got no answer says nothing.
   Future<Map<String, dynamic>> productUsageReport(
-    Map<String, dynamic> report,
-  ) async {
+    Map<String, dynamic> report, {
+    void Function(int vocabulary)? onVocabulary,
+  }) async {
     try {
       final response = await _dio.post(
         '/api/product-usage/report',
@@ -132,6 +162,7 @@ class ApiClient {
           sendTimeout: const Duration(seconds: 5),
         ),
       );
+      onVocabulary?.call(usageVocabulary(response.headers));
       final body = response.data;
       if (response.statusCode != 200 ||
           body is! Map ||
@@ -142,11 +173,12 @@ class ApiClient {
           body is Map && body['error'] is Map
               ? (body['error'] as Map)['code']
               : null,
+          retryAfter: retryAfter(response.headers),
         );
       }
       return Map<String, dynamic>.from(body['data'] as Map);
     } on DioException catch (error) {
-      throw ProductReportFailure(switch (error.type) {
+      final measure = switch (error.type) {
         DioExceptionType.connectionTimeout ||
         DioExceptionType.sendTimeout ||
         DioExceptionType.receiveTimeout =>
@@ -154,7 +186,12 @@ class ApiClient {
         DioExceptionType.connectionError =>
           ProductHealthMeasure.reportFailureUnreachable,
         _ => ProductHealthMeasure.reportFailureOther,
-      });
+      };
+      // No answer in time, or none at all: waited out like a busy one.
+      throw ProductReportFailure(
+        measure,
+        backOff: measure != ProductHealthMeasure.reportFailureOther,
+      );
     }
   }
 
@@ -183,6 +220,62 @@ class ApiClient {
           );
     return Map<String, dynamic>.from(unwrapApiResponse(response) as Map);
   }
+
+  // -- the phone half of a sign-in (backend routes/qrSignIn.ts): approving a device that says its code aloud
+  //    (a lamp, #1410). Natively the daemon passes these through with this computer's session; a viewer
+  //    sends them with its own. --
+
+  /// What is asking to sign in with [code]: its name, kind, network and status.
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    final res = await _dio.post(
+      '/api/auth/qr/lookup',
+      data: {'code': code},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  Future<void> approveSignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/approve',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
+  }
+
+  Future<void> denySignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/deny',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
+  }
+
+  /// Posts [form] to [path] and answers whatever came back, a refusal too: a
+  /// file's way up has its own errors to read. A browser sends it to the
+  /// backend with its token; on a computer the local daemon passes it on.
+  Future<Response<dynamic>> postForm(
+    String path,
+    FormData form, {
+    CancelToken? cancelToken,
+    ProgressCallback? onSendProgress,
+  }) => _dio.post<dynamic>(
+    path,
+    data: form,
+    cancelToken: cancelToken,
+    onSendProgress: onSendProgress,
+    options: Options(
+      // The backend streams the file into storage before it answers.
+      receiveTimeout: const Duration(minutes: 2),
+      // The daemon answers 403 without it. The backend is not sent it: from a
+      // browser a custom header would add a CORS preflight.
+      headers: auth == null ? {'x-adapter-local': '1'} : null,
+    ),
+  );
 
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
@@ -238,7 +331,10 @@ class ApiClient {
       '/api/agent-messages/tabs/${Uri.encodeComponent(tabId)}',
       data: {
         'enabled': ?enabled,
-        if (leader != null) 'leader': leader.toJson() else if (clearLeader) 'leader': null,
+        if (leader != null)
+          'leader': leader.toJson()
+        else if (clearLeader)
+          'leader': null,
       },
       options: Options(headers: {'x-adapter-local': '1'}),
     );
@@ -328,6 +424,13 @@ class ApiClient {
     );
   }
 
+  /// Whether Add Phone's sign-in code cannot be had on this computer right
+  /// now: on Windows, the daemon's pipe did not prove itself at the last ask
+  /// ([LocalDaemonTransport.trustedRoutesUnavailable]). Never in a viewer
+  /// build, which asks the backend itself.
+  bool get phoneSignInUnavailable =>
+      auth == null && (localTransport?.trustedRoutesUnavailable ?? false);
+
   /// A one-time code that signs a phone in to this account: the Add Phone
   /// QR's `h=`, which the phone redeems for a session of its own instead of
   /// asking for an emailed code (backend `lib/harnessSession.ts`).
@@ -335,7 +438,7 @@ class ApiClient {
   /// Minted by the backend against the daemon's own session, and the daemon
   /// hands it out over its owner-only socket and nowhere else — a code that
   /// signs a device in is a credential. So null is an ordinary answer: an
-  /// older daemon or backend, this app on the TCP fallback, the backend down.
+  /// older daemon or backend, a missing private transport, the backend down.
   /// The QR then goes without it and the phone falls back to the email code.
   Future<({String code, Duration ttl})?> phoneSignInCode() async {
     try {
@@ -617,12 +720,52 @@ class ApiClient {
   int _accountRevision = 0;
   int _machineRequestRevision = 0;
 
+  /// How long a read of `/api/harness-shares` stands for, unless a push says they changed
+  /// ([sharesChanged]). Read through this computer's daemon, it took 14 to 16 s, or failed with a 504
+  /// after 20 s, on Diego's app (2026-10-28), where every `machines_changed` (one every 1 to 3 minutes,
+  /// each four times) started another.
+  static const sharesReadInterval = Duration(minutes: 5);
+
+  /// How long a failed shares read waits before the next, the last shares read standing in meanwhile:
+  /// a failure that only marked the list stale was read again at once, by recovery and the next push.
+  static const sharesRetryDelays = [
+    Duration(minutes: 1),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+  ];
+
+  /// When the last shares read that answered started; null while none has for this account.
+  DateTime? _sharesReadAt;
+  int _sharesFailures = 0;
+  DateTime? _sharesRetryAt;
+
+  /// Pushes saying the shares changed, and how many of them the last answered read covers.
+  int _sharesAsked = 0;
+  int _sharesAnswered = 0;
+
+  /// A push said a harness shared with this account was invited or taken back: the next machine
+  /// read reads the shares too, once any wait after a failure is over.
+  void sharesChanged() => _sharesAsked++;
+
+  bool _sharesDue(DateTime now) {
+    final retryAt = _sharesRetryAt;
+    if (retryAt != null && now.isBefore(retryAt)) return false;
+    final readAt = _sharesReadAt;
+    return readAt == null ||
+        _sharesAsked > _sharesAnswered ||
+        now.difference(readAt) >= sharesReadInterval;
+  }
+
   /// Sharing fallback belongs to the account that loaded it. Late responses
   /// must not refill it after sign-out or while a new sign-in is starting.
   void resetAccountCache() {
     ++_accountRevision;
     _sharedMachines = [];
     lastMachinesStale = false;
+    _sharesReadAt = null;
+    _sharesRetryAt = null;
+    _sharesFailures = 0;
+    _sharesAnswered = _sharesAsked;
   }
 
   void _requireAccount(int revision) {
@@ -649,22 +792,38 @@ class ApiClient {
         Machine.fromJson(Map<String, dynamic>.from(row as Map)),
     ].where((m) => !owned.any((own) => own.machineId == m.machineId)).toList();
     var sharedMachines = _sharedMachines;
-    try {
-      final shared = await _dio.get('/api/harness-shares');
-      _requireAccount(account);
-      if (shared.statusCode == 404) {
-        sharedMachines = [];
-      } else {
-        final body = unwrapApiResponse(shared) as Map<String, dynamic>;
-        sharedMachines = [
-          for (final row in body['machines'] as List? ?? const [])
-            Machine.fromJson(Map<String, dynamic>.from(row as Map)),
-        ];
+    final now = _clock();
+    if (_sharesDue(now)) {
+      final asked = _sharesAsked;
+      try {
+        final shared = await _dio.get('/api/harness-shares');
+        _requireAccount(account);
+        if (shared.statusCode == 404) {
+          sharedMachines = [];
+        } else {
+          final body = unwrapApiResponse(shared) as Map<String, dynamic>;
+          sharedMachines = [
+            for (final row in body['machines'] as List? ?? const [])
+              Machine.fromJson(Map<String, dynamic>.from(row as Map)),
+          ];
+        }
+        _sharesReadAt = now;
+        _sharesAnswered = asked;
+        _sharesFailures = 0;
+        _sharesRetryAt = null;
+      } catch (error) {
+        if (isUnauthorizedError(error)) rethrow;
+        _requireAccount(account);
+        final delay =
+            sharesRetryDelays[_sharesFailures < sharesRetryDelays.length
+                ? _sharesFailures
+                : sharesRetryDelays.length - 1];
+        _sharesFailures++;
+        _sharesRetryAt = _clock().add(delay);
       }
-    } catch (error) {
-      if (isUnauthorizedError(error)) rethrow;
-      stale = true;
     }
+    // With no shares read yet there is nothing to stand in for them: the list is stale until one answers.
+    if (_sharesReadAt == null) stale = true;
     _requireAccount(account);
     if (request == _machineRequestRevision) {
       _sharedMachines = sharedMachines;

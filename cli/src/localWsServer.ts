@@ -6,7 +6,9 @@ import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { watchSocketLiveness } from './lib/wsLiveness.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
-import { isTrustedLocal } from './lib/localSocket.js'
+import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
+import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
+import { localCredentialMatches } from './lib/localCredential.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -41,7 +43,7 @@ export interface LocalWsBackend {
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
   /** The agent this window has focused, or null — which of its terminals gets the short output window. */
-  setLocalTerminalFocus?: (connId: string, agentId: string | null) => void
+  setLocalTerminalFocus?: (connId: string, agentId: string | null, visibleAgents?: readonly string[]) => void
   /** hn's `product_observe`, from a connection on this computer's own socket bound to this machine. */
   observeProduct?: (connId: string, payload: unknown) => void
 }
@@ -51,6 +53,9 @@ export interface LocalWsServerOptions {
   backend: LocalWsBackend
   /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
   localSocketServer?: http.Server | null
+  /** The daemon's local credential (lib/localCredential.ts). Given, a TCP upgrade must carry it: the
+   *  loopback port takes any local OS user's process, the Unix socket only this user's. */
+  localCredential?: string
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
    *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
@@ -218,6 +223,9 @@ function jsonFrame(raw: RawData, maxBytes = MAX_JSON_BYTES): Frame | null {
   }
 }
 
+/** A Super Tab or project id as the backend writes them, as long as the Harness Pro holds one (48 bytes with its NUL). */
+const CARD_ID = /^[A-Za-z0-9_-]{1,47}$/
+
 /**
  * The window's swarm list, checked field by field. Anything that is not an id, a name and a list of
  * agent ids is dropped rather than trusted — the same stance app_panes takes with its ids — and a
@@ -241,7 +249,14 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     const panes = typeof r.panes === 'number' && Number.isFinite(r.panes) && r.panes >= 0
       ? Math.min(Math.floor(r.panes), 999)
       : agentIds.length
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes })
+    // A Super Tab (Swarm) tab names its Swarm and the project the window has open in it; the Harness Pro's Swarm card
+    // links to the tab by the first and follows the second. Ids only: anything else is dropped, not trusted.
+    const superTabId = typeof r.superTabId === 'string' && CARD_ID.test(r.superTabId) ? r.superTabId : undefined
+    const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
+    // And the conversation it has open (its Lead's, the person's Buddy chat or a group), which the round dial's face follows.
+    const conversationId = typeof r.conversationId === 'string' && CARD_ID.test(r.conversationId) ? r.conversationId : undefined
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
+      ...(conversationId ? { conversationId } : {}) })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
@@ -261,7 +276,8 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
     if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
   }
-  return { active, swarms, tiles }
+  // Set by the window on the announce a device's pick caused, so the device is not told to follow its own choice back.
+  return { active, swarms, tiles, ...(p.fromDevice === true ? { fromDevice: true } : {}) }
 }
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -281,9 +297,10 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
 }
 
 /**
- * Add an internal loopback WebSocket endpoint to the CLI's existing HTTP server. It intentionally has
- * no credential: loopback-only, no Origin header, and the desktop computer-id validation identify the
- * local process without placing SSO credentials on this transport.
+ * Add an internal loopback WebSocket endpoint to the CLI's existing HTTP server. Over the daemon's Unix
+ * socket it takes no credential: the filesystem says who the peer is. Over TCP it takes the daemon's
+ * local credential (lib/localCredential.ts) — never an SSO credential — besides being loopback-only with
+ * no Origin header: any OS user's process can reach the loopback port.
  */
 /** How long a closing server waits for its clients to answer the close before it drops them. */
 export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
@@ -292,9 +309,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_MESSAGE_BYTES,
-    // The loopback endpoint deliberately has no credential. Echo a protocol only for generic WS
-    // clients that insist on proposing one; it carries no authority and is never inspected.
+    // The local credential travels in a header, never a subprotocol. Echo a protocol only for generic
+    // WS clients that insist on proposing one; it carries no authority and is never inspected.
     handleProtocols: (protocols) => [...protocols][0] ?? false,
+  })
+  // Over the Windows pipe every answer proves the daemon's token (lib/windows/pipeAuth.ts), and so does the 101: a
+  // client drops a connection whose upgrade carries no proof. Nothing is added on TCP or the Unix socket.
+  wss.on('headers', (headers, req) => {
+    const proof = pipeProofOf(req)
+    if (proof) headers.push(`${PIPE_PROOF_HEADER}: ${proof}`)
   })
   // One desktop can have a connection per machine. Once a live window reports its selected pane,
   // background terminal attachments on ANY of those connections must not overwrite that selection.
@@ -309,8 +332,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const onUpgrade = (req: http.IncomingMessage, socket: Socket, head: Buffer): void => {
     const path = (req.url ?? '').split('?')[0]
     if (path !== LOCAL_WS_PATH) return
-    // Over the daemon's own socket (lib/localSocket.ts) the filesystem already vouched for the peer;
-    // it has no address or port to check. It still must not be a browser.
+    // Over the daemon's own socket (lib/localSocket.ts) the filesystem already vouched for the peer, or, on Windows,
+    // the request proved the daemon's token over its pipe; it has no address or port to check. It still must not be a browser.
     if (isTrustedLocal(req)) {
       if (req.headers.origin) { rejectUpgrade(socket, 403, 'Forbidden'); return }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
@@ -324,6 +347,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const bound = server.address()
     if (req.headers.origin || !bound || typeof bound === 'string' || !isLoopbackRequest(req, loopbackHosts(bound.port))) {
       rejectUpgrade(socket, 403, 'Forbidden')
+      return
+    }
+    // Another OS user's process reaches this port too (a guest's harness, say): only this user's carries
+    // the credential.
+    if (options.localCredential !== undefined && !localCredentialMatches(options.localCredential, req)) {
+      rejectUpgrade(socket, 401, 'Unauthorized')
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
@@ -734,7 +763,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
               // Ahead of the dial's revision check below: that gate is about which agent the voice
               // follows, and a stale one says nothing about which terminal is in front of the person.
               // Only this daemon's own streams — a relayed machine's live on that machine's daemon.
-              if (!relay && boundMachineId === options.machineId) options.backend.setLocalTerminalFocus?.(connId, agentId)
+              if (!relay && boundMachineId === options.machineId) {
+                const listed = (parsed.payload as Record<string, unknown>)?.visibleAgents
+                const visible = Array.isArray(listed) ? listed.filter((id): id is string => typeof id === 'string' && !!id) : undefined
+                options.backend.setLocalTerminalFocus?.(connId, agentId, visible)
+              }
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
               if (options.onAppFocusState?.(boundMachineId, agentId, connId,
                 typeof revision === 'string' ? revision : undefined) === false) return

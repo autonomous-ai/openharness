@@ -1,7 +1,9 @@
 /** Stop the exact discovered engine process while leaving the user's tmux pane and shell alive. */
 
 import type { RegisteredSession } from './registry.js'
-import { processRows, type RuntimeCheck } from './tmux.js'
+import { type RuntimeCheck } from './paneEngineProcess.js'
+import { processRows } from './processTable.js'
+import { type AgentSignal } from './processSignals.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 
 /** Delete has already removed the UI entry; signal the saved process immediately. */
@@ -12,7 +14,7 @@ const POLL_MS = 250
 
 /**
  * Exact PID + start-marker + executable validation — the PID-reuse guard shared by delete and restart.
- * Deliberately PID-only, not pane-based (unlike tmux.ts's `checkSessionRuntime`): by the time either
+ * Deliberately PID-only, not pane-based (unlike paneEngineProcess.ts's `checkSessionRuntime`): by the time either
  * caller runs, the pane's UI entry may already be gone (delete) or is about to host a brand-new process
  * on purpose (restart), so nothing here should care whether a `tmux` pane still shows the expected
  * engine — only whether the exact saved process is still the one running.
@@ -48,7 +50,7 @@ export interface TerminateDeps {
   /** Three-valued exact identity check. Probe failure is not evidence that the process is gone. */
   checkRuntime: (session: RegisteredSession) => Promise<RuntimeCheck>
   /** `process.kill`. Throws on EPERM/ESRCH like the real one. */
-  kill: (pid: number, signal: NodeJS.Signals) => void
+  kill: (pid: number, signal: AgentSignal) => void
   sleep: (ms: number) => Promise<void>
   log: (message: string) => void
 }
@@ -85,7 +87,7 @@ export async function terminateDeletedAgent(
   const pid = session.processIdentity?.pid
   if (!pid) return 'not-ours'
 
-  const signal = (sig: NodeJS.Signals): boolean => {
+  const signal = (sig: AgentSignal): boolean => {
     if (deps.current?.() === false) return false
     try { deps.kill(pid, sig); return true } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code

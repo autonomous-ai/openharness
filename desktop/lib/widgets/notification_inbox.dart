@@ -6,23 +6,46 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../state/notification_inbox.dart';
 import 'desktop_chrome.dart';
+import 'pane_menu.dart';
 
+/// The bell's inbox, a titlebar dropdown ([showPaneMenu]): an overlay with no
+/// veil, so a click outside closes it and lands where it was aimed, and it
+/// never holds the titlebar.
 Future<void> showNotificationInbox(
   BuildContext context, {
   required AppNotifier app,
   required Future<bool> Function(InboxNotification) onOpen,
   double topInset = 0,
-}) => showAppDialog<void>(
-  context: context,
-  veilTint: Colors.transparent,
-  builder: (_) =>
-      NotificationInbox(app: app, onOpen: onOpen, topInset: topInset),
-);
+  void Function(void Function() close)? onOpened,
+  bool Function(Offset position)? ownsPointer,
+}) {
+  // A harness the list opened keeps the keyboard it was given; only a list
+  // closed without a result gives it back to whoever had it.
+  var restoreFocus = true;
+  return showPaneMenu<void>(
+    context: context,
+    position: RelativeRect.fromLTRB(0, topInset + 16, 16, 0),
+    minWidth: NotificationInbox.width,
+    maxWidth: NotificationInbox.width,
+    focusFirst: false,
+    onOpen: onOpened == null ? null : (_, close) => onOpened(close),
+    ownsPointer: ownsPointer,
+    shouldRestoreFocus: () => restoreFocus,
+    body: (close) => NotificationInbox(
+      app: app,
+      onOpen: (row) async {
+        final opened = await onOpen(row);
+        if (opened) restoreFocus = false;
+        return opened;
+      },
+      onClose: () => close(null),
+    ),
+  );
+}
 
 /// The existing unread notifications in a quiet, live list beside the bell.
 class NotificationInbox extends StatefulWidget {
@@ -30,12 +53,14 @@ class NotificationInbox extends StatefulWidget {
     super.key,
     required this.app,
     required this.onOpen,
-    this.topInset = 0,
+    required this.onClose,
   });
 
   final AppNotifier app;
   final Future<bool> Function(InboxNotification) onOpen;
-  final double topInset;
+  final VoidCallback onClose;
+
+  static const width = 440.0;
 
   @override
   State<NotificationInbox> createState() => _NotificationInboxState();
@@ -106,7 +131,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
       final opened = await widget.onOpen(current);
       if (!mounted) return;
       if (opened) {
-        Navigator.of(context).pop();
+        widget.onClose();
       } else {
         setState(() => _error = 'Could not open this harness. Try again.');
       }
@@ -178,106 +203,74 @@ class _NotificationInboxState extends State<NotificationInbox> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // The pane menu's surface draws the one rim; Escape is its too.
     return DesktopChrome(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = math.min(
-            440.0,
-            math.max(0.0, constraints.maxWidth - 32),
-          );
-          final available = math.max(
-            0.0,
-            constraints.maxHeight - widget.topInset - 32,
-          );
-          return Dialog(
-            alignment: Alignment.topRight,
-            insetPadding: EdgeInsets.fromLTRB(16, widget.topInset + 16, 16, 16),
-            backgroundColor: Colors.transparent,
-            surfaceTintColor: Colors.transparent,
-            elevation: 0,
-            constraints: BoxConstraints(maxWidth: width),
-            child: SizedBox(
-              key: const ValueKey('notification-inbox'),
-              width: width,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: math.min(520, available),
-                ),
-                child: DesktopDialogSurface(
-                  radius: 12,
-                  elevation: 12,
-                  child: Semantics(
-                    scopesRoute: true,
-                    namesRoute: true,
-                    explicitChildNodes: true,
-                    label: 'Notifications',
-                    child: Focus(
-                      focusNode: _focus,
-                      autofocus: true,
-                      onKeyEvent: _onKey,
-                      child: ListenableBuilder(
-                        listenable: _focus,
-                        builder: (context, _) => Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _header(),
-                            Divider(height: 1, color: DesktopChrome.rim),
-                            Flexible(
-                              child: _rows.isEmpty
-                                  ? Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 24,
-                                        vertical: 40,
-                                      ),
-                                      child: Text(
-                                        'No notifications',
-                                        textAlign: TextAlign.center,
-                                        style: DesktopChrome.control(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
-                                    )
-                                  : ListView.builder(
-                                      controller: _scroll,
-                                      shrinkWrap: true,
-                                      itemCount: _rows.length,
-                                      padding: const EdgeInsets.all(8),
-                                      itemExtent: _rowExtent,
-                                      itemBuilder: (context, index) =>
-                                          _notificationRow(_rows[index]),
-                                    ),
-                            ),
-                            if (_error != null && _rows.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  20,
-                                  4,
-                                  20,
-                                  16,
-                                ),
-                                child: Semantics(
-                                  liveRegion: true,
-                                  child: Text(
-                                    _error!,
-                                    style: DesktopChrome.control(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .error,
-                                    ),
-                                  ),
+      child: SizedBox(
+        key: const ValueKey('notification-inbox'),
+        width: NotificationInbox.width,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 520),
+          child: Semantics(
+            scopesRoute: true,
+            namesRoute: true,
+            explicitChildNodes: true,
+            label: 'Notifications',
+            child: Focus(
+              focusNode: _focus,
+              autofocus: true,
+              onKeyEvent: _onKey,
+              child: ListenableBuilder(
+                listenable: _focus,
+                builder: (context, _) => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _header(),
+                    Divider(height: 1, color: DesktopChrome.rim),
+                    Flexible(
+                      child: _rows.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 40,
+                              ),
+                              child: Text(
+                                'No notifications',
+                                textAlign: TextAlign.center,
+                                style: DesktopChrome.control(
+                                  color: DesktopChrome.muted,
                                 ),
                               ),
-                          ],
+                            )
+                          : ListView.builder(
+                              controller: _scroll,
+                              shrinkWrap: true,
+                              itemCount: _rows.length,
+                              padding: const EdgeInsets.all(8),
+                              itemExtent: _rowExtent,
+                              itemBuilder: (context, index) =>
+                                  _notificationRow(_rows[index]),
+                            ),
+                    ),
+                    if (_error != null && _rows.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                        child: Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _error!,
+                            style: DesktopChrome.control(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                  ],
                 ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -313,7 +306,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
         IconButton(
           key: const ValueKey('notification-inbox-close'),
           tooltip: 'Close notifications',
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: widget.onClose,
           icon: const Icon(AppIcons.close, size: 18),
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           padding: const EdgeInsets.all(6),

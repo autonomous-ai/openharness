@@ -1,6 +1,8 @@
+import AVFoundation
 import AudioToolbox
 import AuthenticationServices
 import Flutter
+import Speech
 import UIKit
 import UserNotifications
 
@@ -19,10 +21,335 @@ import UserNotifications
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     DeviceNameChannel.register(with: engineBridge.pluginRegistry)
+    InstallSourceChannel.register(with: engineBridge.pluginRegistry)
     ClipboardImageChannel.register(with: engineBridge.pluginRegistry)
     SignInPageChannel.register(with: engineBridge.pluginRegistry)
     HandoffChannel.register(with: engineBridge.pluginRegistry)
     ChimeChannel.register(with: engineBridge.pluginRegistry)
+    AppBadgeChannel.register(with: engineBridge.pluginRegistry)
+    DictationChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/dictation` — the phone's own speech recognizer, the one the keyboard's dictation uses
+/// (Dart: `SwarmChannelDictation` in `lib/swarm/swarm_dictation.dart`): a Swarm chat's message box
+/// fills with the words as they are said.
+///
+/// `access` asks for speech recognition, then the microphone, the first time, and answers `allowed`,
+/// `denied` (speech recognition refused or restricted: Dart records and has the backend transcribe,
+/// as before) or `noMic`. `start` takes Dart's `take` and a `locale`, and answers false when the
+/// phone has no recognizer for it now. Then, each with the take: `words` (the recognizer's latest
+/// best guess, `text`; `final` once it says that guess is finished; `from` and `to`, where its words
+/// begin and end in the session's audio, 0 when it gives no times — Dart works out what is done from
+/// these), `level` (the microphone's RMS, ten a second), `paused` whenever the recognizer ends a
+/// session by itself, and once `end` — `done`, `noSpeech` or `failed`. `stop` ends listening, and the
+/// last words and the end follow; `cancel` ends it with nothing more said.
+///
+/// ⚠️ **A take listens until it is stopped** (Tony, 10-29: "until I tap"). iOS ends a recognizer's
+/// session by itself — after a pause, a long silence, its own minute — and the microphone is kept
+/// open through that: `paused` says so, and Dart's `resume` starts the next session at once, false
+/// when it cannot. Only a call or another app taking the audio (an interruption) ends the take as
+/// `failed`. The screen does not dim or lock meanwhile: talking is not a touch.
+///
+/// ⚠️ **Set as the keyboard's dictation is** (Tony, 10-29: "exactly like the keyboard"): the
+/// dictation hint, punctuation, live guesses, no contextual words — and on the phone or on Apple's
+/// servers as the recognizer chooses, not forced on the phone, where Vietnamese can be heard worse.
+/// Nothing heard is logged or kept here.
+final class DictationChannel {
+  private static var shared: DictationChannel?
+
+  private let channel: FlutterMethodChannel
+
+  /// The take listening now.
+  private var current: Take?
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessDictation")?.messenger() else { return }
+    shared = DictationChannel(messenger: messenger)
+  }
+
+  private init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "harness/dictation", binaryMessenger: messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
+    }
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let arguments = call.arguments as? [String: Any]
+    let take = arguments?["take"] as? Int
+    switch call.method {
+    case "access":
+      Self.access { result($0) }
+    case "start":
+      guard let take, let locale = arguments?["locale"] as? String else {
+        result(FlutterError(code: "bad-args", message: "A take and a locale", details: nil))
+        return
+      }
+      result(start(take, locale: locale))
+    case "resume":
+      guard let current, current.id == take else {
+        result(false)
+        return
+      }
+      result(resume(current))
+    case "stop":
+      if let current, current.id == take { stop(current) }
+      result(nil)
+    case "cancel":
+      if current?.id == take { finish(nil) }
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  /// Speech recognition, then the microphone: asked the first time, and answered at once after.
+  private static func access(_ answer: @escaping (String) -> Void) {
+    SFSpeechRecognizer.requestAuthorization { status in
+      guard status == .authorized else {
+        DispatchQueue.main.async { answer("denied") }
+        return
+      }
+      let microphone: (Bool) -> Void = { granted in
+        DispatchQueue.main.async { answer(granted ? "allowed" : "noMic") }
+      }
+      if #available(iOS 17.0, *) {
+        AVAudioApplication.requestRecordPermission(completionHandler: microphone)
+      } else {
+        AVAudioSession.sharedInstance().requestRecordPermission(microphone)
+      }
+    }
+  }
+
+  /// Listens for [take] in [locale]: the microphone opens, and the recognizer's first session
+  /// starts. False, with nothing open, when it cannot.
+  private func start(_ take: Int, locale: String) -> Bool {
+    finish(nil)
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+      recognizer.isAvailable
+    else { return false }
+
+    let session = AVAudioSession.sharedInstance()
+    let engine = AVAudioEngine()
+    let feed = Feed()
+    var measured = 0.0
+    let heard: AVAudioNodeTapBlock = { [weak self] buffer, _ in
+      feed.append(buffer)
+      let now = CACurrentMediaTime()
+      guard now - measured >= 0.1, let rms = Self.rms(buffer) else { return }
+      measured = now
+      DispatchQueue.main.async {
+        guard let self, self.current?.id == take else { return }
+        self.channel.invokeMethod("level", arguments: ["take": take, "rms": rms])
+      }
+    }
+    let input = engine.inputNode
+    do {
+      try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+      try session.setActive(true, options: .notifyOthersOnDeactivation)
+      let format = input.outputFormat(forBus: 0)
+      guard format.sampleRate > 0, format.channelCount > 0 else {
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        return false
+      }
+      input.installTap(onBus: 0, bufferSize: 1024, format: format, block: heard)
+      engine.prepare()
+      try engine.start()
+    } catch {
+      input.removeTap(onBus: 0)
+      engine.stop()
+      try? session.setActive(false, options: .notifyOthersOnDeactivation)
+      return false
+    }
+
+    let listening = Take(
+      id: take, recognizer: recognizer, engine: engine, feed: feed,
+      idleWas: UIApplication.shared.isIdleTimerDisabled)
+    current = listening
+    // A call, a timer's alarm, another app's audio: the microphone is gone, and the take with it.
+    listening.interruption = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification, object: session, queue: .main
+    ) { [weak self] note in
+      let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+        .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+      guard let self, self.current === listening, type == .began else { return }
+      self.finish("failed")
+    }
+    UIApplication.shared.isIdleTimerDisabled = true
+    listen(listening)
+    return true
+  }
+
+  /// A new session of the recognizer's in [take], fed by the microphone from now on.
+  private func listen(_ take: Take) {
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+    request.taskHint = .dictation
+    request.contextualStrings = []
+    if #available(iOS 16.0, *) { request.addsPunctuation = true }
+    take.session += 1
+    let session = take.session
+    take.feed.request = request
+    take.task = take.recognizer.recognitionTask(with: request) { [weak self] result, error in
+      let text = result?.bestTranscription.formattedString
+      let segments = result?.bestTranscription.segments ?? []
+      let from = segments.first?.timestamp ?? 0
+      let to = segments.last.map { $0.timestamp + $0.duration } ?? 0
+      // Finished: the session's last guess, or one the recognizer marks as the end of what was said
+      // before a pause, after which it may start its words over.
+      let finished = result.map { $0.isFinal || $0.speechRecognitionMetadata != nil } ?? false
+      let final = result?.isFinal ?? false
+      // "No speech detected": ended, or given up, before a word was heard.
+      let silent = (error as NSError?).map { $0.domain == "kAFAssistantErrorDomain" && $0.code == 1110 }
+      DispatchQueue.main.async {
+        guard let self, self.current === take, take.session == session, take.task != nil else { return }
+        if let text {
+          self.channel.invokeMethod(
+            "words",
+            arguments: ["take": take.id, "text": text, "final": finished, "from": from, "to": to])
+        }
+        guard final || silent != nil else { return }
+        take.task = nil
+        take.feed.request = nil
+        let end = final ? "done" : silent == true ? "noSpeech" : "failed"
+        if take.stopping {
+          self.finish(end)
+        } else {
+          self.channel.invokeMethod("paused", arguments: ["take": take.id, "end": end])
+        }
+      }
+    }
+  }
+
+  /// The next session, after the recognizer ended one by itself. False when the take cannot go on:
+  /// it is stopping, its microphone stopped, or the recognizer cannot be had now.
+  private func resume(_ take: Take) -> Bool {
+    if take.task != nil { return true }
+    guard !take.stopping, take.engine.isRunning, take.recognizer.isAvailable else { return false }
+    listen(take)
+    return true
+  }
+
+  /// No more audio for [take]: the session's last words, then the end — at once when no session is
+  /// listening, between one the recognizer ended and the next.
+  private func stop(_ take: Take) {
+    take.stopping = true
+    take.engine.stop()
+    take.engine.inputNode.removeTap(onBus: 0)
+    guard let request = take.feed.request else {
+      finish("done")
+      return
+    }
+    take.feed.request = nil
+    request.endAudio()
+  }
+
+  /// Closes the take listening now, and says how it ended — or nothing, for a cancel.
+  private func finish(_ end: String?) {
+    guard let take = current else { return }
+    current = nil
+    take.task?.cancel()
+    take.task = nil
+    take.engine.stop()
+    take.engine.inputNode.removeTap(onBus: 0)
+    take.feed.request?.endAudio()
+    take.feed.request = nil
+    if let interruption = take.interruption { NotificationCenter.default.removeObserver(interruption) }
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    UIApplication.shared.isIdleTimerDisabled = take.idleWas
+    if let end { channel.invokeMethod("end", arguments: ["take": take.id, "end": end]) }
+  }
+
+  /// How loud [buffer] is, 0…1 of full scale.
+  private static func rms(_ buffer: AVAudioPCMBuffer) -> Double? {
+    guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return nil }
+    let count = Int(buffer.frameLength)
+    var sum: Float = 0
+    for index in 0..<count { sum += samples[index] * samples[index] }
+    return Double((sum / Float(count)).squareRoot())
+  }
+}
+
+/// One take, from `start` to its end: the microphone open throughout, its tap on the engine's
+/// input, while the recognizer's sessions come and go in it ([DictationChannel]).
+private final class Take {
+  let id: Int
+  let recognizer: SFSpeechRecognizer
+  let engine: AVAudioEngine
+  let feed: Feed
+
+  /// Whether the screen was kept awake before the take, as it is again after.
+  let idleWas: Bool
+
+  /// The recognizer's session now, and its number: what an earlier one still says lands nowhere.
+  var task: SFSpeechRecognitionTask?
+  var session = 0
+
+  /// `stop` was asked: the session ending now is the take's last.
+  var stopping = false
+  var interruption: NSObjectProtocol?
+
+  init(id: Int, recognizer: SFSpeechRecognizer, engine: AVAudioEngine, feed: Feed, idleWas: Bool) {
+    self.id = id
+    self.recognizer = recognizer
+    self.engine = engine
+    self.feed = feed
+    self.idleWas = idleWas
+  }
+}
+
+/// Where the microphone's audio goes: the request of the recognizer's session now. Changed on the
+/// main thread while the tap appends to it on the audio thread, so behind a lock.
+private final class Feed {
+  private let lock = NSLock()
+  private var current: SFSpeechAudioBufferRecognitionRequest?
+
+  var request: SFSpeechAudioBufferRecognitionRequest? {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return current
+    }
+    set {
+      lock.lock()
+      defer { lock.unlock() }
+      current = newValue
+    }
+  }
+
+  func append(_ buffer: AVAudioPCMBuffer) {
+    lock.lock()
+    defer { lock.unlock() }
+    current?.append(buffer)
+  }
+}
+
+/// `harness/app_badge` — the app icon's count (Dart: `setSwarmBadge` in `lib/notify/system_notices.dart`):
+/// what the Swarms ask of the person, the drawer's waiting count. `set` takes the count; zero takes it
+/// off. Drawn only where the person allowed badges with the notification prompt.
+enum AppBadgeChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessAppBadge")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/app_badge", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "set" else { result(FlutterMethodNotImplemented); return }
+      guard let count = call.arguments as? Int, count >= 0 else {
+        result(FlutterError(code: "bad_count", message: "A count of zero or more.", details: nil))
+        return
+      }
+      if #available(iOS 16.0, *) {
+        // The completion can run off the main thread; Flutter is answered on it.
+        UNUserNotificationCenter.current().setBadgeCount(count) { error in
+          DispatchQueue.main.async {
+            result(error.map { FlutterError(code: "badge", message: $0.localizedDescription, details: nil) })
+          }
+        }
+      } else {
+        UIApplication.shared.applicationIconBadgeNumber = count
+        result(nil)
+      }
+    }
   }
 }
 
@@ -137,6 +464,22 @@ enum ClipboardImageChannel {
           result(png.map { FlutterStandardTypedData(bytes: $0) } ?? unreadable)
         }
       }
+    }
+  }
+}
+
+/// `harness/install_source` — whether this build came from the App Store, for the measurement
+/// context's channel (Dart: `lib/core/install_source.dart`): a tester's counts are kept apart. An App
+/// Store build's receipt is named `receipt`; TestFlight's, and any build Xcode installed, `sandboxReceipt`.
+/// Only the file's name is read, never the receipt, and only `store` or `sandbox` goes back.
+enum InstallSourceChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessInstallSource")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/install_source", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "source" else { result(FlutterMethodNotImplemented); return }
+      let sandbox = Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+      result(sandbox ? "sandbox" : "store")
     }
   }
 }

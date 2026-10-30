@@ -105,6 +105,34 @@ describe('connectToMaster', () => {
     expect(channel.sent).toEqual([{ type: 'harnessd:want', service: 'orchestrator' }])
   })
 
+  it('asks its master to stop everything, and says when there is no master to ask', () => {
+    const channel = new FakeChannel()
+    expect(connectToMaster(channel, supervised).stopAll()).toBe(true)
+    expect(channel.sent).toEqual([{ type: 'harnessd:stop' }])
+    expect(connectToMaster(new FakeChannel(), {}).stopAll()).toBe(false)
+  })
+
+  it('hears the master ask it to leave, before or after it listens, once', async () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    const early = vi.fn()
+    channel.say({ type: 'harnessd:shutdown' })
+    link.onShutdown(early)
+    await Promise.resolve()
+    expect(early).toHaveBeenCalledOnce()
+    const other = new FakeChannel()
+    const late = vi.fn()
+    const second = connectToMaster(other, supervised)
+    second.onShutdown(late)
+    other.say({ type: 'harnessd:shutdown' })
+    other.say({ type: 'harnessd:shutdown' })
+    expect(late).toHaveBeenCalledOnce()
+    // Without a master it listens for nothing.
+    const alone = vi.fn()
+    connectToMaster(new FakeChannel(), {}).onShutdown(alone)
+    expect(alone).not.toHaveBeenCalled()
+  })
+
   it('says why when start-up gave way to safe mode', () => {
     const channel = new FakeChannel()
     connectToMaster(channel, supervised).ready('no tmux')
@@ -130,6 +158,13 @@ describe('connectToMaster', () => {
     link.onUpdate(later)
     await Promise.resolve()
     expect(later).not.toHaveBeenCalled()
+  })
+
+  it('ignores a shutdown for now: nothing listens for it yet', () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    channel.say({ type: 'harnessd:shutdown' })
+    expect(link.status()).toBeNull()
   })
 
   it('keeps what the master says about itself, and hears when the master goes', () => {

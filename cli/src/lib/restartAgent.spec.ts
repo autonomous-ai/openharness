@@ -11,6 +11,7 @@ interface Overrides {
   waitForProcess?: RestartAgentDeps['waitForProcess']
   buildArgv?: RestartAgentDeps['buildArgv']
   prepareResume?: RestartAgentDeps['prepareResume']
+  stopConflictingJob?: RestartAgentDeps['stopConflictingJob']
 }
 
 /** Every primitive records its own call, even when overridden — so `calls` always reflects the real
@@ -25,6 +26,7 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
   return {
     calls,
     ...(over.prepareResume ? { prepareResume: async () => { calls.push('prepareResume'); await over.prepareResume!() } } : {}),
+    ...(over.stopConflictingJob ? { stopConflictingJob: async () => { calls.push('stopConflictingJob'); await over.stopConflictingJob!() } } : {}),
     holdOpen: async () => { calls.push('holdOpen'); return holdOpenImpl() },
     terminate: async (checkAfterMs) => { calls.push('terminate'); return terminateImpl(checkAfterMs) },
     respawn: async (argv) => { calls.push('respawn'); return respawnImpl(argv) },
@@ -56,6 +58,29 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume'])
   })
 
+  it('stops a conflicting background job after history preparation and before the resume argv is built', async () => {
+    const stopConflictingJob = vi.fn()
+    const d = deps({ stopConflictingJob })
+    await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'stopConflictingJob', 'buildArgv', 'respawn', 'waitForProcess'])
+    expect(stopConflictingJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('never checks for a background job on a fresh launch (no session id to resume)', async () => {
+    const stopConflictingJob = vi.fn()
+    const d = deps({ stopConflictingJob, waitForProcess: async () => null })
+    await restartAgent({ engine: 'claude', sessionId: '' }, false, d)
+    expect(stopConflictingJob).not.toHaveBeenCalled()
+  })
+
+  it('does nothing extra for an engine with no background-job check wired (the dep is simply absent)', async () => {
+    const d = deps()
+    expect(d.stopConflictingJob).toBeUndefined()
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
+    expect(outcome.ok).toBe(true)
+    expect(d.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
+  })
+
   it('does not prepare a fresh launch or repeat preparation on the fresh fallback', async () => {
     const prepareResume = vi.fn()
     const d = deps({ prepareResume, waitForProcess: async () => null })
@@ -83,6 +108,19 @@ describe('restartAgent', () => {
     expect(allowed.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('stops nothing when the relaunch is refused on this platform, and asks with the resume it would launch', async () => {
+    const asked: unknown[] = []
+    const d = { ...deps(), launchRefusal: (opts: unknown) => { asked.push(opts); return 'Harness cannot start codex on Windows with these arguments.' } }
+    expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, true, d)).toEqual({
+      ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: 'Harness cannot start codex on Windows with these arguments. Nothing was stopped.',
+    })
+    expect(d.calls).toEqual([])
+    expect(asked).toEqual([{ bypassPermission: true, resumeSessionId: 's1' }])
+    const fresh = { ...deps(), launchRefusal: (opts: unknown) => { asked.push(opts); return null } }
+    expect(await restartAgent({ engine: 'codex', sessionId: '' }, false, fresh)).toMatchObject({ ok: true })
+    expect(asked.at(-1)).toEqual({ bypassPermission: false })
+  })
+
   it('never respawns when holdOpen fails to re-arm the pane', async () => {
     const d = deps({ holdOpen: async () => ({ ok: false, reason: 'tmux unreachable' }) })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
@@ -101,6 +139,13 @@ describe('restartAgent', () => {
     const d = deps({ terminate: async () => 'failed' })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
     expect(outcome.ok).toBe(false)
+    expect(d.calls).toEqual(['holdOpen', 'terminate'])
+  })
+
+  it.each([new Error('The conversation is still held on its server'), 'server unavailable'])('reports a refused native stop without respawning or falling back: %s', async error => {
+    const d = deps({ terminate: async () => { throw error } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
+    expect(outcome).toEqual({ ok: false, detail: `could not stop the running codex session: ${error instanceof Error ? error.message : error}` })
     expect(d.calls).toEqual(['holdOpen', 'terminate'])
   })
 

@@ -1,0 +1,88 @@
+# hxe2e installs N=0.4.19-e2e.1 from the fake CDN with the same irm line, over the live 0.4.18-dev.win1 daemon (08:42:24)
+   status     ● running · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   pid        3148
+Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  Downloading Harness 0.4.19-e2e.1...
+  OK Harness 0.4.19-e2e.1 -> C:\Users\hxe2e\.harness\cli\0.4.19-e2e.1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  Moving the running Harness from 0.4.18-dev.win1 to 0.4.19-e2e.1 (your agents keep running)...
+  machine stopped (pid 3148).
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● started · this computer only (not signed in)
+   version    v0.4.19-e2e.1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        2312
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.
+  harnessd is registered with Task Scheduler already (Harness harnessd (hxe2e)); nothing to change.
+  
+    machine · remote machine
+    ─────────────────────────────────────
+     status     ● running · this computer only (not signed in)
+     version    v0.4.19-e2e.1
+     backend    not signed in · harness login
+     account    prod
+     state      ~\.harness\cli\data
+     auth       ~\.harness\auth
+     agents     0 available
+     pid        2312
+     logs       ~\.harness\cli\data\harness.log
+     dial log   ~\.harness\logs\dial-YYYYMMDD.log
+     local api  http://127.0.0.1:18474
+    ─────────────────────────────────────
+    running in background · stop with: harness stop
+  
+
+  OK harness 0.4.19-e2e.1 installed.
+
+  Set this computer up with three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Useful:
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  harness works in this window now. Terminals that were already open see it once they are reopened.
+exit=0
+0.4.19-e2e.1
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.19-e2e.1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        2312
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+0.4.19-e2e.1
+0.4.18-dev.win1
+0.4.19-e2e.1
+current
+data
+notify.mjs
+real 19.64

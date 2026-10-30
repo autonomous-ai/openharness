@@ -1,0 +1,28 @@
+12:31:12.740 before: 3 live rows; all rows 29
+12:31:12.741 {"id":"20d8966b…","engine":"claude","pane":"%2002","status":"active"}
+12:31:12.741 {"id":"cd88c448…","engine":"codex","pane":"%2003","status":"active"}
+12:31:12.741 {"id":"069267c4…","engine":"terminal","pane":"%2004","status":"active"}
+2026-10-15 05:31:13 identities before: 20d8966b 9456 w:134365409702318334; cd88c448 11376 w:134365409707888617; 069267c4  
+2026-10-15 08:31:13 clock moved +3h
+15:31:33.688 plus3h: 3 live rows; all rows 29
+15:31:33.689 {"id":"20d8966b…","engine":"claude","pane":"%2002","status":"active"}
+15:31:33.689 {"id":"cd88c448…","engine":"codex","pane":"%2003","status":"active"}
+15:31:33.689 {"id":"069267c4…","engine":"terminal","pane":"%2004","status":"active"}
+15:31:33.690 PASS plus3h: claude 20d8966b same id, pane and engine — %2002 claude active
+15:31:33.690 PASS plus3h: codex cd88c448 same id, pane and engine — %2003 codex active
+15:31:33.690 PASS plus3h: terminal 069267c4 same id, pane and engine — %2004 terminal active
+15:31:33.690 PASS plus3h: no new live rows — 3 → 3
+15:31:33.690 SUMMARY 4/4 passed
+2026-10-15 08:31:34 identities at +3h: 20d8966b 9456 w:134365409702318334; cd88c448 11376 w:134365409707888617; 069267c4  
+2026-10-15 05:31:34 clock moved back (-3h); stopwatch 21 s
+12:31:49.519 back: 3 live rows; all rows 29
+12:31:49.521 {"id":"20d8966b…","engine":"claude","pane":"%2002","status":"active"}
+12:31:49.521 {"id":"cd88c448…","engine":"codex","pane":"%2003","status":"active"}
+12:31:49.521 {"id":"069267c4…","engine":"terminal","pane":"%2004","status":"active"}
+12:31:49.522 PASS back: claude 20d8966b same id, pane and engine — %2002 claude active
+12:31:49.522 PASS back: codex cd88c448 same id, pane and engine — %2003 codex active
+12:31:49.522 PASS back: terminal 069267c4 same id, pane and engine — %2004 terminal active
+12:31:49.522 PASS back: no new live rows — 3 → 3
+12:31:49.522 SUMMARY 4/4 passed
+2026-10-15 05:31:49 identities after: 20d8966b 9456 w:134365409702318334; cd88c448 11376 w:134365409707888617; 069267c4  
+2026-10-15 05:31:49 now: 2026-10-15T12:31:49Z

@@ -14,10 +14,13 @@
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { homedir, uptime, userInfo } from 'node:os'
+import { dirname, isAbsolute, join, win32 } from 'node:path'
 
-export type PlatformName = 'launchd' | 'systemd'
+export type PlatformName = 'launchd' | 'systemd' | 'taskscheduler'
+
+/** How each is named to a person. */
+export const PLATFORM_LABEL: Record<PlatformName, string> = { launchd: 'launchd', systemd: 'systemd', taskscheduler: 'Task Scheduler' }
 
 /**
  * Set by the definition, so the master knows the platform runs it and says so in its status file. The
@@ -55,9 +58,9 @@ export const STOP_TIMEOUT_S = 10
 /** A launchctl or systemctl call that takes longer than this is reported as failed, never waited on. */
 export const COMMAND_TIMEOUT_MS = 30_000
 
-/** The platform that would supervise harnessd on this operating system; null where neither runs. */
+/** The platform that would supervise harnessd on this operating system; null where none runs. */
 export function platformFor(os: NodeJS.Platform): PlatformName | null {
-  return os === 'darwin' ? 'launchd' : os === 'linux' ? 'systemd' : null
+  return os === 'darwin' ? 'launchd' : os === 'linux' ? 'systemd' : os === 'win32' ? 'taskscheduler' : null
 }
 
 /** The platform running this master, as its definition says; null when `harness start` or the desktop
@@ -77,6 +80,8 @@ export interface ServiceDefinition {
   home: string
   /** Variables the master needs beside `PLATFORM_ENV`, already chosen by the caller. */
   env: Record<string, string>
+  /** Windows: `bin\harness-launch.exe`, what the scheduled task runs (lib/windows/installLayout.ts `harnessLaunchPath`). */
+  launcherPath?: string
 }
 
 /** A path or value with a control character in it cannot be written into a unit file, and has no
@@ -217,6 +222,151 @@ WantedBy=default.target
 `
 }
 
+/**
+ * Windows: the per-user tasks `Harness harnessd (<user name>)` and `Harness harnessd at sign-in (<user name>)` in Task
+ * Scheduler's root folder (spec section 3, "Start and keep running"). Task names are machine-wide, and a task folder
+ * one user creates can refuse another standard user, so the name carries the user and there is no `\Harness\` folder.
+ * Task Scheduler does not run the master as launchd and systemd do; it starts `harness start --if-down` through the
+ * windowless launcher every five minutes, and `harness start --if-down --at-logon` at logon, which start the master
+ * when none runs (lib/startIfDown.ts) and do nothing otherwise. That is what stands in for KeepAlive and Restart=: a
+ * master that dies is back within five minutes.
+ *
+ * Two tasks, because Task Scheduler runs a task's actions whatever trigger fired, and the logon start is the one that
+ * forgets a `harness stop`, as launchd loads an agent booted out at the next login. The five-minute start honours it.
+ * The boot time alone did not do: with Fast Startup, on by default, Shut down keeps the kernel's uptime, so a stop
+ * outlived a Shut down and the next power-on (final review R1b-2).
+ *
+ * No administrator rights: InteractiveToken runs it as the user, only while they are signed in, with no password stored.
+ * The principal names no user: schtasks registers it for the user who creates it, exactly. A name built from
+ * USERDOMAIN is not that user over SSH, where OpenSSH sets USERDOMAIN to WORKGROUP and schtasks refuses
+ * `WORKGROUP\admin` ("No mapping between account names and security IDs", Windows 11, 2026-10-16). The logon
+ * trigger names the user by SID, as whoami gives it: without a user it would fire at anyone's logon.
+ * IgnoreNew: a start still running when the next one is due is not doubled. No time limit, though each start lasts
+ * seconds: the launcher exits once it has started the CLI, and the master it starts is outside the task's job.
+ * Priority 4, normal: Task Scheduler's default, 7, starts the task below normal priority (and lower I/O and memory
+ * priority), and a process Windows starts without a class of its own takes its parent's, so the daemon and every
+ * agent it starts ran below normal (final review R1b-1). In the XML rather than in harness-launch: the text change
+ * makes `current` false, so the next `harness start` or `harness service install` (which install.ps1 runs on every
+ * install) registers the task again, and an install whose launcher is older is covered as well.
+ * The time trigger's start is fixed, so the same install writes the same text and `current` can compare it.
+ */
+/** The task of [user], the bare user name (USERNAME): `Harness harnessd (<name>)`; a `DOMAIN\` before it is left out. */
+export function taskName(user: string): string {
+  return `Harness harnessd (${user.slice(user.lastIndexOf('\\') + 1)})`
+}
+/** The logon task of [user], named as `taskName` names the other: `Harness harnessd at sign-in (<name>)`. */
+export function logonTaskName(user: string): string {
+  return `Harness harnessd at sign-in (${user.slice(user.lastIndexOf('\\') + 1)})`
+}
+/** What the logon task adds to `harness start --if-down`: forget a `harness stop` made before this logon. */
+export const AT_LOGON_FLAG = '--at-logon'
+export const TASK_REPEAT = 'PT5M'
+/** In the data folder: the definition as written (schtasks registers it from there), and a stop to honour. */
+export const TASK_FILE = 'harnessd-task.xml'
+export const LOGON_TASK_FILE = 'harnessd-logon-task.xml'
+export const TASK_STOPPED_FILE = 'harnessd-stopped.json'
+
+export interface TaskDefinition {
+  launcherPath: string
+  /** The `~\.harness` the launcher resolves its pointers in (`--root`). */
+  root: string
+  home: string
+  logFile: string
+  /** The SID of the user whose logon starts it (`whoamiSid`). */
+  sid: string
+  /** The logon task (`harness start --if-down --at-logon` at this user's logon), not the five-minute one. */
+  atLogon?: boolean
+}
+
+const SID = /^S-1-\d+(-\d+)+$/
+/** `whoami /user /fo csv /nh`: one line, `"<DOMAIN\name>","<SID>"`. */
+export const WHOAMI_ARGS = ['/user', '/fo', 'csv', '/nh']
+
+/** The SID in what `whoami /user /fo csv /nh` printed: its last column, as a name may hold a comma. */
+export function whoamiSid(stdout: string): string | null {
+  const sid = /"([^"]*)"\s*$/.exec(stdout.trim())?.[1]
+  return sid && SID.test(sid) ? sid : null
+}
+
+export function taskSchedulerXml(opts: TaskDefinition): string {
+  for (const [what, path] of [['launcher', opts.launcherPath], ['root', opts.root], ['home', opts.home], ['log', opts.logFile]] as const) {
+    if (!win32.isAbsolute(path) || CONTROL.test(path)) throw new Error(`the ${what} path for the task must be absolute, on one line: ${JSON.stringify(path)}`)
+  }
+  // Quoted for the launcher's own command line: a quote inside cannot be.
+  if (opts.root.includes('"')) throw new Error(`the root for the task cannot hold a quote: ${JSON.stringify(opts.root)}`)
+  if (!SID.test(opts.sid)) throw new Error(`the task needs the user it runs for, as a SID: ${JSON.stringify(opts.sid)}`)
+  // UTF-16, and written so (PlatformService.write): schtasks /Create /XML refused a UTF-8 file as malformed, with
+  // a BOM ("incorrect document syntax") or without ("unable to switch the encoding"), and a UTF-16 file that
+  // declares UTF-8; it took UTF-16LE with a BOM declaring UTF-16 (Windows 11 ARM64, 2026-10-16).
+  const trigger = opts.atLogon
+    ? `    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${opts.sid}</UserId>
+    </LogonTrigger>`
+    : `    <TimeTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>${TASK_REPEAT}</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>`
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<!-- harnessd, the Harness daemon, under Task Scheduler. Written by "harness service install" and removed by
+     "harness service uninstall"; "harness service status" says what Task Scheduler has registered. -->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>harnessd, the Harness daemon${opts.atLogon ? ', at sign-in' : ''}. Its log: ${xml(opts.logFile)}</Description>
+  </RegistrationInfo>
+  <Triggers>
+${trigger}
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>${xml(opts.launcherPath)}</Command>
+      <Arguments>${xml(`--root "${opts.root}" -- start --if-down${opts.atLogon ? ` ${AT_LOGON_FLAG}` : ''}`)}</Arguments>
+      <WorkingDirectory>${xml(opts.home)}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+`
+}
+
+/** A stop written down since this computer last started (within two minutes of its boot time, which is read
+ *  from the uptime and moves by a second or two). The logon task forgets a stop in any case (`AT_LOGON_FLAG`):
+ *  with Fast Startup the uptime runs on through a Shut down. */
+export function stoppedThisBoot(text: string | null, bootMs: number): boolean {
+  if (text === null) return false
+  try {
+    const { boot } = JSON.parse(text) as { boot?: unknown }
+    return typeof boot === 'number' && Math.abs(boot - bootMs) < 120_000
+  } catch {
+    return false
+  }
+}
+
+/** When this computer started, ms since the epoch. */
+export const bootTimeMs = (): number => Date.now() - uptime() * 1000
+
 /** A launchctl, systemctl or loginctl run to its end. `error`: it could not be run at all. */
 export interface CommandResult {
   status: number | null
@@ -231,13 +381,20 @@ export interface PlatformDeps {
   run(command: string, args: string[]): CommandResult
   /** A file's text, or null when it cannot be read. */
   readFile(path: string): string | null
-  /** Write whole and rename into place, making the folder first. */
-  writeFile(path: string, content: string): void
+  /** Write whole and rename into place, making the folder first. `utf16le`: with its byte order mark, as
+   *  schtasks takes a task's XML; UTF-8 otherwise. */
+  writeFile(path: string, content: string, encoding?: 'utf16le'): void
   removeFile(path: string): void
   uid: number
   home: string
   /** `$XDG_CONFIG_HOME`, where systemd looks for user units first; `~/.config` when unset. */
   configHome?: string
+  /** Windows: the user name (USERNAME, no domain), which names the task. */
+  user?: string
+  /** Windows: the data folder, where the task's definition and a stop are written. `~/.harness/cli/data` when unset. */
+  dataDir?: string
+  /** When this computer started (`bootTimeMs`). */
+  bootTime?: () => number
 }
 
 /** This process's user id; 0 where Node has no notion of one. */
@@ -249,7 +406,7 @@ export function currentUid(proc: { getuid?: () => number } = process): number {
  * The real thing: commands looked up on `env.PATH` (Node searches the PATH of the environment it is
  * given), files on disk. The tests hand it a PATH holding only fake binaries and a temporary home.
  */
-export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: number; home?: string } = {}): PlatformDeps {
+export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: number; home?: string; dataDir?: string } = {}): PlatformDeps {
   const env = options.env ?? process.env
   const configHome = env.XDG_CONFIG_HOME
   return {
@@ -258,18 +415,31 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
       const result = spawnSync(command, args, { env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 })
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error.message } : {}) }
     },
-    readFile: (path) => { try { return readFileSync(path, 'utf8') } catch { return null } },
-    writeFile: (path, content) => {
+    readFile: (path) => {
+      try {
+        const bytes = readFileSync(path)
+        // A task's XML, written as UTF-16 with its byte order mark (below).
+        return bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.subarray(2).toString('utf16le') : bytes.toString('utf8')
+      } catch {
+        return null
+      }
+    },
+    writeFile: (path, content, encoding) => {
       mkdirSync(dirname(path), { recursive: true })
       const temp = `${path}.${process.pid}.tmp`
+      const bytes = encoding === 'utf16le' ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, 'utf16le')]) : content
       // Not writable by others: launchd skips a plist with "dubious permissions".
-      writeFileSync(temp, content, { mode: 0o644 })
+      writeFileSync(temp, bytes, { mode: 0o644 })
       renameSync(temp, path)
     },
     removeFile: (path) => rmSync(path, { force: true }),
     uid: options.uid ?? currentUid(),
     home: options.home ?? homedir(),
     ...(configHome && isAbsolute(configHome) ? { configHome } : {}),
+    // No USERDOMAIN: OpenSSH sets it to WORKGROUP (see taskSchedulerXml).
+    ...(env.USERNAME ? { user: env.USERNAME } : {}),
+    ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+    bootTime: bootTimeMs,
   }
 }
 
@@ -331,21 +501,72 @@ export class PlatformService {
     return this.os ? OS_SYSTEMD_UNIT : SYSTEMD_UNIT
   }
 
+  private get dataDir(): string {
+    return this.deps.dataDir ?? join(this.deps.home, '.harness', 'cli', 'data')
+  }
+
+  private get stoppedFile(): string {
+    return join(this.dataDir, TASK_STOPPED_FILE)
+  }
+
+  /** Windows: the logon task's definition, beside the five-minute task's (`file`). */
+  get logonFile(): string {
+    return join(this.dataDir, LOGON_TASK_FILE)
+  }
+
+  /** Windows: the logon task's name, beside the five-minute task's (`target`). */
+  get logonTarget(): string {
+    return logonTaskName(this.taskUser)
+  }
+
+  /** Windows: the user name that names the task, the one source for it: the deps' user, else this process's. */
+  private get taskUser(): string {
+    return this.deps.user ?? userInfo().username
+  }
+
+  private sidRead: string | undefined
+
+  /** Windows: this user's SID, for the task's logon trigger. Asked once: it is this process's for as long as it runs. */
+  private get sid(): string {
+    if (this.sidRead) return this.sidRead
+    const result = this.deps.run('whoami', WHOAMI_ARGS)
+    const sid = result.status === 0 && !result.error ? whoamiSid(result.stdout) : null
+    const what = `whoami ${WHOAMI_ARGS.join(' ')}`
+    if (!sid) throw new Error(`Harness could not tell which Windows user this is: ${result.status === 0 && !result.error ? `${what} printed no SID` : failure('whoami', WHOAMI_ARGS, result)}`)
+    this.sidRead = sid
+    return sid
+  }
+
   /** Where the definition lives. */
   get file(): string {
     if (this.os) return OS_UNIT_FILE
+    if (this.platform === 'taskscheduler') return join(this.dataDir, TASK_FILE)
     return this.platform === 'launchd'
       ? join(this.deps.home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
       : join(this.deps.configHome ?? join(this.deps.home, '.config'), 'systemd', 'user', SYSTEMD_UNIT)
   }
 
-  /** What launchctl or systemctl is told to act on. */
+  /** What launchctl, systemctl or schtasks is told to act on. */
   get target(): string {
+    if (this.platform === 'taskscheduler') return taskName(this.taskUser)
     return this.platform === 'launchd' ? `gui/${this.deps.uid}/${LAUNCHD_LABEL}` : this.unit
   }
 
   render(definition: ServiceDefinition): string {
+    if (this.platform === 'taskscheduler') return this.renderTask(definition, false)
     return this.platform === 'launchd' ? launchdPlist(definition) : systemdUnit(definition)
+  }
+
+  private renderTask(definition: ServiceDefinition, atLogon: boolean): string {
+    const launcherPath = definition.launcherPath ?? ''
+    // The launcher is `<root>\bin\harness-launch.exe` (lib/windows/installLayout.ts `harnessLaunchPath`).
+    return taskSchedulerXml({ launcherPath, root: win32.dirname(win32.dirname(launcherPath)), home: definition.home, logFile: definition.logFile, sid: this.sid, atLogon })
+  }
+
+  /** What is written where: the definition, and on Windows the logon task's beside it. */
+  private definitions(definition: ServiceDefinition): Array<[path: string, content: string]> {
+    if (this.platform !== 'taskscheduler') return [[this.file, this.render(definition)]]
+    return [[this.file, this.renderTask(definition, false)], [this.logonFile, this.renderTask(definition, true)]]
   }
 
   installed(): boolean {
@@ -363,28 +584,74 @@ export class PlatformService {
     if (this.os) return this.installed()
     const content = this.deps.readFile(this.file)
     if (content === null) return false
+    if (this.platform === 'taskscheduler') return content.includes(`Its log: ${xml(logFile)}</Description>`)
     return this.platform === 'launchd'
       ? content.includes(`<key>StandardOutPath</key>\n\t<string>${xml(logFile)}</string>\n`)
       : content.includes(`\nStandardOutput=append:${pathValue(logFile)}\n`)
   }
 
-  /** The definition on disk is the one this install would write. */
-  current(definition: ServiceDefinition): boolean {
-    if (this.os) return true // the package's, not this install's to compare
-    return this.deps.readFile(this.file) === this.render(definition)
+  /**
+   * Task Scheduler only: the task registered under this user's name runs the daemon whose log is `logFile`, as schtasks
+   * itself has it. For a definition file that is gone while its task is not (an install that stopped half way, or a data
+   * folder emptied by hand): `harness uninstall` must still find that task, and still only this data folder's, by the
+   * same description `ownedBy` reads (B5.9 review, I3). schtasks may print a quote or an apostrophe as it is. Anything
+   * but a clear answer is no.
+   */
+  registeredFor(logFile: string): boolean {
+    if (this.platform !== 'taskscheduler') return false
+    const plain = logFile.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Either task: a logon task left when the five-minute one is gone is this data folder's too (re-review N5).
+    return [this.target, this.logonTarget].some((name) => {
+      const result = this.deps.run('schtasks', ['/Query', '/TN', name, '/XML'])
+      if (result.error || result.status !== 0) return false
+      // Written into a pipe, schtasks's XML may come as UTF-16: the text reads the same without the NULs.
+      const text = result.stdout.replace(/\u0000/g, '')
+      return [xml(logFile), plain].some((form) => text.includes(`Its log: ${form}</Description>`))
+    })
   }
 
-  /** Write the definition when it differs from the one on disk; says whether it did. */
+  /** The definition on disk is the one this install would write (on Windows, both tasks'). */
+  current(definition: ServiceDefinition): boolean {
+    if (this.os) return true // the package's, not this install's to compare
+    return this.definitions(definition).every(([path, content]) => this.deps.readFile(path) === content)
+  }
+
+  /**
+   * Write the definition when it differs from the one on disk; says whether it did. On Windows both tasks are written
+   * when either differs, so an install from before the logon task had one of its own gets it with the next
+   * registration (`start(true)`, `register`).
+   */
   write(definition: ServiceDefinition): boolean {
     if (this.os) return false
-    const content = this.render(definition)
-    if (this.deps.readFile(this.file) === content) return false
-    this.deps.writeFile(this.file, content)
+    const wanted = this.definitions(definition)
+    if (wanted.every(([path, content]) => this.deps.readFile(path) === content)) return false
+    for (const [path, content] of wanted) {
+      // schtasks takes a task's XML as UTF-16 only (taskSchedulerXml).
+      if (this.platform === 'taskscheduler') this.deps.writeFile(path, content, 'utf16le')
+      else this.deps.writeFile(path, content)
+    }
     return true
   }
 
   inspect(): PlatformState {
     const base = { platform: this.platform, file: this.file, target: this.target, installed: this.installed(), linger: null, unreachable: null }
+    if (this.platform === 'taskscheduler') {
+      const args = ['/Query', '/TN', this.target, '/XML']
+      const result = this.deps.run('schtasks', args)
+      const none = { ...base, registered: false, pid: null, state: null, failed: false, lastExit: null }
+      if (result.error) return { ...none, unreachable: failure('schtasks', args, result) }
+      if (result.status !== 0) return none
+      // Written into a pipe, schtasks's XML may come as UTF-16: the tags read the same without the NULs.
+      const text = result.stdout.replace(/\u0000/g, '')
+      const disabled = /<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/.test(text)
+      // Registered means both tasks: with the logon task gone (deleted by hand), `harness service install` registers
+      // them again rather than finding nothing to change (re-review N5).
+      const logonArgs = ['/Query', '/TN', this.logonTarget]
+      const logon = this.deps.run('schtasks', logonArgs)
+      if (logon.error) return { ...none, unreachable: failure('schtasks', logonArgs, logon) }
+      // No pid: the task starts the master and is done; the pid file names it.
+      return { ...base, registered: logon.status === 0, pid: null, state: disabled ? 'disabled' : 'enabled', failed: false, lastExit: null }
+    }
     if (this.platform === 'launchd') {
       const result = this.launchctl('print', this.target)
       if (result.error) return { ...base, registered: false, pid: null, state: null, failed: false, lastExit: null, unreachable: failure('launchctl', ['print', this.target], result) }
@@ -425,6 +692,11 @@ export class PlatformService {
    * `systemctl --user` needs the user's manager.
    */
   preflight(): Outcome {
+    if (this.platform === 'taskscheduler') {
+      const args = ['/Query', '/TN', this.target]
+      const result = this.deps.run('schtasks', args)
+      return result.error ? { ok: false, detail: `${failure('schtasks', args, result)} — Task Scheduler could not be asked` } : { ok: true }
+    }
     if (this.platform === 'launchd') {
       const result = this.launchctl('print', `gui/${this.deps.uid}`)
       return result.status === 0 ? { ok: true } : { ok: false, detail: `${failure('launchctl', ['print', `gui/${this.deps.uid}`], result)} — launchd runs a user agent only for a user logged in at the screen` }
@@ -436,6 +708,17 @@ export class PlatformService {
    *  systemd enables the unit and starts it. */
   register(): Outcome {
     if (this.os) return { ok: false, detail: OS_OWNS_IT }
+    // Registered and nothing more: the caller runs it once it has let go of the spawn lock, which the task's own
+    // `harness start --if-down` takes (lib/serviceCommand.ts).
+    if (this.platform === 'taskscheduler') {
+      // The five-minute task first: its file is the one `installed` and `ownedBy` read.
+      const created = this.checked('schtasks', ['/Create', '/TN', this.target, '/XML', this.file, '/F'])
+      if (!created.ok) return created
+      const logon = this.checked('schtasks', ['/Create', '/TN', this.logonTarget, '/XML', this.logonFile, '/F'])
+      // No half registration: the five-minute task goes again, so the caller's "nothing was changed" holds (re-review N4).
+      if (!logon.ok) this.deps.run('schtasks', ['/Delete', '/TN', this.target, '/F'])
+      return logon
+    }
     if (this.platform === 'launchd') {
       // A job someone disabled stays disabled through a bootstrap; installing is asking for it.
       const enabled = this.launchctl('enable', this.target)
@@ -451,6 +734,14 @@ export class PlatformService {
    * loaded is loaded again from the new file, and systemd rereads it.
    */
   start(refreshed: boolean): Outcome {
+    if (this.platform === 'taskscheduler') {
+      if (refreshed) {
+        const created = this.register()
+        if (!created.ok) return created
+      }
+      this.deps.removeFile(this.stoppedFile)
+      return this.checked('schtasks', ['/Run', '/TN', this.target])
+    }
     if (this.platform === 'launchd') {
       const loaded = this.launchctl('print', this.target).status === 0
       if (loaded && !refreshed) return this.checked('launchctl', ['kickstart', this.target])
@@ -483,6 +774,12 @@ export class PlatformService {
    * ended none. The same goes for `restart` and `disable --now`, so nothing here uses them.
    */
   stop(): Outcome {
+    if (this.platform === 'taskscheduler') {
+      // The task does not run the master, so there is nothing of it to stop: `harness stop` stops the daemon itself
+      // (lib/daemonStop.ts). Written down, so the five-minute starts leave it stopped until this computer starts again.
+      this.deps.writeFile(this.stoppedFile, `${JSON.stringify({ boot: (this.deps.bootTime ?? bootTimeMs)() })}\n`)
+      return { ok: true }
+    }
     if (this.platform === 'launchd') {
       if (this.launchctl('print', this.target).status !== 0) return { ok: true }
       return this.checked('launchctl', ['bootout', this.target])
@@ -497,6 +794,32 @@ export class PlatformService {
    *  stopped all the same. */
   unregister(): Outcome {
     if (this.os) return { ok: false, detail: OS_OWNS_IT }
+    if (this.platform === 'taskscheduler') {
+      // The daemon keeps running: Task Scheduler only ever started it.
+      // Each task asked on its own: `inspect` counts the pair, and either may be there alone.
+      const mainArgs = ['/Query', '/TN', this.target, '/XML']
+      const main = this.deps.run('schtasks', mainArgs)
+      // schtasks could not be asked (not there, or past COMMAND_TIMEOUT_MS): the task may still be registered, and
+      // removing its file would leave a task that starts harnessd at every logon with nothing on disk to say so.
+      if (main.error) return { ok: false, detail: failure('schtasks', mainArgs, main) }
+      if (main.status === 0) {
+        const deleted = this.checked('schtasks', ['/Delete', '/TN', this.target, '/F'])
+        if (!deleted.ok) return deleted
+      }
+      // The logon task: asked on its own, as an install from before it had none, and one that stopped half way may
+      // have only one of the two.
+      const logonArgs = ['/Query', '/TN', this.logonTarget]
+      const logon = this.deps.run('schtasks', logonArgs)
+      if (logon.error) return { ok: false, detail: failure('schtasks', logonArgs, logon) }
+      if (logon.status === 0) {
+        const deleted = this.checked('schtasks', ['/Delete', '/TN', this.logonTarget, '/F'])
+        if (!deleted.ok) return deleted
+      }
+      this.deps.removeFile(this.file)
+      this.deps.removeFile(this.logonFile)
+      this.deps.removeFile(this.stoppedFile)
+      return { ok: true }
+    }
     if (this.platform === 'launchd') {
       const stopped = this.stop()
       if (!stopped.ok) return stopped
@@ -522,6 +845,7 @@ export class PlatformService {
   discard(): void {
     if (this.os) return
     this.deps.removeFile(this.file)
+    if (this.platform === 'taskscheduler') this.deps.removeFile(this.logonFile)
     // Best effort: a manager that could not take the unit may not take a reload either.
     if (this.platform === 'systemd') this.deps.run('systemctl', ['--user', 'daemon-reload'])
   }

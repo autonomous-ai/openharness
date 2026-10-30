@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/connected_semantics.dart';
 
@@ -9,10 +10,11 @@ class _Binding extends AutomatedTestWidgetsFlutterBinding
     with ConnectedSemanticsBinding {
   bool guarded = true;
   final batches = <Map<int, Map<Symbol, dynamic>>>[];
+  final customActions = <int, Map<Symbol, dynamic>>{};
 
   @override
   ui.SemanticsUpdateBuilder createPlatformSemanticsUpdateBuilder() =>
-      _RecordingBuilder(batches);
+      _RecordingBuilder(batches, customActions);
 
   @override
   ui.SemanticsUpdateBuilder createSemanticsUpdateBuilder() => guarded
@@ -21,8 +23,9 @@ class _Binding extends AutomatedTestWidgetsFlutterBinding
 }
 
 class _RecordingBuilder implements ui.SemanticsUpdateBuilder {
-  _RecordingBuilder(this.batches);
+  _RecordingBuilder(this.batches, this.customActions);
   final List<Map<int, Map<Symbol, dynamic>>> batches;
+  final Map<int, Map<Symbol, dynamic>> customActions;
   final nodes = <int, Map<Symbol, dynamic>>{};
   final delegate = ui.SemanticsUpdateBuilder();
 
@@ -33,6 +36,9 @@ class _RecordingBuilder implements ui.SemanticsUpdateBuilder {
         nodes[call.namedArguments[#id] as int] = Map.of(call.namedArguments);
         return Function.apply(delegate.updateNode, [], call.namedArguments);
       case #updateCustomAction:
+        customActions[call.namedArguments[#id] as int] = Map.of(
+          call.namedArguments,
+        );
         return Function.apply(
           delegate.updateCustomAction,
           [],
@@ -111,6 +117,7 @@ void main() {
   setUp(() {
     binding.guarded = true;
     binding.batches.clear();
+    binding.customActions.clear();
   });
   tearDown(() {
     debugDefaultTargetPlatformOverride = null;
@@ -259,6 +266,135 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     }
   });
+
+  for (final (changeWhileDisabled, disableBeforeFrame) in [
+    (false, false),
+    (true, false),
+    (false, true),
+  ]) {
+    axTest('a fresh native bridge receives the retained semantics tree '
+        '(change while disabled: $changeWhileDisabled, '
+        'disable before frame: $disableBeforeFrame)', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final label = ValueNotifier('Initial activity');
+      const activityKey = ValueKey('retained-activity');
+      const controlKey = ValueKey('retained-control');
+      try {
+        tester.platformDispatcher.semanticsEnabledTestValue = true;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Column(
+                children: [
+                  Semantics(
+                    key: controlKey,
+                    container: true,
+                    label: 'Unchanged control',
+                    button: true,
+                    onTap: () {},
+                    customSemanticsActions: {
+                      const CustomSemanticsAction(label: 'Inspect task'): () {},
+                    },
+                    child: const SizedBox(width: 100, height: 40),
+                  ),
+                  ValueListenableBuilder(
+                    valueListenable: label,
+                    builder: (context, value, _) => Semantics(
+                      key: activityKey,
+                      container: true,
+                      label: value,
+                      child: const SizedBox(width: 100, height: 40),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(_disconnectedUpdates(binding.batches), isEmpty);
+        final root =
+            binding.renderViews.single.owner!.semanticsOwner!.rootSemanticsNode;
+        final controlId = tester.getSemantics(find.byKey(controlKey)).id;
+        final activityId = tester.getSemantics(find.byKey(activityKey)).id;
+
+        // Native disable destroys the bridge, but an outstanding framework
+        // handle keeps its owner, IDs and clean nodes alive. Any updates in
+        // this interval are dropped by native and must not count as delivered.
+        tester.platformDispatcher.semanticsEnabledTestValue = false;
+        if (changeWhileDisabled) label.value = 'Changed while disabled';
+        await tester.pumpAndSettle();
+        expect(binding.semanticsEnabled, isTrue);
+        expect(
+          binding.renderViews.single.owner!.semanticsOwner!.rootSemanticsNode,
+          same(root),
+        );
+        expect(tester.getSemantics(find.byKey(controlKey)).id, controlId);
+        expect(tester.getSemantics(find.byKey(activityKey)).id, activityId);
+
+        // Model a newly created, empty native tree. No widget changes are
+        // needed to trigger a full replay when the platform enables semantics.
+        binding.batches.clear();
+        binding.customActions.clear();
+        if (disableBeforeFrame) {
+          tester.platformDispatcher.semanticsEnabledTestValue = true;
+          tester.platformDispatcher.semanticsEnabledTestValue = false;
+          await tester.pumpAndSettle();
+          expect(
+            binding.batches,
+            isEmpty,
+            reason:
+                'A scheduled replay must not target a bridge disabled again',
+          );
+        }
+        tester.platformDispatcher.semanticsEnabledTestValue = true;
+        await tester.pumpAndSettle();
+        expect(
+          binding.batches,
+          isNotEmpty,
+          reason: 'A new native bridge needs the retained root and clean nodes',
+        );
+        expect(binding.batches.first, contains(0));
+        expect(_disconnectedUpdates(binding.batches), isEmpty);
+        final replayed = {for (final batch in binding.batches) ...batch};
+        expect(replayed[controlId]?[#label], 'Unchanged control');
+        expect(
+          replayed[controlId]?[#actions] & ui.SemanticsAction.tap.index,
+          isNonZero,
+        );
+        final customActionIds =
+            replayed[controlId]![#additionalActions] as List<int>;
+        expect(customActionIds, hasLength(1));
+        expect(
+          binding.customActions[customActionIds.single]?[#label],
+          'Inspect task',
+          reason: 'A new native bridge needs the custom action definition too',
+        );
+        expect(
+          replayed[activityId]?[#label],
+          changeWhileDisabled ? 'Changed while disabled' : 'Initial activity',
+        );
+
+        // A later partial leaf update must attach to the replayed tree,
+        // rather than become a substitute native root.
+        label.value = 'Changed after enable';
+        await tester.pumpAndSettle();
+        expect(_disconnectedUpdates(binding.batches), isEmpty);
+        expect(
+          binding.batches.last[activityId]?[#label],
+          'Changed after enable',
+        );
+        expect(binding.batches.last, isNot(contains(0)));
+        expect(binding.batches.last, isNot(contains(controlId)));
+        expect(tester.takeException(), isNull);
+      } finally {
+        tester.platformDispatcher.clearSemanticsEnabledTestValue();
+        semantics.dispose();
+        await tester.pumpWidget(const SizedBox());
+        label.dispose();
+      }
+    });
+  }
 
   testWidgets('unaffected platforms retain the standard builder', (
     tester,

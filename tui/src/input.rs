@@ -1261,7 +1261,24 @@ fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str,
 
 /// The Store's catalog from [machine]. [user_action]: a person opened the Store, the one read that
 /// counts toward its reach; a refresh after an install or a form's own read is automatic.
+/// Where a guest may start on a machine shared with this account: its workspace (kept as that machine's
+/// home) and the folders the owner shares (`guest_folders`).
+pub(crate) fn load_guest_folders(app: &mut App, machine: String) {
+    let Some(link) = app.link(&machine) else { return };
+    let generation = link.generation;
+    app.spawn(async move { link.rpc("guest_folders", json!({}), Duration::from_secs(20)).await }, move |app, reply| {
+        if app.connection_generation(&machine) != Some(generation) { return }
+        let Ok(reply) = reply else { return };
+        if let Some(workspace) = reply.get("workspace").and_then(Value::as_str).filter(|w| w.starts_with('/')) { app.homes.insert(machine.clone(), workspace.to_string()); }
+        let folders = reply.get("folders").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(|f| Some((f.get("path")?.as_str().filter(|p| p.starts_with('/'))?.to_string(), f.get("write") == Some(&Value::Bool(true))))).collect();
+        app.guest_folders.insert(machine, folders);
+    });
+}
+
 pub(crate) fn load_dsh(app: &mut App, machine: String, user_action: bool) {
+    // A guest is listed no harnesses or folders of the owner's there (load_guest_folders says where it may start).
+    if app.fleet.shares.contains_key(&machine) { return }
     let Some(link) = app.link(&machine) else { return };
     let id = machine.clone();
     let mark = loading(format!("dsh {machine}"), true);

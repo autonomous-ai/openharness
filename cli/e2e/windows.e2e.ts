@@ -290,9 +290,8 @@ describe('many windows at once', () => {
 
     // The stop was a stop, and every answer is the one its question asks for. A close asked for while
     // another window's inspect of the same agent was still running was answered with that inspect's
-    // `{ activity }` and the agent left running (measured: still active 10 s later), and an inspect that
-    // ran beside a close came back as the close's `{ closed: true }`: the close service answered any
-    // request for an agent with whatever job was running for it.
+    // `{ activity }` and the agent left running (measured: still active 10 s later). An inspect
+    // beside a close now receives `{ closed: true }` when the close wins (#1454).
     expect(stopped, `${how} answered ${JSON.stringify(stopped)} while other windows asked about the agent`)
       .toMatchObject(how === 'agent_close' ? { closed: true } : { deleted: true })
     const shaped: Record<string, (answer: Row) => boolean> = {
@@ -300,7 +299,7 @@ describe('many windows at once', () => {
       sessions_list: (answer) => Array.isArray(answer.sessions),
       agents_list: (answer) => Array.isArray(answer.agents),
       agent_update: (answer) => answer.agent?.id === agent.id,
-      'agent_close inspect': (answer) => typeof answer.activity === 'string',
+      'agent_close inspect': (answer) => typeof answer.activity === 'string' || answer.closed === true,
       terminal_info: (answer) => typeof answer.path === 'string',
     }
     const misshapen = answers.filter(({ type, answer }) => typeof answer.error !== 'string' && !shaped[type](answer))

@@ -101,6 +101,10 @@ pub struct Pane {
     /// A user requested app-wide control while this pane's passive open was in flight.
     pub takeover_pending: bool,
     pub read_only: bool,
+    /// Taken by another client (`terminal_closed.takenBy`): its last frame stays at this side's size
+    /// and the watcher's frames — at the taker's size — are not drawn, as the desktop app keeps its
+    /// tile, until this side takes it back.
+    pub frozen: bool,
     pub last_alive: Instant,
     pub dirty: bool,
     pub bell: bool,
@@ -472,6 +476,7 @@ impl Pane {
             input_off: false,
             opening: false,
             takeover_pending: false,
+            frozen: false,
             far_sized: false,
             read_only: false,
             last_alive: Instant::now(),
@@ -906,98 +911,42 @@ pub fn inflate(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// ── keys → bytes, the way an xterm would send them ────────────────────────────
-
-fn modifier_param(mods: KeyModifiers) -> u8 {
-    let mut n = 1;
-    if mods.contains(KeyModifiers::SHIFT) { n += 1 }
-    if mods.contains(KeyModifiers::ALT) { n += 2 }
-    if mods.contains(KeyModifiers::CONTROL) { n += 4 }
-    n
-}
+// ── keys → bytes, the way an xterm would send them (the table is harness_term::keys) ──────
 
 pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
+    use harness_term::keys::{encode, Key, Modes, Mods};
     if key.kind == KeyEventKind::Release { return None }
     let mods = key.modifiers;
     // ⌘ (the kitty protocol's SUPER, and HYPER) never reaches a pane, as tmux never sees it: an
     // unbound ⌘C is nothing, not a `c`.
     if mods.intersects(KeyModifiers::SUPER | KeyModifiers::HYPER) { return None }
-    let alt = mods.contains(KeyModifiers::ALT);
-    let ctrl = mods.contains(KeyModifiers::CONTROL);
-    let shift = mods.contains(KeyModifiers::SHIFT);
-    let plain_mods = mods.intersection(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL);
-    let app_cursor = mode.contains(TermMode::APP_CURSOR);
-    let csi = |final_byte: char, fallback_ss3: bool| -> Vec<u8> {
-        if plain_mods.is_empty() || (plain_mods == KeyModifiers::SHIFT && final_byte == 'Z') {
-            if fallback_ss3 && app_cursor { format!("\x1bO{final_byte}").into_bytes() } else { format!("\x1b[{final_byte}").into_bytes() }
-        } else {
-            format!("\x1b[1;{}{final_byte}", modifier_param(plain_mods)).into_bytes()
-        }
-    };
-    let tilde = |code: u8| -> Vec<u8> {
-        if plain_mods.is_empty() { format!("\x1b[{code}~").into_bytes() } else { format!("\x1b[{code};{}~", modifier_param(plain_mods)).into_bytes() }
-    };
-    let with_alt = |mut bytes: Vec<u8>| -> Vec<u8> { if alt { bytes.insert(0, 0x1b) } bytes };
-    Some(match key.code {
-        KeyCode::Char(c) => {
-            if ctrl {
-                let lower = c.to_ascii_lowercase();
-                let byte = match lower {
-                    'a'..='z' => lower as u8 - b'a' + 1,
-                    '@' | ' ' | '2' => 0,
-                    '[' | '3' => 0x1b,
-                    '\\' | '4' => 0x1c,
-                    ']' | '5' => 0x1d,
-                    '^' | '6' => 0x1e,
-                    '_' | '-' | '7' => 0x1f,
-                    '8' | '?' => 0x7f,
-                    '/' => 0x1f,
-                    '`' => 0,
-                    _ => return Some(with_alt(c.to_string().into_bytes())),
-                };
-                with_alt(vec![byte])
-            } else {
-                // S-x is X (a key tmux names M-X arrives here as M-S-x).
-                let c = if shift && c.is_lowercase() { c.to_uppercase().next().unwrap_or(c) } else { c };
-                let mut buf = [0u8; 4];
-                with_alt(c.encode_utf8(&mut buf).as_bytes().to_vec())
-            }
-        }
-        // As the desktop sends it: prompts tell a newline (⇧⏎) from the Return that submits.
-        KeyCode::Enter if shift && !alt && !ctrl => b"\x1b[13;2u".to_vec(),
-        KeyCode::Enter => with_alt(vec![b'\r']),
-        // S-Tab is a Tab (tmux drops the shift without extended keys); BTab is the back tab.
-        KeyCode::Tab => with_alt(vec![b'\t']),
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Backspace => with_alt(if ctrl { vec![0x08] } else { vec![0x7f] }),
-        KeyCode::Esc => with_alt(vec![0x1b]),
-        KeyCode::Up => csi('A', true),
-        KeyCode::Down => csi('B', true),
-        KeyCode::Right => csi('C', true),
-        KeyCode::Left => csi('D', true),
-        KeyCode::Home => csi('H', true),
-        KeyCode::End => csi('F', true),
-        KeyCode::PageUp => tilde(5),
-        KeyCode::PageDown => tilde(6),
-        KeyCode::Insert => tilde(2),
-        KeyCode::Delete => tilde(3),
-        KeyCode::F(n) => match n {
-            1..=4 => {
-                let f = [b'P', b'Q', b'R', b'S'][(n - 1) as usize] as char;
-                if plain_mods.is_empty() { format!("\x1bO{f}").into_bytes() } else { format!("\x1b[1;{}{f}", modifier_param(plain_mods)).into_bytes() }
-            }
-            5 => tilde(15), 6 => tilde(17), 7 => tilde(18), 8 => tilde(19), 9 => tilde(20), 10 => tilde(21), 11 => tilde(23), 12 => tilde(24),
-            // The keypad (KP/ … KP., after F12): its characters, or ESC O x in application
-            // keypad mode (tmux's input_key_defaults).
-            13..=28 => {
-                let i = (n - 13) as usize;
-                if mode.contains(TermMode::APP_KEYPAD) { format!("\x1bO{}", "ojmwxyktuvqrsMpn".as_bytes()[i] as char).into_bytes() }
-                else { with_alt(if i == 13 { vec![b'\n'] } else { vec!["/*-789+456123\n0.".as_bytes()[i]] }) }
-            }
-            _ => return None,
-        },
+    let code = match key.code {
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::BackTab => Key::BackTab,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Esc => Key::Esc,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::Right => Key::Right,
+        KeyCode::Left => Key::Left,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
+        KeyCode::Insert => Key::Insert,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::F(n) => Key::F(n),
         _ => return None,
-    })
+    };
+    let mods = Mods {
+        shift: mods.contains(KeyModifiers::SHIFT),
+        alt: mods.contains(KeyModifiers::ALT),
+        ctrl: mods.contains(KeyModifiers::CONTROL),
+    };
+    let modes = Modes { app_cursor: mode.contains(TermMode::APP_CURSOR), app_keypad: mode.contains(TermMode::APP_KEYPAD) };
+    encode(code, mods, modes)
 }
 
 /// A mouse event at pane-local cell ([col], [row]) (0-based), as the pane's program asked to

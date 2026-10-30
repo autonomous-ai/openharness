@@ -125,3 +125,7 @@ void cable_decoder_reset(cable_decoder_t *d);
 // makes no sense is to step over it.
 void cable_decoder_feed(cable_decoder_t *d, const uint8_t *data, size_t n,
                         cable_frame_cb cb, void *ctx);
+
+// The link has gone quiet with bytes still pending: give up on a partial frame (counted corrupt, the way a bad CRC is)
+// and resync now, delivering any whole frame that sits behind it. Returns true when a partial frame was dropped.
+bool cable_decoder_expire(cable_decoder_t *d, cable_frame_cb cb, void *ctx);

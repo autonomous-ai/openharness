@@ -142,6 +142,75 @@ void main() {
     expect(agentsOf(app, 't2'), ['c', 'new']);
   });
 
+  test(
+    'an agent created for a new tab opens a tab of its own, not the tab picked',
+    () async {
+      final app = await deskApp(
+        _Conn(),
+        opensTerminals: false,
+        tabs: [
+          deskTab('t1', 'Desktop', ['a']),
+          deskTab('t2', 'Docker', ['c']),
+        ],
+      );
+      addTearDown(app.dispose);
+      app.noteDeskTab('t1');
+
+      final error = await app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        deskTabId: 't2',
+        newDeskTab: true,
+      );
+      await pumpEventQueue();
+
+      expect(error, isNull);
+      expect(app.deskTabs, hasLength(3));
+      final made = app.deskTabs.last;
+      expect(agentsOf(app, 't1'), ['a']);
+      expect(agentsOf(app, 't2'), ['c']);
+      expect(agentsOf(app, made.id), ['new']);
+      expect(app.activeDeskTabId, made.id);
+      expect(deskApiOf(app).written.map((op) => op['op']), [
+        'tab.create',
+        'pane.add',
+      ]);
+    },
+  );
+
+  test('a Check status after a lost reply keeps the new tab', () async {
+    final app = await deskApp(
+      _Conn(losesFirstReply: true),
+      opensTerminals: false,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a']),
+      ],
+    );
+    addTearDown(app.dispose);
+    app.noteDeskTab('t1');
+    final attempt = AgentCreationAttempt();
+
+    final lost = await app.createAgent(
+      'm',
+      engine: 'claude',
+      folder: '/work',
+      newDeskTab: true,
+      attempt: attempt,
+    );
+    expect(lost, contains('has not confirmed the new harness yet'));
+    expect(deskApiOf(app).written, isEmpty);
+
+    // Asked about with what it was first made with — the new tab is not asked for again.
+    final checked = await app.checkAgentCreation(attempt);
+    await pumpEventQueue();
+
+    expect(checked, isNull);
+    expect(app.deskTabs, hasLength(2));
+    expect(agentsOf(app, 't1'), ['a']);
+    expect(agentsOf(app, app.deskTabs.last.id), ['new']);
+  });
+
   test('an agent deleted on the phone leaves the tabs it was on', () async {
     final app = await deskApp(
       _Conn(),

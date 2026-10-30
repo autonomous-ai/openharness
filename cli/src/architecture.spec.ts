@@ -94,6 +94,23 @@ function importsFor(path: string, text: string): Array<{ from: string; dynamic: 
 const IN_PROCESS_ONLY = 'services/inline.ts'
 
 /**
+ * The Swarm's doors: the only imports of its code from outside it, each dynamic and taken only while the Swarm is on
+ * (`HARNESS_SWARM`, harnessd/swarmSwitch.ts), or, for the CLI's own commands, only when one is run. A walk passes over
+ * them, so a process with the Swarm off loads none of its code; a static import of the same file is walked.
+ */
+const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
+  // Its side of the core's process, and of the services that act on it when they run there.
+  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts'],
+  // Its side of the services that act on it, in their own processes, and its own service's process, which the master
+  // starts only while it is on (harnessd/services.ts `servicesOn`).
+  'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
+  // `harness super-tab` and git's credential helper in a Swarm session: from the sources every daemon process runs cli.ts.
+  'cli.ts': ['superTabs/command.ts', 'superTabs/gitCredential.ts'],
+}
+/** The Swarm's code (Super Tabs): its folder, its libraries and its service. */
+const isSwarmCode = (file: string): boolean => /^superTabs\//.test(file) || /^lib\/swarm/.test(file) || /^services\/superTabs(Process)?\.ts$/.test(file)
+
+/**
  * The files whose `import()`s the core's walk does not follow: the loader of the other twelve engines' code,
  * which the core loads in its own process only once one of their sessions needs it
  * (docs/design/2026-10-08-other-engines-out-of-core.md). An `import()` of their code anywhere else is followed.
@@ -122,9 +139,9 @@ function closureOf(entry: string): Map<string, number> {
 }
 
 /** Whether the walk follows an import of `target` written in `importer`: every one but an `import()` of
- *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
+ *  `IN_PROCESS_ONLY`, one through a Swarm door (`SWARM_DOORS`), or one written in a lazy loader. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
-  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer))
+  return !dynamic || (target !== IN_PROCESS_ONLY && !SWARM_DOORS[importer]?.includes(target) && !LAZY_LOADERS.has(importer))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -191,6 +208,8 @@ const EDGE: RegExp[] = [
   /^lib\/(normalize|transcriptReader)\.ts$/, /^lib\/sessionSearch\/externals\/(claude|codex)\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^orchestrator\//, /^services\//,
+  // The Swarm (Super Tabs) is a subsystem that can be switched off: the core loads its code only through its doors.
+  /^superTabs\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
   // The grid and saved-API launch builders are models': the core asks it for a launch (ModelsPort.gridLaunch) and keeps
@@ -310,6 +329,44 @@ describe('the daemon\'s shape', () => {
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
   })
+
+  it('the core imports nothing of the Swarm\'s, not even its types: its code is loaded only while it is on', () => {
+    // Dee's rule (v1's last item): the daemon core stays small and reliable, and the Swarm is a subsystem that can be
+    // switched off. What the core needs of it is in core/api.ts; what the Swarm runs in the core's process is
+    // handed in by the core's entry from its doors, imported dynamically and only while the Swarm is on.
+    const wrong = importsIn('core').filter(({ from }) => /(^|\/)superTabs\//.test(from) || /(^|\/)lib\/swarm/.test(from))
+      .map(({ file, from }) => `${file} imports ${from}`)
+    expect(wrong, 'Declare what the core needs of the Swarm in core/api.ts, and hand its code in from superTabs/inCore.ts.').toEqual([])
+    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs\//.test(from))
+    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true }])
+    expect(followed('core/main.ts', 'superTabs/inCore.ts', true)).toBe(false)
+    expect(followed('core/main.ts', 'superTabs/inCore.ts', false)).toBe(true)
+    expect(followed('services/models.ts', 'superTabs/inServices.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  // The review of #1765: with the Swarm off, every core still loaded its skills through the registry, and with every
+  // service in the core's process (`HARNESSD_SERVICES=none`) its retention, observers and grid code, and the agent cleanup
+  // kept its members. Every import of its code from outside it is now a door, and no process's start reaches it.
+  it('with the Swarm off no process loads its code, imports included: its code is reached only through its doors', () => {
+    const resolveFrom = (file: string, from: string): string => {
+      const base = resolve(dirname(join(SRC, file)), from)
+      return relative(SRC, [base.replace(/\.js$/, '.ts'), `${base}.ts`, join(base, 'index.ts')].find((candidate) => { try { return statSync(candidate).isFile() } catch { return false } }) ?? base)
+    }
+    const sources = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
+      ? sources(join(dir, entry.name)) : /\.ts$/.test(entry.name) && !/\.(spec|test|e2e)\.ts$/.test(entry.name) ? [join(dir, entry.name)] : [])
+    const outside = sources('.').filter((file) => !isSwarmCode(file) && !file.startsWith('testing/'))
+    const doors = outside.flatMap((file) => importsFor(file, readFileSync(join(SRC, file), 'utf8'))
+      .map(({ from, dynamic }) => ({ file, target: resolveFrom(file, from), dynamic })).filter(({ target }) => isSwarmCode(target)))
+    expect(doors.filter(({ file, target, dynamic }) => !dynamic || !SWARM_DOORS[file]?.includes(target)).map(({ file, target }) => `${file} imports ${target}`),
+      'Hand the Swarm\'s code in through superTabs/inCore.ts or superTabs/inServices.ts, loaded only while it is on.').toEqual([])
+    expect(doors.map(({ file, target }) => `${file} → ${target}`).sort()).toEqual(Object.entries(SWARM_DOORS).flatMap(([file, targets]) => targets.map((target) => `${file} → ${target}`)).sort())
+    // The core (normal and inline), the master, the services' process and each service: none reaches the Swarm's code.
+    const entries = ['coreProcess.ts', 'leanCoreEntry.ts', 'core/main.ts', 'services/inline.ts', 'leanEntry.ts', 'masterProcess.ts', 'serviceProcess.ts',
+      ...sources('services').filter((file) => /Process\.ts$/.test(file) && !isSwarmCode(file))]
+    for (const entry of entries) expect([...closureOf(entry).keys()].filter(isSwarmCode), entry).toEqual([])
+    // The Swarm's own entries do reach it: the walk passes over a door, and only a door.
+    expect([...closureOf('superTabs/inServices.ts').keys()].filter(isSwarmCode).length).toBeGreaterThan(5)
+  }, WALK_TIMEOUT_MS)
 
   it('live transcript coordination depends on engine contracts, with neutral folding mechanics', () => {
     const owners = new Set(['core/transcripts/attach.ts', 'core/transcripts/ingest.ts', 'core/transcripts/normalizers.ts'])
@@ -485,6 +542,12 @@ describe('the daemon\'s shape', () => {
     }).map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The gateway is the relay, not the core: what it needs of the core is an event in GatewayEvents (src/core/api.ts).').toEqual([])
     expect(importsIn('gateway').some(({ from, typeOnly }) => from === '../core/api.js' && typeOnly)).toBe(true)
+  })
+
+  it('the local socket finds the daemon\'s Windows pipe without the daemon\'s client: no import cycle between them', () => {
+    // daemonEndpoint.ts imports localSocket.ts for the socket's path; the pipe's lookup both use is lib/windows/daemonPipe.ts.
+    expect(closureOf('lib/localSocket.ts').has('lib/daemonEndpoint.ts')).toBe(false)
+    expect(closureOf('lib/localSocket.ts').has('lib/windows/daemonPipe.ts')).toBe(true)
   })
 
   it('the master holds no feature code: Node itself, its own folder, and the log trimmer', () => {

@@ -16,6 +16,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/account_devices.dart' show NewDeviceNotice;
 import '../state/app_state.dart';
+import '../measurement/product_measurement.dart' show AddPhoneOpening;
 import '../ws/ws_conn.dart' show WsRequestFailure, WsRequestTimeout;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
@@ -27,7 +28,8 @@ import 'terminal_prompt.dart';
 ///
 /// **The code first, and few words (owner, 2026-10-13).** Desktop asks for an
 /// account before its workspace opens, so Add Phone opens on its QR: the code,
-/// "Scan with the Harness app.", and the stores for a phone without the app.
+/// "Scan with the Harness mobile app.", and the stores for a phone without
+/// the app.
 /// The phone's welcome leads with Scan QR code (mobile `phone_welcome.dart`):
 /// the scan signs it in to this account with nothing to type, so it cannot
 /// land on another account. No steps, no picture, no "Looking for your phone"
@@ -66,21 +68,72 @@ Future<void> showAddPhoneDialog(
   BuildContext context,
   AppNotifier app, {
   AppKeymap? keymap,
+  AddPhoneOpening? from,
   PhonePairCall? pair,
   PhoneSignInCodeCall? signInCode,
+  bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
-}) => showTerminalPrompt<void>(
-  context,
-  keymap: keymap,
-  builder: (_) => AddPhoneDialog(
-    app: app,
-    pair: pair,
-    signInCode: signInCode ?? app.api.phoneSignInCode,
-    onConnectMachine: onConnectMachine,
-    onManageDevices: onManageDevices,
-  ),
-);
+}) {
+  // Membership is needed only for attribution. Last-seen data can delay this
+  // read, so open the dialog first and hold joins until its snapshot arrives.
+  final account = app.currentUser?.id;
+  final generation = app.accountGeneration;
+  Set<String>? known;
+  final pending = <String>{};
+  var reading =
+      from != null && account != null && !kIsWeb && app.viewer == null;
+  void attribute(String pub) {
+    if (account != app.currentUser?.id ||
+        generation != app.accountGeneration ||
+        app.isGuest ||
+        app.signingIn) {
+      return;
+    }
+    if (reading) {
+      pending.add(pub);
+      return;
+    }
+    final keys = known;
+    if (from != null && keys != null && keys.add(pub)) {
+      app.productMeasurement.addPhonePaired(from);
+    }
+  }
+
+  final dialog = showTerminalPrompt<void>(
+    context,
+    keymap: keymap,
+    builder: (_) => AddPhoneDialog(
+      app: app,
+      pair: pair,
+      signInCode: signInCode ?? app.api.phoneSignInCode,
+      signInUnavailable:
+          signInUnavailable ?? () => app.api.phoneSignInUnavailable,
+      onConnectMachine: onConnectMachine,
+      onManageDevices: onManageDevices,
+      onPhoneJoined: (device) => attribute(device.pub),
+    ),
+  );
+  if (reading) {
+    unawaited(() async {
+      try {
+        final devices = await app.loadDevices();
+        if (devices != null) {
+          known = {for (final device in devices.devices) device.pub};
+        }
+      } catch (_) {
+        // A missing snapshot leaves attribution unknown; Add Phone still works.
+      }
+      reading = false;
+      // These joins happened while open, even if the dialog has since closed.
+      for (final pub in pending) {
+        attribute(pub);
+      }
+      pending.clear();
+    }());
+  }
+  return dialog;
+}
 
 /// Where the QR points. The phone's `ConnectCode` (mobile
 /// `lib/phone/welcome/connect_code.dart`) parses exactly this.
@@ -261,13 +314,21 @@ class AddPhoneDialog extends StatefulWidget {
     required this.app,
     this.pair,
     required this.signInCode,
+    this.signInUnavailable,
     this.onConnectMachine,
     this.onManageDevices,
+    this.onPhoneJoined,
   });
 
   final AppNotifier app;
   final PhonePairCall? pair;
   final PhoneSignInCodeCall signInCode;
+
+  /// Whether a sign-in code cannot be had on this computer at all right now
+  /// ([ApiClient.phoneSignInUnavailable]): on Windows, the Harness daemon's
+  /// private pipe is missing. The QR then goes without one, as with an older
+  /// CLI, and says how the phone signs in instead.
+  final bool Function()? signInUnavailable;
   final VoidCallback? onConnectMachine;
 
   /// "See your phones", beside Done once the phone is in: Machines, at its
@@ -276,6 +337,7 @@ class AddPhoneDialog extends StatefulWidget {
   /// (owner, 2026-10-12). Not "devices": the tab row's Devices is the Harness
   /// hardware. The dialog closes; the caller opens Machines after.
   final VoidCallback? onManageDevices;
+  final ValueChanged<NewDeviceNotice>? onPhoneJoined;
 
   @override
   State<AddPhoneDialog> createState() => _AddPhoneDialogState();
@@ -325,6 +387,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// without one: the phone then asks for an emailed code.
   String? _signIn;
   bool _signInAsked = false;
+
+  /// The last ask found no sign-in code to be had here ([AddPhoneDialog.signInUnavailable]).
+  bool _signInUnavailable = false;
   Timer? _signInTimer;
 
   /// Bumped to start the renewal over (see [_restartSignIn]): an answer to an
@@ -411,8 +476,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// A device joined the account while this was open. A computer is not the
   /// phone; anything else signed in with this account is.
   void _deviceJoined(NewDeviceNotice device) {
-    if (_closed || _ready != null || device.kind == 'machine') return;
-    if (_signedOut) return;
+    if (_closed || device.kind == 'machine' || _signedOut) return;
+    widget.onPhoneJoined?.call(device);
+    if (_ready != null) return;
     _phoneIn(device.label);
   }
 
@@ -588,6 +654,8 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     setState(() {
       _signIn = next?.code;
       _signInAsked = true;
+      _signInUnavailable =
+          next == null && (widget.signInUnavailable?.call() ?? false);
     });
     if (_ready != null || _stopped) return;
     final ttl = next?.ttl;
@@ -882,13 +950,23 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ),
       ],
       const SizedBox(height: 14),
-      // The phone's welcome leads with Scan QR code: "the Harness app" is
-      // where to scan, so nobody reaches for the Camera.
+      // The phone's welcome leads with Scan QR code: the Harness mobile app is
+      // where to scan, so nobody reaches for the Camera. "Mobile", because on
+      // this computer "the Harness app" read as the one already open.
       Text(
-        'Scan with the Harness app.',
+        'Scan with the Harness mobile app.',
         textAlign: TextAlign.center,
         style: DesktopChrome.text(size: 15, medium: true),
       ),
+      if (target != null && _signInUnavailable && _signIn == null) ...[
+        const SizedBox(height: 4),
+        Text(
+          'Your phone will ask for a code from your email.',
+          key: const ValueKey('add-phone-email-code'),
+          textAlign: TextAlign.center,
+          style: _note(),
+        ),
+      ],
       const SizedBox(height: 4),
       Wrap(
         alignment: WrapAlignment.center,

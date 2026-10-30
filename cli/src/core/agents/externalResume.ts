@@ -6,12 +6,14 @@ import { externalSessionRequest, externalUnavailable, type ExternalSessionAnswer
 import { externalReservations, externalResumeIds, externalResumePending, type ExternalResumeIntent } from '../../lib/externalResume.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
-import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import { adoptionDecision } from './adopt.js'
 import { heldPaneArgv } from './heldLaunches.js'
 import { createExternalInspector } from './externalInspect.js'
 import { stopExternalOwner } from './externalOwner.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 type Owner = NonNullable<ExternalResumeIntent['owner']>
@@ -24,7 +26,14 @@ const identity = (row: RegisteredSession | undefined) => row && JSON.stringify([
 
 export interface ExternalResumeDeps {
   registry: Pick<typeof registry, 'byAgent' | 'list' | 'openPendingAgent' | 'externalConflict' | 'setExternalResume' | 'setLaunch' | 'finishExternalCancellation'>
-  tmux: Pick<TmuxBackend, 'create' | 'killHeld'> | null
+  /** The backend an adoption's waiting pane opens on (the one new panes are made on); null when there is none.
+   *  One that cannot close a held pane by its token (`killHeld`) opens none. */
+  backend: Pick<TerminalBackend, 'create' | 'killHeld'> | null
+  /** What an adoption answers when [backend] is null: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
+  /** Each runtime's own backend: a cancelled adoption's waiting pane is closed by the one it is on. */
+  backendFor: (runtime: TerminalRuntimeRef) => Pick<TerminalBackend, 'killHeld'> | undefined
   inspect(request: ExternalSessionRequest): Promise<ExternalSessionAnswer>
   waiting(row: RegisteredSession): Promise<boolean>
   generation(): unknown
@@ -35,6 +44,9 @@ export interface ExternalResumeDeps {
   launch(): void
   forget(agentId: string): void
   stopOwner?: typeof stopExternalOwner
+  /** The agent whose conversation [sessionId] is, when a move a dead daemon left may still run its engine (main.ts
+   *  `moveHeld`): adopted, it would get a second engine beside that one. Null for any other. */
+  heldConversation?: (sessionId: string) => string | null
 }
 
 export function createExternalResumes(deps: ExternalResumeDeps) {
@@ -156,11 +168,22 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
   const schedule = () => { if (!timer && !stopped) { timer = setTimeout(() => { timer = undefined; wake() }, 2_000); timer.unref() } }
   const create: CreateAgent = async input => {
     if (stopped || !opened) return { ok: false, error: 'CORE_NOT_READY' }
-    if (!deps.tmux) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    const backend = deps.backend
+    if (!backend?.killHeld) return { ok: false, error: backend ? 'TMUX_UNAVAILABLE' : deps.noBackendCode ?? 'TMUX_UNAVAILABLE' }
     const request = externalSessionRequest({ sessionId: input.resumeSessionId, engine: input.engine })
     if (!request) return { ok: false, error: 'INVALID_SESSION' }
+    const moveHeld = (ids: readonly string[]) => {
+      const agentId = ids.map((id) => deps.heldConversation?.(id) ?? null).find((held) => held !== null)
+      if (!agentId) return null
+      console.warn(moveHeldLine(agentId))
+      return { ok: false as const, error: 'AGENT_BUSY', detail: 'This conversation is held until the daemon restarts.' }
+    }
+    const heldBefore = moveHeld([request.sessionId])
+    if (heldBefore) return heldBefore
     const answer = await inspect(request)
     if (stopped) return { ok: false, error: 'CORE_NOT_READY' }
+    const heldAfter = answer.ok && answer.session ? moveHeld([answer.session.sessionId, ...answer.session.aliases ?? []]) : null
+    if (heldAfter) return heldAfter
     const decision = adoptionDecision(request.sessionId, request.engine, input.takeOver ?? null, answer, held)
     if (!decision.ok && decision.error !== 'SEARCH_UNAVAILABLE'
       && !(decision.error === 'SESSION_BUSY_IN_TERMINAL' && activityUnknown(answer))) return decision
@@ -168,7 +191,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       ...(answer.ok && answer.session ? { session: answer.session } : {}),
       ...(answer.ok && answer.owner && answer.generation ? { owner: { process: answer.owner, generation: answer.generation } } : {}) }
     const result = await createAndRegisterPane({
-      tmuxBackend: { create: req => deps.tmux!.create({ ...req, current: () => !stopped }), kill: runtime => deps.tmux!.killHeld(runtime, intent.token, () => true) },
+      tmuxBackend: { create: req => backend.create({ ...req, current: () => !stopped }), kill: runtime => backend.killHeld!(runtime, intent.token, () => true) },
       registry: deps.registry, engine: input.engine, sessionLabel: buildHarnessSessionLabel(input.engine),
       argv: heldPaneArgv(externalUnavailable().detail, intent.token), cwd: null, externalResume: intent,
       codexHome: input.codexHome, bypassPermission: input.bypassPermission, permissionMode: input.permissionMode,
@@ -188,10 +211,11 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     if (!cancelled) throw new Error('The adoption cancellation could not be saved.')
     const saved = identity(cancelled)
     const owns = () => allowed() && identity(deps.registry.byAgent(initial.agentId)) === saved
-    const panes = cancelled.runtimes.filter(runtime => runtime.backend === 'tmux')
-    if (!deps.tmux || !panes.length) throw new Error('The waiting pane could not be verified.')
-    for (const pane of panes) {
-      const result = await deps.tmux.killHeld(pane, cancelled.externalResume!.token, owns)
+    // Every pane, each on its own backend, which must be able to close it by its token: checked before any closes.
+    const panes = cancelled.runtimes.map(runtime => ({ runtime, backend: deps.backendFor(runtime) }))
+    if (!panes.length || panes.some(pane => !pane.backend?.killHeld)) throw new Error('The waiting pane could not be verified.')
+    for (const { runtime, backend } of panes) {
+      const result = await backend!.killHeld!(runtime, cancelled.externalResume!.token, owns)
       if (!owns() || result.state !== 'succeeded') throw new Error('The waiting pane could not be verified. Adoption stays cancelled.')
     }
     if (!deps.registry.finishExternalCancellation(initial.agentId)) throw new Error('The cancellation could not be committed.')

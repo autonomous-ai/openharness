@@ -27,7 +27,7 @@ import { hermesMessagesToEvents, isTerminalFinish } from '../../../engines/herme
 import { HERMES_HISTORY_ID_RE, readHermesMessages } from '../../../engines/hermes/reader.js'
 import { hasSqliteReader } from '../../sqliteAvailability.js'
 import type { SqliteParam, SqliteRow } from '../../sqliteRead.js'
-import { argvTokens, resumeSessionId } from '../../tmux.js'
+import { argvTokens, resumeSessionId } from '../../processTable.js'
 import {
   LIST_LIMIT, ancestry, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, checkedSql, rowsOf, splitCounts,
   storeStamp, tableColumns, tally, type Counting, type SqlRead, type Tally,

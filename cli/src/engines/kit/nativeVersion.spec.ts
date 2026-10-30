@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync, renameSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { majorVersion, nativeVersionProbe } from './nativeVersion.js'
 
@@ -86,7 +86,7 @@ it('keeps the production resolver asynchronous when only the interactive shell c
   const root = roots.at(-1)!, engine = join(root, 'opencode'), shell = join(root, 'shell'), release = join(root, 'allow-shell')
   renameSync(file, engine)
   writeFileSync(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`, { mode: 0o700 })
-  vi.stubEnv('HOME', root); vi.stubEnv('PATH', join(root, 'empty-path'))
+  vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', join(root, 'empty-path'))
   vi.stubEnv('SHELL', shell); vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
   const { opencodeMajorVersion } = await import('../launchControl.js')
@@ -94,3 +94,28 @@ it('keeps the production resolver asynchronous when only the interactive shell c
   try { expect(await opencodeMajorVersion()).toBe(2) }
   finally { clearTimeout(timer) }
 }, 8_000)
+
+// Node refuses to run a .cmd without a shell on Windows, and cmd.exe would read the arguments: an npm shim's version
+// is read from its script under node (lib/windows/launch.ts), as the pane runs it.
+it('reads an npm shim\'s version from its script under node on Windows', { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'native-version-shim-')); roots.push(root)
+  const shim = join(root, 'codex.cmd')
+  writeFileSync(shim, readFileSync(join(import.meta.dirname, '..', '..', 'lib', 'windows', 'fixtures', 'npm-codex.cmd')))
+  const script = join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+  mkdirSync(dirname(script), { recursive: true })
+  writeFileSync(script, "console.log('0.162.1 ' + process.argv.slice(2).join(' '))\n")
+  // The node beside the shim, which the shim itself prefers: this one.
+  symlinkSync(process.execPath, join(root, 'node.exe'))
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    // A Node start under a full suite's load can pass the 2 s the other cases give.
+    expect(await nativeVersionProbe({ ...rule, timeoutMs: 20_000 }, () => shim).read()).toBe('0.162.1 --version\n')
+  } finally { Object.defineProperty(process, 'platform', platform) }
+  // A batch file that is no npm shim, given arguments cmd.exe would read, is refused and never run.
+  const other = join(root, 'other.cmd'); writeFileSync(other, '@echo 1.0.0\r\n')
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    await expect(nativeVersionProbe({ ...rule, args: ['%PATH%'] }, () => other).read()).rejects.toThrow('batch file')
+  } finally { Object.defineProperty(process, 'platform', platform) }
+})

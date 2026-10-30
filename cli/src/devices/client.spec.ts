@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { devicesCommand, deviceRequest, type DevicesClientDeps } from './client.js'
 
 const snapshot = (brightness = 80) => ({ status: { devices: [{ id: 'usb', attached: true, settings: { brightness } }] } })
@@ -66,5 +70,22 @@ describe('Devices DSH commands', () => {
     socket.emit('message', JSON.stringify({ type: 'harness_devices_list_result', payload: { requestId: call.payload.requestId, ...snapshot() } }))
     expect(await reply).toEqual(snapshot())
     expect(socket.close).toHaveBeenCalledOnce()
+  })
+  it('shows the daemon this OS user\'s local credential on its loopback socket and fetches', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'devices-cred-'))
+    try {
+      const credential = loadOrCreateHookCredential(dataDir)
+      const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
+      const { deps } = fixture()
+      const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
+      Object.assign(deps, { dataDir, connect, request: undefined })
+      const reply = deviceRequest(deps, 'remote', 'harness_devices_list')
+      expect(connect).toHaveBeenCalledWith('ws://127.0.0.1:18473/api/local-ws', { 'X-Harness-Local': credential })
+      socket.emit('close', 1000)
+      await expect(reply).rejects.toThrow('The computer disconnected.')
+      await devicesCommand(['list', '--json'], { ...deps, request: async () => snapshot() })
+      const init = vi.mocked(deps.fetch!).mock.calls[0]![1] as RequestInit
+      expect(init.headers).toMatchObject({ 'x-adapter-local': '1', 'X-Harness-Local': credential })
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
 })

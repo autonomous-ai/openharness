@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub tracking · What readers do</title>
+<style>
+  :root {
+    --page: #0f0f0e; --text: #f5f5f0; --muted: #9a9a90; --line: rgba(255,250,240,.10);
+    --bg: #141413; --surface: #1c1c1a; --elev: #262624; --sub: #3a3a36;
+    --amber: #ff9f0a; --green: #32d74b; --red: #ff453a; --blue: #0a84ff; --rose: #e879a0; --gold: #d4a574;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.5 var(--sans); }
+  main { max-width: 1180px; margin: 0 auto; padding: 40px 16px 96px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 { font-size: 22px; margin: 64px 0 6px; }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: var(--muted); font-weight: 600; }
+  p.lede { color: var(--muted); margin: 0 0 18px; max-width: 760px; }
+  a { color: var(--gold); }
+  code { font: 13px var(--mono); color: #e8e2d4; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 5px; white-space: nowrap; }
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 22px 0 6px; }
+  .principles div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+  .principles b { display: block; margin-bottom: 2px; }
+  .note { color: var(--muted); font-size: 14px; margin: 10px 2px 0; max-width: 900px; }
+  .note b { color: var(--text); font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .phone-row { display: grid; grid-template-columns: minmax(0, 340px) 1fr; gap: 26px; align-items: start; }
+  @media (max-width: 860px) { .grid2, .phone-row { grid-template-columns: 1fr; } }
+  .cap { margin: 8px 2px 0; font-size: 14px; color: var(--muted); }
+  .cap b { color: var(--text); }
+
+  /* A real screenshot in a browser frame; numbered pins sit just above the element they name. */
+  .browser { border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 50px rgba(0,0,0,.55); background: #fff; }
+  .browser .chrome { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: #1b1b1a; border-bottom: 1px solid var(--line); }
+  .dots { display: flex; gap: 6px; } .dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+  .url { flex: 1; margin-left: 10px; font: 12px var(--mono); color: var(--muted); background: #121211; border-radius: 6px; padding: 4px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .shot { position: relative; line-height: 0; }
+  .shot img { width: 100%; display: block; }
+  .pin { position: absolute; transform: translate(-50%, -135%); min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--amber); color: #1a1205;
+    font: 700 12px/22px var(--sans); text-align: center; box-shadow: 0 0 0 2px rgba(15,15,14,.85), 0 4px 10px rgba(0,0,0,.35); font-style: normal; }
+  .pin::after { content: ''; position: absolute; left: 50%; bottom: -5px; margin-left: -4px; border: 4px solid transparent; border-top-color: var(--amber); border-bottom: 0; }
+  /* Beside its element instead of above it, where above would cover a heading. */
+  .pin.right { transform: translate(10px, -50%); }
+  .pin.right::after { left: -5px; bottom: auto; top: 50%; margin: -4px 0 0; border: 4px solid transparent; border-right-color: var(--amber); border-left: 0; }
+  .pin.view { background: var(--blue); color: #fff; } .pin.view::after { border-top-color: var(--blue); }
+  .pin.dwell { background: var(--rose); color: #22060f; } .pin.dwell::after { border-top-color: var(--rose); }
+  .pin.none { background: var(--sub); color: var(--text); } .pin.none::after { border-top-color: var(--sub); }
+
+  .legend { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 18px; }
+  .legend li { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; font-size: 14px; color: #d8d8cf; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .legend li > i { position: static; transform: none; }
+  .legend li > i::after { display: none; }
+  .legend .m { display: block; margin-top: 3px; }
+  .legend small { display: block; color: var(--muted); margin-top: 3px; font-size: 13px; }
+
+  /* The path a count takes. */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin: 22px 0 6px; }
+  .flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font-size: 14px; position: relative; margin-right: 22px; }
+  .flow .step:last-child { margin-right: 0; }
+  .flow .step:not(:last-child)::after { content: '→'; position: absolute; right: -19px; top: 50%; transform: translateY(-50%); color: var(--amber); font-size: 16px; }
+  .flow b { display: block; margin-bottom: 4px; }
+  .flow .step > span { color: var(--muted); display: block; }
+  .flow .drop { color: var(--red); }
+  @media (max-width: 960px) { .flow { grid-template-columns: 1fr; gap: 22px; } .flow .step { margin-right: 0; }
+    .flow .step:not(:last-child)::after { content: '↓'; right: auto; left: 50%; top: auto; bottom: -21px; transform: translateX(-50%); } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  td.k { white-space: nowrap; }
+  tr.group td { color: var(--amber); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; padding-top: 22px; border-bottom: 0; }
+  .table-wrap { overflow-x: auto; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.red { color: var(--red); border-color: rgba(255,69,58,.35); } .tag.amber { color: var(--amber); border-color: rgba(255,159,10,.35); } .tag.green { color: var(--green); border-color: rgba(50,215,75,.35); }
+  pre { font: 13px/1.6 var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; color: #dcd8cc; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  .toc a { font-size: 13px; color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px; }
+  .toc a:hover { color: var(--text); border-color: var(--sub); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hub tracking: what readers do, and what we change next</h1>
+  <p class="lede">Every counter the Hub sends, pinned on the real pages at harness.autonomous.ai, then how to read the totals and which questions they answer. Counting has been live since <b>v1.2.86_backend</b> and <b>v1.3.56_web</b> on 2026-10-19, 03:36 UTC. The screenshots are production, taken the same day with counting switched off in the test browser.</p>
+  <nav class="toc">
+    <a href="#path">Where a count goes</a><a href="#explore">1 · Explore</a><a href="#harness">2 · A harness</a><a href="#phone">2b · On a phone</a>
+    <a href="#publish">3 · Publish &amp; notifications</a><a href="#shared">4 · A shared link</a><a href="#all">Every counter</a><a href="#read">Reading it</a><a href="#questions">Questions</a><a href="#limits">Limits</a><a href="#optimize">To optimize</a><a href="#first">First reading</a><a href="#decided">Decided</a>
+  </nav>
+
+  <div class="principles">
+    <div><b>Daily totals only</b>A fixed list of 65 counters, added up per UTC day. No click trail, no per-person history.</div>
+    <div><b>Visitors too, cookies never</b>The browser sends with <code>credentials: 'omit'</code>; the website's server forwards without cookie or sign-in.</div>
+    <div><b>Opt-outs are absent</b>Global Privacy Control, Do Not Track, a member who turned sharing off, staging accounts and <code>next dev</code> send nothing.</div>
+    <div><b>Visits and clicks, not people</b>One person can be many views. Steps are not linked, so totals are not a funnel.</div>
+  </div>
+
+  <h2 id="path">Where a count goes</h2>
+  <div class="flow">
+    <div class="step"><b>The tab</b><span>Counts in memory (<code>countHub</code>). Sent every 60 s and when the tab hides.</span></div>
+    <div class="step"><b>/api/hub-usage</b><span>Website server. A member's token is used only to read their sharing choice: <span class="drop">off or unreadable → dropped</span>.</span></div>
+    <div class="step"><b>/api/product-usage/hub</b><span>Backend. Refuses any cookie or auth. Strict vocabulary, random receipt, 240 writes/min.</span></div>
+    <div class="step"><b>Daily totals</b><span>The same receipt + atomic increment store as setup counts; today or yesterday only.</span></div>
+    <div class="step"><b>usage:daily → hub</b><span>Per day: views, entries, actions, dwell, two ratios with numerator and denominator.</span></div>
+  </div>
+  <p class="note"><b>Code:</b> <code>website/src/lib/community/hubMeasure.ts</code> (collector), <code>website/src/app/api/hub-usage/route.ts</code> (forwarder), <code>desktop/lib/measurement/hub_usage.dart</code> (the web app's collector, for shared links), <code>backend/src/lib/hubMetricsContract.ts</code> (the 65 names), <code>backend/src/analytics/dailyHubUsage.ts</code> (report). The website's copy of the names is checked against the backend's by <code>hubMetrics.spec.ts</code>, the web app's by <code>hub_usage_contract_test.dart</code>.</p>
+
+  <h2 id="explore">1. Explore: what a visitor sees first</h2>
+  <p class="lede">The front door. A visitor gets the heading, the desktop app and Sign in; then filters and cards.</p>
+  <div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">harness.autonomous.ai/hub</div></div>
+    <div class="shot"><img src="explore.png" alt="Explore at 1440 by 900, signed out">
+      <i class="pin view" style="left:37%;top:16.9%">1</i>
+      <i class="pin" style="left:15.1%;top:29.3%">2</i>
+      <i class="pin" style="left:24.8%;top:29.3%">3</i>
+      <i class="pin" style="left:79.6%;top:4.4%">4</i>
+      <i class="pin" style="left:17.5%;top:36.4%">5</i>
+      <i class="pin" style="left:83.9%;top:36.4%">6</i>
+      <i class="pin" style="left:21.5%;top:62.2%">7</i>
+      <i class="pin" style="left:8.9%;top:87.9%">8</i>
+      <i class="pin none" style="left:12%;top:87.9%">–</i>
+      <i class="pin none" style="left:84.3%;top:4.4%">–</i>
+      <i class="pin none" style="left:90%;top:4.4%">–</i>
+    </div>
+  </div>
+  <ol class="legend">
+    <li><i class="pin view">1</i><div><b>The page drawn</b><code class="m">hub_view_feed_visitor</code> · <code>hub_view_feed_member</code><small>Once per navigation, as soon as it is known who reads. The first Hub page of a tab's visit also counts <code>hub_entry_direct|search|social|internal|other</code>.</small></div></li>
+    <li><i class="pin">2</i><div><b>Get the Harness desktop app</b><code class="m">hub_get_app</code><small>Visitors only. Leads to /desktop.</small></div></li>
+    <li><i class="pin">3</i><div><b>Sign in (intro)</b><code class="m">hub_sign_in_prompt_shown</code> · <code>hub_sign_in_prompt_click</code><small>Shown is counted once it is known to be a visitor. Shared with every other sign-in prompt (comments, likes, publish).</small></div></li>
+    <li><i class="pin">4</i><div><b>Search</b><code class="m">hub_feed_search</code><small>Once each time the settled (debounced) term changes to something non-empty; not the term a link opened with.</small></div></li>
+    <li><i class="pin">5</i><div><b>A category</b><code class="m">hub_feed_category</code><small>Any chip but All.</small></div></li>
+    <li><i class="pin">6</i><div><b>Order</b><code class="m">hub_feed_sort_newest|trending|popular</code><small>Every click, including the one already chosen.</small></div></li>
+    <li><i class="pin">7</i><div><b>Open a card</b><code class="m">hub_card_open</code><small>The cover or title. The next page then counts its own view.</small></div></li>
+    <li><i class="pin">8</i><div><b>Like from a card</b><code class="m">hub_like</code><small>Counted when the like is sent (a member, or a browser holding a sign-in). A visitor gets the sign-in toast instead, which counts as a prompt shown.</small></div></li>
+    <li><i class="pin none">–</i><div><b>Not counted</b><small>The card's comments and forks links (they arrive as a harness view), the header's Publish (arrives as a publish view) and Sign in, and scrolling. <code>hub_feed_more</code> counts each further page, by scroll or button, on every feed (Following, Yours, a creator, a harness's forks).</small></div></li>
+  </ol>
+
+  <h2 id="harness">2. A harness: the page that should lead to a fork</h2>
+  <p class="lede">Share is open so its rows show. Fork on a computer hands the project to the desktop app; "Need the app?" appears under it after the click.</p>
+  <div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">harness.autonomous.ai/hub/pac-man-neon-maze-chase-fb726d28</div></div>
+    <div class="shot"><img src="harness.png" alt="A harness page at 1440 by 900 with the Share menu open">
+      <i class="pin view" style="left:32%;top:18.6%">1</i>
+      <i class="pin" style="left:61.9%;top:20.1%">2</i>
+      <i class="pin" style="left:65.8%;top:20.1%">3</i>
+      <i class="pin" style="left:70.4%;top:20.1%">4</i>
+      <i class="pin" style="left:75.9%;top:20.1%">5</i>
+      <i class="pin" style="left:62.6%;top:25.9%">6</i>
+      <i class="pin" style="left:62.6%;top:31.3%">7</i>
+      <i class="pin" style="left:62.6%;top:35.5%">7</i>
+      <i class="pin" style="left:62.6%;top:39.8%">7</i>
+      <i class="pin" style="left:62.6%;top:45.2%">8</i>
+      <i class="pin" style="left:81.9%;top:20.1%">9</i>
+      <i class="pin" style="left:88.6%;top:20.1%">10</i>
+      <i class="pin right" style="left:17.2%;top:22.3%">11</i>
+      <i class="pin dwell" style="left:37.2%;top:65%">12</i>
+    </div>
+  </div>
+  <ol class="legend">
+    <li><i class="pin view">1</i><div><b>The page drawn</b><code class="m">hub_view_harness_visitor|member</code><small>Also the entry, when a shared link is the first page of the visit.</small></div></li>
+    <li><i class="pin">2</i><div><b>Like</b><code class="m">hub_like</code><small>Members, once the reader is known (the button waits). Unlike counts too.</small></div></li>
+    <li><i class="pin">3</i><div><b>Comments</b><code class="m">hub_comments_open</code> · <code>hub_comment_post</code><small>Opening the panel by its button (a <code>?comments=1</code> link opens it without counting); a comment or reply that was saved.</small></div></li>
+    <li><i class="pin">4</i><div><b>Files</b><code class="m">hub_files_open</code></div></li>
+    <li><i class="pin">5</i><div><b>Share</b><code class="m">hub_share_open</code><small>By click, or ↓ on the button.</small></div></li>
+    <li><i class="pin">6</i><div><b>Copy link</b><code class="m">hub_share_copy</code></div></li>
+    <li><i class="pin">7</i><div><b>X · Facebook · LinkedIn</b><code class="m">hub_share_x|facebook|linkedin</code><small>Opens the network's share page in a new tab. Whether the post was made is not known.</small></div></li>
+    <li><i class="pin">8</i><div><b>More options…</b><code class="m">hub_share_sheet</code><small>Only where the browser has a share sheet.</small></div></li>
+    <li><i class="pin">9</i><div><b>Report</b><code class="m">hub_report</code><small>A submitted report, of the harness or of a comment.</small></div></li>
+    <li><i class="pin">10</i><div><b>Fork</b><code class="m">hub_fork</code> · <code>hub_fork_need_app</code><small>The click that opens the desktop app; then the "Need the app?" link under it. Whether the app opened is not known.</small></div></li>
+    <li><i class="pin">11</i><div><b>Follow</b><code class="m">hub_follow</code><small>Follow or unfollow, here and on a creator's page.</small></div></li>
+    <li><i class="pin dwell">12</i><div><b>Time in view</b><code class="m">hub_harness_dwell_under_10s|10s_to_1m|over_1m</code><small>Visible time only, once per view, as it is left (another page or the tab closing). Full screen, below this frame, counts <code>hub_fullscreen</code> on entering.</small></div></li>
+  </ol>
+
+  <h2 id="phone">2b. On a phone: Fork goes to the fork page</h2>
+  <div class="phone-row">
+    <div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">…/pac-man-neon-maze-chase-fb726d28</div></div>
+      <div class="shot"><img src="harness-phone.png" alt="The same harness at 390 by 844 on a phone">
+        <i class="pin" style="left:10.1%;top:33.5%">2</i>
+        <i class="pin" style="left:23.5%;top:33.5%">3</i>
+        <i class="pin" style="left:35.1%;top:33.5%">4</i>
+        <i class="pin" style="left:44.8%;top:33.5%">5</i>
+        <i class="pin" style="left:54.6%;top:33.5%">9</i>
+        <i class="pin" style="left:83.5%;top:33.5%">10</i>
+        <i class="pin right" style="left:37.6%;top:26.4%">11</i>
+        <i class="pin dwell" style="left:49.2%;top:71.9%">12</i>
+      </div>
+    </div>
+    <div>
+      <p class="note" style="margin-top:0"><b>Same counters, one difference.</b> On a touch screen with no fine pointer, Fork is a link to <code>/hub/…/fork</code>: it still counts <code>hub_fork</code>, and the fork page counts <code>hub_view_fork_*</code>. There, "Copy link for your computer" replaces "Open in Harness" and is not counted again.</p>
+      <p class="note"><b>What this cannot tell apart:</b> a computer's Fork from a phone's. No counter is split by device. The nearest signal is <code>hub_view_fork</code> against <code>hub_fork</code>: on a computer Fork rarely opens the fork page (only through "Need the app?"), so a fork-page view is mostly a phone's tap or a missing app.</p>
+      <p class="note"><b>Labels hide under 480 px:</b> Files, Share and Report show icons only; their counters are unchanged.</p>
+    </div>
+  </div>
+
+  <h2 id="publish">3. Publish and notifications</h2>
+  <div class="grid2">
+    <div>
+      <div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">harness.autonomous.ai/hub/publish</div></div>
+        <div class="shot"><img src="publish.png" alt="Publish, signed out">
+          <i class="pin view" style="left:47%;top:15.7%">1</i>
+          <i class="pin" style="left:14.6%;top:31%">2</i>
+        </div>
+      </div>
+      <p class="cap"><b>1</b> <code>hub_view_publish_*</code>. <b>2</b> the sign-in prompt, shown and clicked. Below the fold, Publish or Save changes counts <code>hub_publish_started</code>, then <code>hub_publish_ok</code> or <code>hub_publish_failed</code>.</p>
+    </div>
+    <div>
+      <div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">harness.autonomous.ai/hub/notifications</div></div>
+        <div class="shot"><img src="notifications.png" alt="Notifications, signed in, sample rows">
+          <i class="pin view" style="left:20%;top:15.3%">1</i>
+          <i class="pin none" style="left:30%;top:27%">–</i>
+        </div>
+      </div>
+      <p class="cap"><b>1</b> <code>hub_view_notifications_*</code>. A row is not counted: it arrives as a harness view. (Rows are sample data drawn in the test browser.)</p>
+    </div>
+  </div>
+  <p class="note">A creator's page counts <code>hub_view_creator_*</code>, its Follow <code>hub_follow</code>, and its cards like Explore's.</p>
+
+  <h2 id="shared">4. A shared link: someone's live harness</h2>
+  <p class="lede"><code>harness.autonomous.ai/s/&lt;id&gt;#key=…</code> is the web app (Flutter), not the Hub's pages, but it counts the same way and through the same <code>/api/hub-usage</code>. The link, its key, the harness and its owner are never sent. A staging link (<code>?env=stag</code>) or account, a debug build and the desktop app send nothing.</p>
+  <ol class="legend">
+    <li><i class="pin view">1</i><div><b>The page drawn</b><code class="m">hub_view_shared_visitor|member</code><small>Once per page, as soon as the app knows whether the reader is signed in.</small></div></li>
+    <li><i class="pin view">2</i><div><b>What the link showed</b><code class="m">hub_shared_open_live|offline|private|no_access|failed</code><small>Each at most once per page: an offline owner's reconnects every 10 s add nothing, and offline then live counts both. <code>private</code>: a private link before sign-in. <code>no_access</code>: not invited, or the link stopped. <code>failed</code>: an incomplete link, a changed owner identity, or no connection.</small></div></li>
+    <li><i class="pin">3</i><div><b>A live viewer drew</b><code class="m">hub_shared_viewer_shown</code><small>Once, on its first frame: the harness shows a picture (Blender, slides, a site), not only a terminal.</small></div></li>
+    <li><i class="pin">4</i><div><b>Comments</b><code class="m">hub_shared_comments_open · hub_shared_comment_post</code><small>The panel opened by its button; a comment saved.</small></div></li>
+    <li><i class="pin">5</i><div><b>Sign in</b><code class="m">hub_shared_sign_in_click</code><small>On a private link, or under the comments.</small></div></li>
+    <li><i class="pin">6</i><div><b>Retry</b><code class="m">hub_shared_retry</code><small>After offline, a failure, or a dropped connection.</small></div></li>
+    <li><i class="pin">7</i><div><b>Leaving for the product</b><code class="m">hub_shared_get_app · hub_shared_product_page</code><small>Download app; the Harness mark (the product page, in a new tab).</small></div></li>
+    <li><i class="pin dwell">8</i><div><b>Time in view</b><code class="m">hub_shared_dwell_under_10s|10s_to_1m|over_1m</code><small>From the first live answer until the page goes, hidden time not counted; once per page.</small></div></li>
+  </ol>
+  <p class="note">No entry is counted here: where shared links are pasted (chat apps, mail) mostly sends no referrer, and its visits would blur the Hub's own <code>hub_entry_*</code>.</p>
+
+  <h2 id="all">Every counter</h2>
+  <p class="lede">The 65 names the backend accepts (<code>HUB_METRICS</code>). Nothing else can be sent: an unknown name refuses the report.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Counter</th><th>When it counts</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr class="group"><td colspan="3">Views · 14</td></tr>
+      <tr><td class="k"><code>hub_view_{page}_{visitor|member}</code></td><td>A page drawn, once per navigation, after the reader is known. Pages: <code>feed</code> (Explore, Following, Yours), <code>creator</code>, <code>harness</code>, <code>publish</code>, <code>notifications</code>, <code>fork</code>, <code>shared</code> (a shared link, section 4).</td><td><code>useHubView</code></td></tr>
+      <tr class="group"><td colspan="3">Entry · 5</td></tr>
+      <tr><td class="k"><code>hub_entry_{direct|search|social|internal|other}</code></td><td>The first Hub page of a tab's visit, classed from the referrer's host in the browser. Search: Google, Bing, DuckDuckGo and similar. Social: X, Facebook, LinkedIn, Reddit, Hacker News, Threads, Bluesky, YouTube, Discord, Telegram, Instagram. Internal: another page of harness.autonomous.ai.</td><td><code>countHubEntry</code></td></tr>
+      <tr class="group"><td colspan="3">Feeds · 7</td></tr>
+      <tr><td class="k"><code>hub_feed_search</code></td><td>A settled search term, each change.</td><td>Feed</td></tr>
+      <tr><td class="k"><code>hub_feed_category</code></td><td>A category chip other than All.</td><td>Feed</td></tr>
+      <tr><td class="k"><code>hub_feed_sort_{newest|trending|popular}</code></td><td>An order clicked.</td><td>Feed</td></tr>
+      <tr><td class="k"><code>hub_feed_more</code></td><td>Each further page, by scroll or button, on any feed.</td><td><code>useFeed</code></td></tr>
+      <tr><td class="k"><code>hub_card_open</code></td><td>A card's cover or title.</td><td>FeedCard</td></tr>
+      <tr class="group"><td colspan="3">A harness · 15</td></tr>
+      <tr><td class="k"><code>hub_like</code></td><td>A like or unlike sent, from a card or the page.</td><td>useFeed, useHarnessDetail</td></tr>
+      <tr><td class="k"><code>hub_comments_open</code> · <code>hub_files_open</code></td><td>The panel opened by its button.</td><td>Detail</td></tr>
+      <tr><td class="k"><code>hub_comment_post</code></td><td>A comment or reply saved.</td><td>useHarnessDetail</td></tr>
+      <tr><td class="k"><code>hub_fullscreen</code></td><td>Entering full screen.</td><td>Viewer</td></tr>
+      <tr><td class="k"><code>hub_share_open</code></td><td>The Share menu opened.</td><td>ShareMenu</td></tr>
+      <tr><td class="k"><code>hub_share_{copy|x|facebook|linkedin|sheet}</code></td><td>A Share row chosen.</td><td>ShareMenu</td></tr>
+      <tr><td class="k"><code>hub_fork</code></td><td>Fork: the desktop handoff on a computer, the fork-page link on a phone.</td><td>ForkButton</td></tr>
+      <tr><td class="k"><code>hub_fork_need_app</code></td><td>"Need the app?" after Fork.</td><td>ForkButton</td></tr>
+      <tr><td class="k"><code>hub_follow</code></td><td>Follow or unfollow (harness page, creator page).</td><td>useHarnessDetail, useCreator</td></tr>
+      <tr><td class="k"><code>hub_report</code></td><td>A report submitted (harness or comment).</td><td>useHarnessDetail</td></tr>
+      <tr class="group"><td colspan="3">Accounts and publishing · 6</td></tr>
+      <tr><td class="k"><code>hub_sign_in_prompt_shown</code></td><td>Any sign-in prompt drawn: comments, the like toast, publish, notifications, Following, and Explore's intro for a visitor.</td><td>SignIn, ExploreIntro</td></tr>
+      <tr><td class="k"><code>hub_sign_in_prompt_click</code></td><td>Its Sign in link.</td><td>SignIn, ExploreIntro</td></tr>
+      <tr><td class="k"><code>hub_get_app</code></td><td>Explore's "Get the Harness desktop app".</td><td>ExploreIntro</td></tr>
+      <tr><td class="k"><code>hub_publish_started|ok|failed</code></td><td>Publish or Save changes submitted, and how it ended.</td><td>publish/page</td></tr>
+      <tr class="group"><td colspan="3">Time on a harness · 3</td></tr>
+      <tr><td class="k"><code>hub_harness_dwell_{under_10s|10s_to_1m|over_1m}</code></td><td>Visible time of one harness view, as it is left.</td><td><code>useHarnessDwell</code></td></tr>
+      <tr class="group"><td colspan="3">A shared link · 15</td></tr>
+      <tr><td class="k"><code>hub_shared_open_{live|offline|private|no_access|failed}</code></td><td>What the link showed, each once per page.</td><td>SharedAgentPage</td></tr>
+      <tr><td class="k"><code>hub_shared_viewer_shown</code></td><td>Its live viewer's first frame.</td><td>SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_comments_open</code> · <code>hub_shared_comment_post</code></td><td>Comments opened by the button; a comment saved.</td><td>SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_sign_in_click</code> · <code>hub_shared_retry</code></td><td>Sign in (private link, comments); Retry (page or panel).</td><td>SharedAgentPage, SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_get_app</code> · <code>hub_shared_product_page</code></td><td>Download app; the Harness mark.</td><td>SharedAgentPage</td></tr>
+      <tr><td class="k"><code>hub_shared_dwell_{under_10s|10s_to_1m|over_1m}</code></td><td>Visible time from the first live answer until the page goes.</td><td><code>VisibleTime</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="read">Reading it</h2>
+  <pre>cd backend
+DATABASE_URL=&lt;read-only&gt; npm run usage:daily -- 14   # keep output in .harness/usage/, never commit it</pre>
+  <p class="note">The <code>hub</code> section gives a <b>status</b> for the window (<code>collected</code> or <code>not collected</code>), then per UTC day (a day with no Hub report is <code>null</code>, not zero): <b>views</b> by page and reader, <b>entries</b>, every <b>action</b>, <b>dwell</b>, and two ratios kept as numerator / denominator / ratio: <code>forkClicksPerHarnessView</code> and <code>signInClicksPerPromptShown</code>. Today is partial; compare complete seven-day windows.</p>
+  <p class="note"><b>First complete window:</b> 2026-10-20 to 2026-10-26. 2026-10-19 is the release day and partial, and a handful of its Explore views came from this review's Lighthouse and performance runs before counting was switched off in the test browser.</p>
+
+  <h2 id="questions">The questions, and what would change</h2>
+  <p class="lede">Each one names its numbers before we look, so the decision is not picked after the fact (see the daily review in <code>docs/product-measurement.md</code>).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Question</th><th>Numbers</th><th>If so, change</th></tr></thead>
+    <tbody>
+      <tr><td>Does a visitor find something to open?</td><td><code>hub_card_open</code> ÷ <code>hub_view_feed_visitor</code></td><td>Low: a featured row or starters above the fold; Trending as the visitors' default order.</td></tr>
+      <tr><td>Is Trending or Popular wanted over Newest?</td><td><code>hub_feed_sort_trending</code> + <code>_popular</code> against views; card opens per view before and after a default change</td><td>Most sessions that sort leave Newest: make that the default.</td></tr>
+      <tr><td>Does the intro bring people in?</td><td><code>hub_get_app</code>, <code>hub_sign_in_prompt_click</code> ÷ <code>hub_sign_in_prompt_shown</code></td><td>Few clicks: shorten the intro, or show it only on a first visit (<code>hub_entry_*</code> says how many are first visits).</td></tr>
+      <tr><td>Does a harness page lead to a fork?</td><td><code>forkClicksPerHarnessView</code>; <code>hub_fork_need_app</code> ÷ <code>hub_fork</code></td><td>Many "Need the app?": the handoff fails for most; put the install path before Fork.</td></tr>
+      <tr><td>Do phone readers get anywhere?</td><td><code>hub_view_fork_*</code> against <code>hub_fork</code></td><td>Fork pages viewed but no later fork: offer "send to my computer" (email the link) instead of copy.</td></tr>
+      <tr><td>Do people stay?</td><td>Dwell buckets, against <code>hub_view_harness</code></td><td>Mostly under 10 s: the output loads slowly or the page does not say what it is; look at output load and the first screen.</td></tr>
+      <tr><td>How do people share, and does it bring readers?</td><td><code>hub_share_*</code> by row; <code>hub_entry_social</code> over time</td><td>Copy dominates: keep it first. Social entries flat: preview images and titles (link previews were fixed in v1.3.58_web).</td></tr>
+      <tr><td>Do readers talk?</td><td><code>hub_comments_open</code>, <code>hub_comment_post</code>, prompts shown in comments</td><td>Opens but no posts: a prompt or example question in the empty panel.</td></tr>
+      <tr><td>Does a shared link reach a live harness?</td><td><code>hub_shared_open_live</code> against <code>hub_view_shared_*</code>; <code>_offline</code>, <code>_private</code>, <code>_no_access</code>, <code>_failed</code></td><td>Mostly offline: show the owner's last output while their machine is away. Many private before sign-in, few <code>hub_shared_sign_in_click</code>: say who invited the reader and why to sign in.</td></tr>
+      <tr><td>Does a shared link bring people to Harness?</td><td><code>hub_shared_get_app</code> + <code>hub_shared_product_page</code> ÷ <code>hub_view_shared_visitor</code>; <code>hub_shared_dwell_*</code></td><td>Long dwell, few clicks: a "make one like this" call to action beside the live harness.</td></tr>
+      <tr><td>Does search work?</td><td><code>hub_feed_search</code> followed by <code>hub_card_open</code> (same days)</td><td>Searches with few opens: search creators too (the placeholder promises it), fuzzy matching.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="limits">Limits</h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    <b>Not people:</b> a reader who reloads counts two views; one who opens ten harnesses, ten. Entry is once per tab visit (session storage), so it is the closest to visits.<br>
+    <b>Not a funnel:</b> a fork cannot be traced back to the card that led to it. Ratios compare totals on the same days.<br>
+    <b>Absent readers:</b> GPC and Do Not Track browsers, members with sharing off, staging accounts, ad and script blockers that stop <code>/api/hub-usage</code>.<br>
+    <b>Lost counts:</b> a tab that is killed before it hides, a failed send (never retried), and anything over the backend's 240 reports a minute per process, which is about 200 tabs open at once. <code>TODO(BE)</code>: past that, add reports up on the website's server and send one a minute.<br>
+    <b>Fabricable:</b> the endpoint is public. Treat a sudden jump on one counter as suspect until it shows on others.<br>
+    <b>No device split:</b> phone and computer are only told apart through the fork page (2b).</p>
+
+  <h2 id="optimize">To optimize, found while making this page</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th></th><th>What</th><th>Evidence</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag red">decide</span></td><td>A Google Ads tag runs on every Hub page</td><td>Requests to <code>googleads.g.doubleclick.net</code>, <code>google.com/rmkt/collect</code> and <code>/ccm/collect</code> for <code>AW-943247754</code>, served through the first-party path <code>/kaxv/</code> (Cloudflare's Google tag gateway, not in the repo); third-party cookies <code>test_cookie</code>, <code>IDE</code>. Lighthouse Best Practices: 77.</td><td>Whoever owns Cloudflare and ads decides: leave it off <code>/hub</code>, or say so in <code>product-measurement.md</code>, which now promises no cookies. It also ignores GPC.</td></tr>
+      <tr><td><span class="tag amber">P1</span></td><td>Covers weigh too much</td><td>Starter covers are PNGs of ~600 KB (<code>ribbon-lamp</code> 615 KB, <code>two-futures</code> 606 KB); a publication's cover is 1775 px wide where a phone shows ~380 px. About 424 KB wasted on a phone's first screen. LCP is still 1.6 s on throttled 4G.</td><td>Resize to 1200 px and serve WebP, with a 1200 px PNG kept for link previews.</td></tr>
+      <tr><td><span class="tag amber">P1</span></td><td>Card labels hide their text from screen readers</td><td>Lighthouse <code>label-content-name-mismatch</code>, 67 nodes: the card link, Like and Comments use <code>aria-label</code>, which replaces the description and counts.</td><td><code>aria-labelledby</code> the title, and keep the counts visible to the name.</td></tr>
+      <tr><td><span class="tag">P2</span></td><td>Publish does not line up with the header</td><td>Its content starts at 157 px against the header's 115 px at 1440 px (screenshot 3); the fork page too.</td><td>Use the header's width (<code>.wrap</code>) as Notifications does.</td></tr>
+      <tr><td><span class="tag">P2</span></td><td>The footer floats mid-page on short pages</td><td>Notifications with three rows: footer at 551 px of 900.</td><td>Keep the footer at the bottom of the viewport on short pages.</td></tr>
+      <tr><td><span class="tag">P2</span></td><td>From the earlier review</td><td colspan="2">A comment notification does not jump to its comment; no way to find creators; "All harnesses" loses filters and scroll; headings vary from 25 to 38 px; a few links still use the raw id (reports, fork notifications, download); unused CSS (<code>.steps</code>).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="first">First reading · 2026-10-19</h2>
+  <p class="lede">Production totals from 03:36 UTC (release) to 08:42 UTC, about five hours. Read straight from the daily totals (<code>hub_*</code> rows), since <code>npm run usage:daily</code> currently fails on production (see below).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Counter</th><th>Total</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td class="k"><code>hub_view_feed_visitor</code></td><td>8</td><td>About 3 are this review's own audits (Lighthouse, a network listing, a performance trace), run before counting was switched off in the test browser. About 5 are real.</td></tr>
+      <tr><td class="k"><code>hub_view_harness_visitor</code></td><td>5</td><td>All visitors; no member view yet.</td></tr>
+      <tr><td class="k"><code>hub_entry_direct</code></td><td>7</td><td>Every entry was direct, none from search or social yet. Includes the audits'.</td></tr>
+      <tr><td class="k"><code>hub_sign_in_prompt_shown</code></td><td>11</td><td>Mostly Explore's intro, shown on each visitor view.</td></tr>
+      <tr><td class="k"><code>hub_get_app</code></td><td>1</td><td>One click on "Get the Harness desktop app".</td></tr>
+      <tr><td class="k"><code>hub_harness_dwell_under_10s</code></td><td>5</td><td>Every harness view left in under ten seconds.</td></tr>
+      <tr><td class="k">everything else</td><td>0</td><td>No card open, like, comment, share, fork, search or sort.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><b>Too few to decide anything.</b> The one signal to watch: all five harness views ended under ten seconds with no action. If that holds over the first full week, start from "Do people stay?" above: how fast the output appears, and whether the first screen says what the harness is and what Fork does.<br>
+    <b>To fix:</b> <code>npm run usage:daily</code> exits with "Could not read aggregate product usage" against production. The Hub rows read fine with a direct query, so the failure is elsewhere in the report and its catch hides the cause.<br>
+    <b>Next readings:</b> daily from 2026-10-20, the first clean day; the first complete week (2026-10-20 to 10-26) on 2026-10-27.</p>
+
+  <h2 id="decided">Decided</h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    <b>Collection:</b> visitors are counted (decided 2026-10-19), with no cookie, identifier, URL or content, through the website's server; the one web exception to signed-out collection, recorded in <code>docs/product-measurement.md</code>.<br>
+    <b>Released:</b> <code>v1.2.86_backend</code> (endpoint and report) and <code>v1.3.56_web</code> (collector and the review's fixes) on 2026-10-19; <code>v1.3.58_web</code> fixed link previews and removed Open Harness from the signed-in bar. Checked in production: the backend reports <code>v1.2.86_backend</code>, the endpoint refuses credentials (400), <code>/api/hub-usage</code> answers POST only, <code>robots.txt</code> allows covers.<br>
+    <b>Next review:</b> 2026-10-27, on the first complete week (2026-10-20 to 10-26). Then pick one question above, write its hypothesis and guardrails, change one thing, and compare equal windows.<br>
+    <b>Still open:</b> the Google Ads tag; cover weight; card labels.</p>
+</main>
+</body>
+</html>

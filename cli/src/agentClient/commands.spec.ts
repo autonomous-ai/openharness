@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
@@ -81,6 +82,15 @@ function harness(daemon: FakeDaemon, over: Partial<ClientDeps> & { others?: Reco
   }
   return { deps, out, err, ledger: new Ledger(ledgerPath(dir)), advance: (ms: number) => { clock += ms } }
 }
+
+it('recognizes a Windows host pane from HARNESS_PANE for agent commands', async () => {
+  const d = new FakeDaemon()
+  d.frames = [frame('lead', { tmuxPane: 'p1:%3' })]
+  const h = harness(d, { env: { HARNESS_PANE: 'p1:%3' } })
+  delete h.deps.pane
+  expect(await whoamiCommand([], h.deps)).toBe(EXIT.ok)
+  expect(h.out.join('\n')).toContain('inside Harness')
+})
 
 const started = (ledger: Ledger, by: string, child: string, childMachine = 'm', at = NOW) => ledger.append({
   at, depth: 1, by: { machineId: 'm', agentId: by, name: by, engine: 'claude' }, child: { machineId: childMachine, agentId: child, name: child },
@@ -856,9 +866,9 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. It was still starting, so no conversation was kept.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 4.'])
     expect(await closeCommand(['kid', '--now', '--json'], h.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It was still starting, so no conversation was kept.', next: [], open: 0 })
+    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It had not started a conversation, so none was kept.', next: [], open: 0 })
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.failed)
     expect(h.err).toEqual(['kid was not closed: Harness cannot tell which conversation it is in right now, and closing it would lose that conversation. Try again in a moment.'])
   })
@@ -919,7 +929,10 @@ describe('harness new, run by an agent', () => {
     rmSync(agentSettingsPath(dir))
     const inPane = (await agentOrigin(harness(d).deps))!
     await expect(inPane.check()).rejects.toMatchObject({ code: 'TURNED_OFF', message: AGENTS_START_AGENTS_OFF })
-    expect(AGENTS_START_AGENTS_OFF).toBe('Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.')
+    // The agent asks the person with its own tool, and turns it on only after their yes: people do not open a terminal.
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/^Agents may not start harnesses yet\. agents-start-agents is off\. Ask the person, with your tool for asking them \(Claude Code: AskUserQuestion; Codex: request_user_input\)/)
+    expect(AGENTS_START_AGENTS_OFF).toContain('Only if they say yes, run `harness settings agents-start-agents on --person-said-yes`')
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/Never answer it for them\. If they say no: do the work yourself\.$/)
     const outside = (await agentOrigin(harness(d, { pane: undefined, env: { CODEX_THREAD_ID: 't' } }).deps))!
     await expect(outside.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
     expect(await agentOrigin(harness(d, { pane: undefined }).deps)).toBeNull()
@@ -1620,7 +1633,7 @@ describe('harness whoami', () => {
     const h = harness(d)
     expect(await whoamiCommand(['--json'], h.deps)).toBe(EXIT.ok)
     const { context } = JSON.parse(h.out.join('\n'))
-    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on', fixBy: 'person' })
+    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on --person-said-yes', fixBy: 'person' })
     expect(context.machines).toEqual([])
   })
 
@@ -1657,5 +1670,654 @@ describe('harness whoami', () => {
     const h = harness(new FakeDaemon())
     expect(await whoamiCommand(['x'], h.deps)).toBe(EXIT.usage)
     expect(h.err[0]).toBe('harness whoami takes no names and no --machine: it is about you, here.')
+  })
+})
+
+describe('a cloud harness (#1444)', () => {
+  const cloud = (id: string, state: string, over: Partial<Frame> = {}) => frame(id, {
+    engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, sessionId: id,
+    activity: { state: state === 'working' || state === 'starting' ? 'working' : 'idle' },
+    cloud: { state, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] }, ...over,
+  })
+  const transcript = (d: FakeDaemon, messages: Array<{ from: string; text: string }>) => {
+    d.extra.cloud_transcript = () => ({ messages: messages.map((m, i) => ({ id: String(i), at: '', ...m })), total: messages.length })
+  }
+
+  it('shows its state from the cloud, its last words and its links, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'idle')]
+    transcript(d, [{ from: 'person', text: 'old' }, { from: 'agent', text: 'old answer' }, { from: 'person', text: 'reply to the thread' }, { from: 'agent', text: 'On it.' }, { from: 'agent', text: 'Replied.' }])
+    const h = harness(d)
+    expect(await showCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ state: 'idle', ask: 'reply to the thread', answer: 'On it.\n\nReplied.',
+      links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] })
+    expect(d.requests.some((r) => r.type === 'agent_close' || r.type === 'session_get')).toBe(false)
+    const text = harness(d)
+    expect(await showCommand(['devin'], text.deps)).toBe(EXIT.ok)
+    expect(text.out).toContain('Session: https://app.devin.ai/sessions/1')
+  })
+
+  it('says it needs the person while it asks, though its frame says idle, and how the answer goes to it', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'needs_input')]
+    transcript(d, [{ from: 'person', text: 'go' }, { from: 'agent', text: 'Which branch?' }])
+    const h = harness(d)
+    expect(await showCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ state: 'needs-input', needsPerson: true, answer: 'Which branch?',
+      next: [{ run: "harness reply devin -- <the person's answer>" }] })
+    const w = harness(d)
+    expect(await waitCommand(['devin'], w.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('waits while it starts and works, and returns when it is done or failed', async () => {
+    const d = new FakeDaemon()
+    const states = ['starting', 'working', 'working', 'idle']
+    d.extra.agents_list = () => ({ agents: [cloud('devin', states.length > 1 ? states.shift()! : states[0])] })
+    const h = harness(d)
+    expect(await waitCommand(['devin'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['devin: idle · read it: harness show devin'])
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+    d.extra.agents_list = () => ({ agents: [cloud('devin', 'failed')] })
+    const f = harness(d)
+    expect(await waitCommand(['devin', '--json'], f.deps)).toBe(EXIT.stopped)
+    expect(JSON.parse(f.out.join('\n')).harnesses[0].state).toBe('failed')
+  })
+
+  it('replies with the person\'s words, and refuses an agent, a terminal harness and no words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'needs_input'), frame('kid')]
+    const sent: Record<string, unknown>[] = []
+    d.extra.cloud_send = (payload) => { sent.push(payload); return { ok: true } }
+    const h = harness(d)
+    expect(await replyCommand(['devin', '--', 'the', 'release', 'branch'], h.deps)).toBe(EXIT.ok)
+    expect(sent).toEqual([{ agentId: 'devin', text: 'the release branch' }])
+    expect(h.out.join('\n')).toMatch(/^Sent to devin\.\nNext: harness wait devin/)
+    // A harness in a pane takes a program's words only while the person allows it (below, `harness reply` to a pane).
+    expect(await replyCommand(['kid', '--', 'x'], harness(d).deps)).toBe(EXIT.refused)
+    expect(await replyCommand(['devin'], harness(d).deps)).toBe(EXIT.usage)
+    d.extra.cloud_send = () => ({ error: 'CLOUD_FAILED', detail: 'Devin Cloud is still working.' })
+    const busy = harness(d)
+    expect(await replyCommand(['devin', '--', 'x'], busy.deps)).not.toBe(EXIT.ok)
+    expect(busy.err.join('\n')).toMatch(/still working/)
+    d.frames.push(frame('lead'))
+    const before = d.requests.length
+    const agent = harness(d)
+    expect(await replyCommand(['devin', '--', 'x'], agent.deps)).toBe(EXIT.refused)
+    expect(d.requests.slice(before).some((r) => r.type === 'cloud_send')).toBe(false)
+    // The agent is told to tell the person, never to run the reply it would be refused.
+    const shown = harness(d)
+    expect(await showCommand(['devin', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n')).next).toEqual([{ tell: expect.stringMatching(/tell the person/) }])
+  })
+
+  it('says a failed one failed in the cloud, shows nothing read when its conversation cannot be read, and will not close one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'failed')]
+    const w = harness(d)
+    expect(await waitCommand(['devin'], w.deps)).toBe(EXIT.stopped)
+    expect(w.out).toEqual(['devin: failed · it failed in the cloud; what it said and its links: harness show devin'])
+    d.extra.cloud_transcript = () => ({ error: 'SERVICE_UNAVAILABLE' })
+    const s = harness(d)
+    expect(await showCommand(['devin'], s.deps)).toBe(EXIT.ok)
+    expect(s.out).toContain('No turn yet.')
+    const c = harness(d)
+    expect(await closeCommand(['devin'], c.deps)).toBe(EXIT.usage)
+    expect(c.err.join('\n')).toMatch(/stop it in Harness/)
+    expect(d.requests.some((r) => r.type === 'agent_close' && r.payload.mode !== 'inspect')).toBe(false)
+  })
+
+  it('shows the maker\'s status in show and ps --all, and leaves Fo, Cursor and a local harness as they were', async () => {
+    const d = new FakeDaemon()
+    d.frames = [
+      cloud('asleep', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' }, links: [] } }),
+      cloud('halted', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' }, links: [] } }),
+      cloud('done', 'idle', { cloud: { state: 'idle', activity: null, providerStatus: { status: 'exit', detail: null }, links: [] } }),
+      cloud('fo', 'idle', { engine: 'fo', cloud: { state: 'idle', activity: 'Calling Hair Lab', links: [] } }),
+      cloud('cursor', 'working', { engine: 'cursor-cloud', cloud: { state: 'working', links: [] } }),
+      frame('local'),
+    ]
+    const listed = harness(d, { pane: undefined })
+    expect(await psCommand(['--json'], listed.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(listed.out[0]).harnesses.map((r: { name: string }) => r.name)).not.toContain('asleep')
+    const all = harness(d, { pane: undefined })
+    expect(await psCommand(['--all', '--json'], all.deps)).toBe(EXIT.ok)
+    const byName = Object.fromEntries(JSON.parse(all.out[0]).harnesses.map((r: { name: string }) => [r.name, r]))
+    expect(byName.asleep.cloud).toEqual({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
+    expect(byName.halted.cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect(byName.done.cloud.providerStatus).toEqual({ status: 'exit', detail: null })
+    expect(byName.fo.cloud).toEqual({ state: 'idle', activity: 'Calling Hair Lab' })
+    expect(byName.cursor.cloud).toEqual({ state: 'working', activity: null })
+    expect(byName.local).not.toHaveProperty('cloud')
+    const shown = harness(d, { pane: undefined })
+    expect(await showCommand(['halted', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n')).cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    const fo = harness(d, { pane: undefined })
+    expect(await showCommand(['fo', '--json'], fo.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(fo.out.join('\n')).cloud).toEqual({ state: 'idle', activity: 'Calling Hair Lab' })
+    expect(JSON.parse(fo.out.join('\n'))).not.toHaveProperty('cloud.providerStatus')
+    const local = harness(d, { pane: undefined })
+    expect(await showCommand(['local', '--json'], local.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(local.out.join('\n'))).not.toHaveProperty('cloud')
+  })
+
+  it('waits on the frame it ended on, including one that left the live list', async () => {
+    const steps = [
+      cloud('devin', 'starting', { cloud: { state: 'starting', activity: null, providerStatus: { status: 'new', detail: null }, links: [] } }),
+      cloud('devin', 'working', { cloud: { state: 'working', activity: null, providerStatus: { status: 'running', detail: 'working' }, links: [] } }),
+      cloud('devin', 'idle', { cloud: { state: 'idle', activity: null, providerStatus: { status: 'running', detail: 'finished' }, links: [] } }),
+    ]
+    const d = new FakeDaemon()
+    d.extra.agents_list = () => ({ agents: [steps.length > 1 ? steps.shift()! : steps[0]!] })
+    const h = harness(d)
+    expect(await waitCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n')).harnesses[0]).toMatchObject({ state: 'idle', cloud: { state: 'idle', providerStatus: { status: 'running', detail: 'finished' } } })
+    const asking = new FakeDaemon()
+    asking.frames = [cloud('devin', 'needs_input', { cloud: { state: 'needs_input', activity: null, providerStatus: { status: 'running', detail: 'waiting_for_approval' }, links: [] } })]
+    const w = harness(asking)
+    expect(await waitCommand(['devin', '--json'], w.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(w.out.join('\n')).harnesses[0]).toMatchObject({ state: 'needs-input', needsPerson: true, cloud: { providerStatus: { status: 'running', detail: 'waiting_for_approval' } } })
+    const gone = new FakeDaemon()
+    const live = cloud('devin', 'working', { cloud: { state: 'working', activity: null, providerStatus: { status: 'running', detail: 'working' }, links: [] } })
+    const stopped = cloud('devin', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' }, links: [] } })
+    let n = 0
+    gone.extra.agents_list = (payload) => {
+      n += 1
+      if (n <= 2) return { agents: [live] }
+      return { agents: payload.includeStopped ? [stopped] : [] }
+    }
+    const s = harness(gone)
+    expect(await waitCommand(['devin', '--json'], s.deps)).toBe(EXIT.stopped)
+    expect(JSON.parse(s.out.join('\n')).harnesses[0].cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+  })
+})
+
+describe('harness tell', () => {
+  const told = (over: { state?: string; error?: [string, string] } = {}) => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => {
+      calls.push([target.machineId, payload])
+      if (over.error) throw new RefusedError(over.error[0], over.error[1])
+      return { id: 'm0000001', state: over.state ?? 'queued' }
+    }
+    return { calls, record }
+  }
+  const answeredWith = (d: FakeDaemon, id: string, ask: string, answer: string) =>
+    d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: ask }), ev('text_delta', { content: answer }), ev('done')], hasMore: false }])
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
+
+  it('gives a harness it started more work, through its machine, and records it for wait', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = told()
+    const h = harness(d, { record: r.record })
+    started(h.ledger, 'lead', 'kid')
+    expect(await tellCommand(['kid', '--', 'Now', 'add', 'tests.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%lead', machine: 'studio', agentId: 'kid', text: 'Now add tests.' }]])
+    expect(h.out.join('\n')).toBe('kid on studio: told. kid has it: typed once it is free, or given at its next tool call while it works.\n'
+      + 'Next: harness wait kid  (until it has answered; then read it: harness show kid)')
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'lead' }, { machineId: 'm', agentId: 'kid' })).toEqual({
+      at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+  })
+
+  it('on another machine, says who tells it: that machine checks its own record', async () => {
+    const d = new FakeDaemon(), far = new FakeDaemon('m2')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    far.frames = [frame('far')]
+    const r = told()
+    const h = harness(d, { record: r.record, others: { m2: far } })
+    started(h.ledger, 'lead', 'far', 'm2')
+    expect(await tellCommand(['far', '--json', '--', 'Ship it.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m2', { action: 'tell', from: { machineId: 'm', agentId: 'lead' }, machine: 'studio', agentId: 'far', text: 'Ship it.' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ name: 'far', state: 'queued', next: [{ run: 'harness wait far' }] })
+    expect(far.closed).toBe(true)
+  })
+
+  it('is refused, never asked of a machine, until the person allows it, and for a harness the caller did not start', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid'), frame('theirs'), frame('done', { status: 'stopped' })]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'lead', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'done')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false })
+    let h = harness(d, { record: r.record })
+    expect(await tellCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings agents-tell-agents on')
+    setAgentSettingsForTest(dir, { agentsTellAgents: true })
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['theirs', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toBe('You did not start theirs, so you may not tell it. Only the person can.')
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['done', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toMatch(/no longer running.*Start a new harness/)
+    // The person at a terminal has no pane to tell from: they open the harness in Harness.
+    h = harness(d, { record: r.record, pane: undefined })
+    expect(await tellCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['kid'], h.deps)).toBe(EXIT.usage)
+    expect(await tellCommand(['kid', 'theirs', '--', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(r.calls).toEqual([])
+  })
+
+  it('says the machine\'s refusal as it said it, as a refusal not to retry', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = told({ error: ['NOT_YOURS', 'You did not start that harness, as its machine records it, so you may not tell it. Only the person can.'] })
+    const h = harness(d, { record: r.record })
+    started(h.ledger, 'lead', 'kid')
+    expect(await tellCommand(['kid', '--json', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'NOT_YOURS', code: 'NOT_YOURS' })
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'lead' }, { machineId: 'm', agentId: 'kid' })).toBeNull()
+  })
+
+  it('wait does not return on the answer to the work before, until the harness takes the new work', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    // Idle on the turn before the tell: still waiting when the wait ends.
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    // Typed into it, a turn asked with those words: that answer is the one to read.
+    answeredWith(d, 'kid', '[from lead · Claude Code · studio, the harness that started you: more work. It reads your answer itself.]\n\nNow  add\ntests.', 'Added 3.')
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+  })
+
+  it('wait takes work given inside a turn, and lets go of a tell nothing took after a while', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { updatedAt: new Date(NOW + 5_000).toISOString() })]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed, and tests added.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    // It worked after the tell (given at a tool call): its answer is the new one.
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+    d.frames[1] = frame('kid')
+    h.advance(10 * 60_000 + 1)
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+  })
+
+  it('show says the answer is to the work before, and an idle harness of the caller\'s can be told more', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toContain('Next: harness tell kid -- <work>  (to give it more work in the same conversation)\n  or: harness close kid  (once you have what you need)')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    const again = harness(d)
+    expect(await showCommand(['kid', '--json'], again.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(again.out.join('\n'))).toMatchObject({ answer: 'Fixed.', told: { taken: false }, next: [{ run: 'harness wait kid' }] })
+    // Through MCP the next steps are its tools.
+    const mcp = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
+    setAgentSettingsForTest(dir, {})
+    new Ledger(ledgerPath(dir)).append({ at: NOW - 11 * 60_000, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Old.' })
+    expect(await showCommand(['kid'], mcp.deps)).toBe(EXIT.ok)
+    expect(mcp.out.join('\n')).toContain('Next: harness_tell (name: "kid", text: "<work>")')
+  })
+})
+
+describe('harness watch', () => {
+  const cloud = (id: string, state: string, over: Partial<Frame> = {}) => frame(id, {
+    engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, sessionId: id,
+    activity: { state: state === 'working' || state === 'starting' ? 'working' : 'idle' },
+    cloud: { state, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] }, ...over,
+  })
+  /** Each round's frame and transcript, one per look; the last stays. */
+  const script = (d: FakeDaemon, rounds: Array<{ frame: Frame; said?: Array<{ from: string; text: string }> }>) => {
+    let at = 0
+    const now = () => rounds[Math.min(at, rounds.length - 1)]
+    d.extra.agents_list = (payload) => {
+      const f = now().frame
+      return { agents: payload.includeStopped || f.status !== 'stopped' ? [f] : [] }
+    }
+    d.extra.cloud_transcript = () => ({ messages: (now().said ?? []).map((m, i) => ({ id: String(i), at: '', ...m })) })
+    return () => { at++ }
+  }
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('follows a cloud harness: one line a change, its question and its answer, until it stops (exit 4)', async () => {
+    const d = new FakeDaemon()
+    const asked = [{ from: 'person', text: 'add a slugify helper' }]
+    const question = [...asked, { from: 'agent', text: 'Question: kebab or snake case?' }]
+    const answer = [...question, { from: 'person', text: 'kebab' }, { from: 'agent', text: 'Summary: added slugify with tests.' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'starting', { updatedAt: '1' }) },
+      { frame: cloud('devin', 'working', { updatedAt: '2' }), said: asked },
+      { frame: cloud('devin', 'working', { updatedAt: '2' }), said: asked },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '3' }), said: question },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '3' }), said: question },
+      { frame: cloud('devin', 'working', { updatedAt: '4' }), said: [...question, { from: 'person', text: 'kebab' }] },
+      { frame: cloud('devin', 'idle', { updatedAt: '5' }), said: answer },
+      { frame: cloud('devin', 'idle', { updatedAt: '5' }), said: answer },
+      { frame: cloud('devin', 'stopped', { updatedAt: '6', status: 'stopped' }), said: answer },
+    ])
+    const h = harness(d, { sleep: async () => { h.advance(1_000); next() } })
+    expect(await watchCommand(['devin', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['started', 'working', 'needs_person', 'working', 'done', 'stopped'])
+    expect(said[2]).toMatchObject({ name: 'devin', agent: 'devin-cloud', state: 'needs-input', question: 'Question: kebab or snake case?', truncated: false,
+      cloud: { state: 'needs_input' }, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] })
+    expect(said[3]).toMatchObject({ event: 'working', ask: 'kebab' })
+    expect(said[4]).toMatchObject({ event: 'done', state: 'idle', summary: 'Summary: added slugify with tests.' })
+    expect(said[0].at).toBe(new Date(NOW).toISOString())
+    // Read no screen, and the transcript only when the frame moved (the stopped line reads its last answer).
+    expect(d.requests.some((r) => r.type === 'agent_close' || r.type === 'session_get')).toBe(false)
+    expect(d.requests.filter((r) => r.type === 'cloud_transcript').length).toBe(5)
+    expect(said[5]).toMatchObject({ event: 'stopped', summary: 'Summary: added slugify with tests.' })
+  })
+
+  it('says a second question as a new line, in the same state', async () => {
+    const d = new FakeDaemon()
+    const first = [{ from: 'person', text: 'go' }, { from: 'agent', text: 'Which repo?' }]
+    const second = [...first, { from: 'person', text: 'lamp' }, { from: 'agent', text: 'Which branch?' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'needs_input', { updatedAt: '1' }), said: first },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '2' }), said: second },
+    ])
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); next() } })
+    expect(await watchCommand(['devin', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.question)).toEqual(['Which repo?', 'Which branch?'])
+  })
+
+  it('follows a harness here by wait\'s looks: working, a question on its screen, then done on two idle looks', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: 'fix the test' }), ev('tool_start'), ev('tool_end'), ev('text_delta', { content: 'Fixed: 12 passed.' })], hasMore: false }])
+    let round = 0
+    const h = harness(d, { sleep: async (ms) => {
+      h.advance(ms)
+      round++
+      // Its screen: a question, then a draft (about to work again), then idle.
+      if (round === 2) { d.frames = [frame('kid')]; d.screens.set('kid', ['needs_input', 'draft', 'idle']) }
+    } })
+    expect(await watchCommand(['kid', '--json', '--timeout', '8s'], h.deps)).toBe(EXIT.timeout)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'needs_person', 'working', 'done'])
+    expect(said[0]).toMatchObject({ state: 'working', ask: 'fix the test' })
+    expect(said[1]).toMatchObject({ state: 'needs-input', question: 'Fixed: 12 passed.' })
+    expect(said[3]).toMatchObject({ state: 'idle', summary: 'Fixed: 12 passed.', tools: 1 })
+  })
+
+  it('says idle, not done, for a harness with nothing asked of it, once it is past its start', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('new', { createdAt: '2026-10-11T11:00:00Z' })]
+    const h = harness(d)
+    expect(await watchCommand(['new', '--json', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['idle'])
+  })
+
+  it('prints a line a change for a person, and ends at --timeout while it still works', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: 'build it' })], hasMore: false }])
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid: working: asked: build it'])
+  })
+
+  it('says stopped and exits 4 for a harness gone while it was watched', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); d.frames = [] } })
+    expect(await watchCommand(['kid', '--json'], h.deps)).toBe(EXIT.stopped)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['working', 'stopped'])
+  })
+
+  it('looks again after a round that timed out', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    let first = true
+    const real = d.request.bind(d)
+    d.request = async (type, payload) => {
+      if (type === 'agents_list' && first && d.requests.some((r) => r.type === 'agents_list')) { first = false; throw new AgentClientError('TIMEOUT', 'slow') }
+      return real(type, payload)
+    }
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['working'])
+  })
+
+  it('keeps a cloud maker\'s state: a Devin that has only finished is needs_person, with its words and providerStatus (#1449)', async () => {
+    const d = new FakeDaemon()
+    const asked = [{ from: 'person', text: 'add a word counter' }]
+    const finished = [...asked, { from: 'agent', text: 'Summary: added it; all 3 tests pass.' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'working', { updatedAt: '1', cloud: { state: 'working', providerStatus: { status: 'running', detail: 'working' } } }), said: asked },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '2', cloud: { state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_user' } } }), said: finished },
+      { frame: cloud('devin', 'stopped', { updatedAt: '3', status: 'stopped', cloud: { state: 'stopped', providerStatus: { status: 'suspended', detail: 'inactivity' } } }), said: finished },
+    ])
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); next() } })
+    expect(await watchCommand(['devin', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'needs_person', 'stopped'])
+    expect(said[1]).toMatchObject({ question: 'Summary: added it; all 3 tests pass.', cloud: { providerStatus: { status: 'running', detail: 'waiting_for_user' } } })
+    // Put to sleep after it finished: the stopped line still carries the answer.
+    expect(said[2]).toMatchObject({ state: 'stopped', summary: 'Summary: added it; all 3 tests pass.', cloud: { providerStatus: { status: 'suspended', detail: 'inactivity' } } })
+  })
+
+  it('says what the harness was asked without the line harness new puts before it', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: '[from Claude Code outside Harness · studio, the agent that started you. It reads your answer itself.]\n\nbuild it' })], hasMore: false }])
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out)[0]).toMatchObject({ event: 'working', ask: 'build it' })
+  })
+
+  it('takes one name, a whole --chars and a duration', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a'), frame('b')]
+    for (const [argv, said] of [
+      [[], 'Name the harness to watch.'],
+      [['a', 'b'], 'Watch one harness.'],
+      [['a', '--chars', '0'], '--chars takes a whole number.'],
+    ] as const) {
+      const h = harness(d)
+      expect(await watchCommand(argv, h.deps)).toBe(EXIT.usage)
+      expect(h.err[0]).toBe(said)
+    }
+  })
+})
+
+describe('harness reply to a harness in a pane (a program acting for the person)', () => {
+  const replied = (over: { state?: string; error?: [string, string] } = {}) => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => {
+      calls.push([target.machineId, payload])
+      if (over.error) throw new RefusedError(over.error[0], over.error[1])
+      return { id: 'm0000001', state: over.state ?? 'queued' }
+    }
+    return { calls, record }
+  }
+  const answeredWith = (d: FakeDaemon, id: string, ask: string, answer: string) =>
+    d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: ask }), ev('text_delta', { content: answer }), ev('done')], hasMore: false }])
+  // The lamp's lamp-tasks: no pane, no agent in its shell.
+  const program = (d: FakeDaemon, over: Partial<ClientDeps> & { others?: Record<string, FakeDaemon> } = {}) => harness(d, { pane: undefined, ...over })
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { programsReply: true }) })
+
+  it('gives an idle harness the person\'s words through its machine, and records them for wait', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('lamp-skill', { engine: 'claude' })]
+    const r = replied()
+    const h = program(d, { record: r.record, others: { m2: office } })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    expect(await replyCommand(['--machine', 'office', 'lamp-skill', '--json', '--', 'The lamp\'s check refused skill.toml: name is missing.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m2', { action: 'reply_local', machine: 'studio', agentId: 'lamp-skill', text: 'The lamp\'s check refused skill.toml: name is missing.' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ ok: true, name: 'lamp-skill', state: 'queued', next: [{ run: 'harness wait --machine office lamp-skill' }] })
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'person' }, { machineId: 'm2', agentId: 'lamp-skill' })).toMatchObject({ probe: 'The lamp\'s check refused skill.toml: name is missing.' })
+  })
+
+  it('is refused, never asked of a machine, while the switch is off, and for one that works, waits or is gone', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid'), frame('busy', { activity: { state: 'working' } }), frame('asks', { activity: undefined }), frame('done', { status: 'stopped' })]
+    const r = replied()
+    setAgentSettingsForTest(dir, { programsReply: false })
+    let h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings programs-reply on')
+    setAgentSettingsForTest(dir, { programsReply: true })
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['busy', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toMatch(/busy is working\. Wait for it to finish \(harness wait busy\)/)
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['asks', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toMatch(/waiting for the person.*Only they answer that/)
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['done', '--', 'x'], h.deps)).not.toBe(EXIT.ok)
+    expect(r.calls).toEqual([])
+  })
+
+  it('refuses an agent: it tells the harnesses it started (harness tell), and only those', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = replied()
+    const inPane = harness(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], inPane.deps)).toBe(EXIT.refused)
+    expect(inPane.err.join('\n')).toMatch(/harness tell/)
+    const outside = program(d, { record: r.record, env: { CLAUDECODE: '1' } })
+    expect(await replyCommand(['kid', '--', 'x'], outside.deps)).toBe(EXIT.refused)
+    expect(r.calls).toEqual([])
+  })
+
+  it('says the machine\'s refusal as it said it, and records nothing', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid')]
+    // Its machine reads the switch as off: the account's experiment had not reached it yet.
+    const r = replied({ error: ['REPLY_OFF', 'Programs may not give more work to your harnesses yet.'] })
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('Programs may not give more work')
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'person' }, { machineId: 'm', agentId: 'kid' })).toBeNull()
+  })
+
+  it('wait holds the answer to the work before until the harness takes the words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { engine: 'claude' })]
+    answeredWith(d, 'kid', 'Make a timer skill.', 'Done: skill.toml written.')
+    const r = replied()
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'The lamp\'s check refused it: name is missing.'], h.deps)).toBe(EXIT.ok)
+    expect(await waitCommand(['kid', '--timeout', '10s'], program(d).deps)).toBe(EXIT.timeout)
+    // Typed as the person's words, no header: a turn asked with them.
+    answeredWith(d, 'kid', 'The lamp\'s check refused it: name is missing.', 'Fixed: name added.')
+    expect(await waitCommand(['kid', '--timeout', '10s'], program(d).deps)).toBe(EXIT.ok)
+    const shown = program(d)
+    expect(await showCommand(['kid', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n'))).toMatchObject({ answer: 'Fixed: name added.' })
+  })
+})
+
+describe('harness route (a program acting for the person picks the harness)', () => {
+  const replied = () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => { calls.push([target.machineId, payload]); return { id: 'm0000001', state: 'queued' } }
+    return { calls, record }
+  }
+  // The lamp's lamp-tasks, asking about the office computer's harnesses.
+  const program = (d: FakeDaemon, office: FakeDaemon, over: Partial<ClientDeps> = {}) => {
+    const h = harness(d, { pane: undefined, others: { m2: office }, ...over })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    return h
+  }
+  const decides = (d: FakeDaemon, answer: Record<string, unknown>) => {
+    const asked: Array<Record<string, unknown>> = []
+    d.extra.route_decide = (payload) => { asked.push(payload); return answer }
+    return asked
+  }
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { programsReply: true }) })
+
+  it('shows this machine\'s router that machine\'s harnesses in a pane, and types the words into the one it picks', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week', { engine: 'devin' }), frame('skills', { engine: 'claude' }), frame('fo', { location: 'cloud' } as never), frame('old', { status: 'stopped' })]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9234, trace: '2 sessions · jev: "week" 92%' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'how is the week log going?'], h.deps)).toBe(EXIT.ok)
+    expect(asked).toEqual([{ text: 'how is the week log going?', projects: [], agents: [], sessions: [
+      { id: 'week', name: 'week', asks: ['ask of week'], about: 'week recap' },
+      { id: 'skills', name: 'skills', asks: ['ask of skills'], about: 'skills recap' },
+    ] }])
+    // Decided by THIS machine's router, never the office's.
+    expect(office.requests.some((q) => q.type === 'route_decide')).toBe(false)
+    expect(r.calls).toEqual([['m2', { action: 'reply_local', machine: 'studio', agentId: 'week', text: 'how is the week log going?' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ decided: 'session', id: 'week', name: 'week', machine: 'office', confidence: 0.923,
+      reason: '2 sessions · jev: "week" 92%', sent: { state: 'queued' }, next: [{ run: 'harness wait --machine office week' }] })
+  })
+
+  it('says new work and sends nothing, so the caller starts it', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    decides(d, { decided: 'new', via: 'jev', reason: 'Jev: new work' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'write a haiku'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ decided: 'new', reason: 'Jev: new work' })
+    expect(r.calls).toEqual([])
+  })
+
+  it('tells the router where this computer\'s last words for that machine went, within ten minutes only', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week'), frame('skills')]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.95, trace: 't' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--', 'read the week log'], h.deps)).toBe(EXIT.ok)
+    expect(asked[0].last).toBeUndefined()
+    h.advance(60_000)
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[1].last).toEqual({ id: 'week', agoMs: 60_000 })
+    // Another computer's words for the office (its line in this ledger cannot be: each computer keeps its own) and
+    // words for another machine never steer this one.
+    h.ledger.append({ at: NOW + 60_000, by: { machineId: 'm', agentId: 'person' }, told: { machineId: 'm3', agentId: 'skills' }, probe: 'x' })
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[2].last).toEqual({ id: 'week', agoMs: 60_000 })
+    h.advance(10 * 60_000)
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[3].last).toBeUndefined()
+  })
+
+  it('never sends to a harness still working: says NOT_IDLE, and to wait, not to start new work', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week', { activity: { state: 'working' } })]
+    decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9, trace: 't' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'how is it going?'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said).toMatchObject({ decided: 'session', id: 'week', sent: { error: 'NOT_IDLE' }, next: [{ run: 'harness wait --machine office week' }] })
+    expect(said.next[0].when).toMatch(/Never start new work/)
+    expect(r.calls).toEqual([])
+    expect(h.ledger.lastToldBy({ machineId: 'm', agentId: 'person' }, 'm2')).toBeNull()
+  })
+
+  it('is refused while the switch is off and for an agent, and asks the router nothing', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9, trace: 't' })
+    setAgentSettingsForTest(dir, { programsReply: false })
+    let h = program(d, office)
+    expect(await routeCommand(['--machine', 'office', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings programs-reply on')
+    setAgentSettingsForTest(dir, { programsReply: true })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    h = harness(d)
+    expect(await routeCommand(['--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(asked).toEqual([])
+  })
+
+  it('decides nothing when the router cannot: the caller acts on nothing', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    decides(d, { error: 'JEV_UNAVAILABLE', detail: "Harness's server did not answer in time" })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'ROUTER_UNAVAILABLE' })
+    expect(r.calls).toEqual([])
   })
 })

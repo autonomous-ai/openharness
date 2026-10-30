@@ -219,6 +219,47 @@ String? newBranchHere(GitProjectInfo info, String? name) {
       : typed;
 }
 
+/// With Worktree off, whether Start moves the folder ITSELF onto another branch — the one choice
+/// that reaches every harness already working in its checkout.
+///
+/// ⚠️ **The desktop's condition (`state/new_harness.dart`, `create`), kept in step with it.** With
+/// Worktree off the machine (`cli/src/lib/gitProject.ts`, `prepareGitProject`) makes a typed new
+/// branch where the folder is and moves the folder onto it, and checks any other local branch out
+/// in the folder with `git switch` once nothing there is uncommitted. Three choices move nothing,
+/// so they are not counted: the branch the folder is already on; a branch with a worktree of its
+/// own, which the machine opens instead, since Git will not check a branch out twice; and a remote
+/// branch, which the machine refuses with Worktree off, in its own words ("Choose a local branch,
+/// or turn Worktree on."). The desktop refuses that last one before its own check, so the two never
+/// say different things about it.
+bool switchesFolderBranch(
+  GitProjectInfo info, {
+  required bool worktree,
+  required String? branchRef,
+  required String? branchName,
+}) {
+  if (worktree) return false;
+  if (newBranchHere(info, branchName) != null) return true;
+  final ref = branchRef ?? defaultBranchRef(info, worktree: false);
+  return ref != null &&
+      ref.startsWith('refs/heads/') &&
+      ref != currentBranchRef(info) &&
+      // The desktop's `_worktreeOf`: checked out somewhere other than this folder.
+      !info.branches.any(
+        (branch) =>
+            branch.ref == ref &&
+            branch.worktree != null &&
+            branch.name != info.branch,
+      );
+}
+
+/// Whether [path] is the checkout at [root] or a folder inside it — what moves with the checkout
+/// when its branch is switched.
+///
+/// Both are the machine's paths, so they are compared by POSIX rules whatever this device's own
+/// are; `/code/web` holds `/code/web/api` and not `/code/website`.
+bool withinCheckout(String root, String path) =>
+    p.posix.equals(path, root) || p.posix.isWithin(root, path);
+
 /// The preparation a Git project's folder gets at Start.
 ///
 /// ⚠️ **Ported from the desktop's `state/new_harness.dart` line for line, and

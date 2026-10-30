@@ -12,8 +12,11 @@ const pasteChangedMessage =
 /// Pastes the phone's clipboard into [session]: its text as one paste rather than as typing, or,
 /// when there is no text, its image, the same upload the key bar's image button makes.
 ///
-/// The Paste row of the terminal's actions sheet (`phone/terminal_page.dart`). iOS has no other way
-/// in: long-press on the terminal is selection there, and the soft keyboard has no paste key.
+/// The Paste row of the terminal's actions sheet (`phone/terminal_page.dart`), and every other paste
+/// the page offers through it: the key bar's paste, the long-press Paste on the prompt, and a
+/// hardware keyboard's ⌘V (Ctrl+V on Android) or a right- or middle-click on the terminal
+/// (`TerminalPanel.onPaste`). iOS has no other way in: long-press on the output is selection there,
+/// and the soft keyboard has no paste key.
 ///
 /// Text is asked about first with [Clipboard.hasStrings], which iOS answers without its "Allow
 /// Paste" prompt, so the person is asked once, for the one thing actually read. Unlike the

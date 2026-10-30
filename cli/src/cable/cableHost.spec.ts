@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
@@ -707,6 +707,15 @@ describe('cableEventFor', () => {
     expect(cableEventFor({ ...base, payload: { ...base.payload, restored: true } })?.subagent).toBe(true)
     expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
+
+  it('carries a summary\'s tier, decided by the recaps, and no word that is not one', () => {
+    const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
+    for (const tier of ['alert', 'list', 'silent'] as const) {
+      expect(cableEventFor({ ...base, payload: { ...base.payload, tier } })?.tier).toBe(tier)
+    }
+    expect(cableEventFor({ ...base, payload: { ...base.payload, tier: 'loud' } })).not.toHaveProperty('tier')
+    expect(cableEventFor({ ...base, payload: { kind: 'done', text: 'done', tier: 'alert' } })).not.toHaveProperty('tier')
+  })
 })
 
 
@@ -950,5 +959,148 @@ describe('DaemonCableHost player library and member ids', () => {
     expect(rows).toMatchObject([{ id: 'a1', machineId: 'mine', status: 'idle', lastActivityAt: null },
       { id: 'a2', machineId: 'mine', status: 'idle', lastActivityAt: 5000 }])
     AGENTS.length = 0
+  })
+})
+
+describe('Swarm cards', () => {
+  const card = { id: 'st1', name: 'openharness', count: 1, leads: [{ id: 'l1', projectId: 'p1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }] }
+
+  it('keeps the list the core last handed it, and names a Swarm tab\'s Swarm on the desk row', () => {
+    const host = new DaemonCableHost(wiring())
+    // Not read yet is not "no Swarms": a dial told so before the core had read them left the Swarm on its face.
+    expect(host.swarmCards()).toBeNull()
+    host.setSwarmCards([])
+    expect(host.swarmCards()).toEqual([])
+    host.setSwarmCards([card])
+    expect(host.swarmCards()).toEqual([card])
+    host.setSwarms({ active: 't2', tiles: [], swarms: [
+      { id: 't1', name: 'Work', agentIds: ['a'], panes: 1 },
+      { id: 't2', name: 'openharness', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+    ] })
+    expect(host.listSwarms().swarms).toEqual([
+      { id: 't1', name: 'Work', agents: 1, agentIds: ['a'], panes: 1 },
+      { id: 't2', name: 'openharness', agents: 0, agentIds: [], panes: 1, superTabId: 'st1' },
+    ])
+  })
+
+  it('says which Swarm project the window has open: only on a Swarm tab, with the device mark, and no project as none', () => {
+    const host = new DaemonCableHost(wiring())
+    expect(host.activeSwarmProject()).toBeNull()   // no window
+    const swarms = [
+      { id: 't1', name: 'Work', agentIds: [], panes: 0 },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Swarm, no project', agentIds: [], panes: 1, superTabId: 'st1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [], fromDevice: true })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: true })
+    // The Swarm tab on its Chat with PM or a DM: still that Swarm, with no project of its own (Diego, 2026-10-28:
+    // the dial sat on "Nothing on this tab" while the window showed the Swarm).
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
+  })
+
+  it('names the conversation the window has open in the active Swarm tab, when it names one', () => {
+    const host = new DaemonCableHost(wiring())
+    const swarms = [
+      { id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1' },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Work', agentIds: [], panes: 0, conversationId: 'c1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+  })
+
+  it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
+    const w = wiring({
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), swarmCardSide: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => ({ said: true as const })),
+      swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
+    })
+    const host = new DaemonCableHost(w)
+    host.swarmCardsWanted(true); host.swarmCardOpen('c1', 'st1', 'l1'); host.superTabSelected('st1', 'p1')
+    expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
+    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1', false)
+    expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
+    expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
+    // A dial that speaks swarmChat asks for the chat on the face: the flag goes on to the wiring.
+    host.swarmCardOpen('c1', 'st1', 'l1', true)
+    expect(w.swarmCardOpen).toHaveBeenLastCalledWith('c1', 'st1', 'l1', true)
+    await host.swarmCardRecap('st1', 'l1', true)
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', true)
+    expect(await host.swarmSay('h1', 'ship it', true)).toEqual({ said: true })
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await host.swarmSay('h1', 'ship it')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', false)
+    // A dial that speaks swarmBuddy asks for the face on its side, and says which side it swiped to.
+    await host.swarmCardRecap('st1', 'l1', 'buddy')
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
+    host.swarmCardSide('st1', 'buddy')
+    expect(w.swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
+    const bare = new DaemonCableHost(wiring())
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1')
+    expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+    expect(await bare.swarmSay('h1', 'ship it')).toEqual({ said: false })
+  })
+})
+
+describe('firmware release lookup', () => {
+  // A dial on 9.9.9 is never offered the manifest's 0.0.1, so each call ends after the manifest read and
+  // the count below is exactly the GETs a plugged-in dial costs.
+  const manifest = { circle: { version: '0.0.1', url: 'https://x/fw.bin', sha256: 'a'.repeat(64), size: 1 } }
+  function stubManifest(ok = () => true) {
+    const fetch = vi.fn(async () => (ok() ? new Response(JSON.stringify(manifest)) : new Response('', { status: 503 })))
+    vi.stubGlobal('fetch', fetch)
+    return fetch
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('answers repeat keepalives from the release it read, for 30 minutes', async () => {
+    vi.useFakeTimers()
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    for (let i = 0; i < 19; i++) {
+      vi.advanceTimersByTime(15_000)
+      await host.firmwareFor('9.9.9', 'circle', true)
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(30 * 60_000)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the manifest at once unless a keepalive asks, and per OTA key', async () => {
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await host.firmwareFor('9.9.9', 'harness-pro', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('never keeps a failed read: the next keepalive asks again', async () => {
+    let up = true
+    const fetch = stubManifest(() => up)
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    up = false
+    // Nor does an earlier good read stand in for it.
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+    up = true
+    await host.firmwareFor('9.9.9', 'circle', true)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 })

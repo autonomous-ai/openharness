@@ -28,6 +28,15 @@ fn remove_views(tabs: &mut Vec<Tab>, removed: &HashSet<u64>) {
 impl App {
     pub(crate) fn saved_identity(&self) -> Value { json!(self.daemon_identity) }
 
+    /// [machine] is this computer's daemon: the machine it last said it is, or the one listed as this
+    /// computer. Not `fleet.local_id` alone, which is hn's own shells while the daemon is down: this
+    /// computer's own redials were counted as remote_connect then (measure.rs).
+    pub(crate) fn this_computer(&self, machine: &str) -> bool {
+        if crate::local::is_local(machine) { return false }
+        machine == self.fleet.local_id || self.daemon_identity.as_ref().is_some_and(|id| id.machine == machine)
+            || self.fleet.machine(machine).is_some_and(|m| m.local)
+    }
+
     pub(super) fn reconcile_account_machines(&mut self, rows: &[Value], stale: bool) {
         // An older outage cache cannot prove a removal or undo a confirmed one.
         // Keep live views until a fresh inventory supplies the authoritative list.
@@ -61,7 +70,7 @@ impl App {
         self.fleet.machines.retain(|m| m.id != machine);
         self.fleet.agents.retain(|(m, _), _| m != machine);
         self.shells.retain(|(m, _)| m != machine);
-        self.homes.remove(machine); self.usage.remove(machine); self.rtt.remove(machine);
+        self.homes.remove(machine); self.usage.remove(machine); self.usage_asked.remove(machine); self.rtt.remove(machine);
         self.pending_questions.retain(|(m, _, _)| m != machine);
         self.home_order.borrow_mut().clear(); self.fleet_marked = false;
         self.fit_panes(); self.redraw_all = true; self.server_dirty = true;
@@ -222,7 +231,7 @@ impl App {
         self.recent.clear(); self.home_external.clear(); self.said.clear(); self.said_for.clear(); self.said_want.clear();
         self.said_generation = self.said_generation.wrapping_add(1); self.said_pending = 0; self.said_due = None;
         self.tails.clear(); self.tails_asked.clear(); self.pending_questions.clear();
-        self.dsh.clear(); self.rtt.clear(); self.homes.clear(); self.usage.clear(); self.usage_checked = None;
+        self.dsh.clear(); self.rtt.clear(); self.homes.clear(); self.usage.clear(); self.usage_checked = None; self.usage_asked.clear();
         self.prs.clear(); self.pr_asking.clear(); self.prs_read = None; self.seen_rostered.clear(); self.enriching = 0;
         self.home_order.borrow_mut().clear(); self.fleet_marked = false;
         self.agent_errors.clear(); self.launch_failed = None; self.away = None;

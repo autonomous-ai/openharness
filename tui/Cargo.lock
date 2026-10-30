@@ -653,14 +653,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-term"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+]
+
+[[package]]
 name = "harness-tui"
-version = "0.1.35"
+version = "0.1.43"
 dependencies = [
  "alacritty_terminal",
  "base64",
  "crossterm",
  "flate2",
  "futures-util",
+ "harness-term",
  "libc",
  "qrcodegen",
  "ratatui",

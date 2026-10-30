@@ -67,7 +67,9 @@ export function createProductHealth(add: (metric: ProductUsageMetric, day?: stri
       state.week = week
     },
     sample(sample?: () => { rss: number; cpuPercent?: number }) {
-      if (!sample || now() - sampledAt < 60000) return
+      // Once a tick: the collector's ticks are 45 to 75 seconds apart (gateway/productUsage.ts), a minute on
+      // average, so a 60-second floor would skip every other short tick and undercount the samples.
+      if (!sample || now() - sampledAt < 45000) return
       sampledAt = now()
       try {
         const value = sample()

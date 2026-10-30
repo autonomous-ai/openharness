@@ -92,6 +92,7 @@ class ProviderUsage {
     this.message,
     this.fetchedAt,
     this.account,
+    this.email,
   });
 
   /// The state a provider is in before it has ever answered.
@@ -100,7 +101,8 @@ class ProviderUsage {
       windows = const [],
       message = null,
       fetchedAt = null,
-      account = null;
+      account = null,
+      email = null;
 
   final UsageProvider provider;
   final UsageStatus status;
@@ -125,6 +127,10 @@ class ProviderUsage {
   /// never matches anything**, itself included — two readings nobody can name
   /// are not provably one account, and merging them could hide a subscription.
   final String? account;
+
+  /// The provider login's email, for display only. [account] remains the stable
+  /// identity used to group readings and select the correct subscription.
+  final String? email;
 
   bool get hasFigures => status == UsageStatus.ok && windows.isNotEmpty;
 

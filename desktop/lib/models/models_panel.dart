@@ -426,7 +426,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                               foregroundColor: AppPalette.textSecondary,
                               textStyle: AppType.monoMeta(),
                             ),
-                            child: const Text('Manage models'),
+                            child: const Text('Your models'),
                           ),
                       ],
                     ),

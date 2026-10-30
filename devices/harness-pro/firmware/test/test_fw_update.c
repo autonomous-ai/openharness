@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "fw_update.h"
+#include "last_words.h"
 #include "hal/efuse_hal.h"
 #include "mbedtls/sha256.h"
 
@@ -69,6 +70,7 @@ void fw_update_ui_pct(int p) { if (h_pcts < 64) pcts[h_pcts++] = p; }
 void fw_update_ui_restarting(const char *t) { h_restarting++; snprintf(restarting_to, 32, "%s", t); }
 void fw_update_ui_failed(void) { h_failed++; }
 void fw_update_restart(void) { h_restart++; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
 
 // ---- fixtures --------------------------------------------------------------------------------------------
 static uint8_t img[IMG_SIZE];
@@ -293,29 +295,41 @@ static void mark_valid_only_when_pending(void)
     assert(c_cancel == 0 && !fw_was_updated(v, sizeof v));
 }
 
-// When a fresh image is confirmed: never before the first frame; then at the first cable session or at 60 s up.
+// When a fresh image is confirmed: after the first frame, 60 s up with a 30 s unbroken session, or 180 s up alone.
+static void confirm_policy(void)
+{
+    assert(!fw_confirm_due(0, 0) && !fw_confirm_due(179999, 0) && fw_confirm_due(180000, 0));     // no cable: 180 s
+    assert(!fw_confirm_due(2000, 1500) && !fw_confirm_due(59999, 1000));                          // the old welcome-time rule is gone
+    assert(!fw_confirm_due(60000, 40000));                                                        // session only 20 s old
+    assert(!fw_confirm_due(60000, 30001) && fw_confirm_due(60000, 30000));
+    assert(!fw_confirm_due(59999, 1000));                                                         // 58 s of session, but the image is under 60 s
+    assert(fw_confirm_due(90000, 60000) && !fw_confirm_due(89999, 60000));                        // late welcome: 30 s after it
+    assert(fw_confirm_due(0xFFFFFF00u, 1));                                                       // far past every limit
+}
+
 static void confirm_timing(void)
 {
     char v[32];
-    // welcome before the first frame: nothing yet; the frame then confirms (once)
+    // a clean run with a cable: nothing before the frame, nothing at 60 s, confirmed 30 s after the welcome (once)
     reset(); fw_confirm_test_reset(); img_state = ESP_OTA_IMG_PENDING_VERIFY;
-    assert(fw_confirm_pending());
-    assert(!fw_confirm_session_up() && c_cancel == 0);
-    assert(!fw_confirm_tick(61000) && c_cancel == 0);          // 60 s up but no frame: still not
-    assert(fw_confirm_frame_painted() && c_cancel == 1 && !fw_confirm_pending());
-    assert(!fw_confirm_session_up() && !fw_confirm_tick(90000) && c_cancel == 1);
-    assert(fw_was_updated(v, sizeof v));
-    // frame first, no welcome: not before 60 s, once at 60 s
+    fw_confirm_session_up(2000);
+    assert(!fw_confirm_tick(90000) && c_cancel == 0 && fw_confirm_pending());     // no frame yet
+    fw_confirm_frame_painted();
+    assert(!fw_confirm_tick(31999) && !fw_confirm_tick(59999) && c_cancel == 0);
+    assert(fw_confirm_tick(60000) && c_cancel == 1 && !fw_confirm_pending());
+    assert(!fw_confirm_tick(61000) && c_cancel == 1 && fw_was_updated(v, sizeof v));
+    // the session drops and comes back: the 30 s start over
     reset(); fw_confirm_test_reset(); img_state = ESP_OTA_IMG_PENDING_VERIFY;
-    assert(!fw_confirm_frame_painted() && c_cancel == 0);
-    assert(!fw_confirm_tick(1000) && !fw_confirm_tick(59999) && c_cancel == 0 && fw_confirm_pending());
-    assert(fw_confirm_tick(60000) && c_cancel == 1);
-    assert(!fw_confirm_tick(61000) && !fw_confirm_session_up() && c_cancel == 1);
-    // frame, then the welcome: confirmed on the welcome, long before 60 s, once
+    fw_confirm_frame_painted(); fw_confirm_session_up(2000);
+    fw_confirm_session_down();
+    assert(!fw_confirm_tick(100000) && c_cancel == 0);
+    fw_confirm_session_up(100000);
+    assert(!fw_confirm_tick(129999) && fw_confirm_tick(130000) && c_cancel == 1);
+    // no cable ever: 180 s
     reset(); fw_confirm_test_reset(); img_state = ESP_OTA_IMG_PENDING_VERIFY;
-    assert(!fw_confirm_frame_painted() && !fw_confirm_tick(5000) && c_cancel == 0);
-    assert(fw_confirm_session_up() && c_cancel == 1);
-    assert(!fw_confirm_session_up() && !fw_confirm_tick(60000) && c_cancel == 1);
+    fw_confirm_frame_painted();
+    assert(!fw_confirm_tick(60000) && !fw_confirm_tick(179999) && c_cancel == 0);
+    assert(fw_confirm_tick(180000) && c_cancel == 1 && !fw_confirm_tick(181000));
 }
 
 // M6: no first frame on a trial image reverts it; on a confirmed image nothing happens.
@@ -330,7 +344,7 @@ int main(void)
     make_image();
     offer_validation(); busy_declined(); second_offer_declined(); slice_without_offer_is_ignored();
     slice_past_size_aborts(); stall_aborts_after_10s(); offsets_and_resend(); silence_asks_for_resend(); short_payload_ignored(); end_checks(); happy_path(); mark_valid_only_when_pending();
-    confirm_timing(); no_frame_rolls_back();
+    confirm_policy(); confirm_timing(); no_frame_rolls_back();
     puts("test_fw_update: ok");
     return 0;
 }

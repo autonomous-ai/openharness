@@ -16,14 +16,19 @@ import type { BackendNotice } from './api.js'
 
 type Experiments = Readonly<Record<string, { state: readonly string[] }>>
 
-/** Whether any of `state` is in `dataDir`: a path under it, or `dir/*.ext` for a file of that kind in that folder. */
+/** Whether any of `state` is in `dataDir`: a path under it, or `dir/prefix*suffix` for a file of that kind in that folder.
+ *  The star was only read after a slash, so `super-tabs/host-*.json` was looked up as that literal file name and never
+ *  found: a machine contributed to a Swarm never woke the Swarm service at a start, and after the master re-executed
+ *  (every update) it stayed off until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
 export function stateIsThere(dataDir: string, state: readonly string[]): boolean {
   return state.some((entry) => {
-    const star = entry.lastIndexOf('/*')
+    const slash = entry.lastIndexOf('/')
+    const star = entry.indexOf('*', slash + 1)
     if (star < 0) return existsSync(join(dataDir, entry))
-    const suffix = entry.slice(star + 2)
+    const prefix = entry.slice(slash + 1, star)
+    const suffix = entry.slice(star + 1)
     try {
-      return readdirSync(join(dataDir, entry.slice(0, star))).some((name) => name.endsWith(suffix))
+      return readdirSync(join(dataDir, entry.slice(0, slash))).some((name) => name.startsWith(prefix) && name.endsWith(suffix))
     } catch {
       return false
     }
@@ -163,7 +168,7 @@ export function createAgentSettingsSync(deps: {
       const changes = body && typeof body === 'object'
         ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => key in AGENT_SETTING_EXPERIMENTS && typeof value === 'boolean')
         : []
-      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false} or {"agentMessagesHideSummary": true|false}.' } } }
+      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false}, {"agentMessagesHideSummary": true|false}, {"agentsTellAgents": true|false} or {"programsReply": true|false}.' } } }
       const asked = deps.session()
       if (!asked?.machineId) return { status: 409, body: { error: { code: 'SIGNED_OUT', message: AGENT_SETTINGS_SIGNED_OUT } } }
       const read = heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked)
@@ -173,6 +178,11 @@ export function createAgentSettingsSync(deps: {
         const feature = AGENT_SETTING_EXPERIMENTS[key as keyof AgentSettings]
         const written = heard(await deps.backend('PATCH', EXPERIMENTAL_SETTINGS, { accountId, feature, enabled }), asked)
         if (!agentSettingsFromAnswer(written)) return failed(written)
+      }
+      // Turned on by an agent on the person's yes (agentClient/settings.ts): Harness has only its word for that yes.
+      const byAgent = (body as Record<string, unknown>).byAgent
+      if (typeof byAgent === 'string' && byAgent.trim()) {
+        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by ${byAgent.trim().slice(0, 40)}, which says the person said yes`)
       }
       return { status: 200, body: { ...readAgentSettings(deps.dataDir, deps.session()), signedIn: true } }
     },

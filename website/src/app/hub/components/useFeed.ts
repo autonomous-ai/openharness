@@ -1,10 +1,11 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { communityRequest, CommunityError } from '@/lib/community/client';
+import { communityRequest, CommunityError, sessionHeaders } from '@/lib/community/client';
 import { feedPath, type FeedPage, type FeedQuery, type Stats } from '@/lib/community/feed';
 import { onSessionChange } from '@/lib/community/session';
 import { putLike } from '@/lib/community/social';
 import type { HarnessSummary } from '@/lib/community/types';
+import { countHub } from '@/lib/community/hubMeasure';
 
 
 /**
@@ -21,10 +22,13 @@ export function useFeed({ following, mine, forkedFrom, author, query, category, 
   const [cursor, setCursor] = useState<string | null>(initial?.nextCursor ?? null), [settled, setSettled] = useState(!!initial);
   const [order, setOrder] = useState<string[] | null>(initial?.order ?? null);
   const [error, setError] = useState(''), [likeError, setLikeError] = useState(''), [signedOut, setSignedOut] = useState(false), [busy, setBusy] = useState(false);
+  // A like that needs an account: said where the reader is (FeedToast), not as the feed's own sign-in.
+  const [likePrompt, setLikePrompt] = useState(false);
   const [liking, setLiking] = useState<ReadonlySet<string>>(new Set());
   const generation = useRef(0), loading = useRef(false), pendingLikes = useRef(new Set<string>()), more = useRef<HTMLDivElement>(null);
   const load = useCallback(async (after?: string) => {
     if (after && loading.current) return;
+    if (after) countHub('hub_feed_more');
     const requestId = ++generation.current;
     loading.current = true; setBusy(true); setError(''); setSignedOut(false);
     try {
@@ -56,17 +60,20 @@ export function useFeed({ following, mine, forkedFrom, author, query, category, 
     setLiking(new Set(pendingLikes.current));
   };
   async function like(id: string) {
-    if (!signedIn) { setSignedOut(true); return; }
+    // Before the first page answers the feed cannot say who is reading: a browser holding a sign-in tries, and the Hub decides.
+    if (!signedIn && !sessionHeaders().Authorization) { setLikePrompt(true); return; }
     if (pendingLikes.current.has(id)) return;
-    pending(id, true); setLikeError('');
+    countHub('hub_like');
+    pending(id, true); setLikeError(''); setLikePrompt(false);
     try {
       const result = await putLike(id, !stats[id]?.liked);
       setStats(previous => ({ ...previous, [id]: { ...previous[id], comments: previous[id]?.comments || 0, ...result } }));
     } catch (e) {
-      if (e instanceof CommunityError && e.status === 401) setSignedOut(true);
+      if (e instanceof CommunityError && e.status === 401) setLikePrompt(true);
       // Not the feed's error: that one offers to reload the feed and pauses its paging.
       else setLikeError(e instanceof Error ? e.message : 'Could not save your like. Try again.');
     } finally { pending(id, false); }
   }
-  return { posts, order, follows, stats, cursor, settled, error, likeError, signedOut, busy, liking, more, load, like };
+  const dismissLike = useCallback(() => { setLikeError(''); setLikePrompt(false); }, []);
+  return { posts, order, follows, stats, cursor, settled, error, likeError, likePrompt, dismissLike, signedOut, busy, liking, more, load, like };
 }

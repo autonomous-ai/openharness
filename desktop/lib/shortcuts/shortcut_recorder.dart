@@ -48,6 +48,7 @@ const _pickerBareKeys = {'up', 'down', 'pageup', 'pagedown'};
 String contextPhrase(KeymapContext context) => switch (context) {
   KeymapContext.workspace => '',
   KeymapContext.terminal => ' in agent input',
+  KeymapContext.swarmChat => ' in Swarm chat',
   KeymapContext.picker => ' in search',
   KeymapContext.project => ' in the project menu',
 };
@@ -63,7 +64,12 @@ class _ShortcutRecorderState extends State<ShortcutRecorder> {
 
   String get _command => widget.lesson.command;
   KeymapContext get _context => widget.lesson.context;
-  bool get _linux => !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+  /// Linux and the native Windows app: Ctrl and Alt are the chord keys, and
+  /// the terminal owns the Ctrl+Shift clipboard keys.
+  bool get _pcKeyboard =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.windows);
   bool get _customized =>
       widget.lesson.bindings.any((binding) => binding.custom) ||
       widget.keymap.current
@@ -96,7 +102,7 @@ class _ShortcutRecorderState extends State<ShortcutRecorder> {
     if (!modified &&
         !function &&
         !(_context.isPicker && _pickerBareKeys.contains(stroke.key))) {
-      return 'Add ${_linux ? 'Ctrl or Alt' : '⌘, ⌃ or ⌥'} — a key on its own '
+      return 'Add ${_pcKeyboard ? 'Ctrl or Alt' : '⌘, ⌃ or ⌥'} — a key on its own '
           'would type instead.';
     }
     if (widget.lesson.bindings.length == 1 &&
@@ -110,7 +116,7 @@ class _ShortcutRecorderState extends State<ShortcutRecorder> {
       context: _context,
       keys: [stroke],
       label: _label,
-      linux: _linux,
+      linux: _pcKeyboard,
     );
     if (conflict == null) return null;
     final where = conflict.context == null
@@ -169,7 +175,7 @@ class _ShortcutRecorderState extends State<ShortcutRecorder> {
         context: _context,
         keys: binding.keys,
         label: _label,
-        linux: _linux,
+        linux: _pcKeyboard,
       );
       if (conflict != null) {
         setState(

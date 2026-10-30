@@ -1,0 +1,22 @@
+#!/bin/sh
+# What the harness in this folder changed and has not committed: the files, then the lines, in a
+# pager. C-b D splits it beside the harness (tmux.conf), in the harness's own folder; q closes it.
+cd "${1:-.}" 2>/dev/null || { printf 'No folder %s\n' "$1"; read -r _; exit 1; }
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    printf '%s is not a git repository: there is no diff to show.\n\nPress Enter to close.' "$PWD"
+    read -r _
+    exit 0
+fi
+if [ -z "$(git status --porcelain)" ]; then
+    printf 'Nothing changed in %s since its last commit.\n\n' "$PWD"
+    git --no-pager log --oneline -5
+    printf '\nPress Enter to close.'
+    read -r _
+    exit 0
+fi
+{
+    printf '%s\n\n' "$PWD"
+    git -c color.status=always status --short
+    printf '\n'
+    git -c color.ui=always diff HEAD
+} | LESS= less -R

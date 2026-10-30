@@ -1,0 +1,218 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/model.dart';
+import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_models_page.dart';
+
+import 'swarm_fixture.dart';
+
+/// What Your models lists for a Swarm: the models its machines' fresh
+/// readings say it can use now, as Desktop's machine details read them — an
+/// API a member shares, a member's model on the Swarm's grid, or a model
+/// shared with one machine's owner, usable on that machine alone.
+void main() {
+  final now = DateTime.utc(2026, 10, 28, 4);
+  final fresh = now.subtract(const Duration(seconds: 10));
+  final stale = now.subtract(const Duration(minutes: 2));
+
+  Map<String, dynamic> machine(
+    String id,
+    String name,
+    List<Map<String, dynamic>> models, {
+    DateTime? at,
+  }) => {
+    'machineId': id,
+    'name': name,
+    'observation': {
+      'receivedAt': (at ?? fresh).millisecondsSinceEpoch,
+      'localModels': models,
+    },
+  };
+
+  SuperTabSnapshot snapshot({
+    Map<String, dynamic>? localModels = const {
+      'grid': 'swarm-grid',
+      'enabled': true,
+      'ready': true,
+    },
+    List<Map<String, dynamic>> machines = const [],
+  }) {
+    final data = firstLoad();
+    (data['head'] as Map)['data'] = {
+      ...headData(),
+      'localModels': ?localModels,
+    };
+    data['machines'] = [
+      for (final (i, m) in machines.indexed)
+        part(m['machineId'] as String, 1 + i, m),
+    ];
+    return SuperTabSnapshot.fromJson(SuperTabParts.firstLoad(data).state);
+  }
+
+  test('a Swarm whose models were never turned on lists none', () {
+    expect(swarmModelList(snapshot(localModels: null), now: now), isNull);
+    expect(
+      swarmModelList(
+        snapshot(localModels: {'grid': 'swarm-grid', 'enabled': false}),
+        now: now,
+      ),
+      isNull,
+    );
+  });
+
+  test('APIs, local models and one-computer models, each where it runs', () {
+    final list = swarmModelList(
+      snapshot(
+        machines: [
+          machine('mac-1', 'MacbookPro.local', [
+            {
+              'grid': 'swarm-grid',
+              'model': 'moonshotai/kimi-k3',
+              'name': 'moonshotai/kimi-k3 · OpenRouter',
+              'kind': 'api',
+            },
+            {
+              'grid': 'swarm-grid',
+              'model': 'qwen3-coder-30b',
+              'name': 'Qwen3 Coder 30B',
+              'kind': 'local',
+            },
+          ]),
+          machine('mac-2', "Diego's Mac", [
+            {
+              'grid': 'diego-grid',
+              'model': 'llama-4-scout',
+              'name': 'Llama 4 Scout',
+              'kind': 'shared',
+            },
+          ]),
+        ],
+      ),
+      now: now,
+    )!;
+
+    expect(list.apis, [
+      (name: 'kimi-k3', provider: 'OpenRouter', machine: 'MacbookPro.local'),
+    ]);
+    expect(list.local, [
+      (name: 'Qwen3 Coder 30B', provider: null, machine: 'MacbookPro.local'),
+    ]);
+    expect(list.oneComputer, [
+      (name: 'Llama 4 Scout', provider: null, machine: "Diego's Mac"),
+    ]);
+    expect(list.isEmpty, isFalse);
+  });
+
+  test('an old reading, or a model still starting, is not usable now', () {
+    final list = swarmModelList(
+      snapshot(
+        machines: [
+          machine('mac-1', 'Studio', [
+            {'grid': 'swarm-grid', 'model': 'old', 'kind': 'local'},
+          ], at: stale),
+          machine('mac-2', 'Mini', [
+            {
+              'grid': 'swarm-grid',
+              'model': 'warming',
+              'kind': 'local',
+              'starting': true,
+            },
+          ]),
+        ],
+      ),
+      now: now,
+    )!;
+
+    expect(list.isEmpty, isTrue);
+  });
+
+  test('a model two machines offer is listed once', () {
+    final model = {
+      'grid': 'swarm-grid',
+      'model': 'deepseek/deepseek-v4.1-flash',
+      'name': 'deepseek/deepseek-v4.1-flash · OpenRouter',
+      'kind': 'api',
+    };
+    final list = swarmModelList(
+      snapshot(
+        machines: [
+          machine('mac-1', 'Studio', [model]),
+          machine('mac-2', 'Mini', [model]),
+        ],
+      ),
+      now: now,
+    )!;
+
+    expect(list.apis, [
+      (name: 'deepseek-v4.1-flash', provider: 'OpenRouter', machine: 'Studio'),
+    ]);
+  });
+
+  test("lent by one person: only their machines' models, not a teammate's, "
+      'nor their Harness Team account\'s on their Mac', () {
+    final swarm = snapshot(
+      machines: [
+        {
+          ...machine('mac-1', 'Studio', [
+            {'grid': 'swarm-grid', 'model': 'qwen3-coder', 'name': 'Qwen3'},
+          ]),
+          'contributorId': me,
+        },
+        {
+          ...machine('mac-ken', 'Ken Workstation', [
+            {'grid': 'swarm-grid', 'model': 'gemma-4', 'name': 'Gemma 4'},
+          ]),
+          'contributorId': 'ken',
+        },
+        {
+          ...machine('team-1', 'Harness Team', [
+            {'grid': 'swarm-grid', 'model': 'phi-5', 'name': 'Phi 5'},
+          ]),
+          'contributorId': me,
+          'hostMachineId': 'mac-1',
+        },
+      ],
+    );
+
+    final mine = swarmModelList(swarm, now: now, lentBy: me)!;
+    expect(
+      [for (final m in mine.local) (m.name, m.machine)],
+      [('Qwen3', 'Studio')],
+    );
+    expect(swarmModelList(swarm, now: now)!.local, hasLength(3));
+  });
+
+  test('lent by one person: a Harness Team account\'s pool is left out by '
+      'its own mark, also once the Mac it names has left the Swarm, or '
+      'when only its reading says Team', () {
+    // Read as signed in as a Team account, with no Mac named.
+    final teamMini = machine('team-2', 'Team Mini', [
+      {'grid': 'swarm-grid', 'model': 'gemma-4', 'name': 'Gemma 4'},
+    ]);
+    (teamMini['observation'] as Map)['sessionKind'] = 'team';
+    final swarm = snapshot(
+      machines: [
+        {
+          ...machine('mac-1', 'Studio', [
+            {'grid': 'swarm-grid', 'model': 'qwen3-coder', 'name': 'Qwen3'},
+          ]),
+          'contributorId': me,
+        },
+        {
+          // Its Mac is no longer in the Swarm.
+          ...machine('team-1', 'Harness Team', [
+            {'grid': 'swarm-grid', 'model': 'phi-5', 'name': 'Phi 5'},
+          ]),
+          'contributorId': me,
+          'hostMachineId': 'mac-gone',
+        },
+        {...teamMini, 'contributorId': me},
+      ],
+    );
+
+    final mine = swarmModelList(swarm, now: now, lentBy: me)!;
+    expect(
+      [for (final m in mine.local) (m.name, m.machine)],
+      [('Qwen3', 'Studio')],
+    );
+  });
+}

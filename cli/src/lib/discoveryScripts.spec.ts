@@ -89,7 +89,8 @@ describe('generated discovery scripts', () => {
     expect(src).not.toContain('HERDR')
     expect(src).not.toContain('MACHINE_ID')
     expect(src).not.toContain('launcherId')
-    expect(src).toContain('if (!pane || !token')
+    expect(src).toContain('if ((!pane && !ptyPane) || !token')
+    expect(src).toContain('process.env.HARNESS_PANE')
   })
 
   // OpenCode 2.0 loads only `export default { id, setup }`, runs server plugins in one shared service

@@ -41,7 +41,16 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
   bool _detailsOpen = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.notifier.productMeasurement.setupShown();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.notifier.productMeasurement.setupHidden();
     _copyTimer?.cancel();
     _scroll.dispose();
     _primaryFocus.dispose();
@@ -744,9 +753,13 @@ class EnvironmentCheckList extends StatelessWidget {
     super.key,
     required this.readiness,
     this.checking = false,
+    this.isWindows,
   });
 
   final EnvironmentReadiness readiness;
+
+  /// The terminal step is B's terminal host on Windows. Null means this host.
+  final bool? isWindows;
 
   /// Pre-flight rows show a spinner instead of a status.
   final bool checking;
@@ -754,6 +767,7 @@ class EnvironmentCheckList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final windows = isWindows ?? Platform.isWindows;
     final state = readiness;
     final probing = checking && state.phase == EnvironmentSetupPhase.preflight;
     return _Panel(
@@ -761,8 +775,8 @@ class EnvironmentCheckList extends StatelessWidget {
         children: [
           const _CheckSectionLabel('Host dependencies'),
           _CheckRow(
-            label: 'tmux terminal backend',
-            detail: _tmuxDetail(state),
+            label: windows ? 'Terminal host' : 'tmux terminal backend',
+            detail: windows ? _terminalHostDetail(state) : _tmuxDetail(state),
             status: state.steps[EnvironmentStep.tmux],
             checking: probing,
           ),
@@ -776,7 +790,9 @@ class EnvironmentCheckList extends StatelessWidget {
           const _CheckSectionLabel('Harness components'),
           _CheckRow(
             label: 'Managed Node 20+ & Harness CLI',
-            detail: '~/.harness/runtime · harness version',
+            detail: windows
+                ? r'%USERPROFILE%\.harness · harness version'
+                : '~/.harness/runtime · harness version',
             status: state.steps[EnvironmentStep.harness],
             checking: probing,
           ),
@@ -784,6 +800,11 @@ class EnvironmentCheckList extends StatelessWidget {
       ),
     );
   }
+
+  static String _terminalHostDetail(EnvironmentReadiness state) =>
+      state.planFor(EnvironmentStep.tmux).isEmpty
+      ? 'Required for every harness · harness-pty.exe'
+      : 'Required for every harness · installs with the Harness CLI';
 
   static String _tmuxDetail(EnvironmentReadiness state) {
     const base = 'Required for every harness';

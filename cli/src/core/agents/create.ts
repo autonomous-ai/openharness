@@ -11,7 +11,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ModelsPort } from '../api.js'
+import type { ModelsPort, SwarmLaunch } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
@@ -25,11 +25,12 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
-  buildEngineCommandArgv, buildEngineLaunchArgv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
+  buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
+import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
@@ -39,13 +40,14 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
-import type { TmuxBackend } from '../../lib/tmuxBackend.js'
-import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
+import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
+import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
+import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
 import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -59,9 +61,14 @@ type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
 export interface CreateAgentDeps {
   publishConfig?: typeof publishGridConfigDir
-  /** The tmux backend; null where the configuration lists no tmux. */
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
-  tmuxBackend: TmuxBackend | null
+  /** The backend new panes are made on; null where none is configured or could be readied. */
+  createBackend: TerminalBackend | null
+  /** Recheck a backend missing at boot after its runtime has been installed. Healthy launches never call it. */
+  recoverBackend?: () => Promise<TerminalBackend | null>
+  /** What a launch answers when [createBackend] is null: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
   registry: typeof registry
   externalResume: CreateAgent
   watchNewPane: ReturnType<typeof createPaneWatcher>
@@ -88,19 +95,31 @@ export interface CreateAgentDeps {
   gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
   dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
+  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
+   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
+  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
+  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
+  /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: SwarmLaunch
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, tmuxBackend, registry, externalResume, watchNewPane, announceSession, attachDsh,
+  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch,
+  gridSetup, privateGridName, dshLaunch, ownerRelay, swarmLaunch,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
-    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId } = input
-    if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
+    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
+    let createBackend = initialBackend
+    if (!createBackend && recoverBackend) {
+      createBackend = await recoverBackend()
+      if (!authority.current()) return stale()
+    }
+    if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     const workspaceIdentity = () => { const info = statSync(cwd); return `${info.dev}:${info.ino}:${realpathSync(cwd)}` }
     let originalWorkspace: string
@@ -175,9 +194,8 @@ export function createAgentCreator({
       if (refusal) {
         return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
-      if (!(await tmuxSupportsSessionEnv())) {
-        const detail = `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
-          + `which is the first version that can give a new session its own environment — so ${installed.manifest.name} `
+      if (!(await createBackend.capabilities()).sessionEnv) {
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.manifest.name} `
           + `could not tell ${engine} which harness it is. Upgrade tmux.`
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
@@ -243,10 +261,8 @@ export function createAgentCreator({
     }
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
     if (grid && built?.ok) {
-      if (!(await tmuxSupportsSessionEnv())) {
-        const detail = `this machine's tmux is older than `
-          + `${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, which is the first version that can `
-          + `give a new session its own environment — so ${engine} could not have been pointed at grid `
+      if (!(await createBackend.capabilities()).sessionEnv) {
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${engine} could not have been pointed at grid `
           + `${grid.networkName}. Upgrade tmux, or create this agent without a grid selected.`
         console.warn(`[agent] create ${engine} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_GRID', detail }
@@ -274,7 +290,20 @@ export function createAgentCreator({
       // normally launched one. The key is never printed.
       console.log(describeGridLaunch(engine, grid, built.launch.webSearch))
     }
+    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
+    // owner's relay (team/relay.ts), where a grid would otherwise sit: a grid launch is its own provider.
+    const offered = !grid && ownerRelay ? await (engine === 'codex' && codexHome ? ownerRelay(engine, codexHome) : ownerRelay(engine)) : null
+    // A Codex home of its own the relay cannot sign in: refused with why, never launched signed out (team/relay.ts).
+    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', detail: offered.refused }
+    const relay = offered
     if (!current()) return stale()
+    // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
+    // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
+    // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
+    if (input.swarmRole && permissionMode === 'full') {
+      try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
+      catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
+    }
     if (trustEmptyProject) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
@@ -321,21 +350,43 @@ export function createAgentCreator({
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
     // only `invalid x-api-key`. Nothing is cleared when no grid is in play: an agent on its own login
     // is supposed to use exactly these variables.
-    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
+    // Another person's project work (superTabs/start.ts): git and gh use the Harness GitHub App's token for the task,
+    // never this machine owner's own GitHub login (lib/swarmGitHub.ts). Kept on the row's skill, so a relaunch keeps it.
+    let swarmGitHub: ReturnType<SwarmLaunch['github']> = null
+    if (swarmLaunch && input.swarmRole && input.swarmGitHub) {
+      try { swarmGitHub = swarmLaunch.github(label) }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
+    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv), ...swarmGitHub?.clearEnv ?? []]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment })
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...told])
+    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
+      ...(swarmGitHub ? { github: true as const } : {}) } : undefined
+    let swarmInstructions: string | undefined
+    if (swarmLaunch && swarmSkill) {
+      try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
+    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
+    // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
+    // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
+    const machineMcp = input.swarmRole === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
-    const launchOptions = { ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), terminalHint: { machineName: terminalHintMachineName() } }
-    const command = buildEngineCommandArgv(engine, launchOptions)
-    const argv = buildEngineLaunchArgv(engine, launchOptions)
+    const launchOptions = { ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
+    let command: string[], argv: string[]
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      argv = buildEngineLaunchArgv(engine, launchOptions)
+    } catch (error) { return windowsLaunchRefusal(error) }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
     // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.
     // `tmuxBackend` exists whenever the CONFIG lists tmux — it is never a probe of the binary, so a
@@ -355,21 +406,25 @@ export function createAgentCreator({
     if (!current()) return stale()
     const result = await createAndRegisterPane({
       current, ...(native ? { nativeToken: native.token } : {}),
-      tmuxBackend,
+      tmuxBackend: createBackend,
       registry,
       engine,
       cwd,
       sessionLabel: label,
       argv,
-      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
-        mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), native?.environment)), !!grid,
-        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
+      // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
+      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+      env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? mergedLaunchEnv(codexHome ? profileEnvironment(engine, codexHome) : undefined, relay?.env), dshEnv),
+        mergedLaunchEnv(mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), swarmGitHub?.env), native?.environment)), !!grid,
+        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       scmLaunchRecord: scmLaunchRecord ?? null,
       codexHome,
       dsh,
       dshRuntime: dsh ? label : null,
+      ...(swarmSkill ? { swarmSkill } : {}),
       agent,
       bypassPermission,
       permissionMode,
@@ -384,7 +439,7 @@ export function createAgentCreator({
     // shell exiting is the person closing it — so `remain-on-exit` comes off now, and the pane going
     // away is what removes the row (reconciler `onRemoved`), exactly as for an engine that quit.
     if (isTerminalEngine(engine)) {
-      await clearPaneRemainOnExit(spawned.runtime.paneId)
+      await createBackend.releaseHold(spawned.runtime)
       const ready = registry.setLaunch(pending.agentId, { state: 'ready' }) ?? pending
       announceSession(ready)
       console.log(`[agent] create terminal open · agent ${pending.agentId}`)

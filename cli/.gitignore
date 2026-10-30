@@ -6,3 +6,6 @@ dist/
 coverage/
 # The Docker rig's pinned computer id — local to this checkout.
 docker/remote-machine/.rig.env
+
+# Specs render engine plugins here.
+src/.tmp/

@@ -124,6 +124,9 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
+    // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.
+    link.port.broadcast({ type: 'turn_started', agentId: 'g' }, 'kim@acme.io')
+    expect(kinds().at(-1)).toBe('broadcast')
     setBuffered(0)
     link.port.usageCounter?.('create_requests')
     expect(kinds().at(-1)).toBe('usageCounter')
@@ -805,6 +808,14 @@ describe('account HTTP owned by the gateway', () => {
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'GET', path: '/api/auth/me' }, 25_000)
     await link.ops.backend('PATCH', '/api/machines/m1', { name: 'Laptop' })
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'PATCH', path: '/api/machines/m1', body: { name: 'Laptop' } }, 25_000)
+    // A busy answer's Retry-After crosses to the core, so the daemon can pass it on to the Desktop's reports.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }
+    call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_000 })
+    expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy, retryAfterMs: 90_000 })
+    for (const junk of [-1, Number.NaN, 'PRIVATE', null]) {
+      call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: junk })
+      expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy })
+    }
     call.mockResolvedValueOnce({ name: 'private-grid' })
     expect(await link.ops.mintGridName()).toBe('private-grid')
     call.mockResolvedValueOnce({})

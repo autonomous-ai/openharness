@@ -16,6 +16,7 @@ import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
+import { DeviceAddonError } from '../lib/autonomous-device/addons.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
 
 export { WIFI_FALLBACKS } from '../core/api.js'
@@ -179,6 +180,19 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
     receipt: async (deviceId, idempotencyKey) => ({ receipt: service.receipt(deviceId, idempotencyKey) }),
+    addon: async (op, input) => {
+      try {
+        if (op === 'state') return { result: { devices: service.addons.state(typeof input.deviceId === 'string' ? input.deviceId : undefined) } }
+        if (op === 'propose') return { result: { proposal: service.addons.propose(input) } }
+        const proposal = service.addons.proposal(typeof input.proposalId === 'string' ? input.proposalId : '')
+        // Never sent, or aged out: said as such, so a script can tell it from a proposal.
+        if (!proposal) return { error: { code: 'PROPOSAL_UNKNOWN', message: 'No such proposal: never sent, or aged out after ten minutes' } }
+        return { result: { proposal } }
+      } catch (error) {
+        if (error instanceof DeviceAddonError) return { error: { code: error.code, message: error.message } }
+        throw error
+      }
+    },
     stop: async () => store.stopUiDelivery(),
   }
   store.startUiDelivery()

@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   desk: vi.fn(), zoo: vi.fn(), machines: vi.fn(), keys: vi.fn(), vault: vi.fn(),
   deskUnsub: vi.fn(), zooUnsub: vi.fn(), machinesUnsub: vi.fn(), keysUnsub: vi.fn(), vaultUnsub: vi.fn(),
+  swarms: vi.fn(), swarmsUnsub: vi.fn(),
 }))
+vi.mock('./swarmClientPushes.js', () => ({ relaySwarmChanges: m.swarms }))
 vi.mock('./bus.js', () => ({
   subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeDeviceMachineListChanged: m.machines,
   subscribeDeviceKeysChanged: m.keys, subscribeConnectorsChanged: m.vault,
@@ -22,6 +24,18 @@ describe('account pushes on a daemon socket', () => {
     m.machines.mockResolvedValue(m.machinesUnsub)
     m.keys.mockResolvedValue(m.keysUnsub)
     m.vault.mockResolvedValue(m.vaultUnsub)
+    m.swarms.mockResolvedValue(m.swarmsUnsub)
+  })
+
+  // WS roadmap Phase 2a: the windows read a Swarm when told (lib/swarmClientPushes.ts), through this daemon.
+  it('hands the daemon a change to a Swarm the account is in, as a connection-less down frame', async () => {
+    const send = vi.fn()
+    const stop = await relayAccountPushes('user-1', send, on)
+    expect(m.swarms).toHaveBeenCalledWith('user-1', expect.any(Function))
+    m.swarms.mock.calls[0][1]({ type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 1, parts: ['main'] } })
+    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 1, parts: ['main'] } } })
+    stop()
+    expect(m.swarmsUnsub).toHaveBeenCalledOnce()
   })
 
   it('hands the daemon a change to the account\'s sealed connections, for it to re-read and merge', async () => {
@@ -32,6 +46,19 @@ describe('account pushes on a daemon socket', () => {
     expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'connectors_changed', payload: { revision: 9 } } })
     stop()
     expect(m.vaultUnsub).toHaveBeenCalledOnce()
+  })
+
+  // A team machine (lib/teamSession.ts) runs for teammates and reads none of the account's desk, zoo, machine list or
+  // connections; it keeps only what it trusts its connections by, the device key log.
+  it('gives a team machine only the device-key-log change', async () => {
+    const send = vi.fn()
+    const stop = await relayAccountPushes('user-1', send, { zoo: true, team: true })
+    expect(m.keys).toHaveBeenCalledWith('user-1', expect.any(Function))
+    for (const other of [m.desk, m.zoo, m.machines, m.vault, m.swarms]) expect(other).not.toHaveBeenCalled()
+    m.keys.mock.calls[0][1]({ seq: 2, hash: 'h' })
+    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: 2, hash: 'h' } } })
+    stop()
+    expect(m.keysUnsub).toHaveBeenCalledOnce()
   })
 
   it('listens on the channels of the account that owns the socket', async () => {

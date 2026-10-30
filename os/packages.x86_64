@@ -41,6 +41,10 @@ intel-media-driver
 wl-clipboard
 grim
 slurp
+# The desktop MCP (os/desktop_mcp.py): an agent's own keyboard and mouse on the screen it sees.
+wtype
+python-pywayland
+wlr-protocols
 xdg-utils
 xdg-desktop-portal-wlr
 pipewire
@@ -52,11 +56,15 @@ brightnessctl
 ttf-dejavu
 ttf-nerd-fonts-symbols-mono
 noto-fonts-emoji
+# The sound the terminal's bell plays (foot.ini [bell]).
+sound-theme-freedesktop
 # Harness and the package tools needed to bootstrap agent engines.
 nodejs-lts-jod
 npm
 tmux
 git
+# gh: an agent pushes and opens pull requests, and a Swarm checks a project's out, with the person's GitHub.
+github-cli
 curl
 jq
 ripgrep

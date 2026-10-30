@@ -9,7 +9,7 @@ import { externalEvidenceActive, externalReadFailed } from '../../lib/sessionSea
 
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readJson, readTail, readText, record, text } from '../../lib/sessionSearch/externals/support.js'
-import { argvTokens, engineProcessMatch, resumeSessionId } from '../../lib/tmux.js'
+import { argvTokens, engineProcessMatch, resumeSessionId } from '../../lib/processTable.js'
 import {
   type ExternalEngine, type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type Ownership, type ProcessView,
   type RunningProcess, type ScanContext, UNSETTLED,

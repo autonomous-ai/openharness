@@ -1,0 +1,163 @@
+# Task B4.13: Command Code on Windows (F7), verified on the Windows VM (admin@192.168.65.3, Win11 ARM64,
+# npm 11.19.0, node v24.20.0) on 2026-10-17 (VM local time 11:03-11:12 PDT, UTC 18:03-18:12).
+#
+# Build: harness v0.4.18-dev.c1afd3e39.dirty (HEAD c1afd3e39 plus this task's engineBin/launchSearchNames change and
+# the driver's machine-id fix), the B4 install in C:\work\b4 (port 18475). harness-pty.exe reused from the VM's
+# 2026-10-17 build (pty/ unchanged since 2026-10-16).
+# Controller rulings (task-B4.13-carries.md):
+# - Hooks stay OFF (DISABLE_HOOK_INSTALL=true): this run verifies the launch only. Hooks verified in B4.15.
+# - No npm -g. Command Code installed with `npm i --prefix C:\work\b4\cc command-code@latest` (1.84.0). npm put a
+#   prefix install's shims in C:\work\b4\cc\node_modules\.bin (cmd, cmdc, command-code, commandcode: .cmd/.ps1/sh),
+#   so that folder went first on the B4 daemon's PATH, for this run only (C:\work\b4\env.cmd, restored afterwards).
+# - COMMANDCODE_HOME redirected. Command Code 1.84.0 itself never reads COMMANDCODE_HOME: its dist/cli.mjs builds
+#   every home path as `${HOME ?? USERPROFILE}/.commandcode/...`. So the run also set HOME, and the run's env.cmd
+#   added:
+#     set "PATH=C:\work\b4\cc\node_modules\.bin;%PATH%"
+#     set HOME=C:\work\b4\homes\commandcode
+#     set COMMANDCODE_HOME=C:\work\b4\homes\commandcode\.commandcode
+# - Port 18473 (C:\work\e2e's daemon) was checked before start: nothing listened on 18473 or 18475.
+# - %USERPROFILE%\.commandcode did not exist before the run (`if exist` -> NO_CCHOME).
+# - Before this fix `where cmd command-code cmdc` on the VM answered C:\Windows\System32\cmd.exe first (F7).
+
+## 1. Daemon start (C:\work\b4\launch.ps1), then C:\work\b4\cli.cmd status
+create rc=0 pid=3536
+   status     ● running · backend connected
+   version    v0.4.18-dev.c1afd3e39.dirty
+   state      C:\work\b4\data
+   local api  http://127.0.0.1:18475
+  TCP    127.0.0.1:18475        0.0.0.0:0              LISTENING       7332
+
+## 2. C:\work\b4\run.cmd list, then run.cmd create commandcode
+# The driver now selects the sign-in's machine id, so `list` connects (empty list) with no NO_PEER_LINK.
+18:04:00.224 create commandcode → aac1bc5e… launch=starting (233 ms)
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"starting","pane":"%1001","name":"Command Code harness 10-17 11:04","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+
+## 3. After 15 s: run.cmd screen <id>, then run.cmd list
+# The pane shows Command Code's own interface (its sign-in screen). It is not `Microsoft Windows [Version ...`.
+√ Ready to log in
+T   Command Code Authentication
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+Sign in to Command Code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+Sign in to Command Code
+⠦ Complete login in your browser...
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ API Key: Paste your API key...                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Authorize in browser, or paste API key here
+If your browser doesn't open, go to this link:
+https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A60014%2Fcallback&state=<redacted>&mode=redirect
+ctrl+c to cancel
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+
+## 4. Processes (Win32_Process): the engine is node.exe running command-code's dist\index.mjs, a direct child of the
+## B4 pty host. No cmd.exe runs in the pane.
+11856 parent=11972 node.exe :: "C:\Program Files\nodejs\node.exe" C:\work\b4\cc\node_modules\command-code\dist\index.mjs
+---
+USERPROFILE .commandcode exists: True
+redirected home: 
+C:\work\b4\homes\commandcode\.commandcode
+C:\work\b4\homes\commandcode\.harness
+C:\work\b4\homes\commandcode\.commandcode\cache
+C:\work\b4\homes\commandcode\.commandcode\cache\model-catalog
+C:\work\b4\homes\commandcode\.commandcode\cache\model-catalog\v1
+C:\work\b4\homes\commandcode\.commandcode\cache\model-catalog\v1\catalog-a813c4ec6551f9c3.json
+C:\work\b4\homes\commandcode\.harness\connections
+C:\work\b4\homes\commandcode\.harness\connections\projections.json
+11856 node.exe :: "C:\Program Files\nodejs\node.exe" C:\work\b4\cc\node_modules\command-code\dist\index.mjs
+11972 harness-pty.exe :: C:\work\b4\dist\pty\harness-pty.exe serve --home C:\work\b4\ptyhome
+7332 node.exe :: "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\work\b4\dist\cli.js __run
+1564 node.exe :: "C:\Program Files\nodejs\node.exe"  C:\work\b4\dist\cli.js start -f 
+3536 cmd.exe :: cmd.exe /c C:\work\b4\start.cmd
+# (a cmd.exe query here had a quoting error and printed nothing; the pty host's children are listed below)
+--- updates.json:
+{
+  "autoUpdate": true,
+  "lastCheckedAt": 1792260244611,
+  "pending": null
+}
+<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><S S="Error">Get-CimInstance : Invalid query _x000D__x000A_</S><S S="Error">At line:1 char:275_x000D__x000A_</S><S S="Error">+ ... pty host:"; Get-CimInstance Win32_Process -Filter "Name=cmd.exe" | Fo ..._x000D__x000A_</S><S S="Error">+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~_x000D__x000A_</S><S S="Error">    + CategoryInfo          : InvalidArgument: (:) [Get-CimInstance], CimException_x000D__x000A_</S><S S="Error">    + FullyQualifiedErrorId : HRESULT 0x80041017,Microsoft.Management.Infrastructure.CimCmdlets.GetCimInstanceCommand_x000D__x000A_</S><S S="Error"> _x000D__x000A_</S></Objs>
+children of the pty host 11972:
+2020 OpenConsole.exe :: "C:\work\b4\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a4 --server 0x19c
+11856 node.exe :: "C:\Program Files\nodejs\node.exe" C:\work\b4\cc\node_modules\command-code\dist\index.mjs
+
+# The %USERPROFILE%\.commandcode above was created by Command Code itself at its start (11:04:02, 2 s after the
+# create). It reads os.homedir() (USERPROFILE) for these two files and ignores HOME:
+#   2026-10-17T11:04:02.557-07:00  37  C:\Users\admin\.commandcode\telemetry-install-id
+#   2026-10-17T11:04:04.611-07:00  77  C:\Users\admin\.commandcode\updates.json
+# It did not exist before the run, so cleanup removed it. Everything else Command Code wrote went to the redirected
+# home: .commandcode\cache\model-catalog.
+
+## 5. Cleanup
+# agent_delete was refused while Command Code ran (the known F5 hold: no conversation identity with hooks off). Per the
+# F5 workaround, a real Ctrl+C (PowerShell [char]3 through `e2e.mjs type`) ended Command Code in its pane. The rows
+# (the commandcode row and the terminal row the pane became) were then stopped and purged with agent_purge
+# inspect/delete, from a one-off C:\work\b4\purge.mjs (deleted afterwards). Then: C:\work\b4\stop.cmd, the run's
+# env.cmd restored, and `rmdir /s /q` on C:\work\b4\cc, C:\work\b4\homes\commandcode (and the empty
+# C:\work\b4\homes) and %USERPROFILE%\.commandcode (created by this run). The B4 pty host this run started (pid
+# 11972, created 11:03:30, no children, no panes) outlived the daemon by design. It was ended after its identity was
+# checked (pid, creation time, exe path, command line, no children), with Stop-Process on that one pid and no /T.
+{"requestId":"ea441aae…","error":"IDENTITY_UNAVAILABLE","detail":"Conversation identity is held: the native ps probe did not complete.","held":true,"retryable":true}
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+list-done
+Authorize in browser, or paste API key here
+If your browser doesn't open, go to this link:
+https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A60014%2Fcallback&state=<redacted>&mode=redirect
+ctrl+c to cancel
+—  × Authentication cancelled by user.
+harness: command-code exited (1). This pane is a shell now - run command-code again, or stop the pane.
+PS C:\work\b4\proj>
+{"id":"1ee0f859…","engine":"terminal","status":"active","launch":"ready","pane":"%1001","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"requestId":"77099f00…","deleted":true}
+{"requestId":"2889c457…","deleted":true}
+=== list 
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+=== end
+=== list after 8s 
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+=== end
+{"requestId":"19f26486…","deleted":true}
+{"requestId":"bd141acc…","deleted":true}
+=== list 
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+=== end
+1ee0f859… inspect {"requestId":"7a9e22b5…","error":"INVALID_DELETE_REQUEST"}
+aac1bc5e… inspect {"requestId":"1284d081…","error":"INVALID_DELETE_REQUEST"}
+remaining [["1ee0f859…","terminal","stopped"],["aac1bc5e…","commandcode","stopped"]]
+1ee0f859… inspect {"requestId":"3ab506ed…","reviewId":"02c6585a…","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
+1ee0f859… delete {"requestId":"f155de28…","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
+aac1bc5e… inspect {"requestId":"b4931079…","reviewId":"709c9cd2…","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
+aac1bc5e… delete {"requestId":"658e842e…","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
+remaining []
+machine stopped (pid 1564).
+=== checks 
+cc gone
+homes gone
+profile .commandcode gone
+set ADAPTER_DATA_DIR=C:\work\b4\data
+set HARNESS_PTY_DIR=C:\work\b4\ptyhome
+set ADAPTER_COMPUTER_ID_FILE=C:\work\b4\computer-id
+set HARNESS_LOGS_DIR=C:\work\b4\logs
+set HARNESS_HOOK_ROUTES_DIR=C:\work\b4\hook-routes
+set HARNESS_AGENT_MESSAGES_DIR=C:\work\b4\agent-messages
+set DSH_DIR=C:\work\b4\dsh
+set HARNESS_DEVICES_DIR=C:\work\b4\devices
+set DISABLE_HOOK_INSTALL=true
+set DISABLE_GRID_INSTALL=true
+set HARNESS_PTY_BIN=C:\work\b4\dist\pty\harness-pty.exe
+set PORT=18475
+INFO: Could not find files for the given pattern(s).
+11972 harness-pty.exe :: C:\work\b4\dist\pty\harness-pty.exe serve --home C:\work\b4\ptyhome
+ended verified B4 pty host 11972; alive now: False
+no B4 or Command Code process left
+
+## Outcome
+F7 fixed: Command Code starts by `command-code` (npm's command-code.cmd, run as its script) and shows its own
+interface, launch=ready. sessionId is empty: hooks not verified: needs a Command Code sign-in (hooks are off in this
+run; hooks verified in B4.15).

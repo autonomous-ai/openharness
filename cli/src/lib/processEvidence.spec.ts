@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readlink } from 'node:fs/promises'
 import { NativeEvidenceBudget, nativeBytes, nativeProbe, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { parseProcessGraph, readProcessEvidence } from './processEvidence.js'
-import { engineProcessMatchScore, resumeSessionId } from './tmux.js'
+import { engineProcessMatchScore, resumeSessionId } from './processTable.js'
 import { nativeProcessControl } from './nativeProcessControl.js'
 
 vi.mock('node:fs/promises', async original => ({ ...await original<object>(), readlink: vi.fn() }))

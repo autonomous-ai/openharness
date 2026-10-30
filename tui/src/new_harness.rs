@@ -116,6 +116,9 @@ pub struct Form {
     launch_target: Option<crate::input::LaunchTarget>,
     remember_choices: bool,
     local_only: bool,
+    /// On a machine shared with this account (guest sharing): its harness runs on the owner's plans,
+    /// and the owner's daemon lists a guest no models or profiles.
+    guest: bool,
     prepared_folder: Option<String>,
     focus: Field,
     child: Option<Child>,
@@ -170,13 +173,13 @@ impl Form {
         // The machine is its own row, here and on the page: not "project @ machine" in one.
         let mut fields = vec![Field::Task, Field::Agent, Field::Machine, Field::Project];
         if !page && git_controls { fields.extend([Field::Branch, Field::Worktree]); }
-        if self.draft.what.engine != "terminal" {
+        if self.draft.what.engine != "terminal" && !self.guest {
             fields.push(Field::Model);
         }
         if !data::modes(&self.draft.what.engine).is_empty() {
             fields.push(Field::Approvals);
         }
-        if self.draft.what.engine == "codex" && self.draft.model.is_none() {
+        if self.draft.what.engine == "codex" && self.draft.model.is_none() && !self.guest {
             fields.push(Field::Profile);
         }
         if page && git_controls { fields.extend([Field::Worktree, Field::Branch]); }
@@ -551,6 +554,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         launch_target: None,
         remember_choices: true,
         local_only: false,
+        guest: false,
         prepared_folder: None,
         focus: if task::supported(&engine) { Field::Task } else { Field::Create },
         child: None,
@@ -583,6 +587,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
 fn refresh_form(app: &App, form: &mut Form) {
     form.machine_label = machine_label(app, &form.draft.machine);
     form.local_only = crate::local::is_local(&form.draft.machine) && app.daemon_down;
+    form.guest = app.fleet.shares.contains_key(&form.draft.machine);
     // Git discovery can finish while its controls have keyboard focus.
     if matches!(form.focus, Field::Branch | Field::Worktree) && !form.fields().contains(&form.focus) {
         form.focus = Field::Project;
@@ -675,6 +680,11 @@ fn resolve_launch_machine(app: &mut App, form: &mut Form) {
     }
 }
 fn agent_rows(app: &App, machine: &str) -> Vec<Row> {
+    // A guest on a machine shared with this account starts Claude Code or Codex there, on its owner's plans, in
+    // a space of its own: nothing from the Store, no other engine (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    if app.fleet.shares.contains_key(machine) {
+        return modal::new_what_rows(&[]).into_iter().filter(|r| matches!(r.id.as_str(), "engine:claude" | "engine:codex")).collect();
+    }
     modal::new_what_rows(app.dsh.get(machine).map(Vec::as_slice).unwrap_or(&[]))
 }
 fn compatible_rows(app: &App, machine: &str, dsh: &str) -> Vec<Row> {
@@ -697,6 +707,20 @@ fn compatible_rows(app: &App, machine: &str, dsh: &str) -> Vec<Row> {
 }
 fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     const PER_MACHINE: usize = 50;
+    // A guest on a machine shared with this account starts in its workspace or a folder the owner shares, and
+    // browses, makes or clones nothing of the owner's (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    let chosen = app.fleet.launch_machine_id(&draft.machine);
+    if app.fleet.shares.contains_key(chosen) {
+        let mut rows = vec![];
+        if let Some(workspace) = app.homes.get(chosen) {
+            rows.push(Row::new(format!("home:{chosen}\t{workspace}"), "My workspace").extra("home workspace").group("Yours"));
+        }
+        for (path, write) in app.guest_folders.get(chosen).into_iter().flatten() {
+            rows.push(Row::new(format!("at:{chosen}\t{path}"), path.clone()).extra("shared folder").group("Shared with you")
+                .right(if *write { "you can edit it" } else { "read only" }));
+        }
+        return rows;
+    }
     let mut rows = vec![];
     if draft.what.engine != "terminal" {
         rows.push(Row::new("clone", "Clone Repository"));
@@ -707,7 +731,6 @@ fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     }
     // The chosen machine's home first, as the composer offers "this folder": a machine whose recent
     // agents all ran in scratch folders otherwise offered nothing else.
-    let chosen = app.fleet.launch_machine_id(&draft.machine);
     if let Some(home) = app.homes.get(chosen).filter(|h| h.starts_with('/')) {
         let label = if show_machine { format!("~ @ {}", machine_label(app, chosen)) } else { "~".into() };
         // (Its own id, not a recent project's "at:": chosen the same way, never counted among them.)
@@ -775,7 +798,8 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
     } else {
         None
     };
-    if form.draft.what.engine == "terminal" || form.local_only || path.is_none() {
+    // (A guest reads no Git of the owner's: a shared folder is opened as it is.)
+    if form.draft.what.engine == "terminal" || form.local_only || path.is_none() || app.fleet.shares.contains_key(&form.draft.machine) {
         form.git = Value::Null;
         form.git_key = None;
         form.git_loading = false;
@@ -1181,6 +1205,8 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     form.models = Value::Null;
     form.profiles = Value::Null;
     form.draft.profile = None;
+    // A guest's harness runs on the owner's plans: a model chosen for another machine stays behind.
+    if app.fleet.shares.contains_key(machine) { form.draft.model = None }
     form.resource_generation.clear();
     crate::input::load_dsh(app, machine.into(), false);
     refresh_form(app, form);
@@ -1999,6 +2025,56 @@ mod tests {
         app.dsh.insert("local".into(), vec![json!({"id":"example/blender", "engine":"codex", "engines":["terminal", "codex"]})]);
         let rows = compatible_rows(&app, "local", "example/blender");
         assert_eq!(rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["engine:codex"]);
+    }
+
+    #[test]
+    fn a_guest_starts_in_its_workspace_or_a_folder_the_owner_shares_and_browses_nothing_of_the_owners() {
+        let mut app = app();
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        app.homes.insert("dee".into(), "/Users/Shared/HarnessGuests/hg_0/work".into());
+        app.guest_folders.insert("dee".into(), vec![("/Users/dee/code/app".into(), true), ("/Users/dee/docs".into(), false)]);
+        let draft = |machine: &str| Draft {
+            machine: machine.into(), what: saved_agent(&Value::Null), project: Project::New(String::new()), task: String::new(),
+            permission: "auto".into(), worktree: None, branch: None, new_branch: None, model: None, profile: None,
+        };
+        let rows = project_rows(&app, &draft("dee"), false);
+        assert_eq!(rows.iter().map(|r| (r.id.as_str(), r.label.as_str(), r.right.as_str())).collect::<Vec<_>>(), [
+            ("home:dee\t/Users/Shared/HarnessGuests/hg_0/work", "My workspace", ""),
+            ("at:dee\t/Users/dee/code/app", "/Users/dee/code/app", "you can edit it"),
+            ("at:dee\t/Users/dee/docs", "/Users/dee/docs", "read only"),
+        ]);
+        // This account's own machine still opens, makes and clones folders.
+        let own = project_rows(&app, &draft("local"), false);
+        assert!(own.iter().any(|r| r.id == "folder"));
+    }
+
+    #[test]
+    fn a_guest_starts_claude_code_or_codex_on_a_machine_shared_with_it_and_nothing_from_its_store() {
+        let mut app = app();
+        app.dsh.insert("dee".into(), vec![json!({"id":"example/blender", "engine":"codex", "name":"Blender"})]);
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        let ids = |rows: Vec<Row>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+        assert_eq!(ids(agent_rows(&app, "dee")), ["engine:claude", "engine:codex"]);
+        // This account's own machines still offer every engine.
+        assert!(agent_rows(&app, "local").len() > 2);
+    }
+
+    /// A guest's harness runs on the owner's plans, and the owner's daemon lists a guest no models or
+    /// profiles (GUEST_NOT_ALLOWED): no Model or Profile is offered there, and none chosen goes along.
+    #[tokio::test]
+    async fn a_guest_is_offered_no_model_or_profile_on_a_machine_shared_with_it() {
+        let mut app = app();
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "dee".into(), name: "Dee's Mac".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        open(&mut app, None, Some("/home/dev/repo".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        set_engine(&mut form, "codex");
+        assert!(form.fields().contains(&Field::Model) && form.fields().contains(&Field::Profile), "this computer's own");
+        form.draft.model = Some(("own-grid".into(), "qwen-35b".into(), "studio".into()));
+        set_machine(&mut app, &mut form, "dee");
+        assert!(!form.fields().contains(&Field::Model));
+        assert!(!form.fields().contains(&Field::Profile));
+        assert_eq!((form.draft.model.clone(), form.draft.profile.clone()), (None, None));
     }
 
     fn app() -> App {

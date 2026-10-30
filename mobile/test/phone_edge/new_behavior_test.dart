@@ -21,8 +21,13 @@ void main() {
   const answers = {
     'engines_probe': {
       'engines': [
-        {'engine': 'claude', 'installed': true},
-        {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
+        {'engine': 'claude', 'installed': true, 'signedIn': true},
+        {
+          'engine': 'codex',
+          'installed': true,
+          'signedIn': true,
+          'supportsCodexHome': true,
+        },
         {'engine': 'opencode', 'installed': false, 'installable': false},
       ],
     },
@@ -77,6 +82,7 @@ void main() {
     String? folder,
     List<Agent>? agents,
     Map<String, Map<String, dynamic>> overrides = const {},
+    String? remembered,
   }) async {
     setPhone(tester, largePhone);
     final conn = EdgeConn({...answers, ...overrides}, startsAgents);
@@ -84,6 +90,9 @@ void main() {
       conn.capabilities = {...conn.capabilities, 'features': {}};
     }
     final app = edgeApp(conn: conn, agents: agents ?? [edgeAgent('a')]);
+    // The folder this phone last started in on `m`: the project row's default, ahead of the
+    // latest harness's folder.
+    if (remembered != null) await app.projectHistory.select('m', remembered);
     app.stateOf('m')!
       ..projectFolderAvailable = makesProjects
       ..terminalCapabilityLoaded = true;
@@ -242,11 +251,21 @@ void main() {
         ),
       );
 
+  /// The machine's harness, working in another folder than `/code/web` (the folder these tests
+  /// remember): Start may switch `/code/web`'s branch with Worktree off.
+  final elsewhere = [edgeAgent('a', project: 'api')];
+
   for (final worktree in [false, true]) {
     testWidgets(
       'branch and worktree are independent; create with worktree $worktree',
       (tester) async {
-        final (:app, :conn) = await openNew(tester);
+        // Worktree off moves the folder to fix/login, so nothing may be working in it — a harness
+        // there is refused (`new_branch_guard_test.dart`). Worktree on leaves the folder alone.
+        final (:app, :conn) = await openNew(
+          tester,
+          remembered: worktree ? null : '/code/web',
+          agents: worktree ? null : elsewhere,
+        );
         expect(find.text('branch'), findsNothing);
         expect(find.text('worktree'), findsNothing);
         await tapInView(tester, find.text('options'));
@@ -272,6 +291,7 @@ void main() {
         await frames(tester, count: 20);
         final payload = conn.payloads['agent_create']!.single;
         expect(payload['projectSource'], worktree ? 'worktree' : 'branch');
+        expect(payload['gitSource'], '/code/web');
         expect(payload['branchRef'], 'refs/heads/fix/login');
         expect(payload.containsKey('cwd'), isFalse);
         expect(payload.containsKey('gridModel'), isFalse);
@@ -281,7 +301,12 @@ void main() {
   }
 
   testWidgets('a new branch name works with Worktree off', (tester) async {
-    final (:app, :conn) = await openNew(tester);
+    // The folder moves to the new branch, so nothing may be working in it.
+    final (:app, :conn) = await openNew(
+      tester,
+      remembered: '/code/web',
+      agents: elsewhere,
+    );
     await tapInView(tester, find.text('options'));
     await frames(tester);
     await tapInView(tester, find.text('worktree'));
@@ -298,6 +323,7 @@ void main() {
     await frames(tester, count: 20);
     final payload = conn.payloads['agent_create']!.single;
     expect(payload['projectSource'], 'branch');
+    expect(payload['gitSource'], '/code/web');
     expect(payload['branchName'], 'fix-the-login');
     await close(tester, app);
   });
@@ -341,7 +367,12 @@ void main() {
   testWidgets(
     'model, branch and Worktree survive Cancel; subscription restores profile',
     (tester) async {
-      final (:app, :conn) = await openNew(tester);
+      // Worktree off moves the folder to fix/login, so nothing may be working in it.
+      final (:app, :conn) = await openNew(
+        tester,
+        remembered: '/code/web',
+        agents: elsewhere,
+      );
       await choose(tester, 'agent', 'Codex');
       await tapInView(tester, find.text('options'));
       await frames(tester);
@@ -369,6 +400,8 @@ void main() {
       final payload = conn.payloads['agent_create']!.single;
       expect(payload['codexHome'], '/home/ada/.codex-work');
       expect(payload.containsKey('gridModel'), isFalse);
+      expect(payload['projectSource'], 'branch');
+      expect(payload['gitSource'], '/code/web');
       await close(tester, app);
     },
   );
@@ -427,7 +460,11 @@ void main() {
     await close(tester, app);
   });
 
-  testWidgets('agents are offered in most recently used order', (tester) async {
+  // Desktop's order (new_harness.dart `_agentOptions`): the selected agent, then the most recently
+  // used, then the rest as the catalog lists them.
+  testWidgets('agents are offered selected first, then most recently used', (
+    tester,
+  ) async {
     final (:app, conn: _) = await openNew(tester);
     await app.agentPreference.select('claude');
     await app.agentPreference.select('opencode');
@@ -438,7 +475,7 @@ void main() {
         .widgetList<FindRow>(find.byType(FindRow))
         .map((row) => row.title)
         .toList();
-    expect(titles.take(3), ['Codex', 'OpenCode', 'Claude Code']);
+    expect(titles.take(3), ['Claude Code', 'Codex', 'OpenCode']);
     expect(find.text('more'), findsNothing);
     await close(tester, app);
   });

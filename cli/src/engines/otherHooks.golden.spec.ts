@@ -308,7 +308,7 @@ beforeAll(async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   const home = join(root, 'home')
   const env: Record<string, string | undefined> = {
-    HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
+    HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
     ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), CODEX_HOME: join(home, '.codex'),
     OPENCODE_PATH: join(root, 'bin', 'opencode'),
   }

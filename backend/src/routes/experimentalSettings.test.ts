@@ -17,10 +17,10 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
 type Row = { id: string; userId: string; focusBarCreature: boolean; shareButton: boolean; devicesTab?: boolean
-  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; agentMessagesHideSummary?: boolean; revision: number }
-const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages', 'agentMessagesHideSummary'] as const
+  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; agentMessagesHideSummary?: boolean; agentsTellAgents?: boolean; programsReply?: boolean; revision: number }
+const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages', 'agentMessagesHideSummary', 'agentsTellAgents', 'programsReply'] as const
 /** Every experiment off, as a new account reads them. */
-const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false, agent_messages_hide_summary: false }
+const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false, agent_messages_hide_summary: false, agents_tell_agents: false, programs_reply: false }
 describe('account experiments and retained collections', () => {
   let app: FastifyInstance
   let rows: Map<string, Row>
@@ -59,7 +59,8 @@ describe('account experiments and retained collections', () => {
     expect((await app.inject({ method: 'GET', url: '/api/experimental-settings' })).statusCode).toBe(401)
     expect(mocks.prisma.experimentalSettings.findUnique).not.toHaveBeenCalled()
     expect((await read()).json().data).toEqual({ accountId: 'owner', revision: 0, features: OFF, available: {
-      focus_bar_creature: true, share_button: true, devices_tab: true, agents_start_agents: true, agent_pull_request_line: true, agent_messages: true, agent_messages_hide_summary: true } })
+      focus_bar_creature: true, share_button: true, devices_tab: true, agents_start_agents: true, agent_pull_request_line: true, agent_messages: true, agent_messages_hide_summary: true,
+      agents_tell_agents: true, programs_reply: true } })
     expect(rows.size).toBe(0)
     expect((await zoo()).statusCode).toBe(404)
     expect(mocks.prisma.zoo.findUnique).not.toHaveBeenCalled()
@@ -72,6 +73,27 @@ describe('account experiments and retained collections', () => {
     expect((await write('agent_messages_hide_summary', true)).json().data.features).toEqual({ ...OFF, share_button: true, devices_tab: true, agent_messages: true, agent_messages_hide_summary: true })
     expect(rows.get(id)).toMatchObject({ agentMessagesHideSummary: true, agentMessages: true, revision: 6 })
     expect((await write('agent_messages_hide_summary', false)).json().data.features.agent_messages_hide_summary).toBe(false)
+    expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
+  })
+  it('keeps telling a started harness more work off until the account turns it on, apart from Agent Messages', async () => {
+    const id = experimentalSettingsId('owner')
+    // A row from before the column: off.
+    rows.set(id, { id, userId: 'owner', focusBarCreature: false, shareButton: false, devicesTab: false, agentsStartAgents: true, revision: 2 })
+    expect((await read()).json().data.features.agents_tell_agents).toBe(false)
+    expect((await write('agents_tell_agents', true)).json().data.features).toEqual({ ...OFF, agents_start_agents: true, agents_tell_agents: true })
+    expect(rows.get(id)).toMatchObject({ agentsTellAgents: true, revision: 3 })
+    expect(rows.get(id)!.agentMessages).not.toBe(true)
+    expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
+  })
+  it('keeps a program giving an idle harness more work off until the account turns it on, apart from agents telling agents', async () => {
+    const id = experimentalSettingsId('owner')
+    // A row from before the column: off.
+    rows.set(id, { id, userId: 'owner', focusBarCreature: false, shareButton: false, devicesTab: false, agentsTellAgents: true, revision: 4 })
+    expect((await read()).json().data.features.programs_reply).toBe(false)
+    expect((await write('programs_reply', true)).json().data.features).toEqual({ ...OFF, agents_tell_agents: true, programs_reply: true })
+    expect(rows.get(id)).toMatchObject({ programsReply: true, agentsTellAgents: true, revision: 5 })
+    expect((await write('programs_reply', false)).json().data.features.programs_reply).toBe(false)
+    expect(rows.get(id)!.agentsTellAgents).toBe(true)
     expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
   })
   it('shares choices between clients without losing concurrent changes to different switches', async () => {

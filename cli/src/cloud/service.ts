@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, isCloudAgent, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -58,13 +58,6 @@ const QUIET_MS = 24 * 60 * 60_000
  *  never be asked again at once, for a day. */
 const LOOK_MIN_MS = 5_000
 const TRANSCRIPT_MAX = 500
-
-/** `owner/name` from a GitHub address or the pair itself, or null. */
-export function repositoryOf(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(value.trim())
-  return match ? `${match[1]}/${match[2]}` : null
-}
 
 /** A harness's name from its task: its first line, short. */
 export function nameFor(task: string, agent: CloudAgentId): string {
@@ -170,6 +163,9 @@ export function startCloudService(options: CloudServiceOptions) {
     if (update.state === 'needs_input' && !entry.heard) update = { ...update, state: undefined, question: undefined }
     if (update.state) entry.harness.state = update.state
     if (update.activity !== undefined) entry.harness.activity = update.activity
+    // Refreshed even when this look brought no messages, and when its "waiting" was the wait just answered.
+    // A null detail replaces the old one: the maker no longer reports it.
+    if (update.providerStatus) entry.harness.providerStatus = { status: update.providerStatus.status, detail: update.providerStatus.detail }
     if (update.branch !== undefined) entry.harness.branch = update.branch
     if (update.links) entry.harness.links = update.links
     if (update.remote) entry.remote = { ...entry.remote, ...update.remote }
@@ -242,9 +238,9 @@ export function startCloudService(options: CloudServiceOptions) {
     const agent = request.engine
     if (!isCloudAgent(agent)) return { ok: false, error: 'INVALID_ENGINE', detail: 'That is not a cloud agent.' }
     const task = typeof request.prompt === 'string' ? request.prompt.trim() : ''
-    if (!task) return { ok: false, error: 'INVALID_REQUEST', detail: `Tell ${CLOUD_AGENTS[agent].name} what to do.` }
+    const refusal = cloudRequestRefusal(agent, task, [request.repositoryUrl, request.repository])
+    if (refusal) return { ok: false, error: 'INVALID_REQUEST', detail: refusal }
     const repository = repositoryOf(request.repositoryUrl) ?? repositoryOf(request.repository)
-    if (CLOUD_AGENTS[agent].kind === 'coding' && !repository) return { ok: false, error: 'INVALID_REQUEST', detail: `Choose a GitHub repository for ${CLOUD_AGENTS[agent].name}.` }
     const acuLimit = typeof request.acuLimit === 'number' && Number.isInteger(request.acuLimit) && request.acuLimit > 0 && request.acuLimit <= 1000 ? request.acuLimit : undefined
     const model = typeof request.model === 'string' && request.model ? request.model.slice(0, 120) : undefined
     let started: Awaited<ReturnType<CloudAdapter['start']>>
@@ -286,9 +282,12 @@ export function startCloudService(options: CloudServiceOptions) {
     // Working from the moment the words go, as a terminal agent's turn starts with its prompt: Fo answers
     // `ask_fo` with its whole reply, 15 s later, and the dial sat on the last recap all that time (2026-10-11).
     // Told, not saved: refused, it is back where it was.
-    const was = { state: entry.harness.state, activity: entry.harness.activity }
+    const was = { state: entry.harness.state, activity: entry.harness.activity, providerStatus: entry.harness.providerStatus }
     entry.harness.state = 'working'
     entry.harness.activity = null
+    // The status from before these words is not this turn's. It stands again when the next look says so;
+    // a refused send puts the old one back, because the maker never took the words.
+    delete entry.harness.providerStatus
     publish()
     const adapter = adapters[entry.harness.agent]
     try {
@@ -296,6 +295,7 @@ export function startCloudService(options: CloudServiceOptions) {
       if (moved) entry.remote = { ...entry.remote, ...moved }
     } catch (error) {
       Object.assign(entry.harness, was)
+      if (!was.providerStatus) delete entry.harness.providerStatus
       publish()
       return refused(error, entry.harness.agent)
     }
@@ -343,6 +343,8 @@ export function startCloudService(options: CloudServiceOptions) {
     timers.delete(agentId)
     entry.harness.state = 'stopped'
     entry.harness.activity = adapter.stop ? null : `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.`
+    // A local stop is not the maker's last report. Showing that report would call a finished session current.
+    delete entry.harness.providerStatus
     ask(entry, null)
     touched(entry)
     return adapter.stop ? { ok: true } : { ok: true, detail: `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.` }

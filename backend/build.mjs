@@ -7,7 +7,7 @@ function getAllTsFiles(dir, fileList = []) {
     const filePath = join(dir, file)
     if (statSync(filePath).isDirectory()) {
       getAllTsFiles(filePath, fileList)
-    } else if (file.endsWith('.ts') && !file.endsWith('.test.ts')) {
+    } else if (file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.endsWith('.test-support.ts')) {
       fileList.push(filePath)
     }
   }

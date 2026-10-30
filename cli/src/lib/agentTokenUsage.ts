@@ -9,17 +9,21 @@ import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
 
-import { usageTargetKey, type AgentTokenUsage, type AgentUsageTarget as Target } from './agentUsageWire.js'
+import { MAX_USAGE_MODELS, OTHER_MODELS, usageModelName, usageTargetKey, type AgentTokenUsage, type AgentUsageTarget as Target, type ModelTokens } from './agentUsageWire.js'
 export type { AgentTokenUsage } from './agentUsageWire.js'
 type Buckets = [number, number, number, number]
 type CodexTotals = [number, number, number, number]
 type Checkpoint = {
-  version: 5; key: string; offset: number; size: number; mtime: number; inode: string;
+  version: 6; key: string; offset: number; size: number; mtime: number; inode: string;
   boundary: string; total: number; observed: boolean; updatedAt: string | null;
   claude: Record<string, Buckets>; codex: CodexTotals | null; seen: Record<string, true>;
   output: OutputLedger;
   work: SessionWorkLedger; sourceSession: string | null;
   usage: [number, number, number];
+  /** Per model: uncached input, output, cache read, cache write. What the Swarm prices an attempt by (backend costs/). */
+  models: Record<string, Buckets>
+  /** The model Codex's latest turn settings named: its token counts carry none of their own. */
+  codexModel: string | null
 }
 type Entry = {
   target: Target; value: AgentTokenUsage | null; checked: number; pending: Promise<void> | null;
@@ -53,9 +57,9 @@ function targetSnapshot(s: Target): Target {
     codexHome: s.codexHome, cwd: s.cwd, registeredAt: s.registeredAt, forkedFrom: s.forkedFrom ? { ...s.forkedFrom } : null }
 }
 function empty(key: string): Checkpoint {
-  return { version: 5, key, offset: 0, size: 0, mtime: 0, inode: '', boundary: '', total: 0, usage: [0, 0, 0],
+  return { version: 6, key, offset: 0, size: 0, mtime: 0, inode: '', boundary: '', total: 0, usage: [0, 0, 0],
     observed: false, updatedAt: null, claude: {}, codex: null, seen: {}, output: emptyOutputLedger(),
-    work: emptySessionWork(), sourceSession: null }
+    work: emptySessionWork(), sourceSession: null, models: {}, codexModel: null }
 }
 function rawCodex(value: unknown): CodexTotals | null {
   const row = object(value)
@@ -64,12 +68,23 @@ function rawCodex(value: unknown): CodexTotals | null {
     tokens(row.output_tokens), tokens(row.reasoning_output_tokens)] : null
 }
 
+/** Adds a delta to its model's buckets. Past MAX_USAGE_MODELS - 1 models a session files every new one together under
+ *  OTHER_MODELS, which keeps one place free for it: the reading stays at MAX_USAGE_MODELS whatever a transcript names, and
+ *  stays valid (a 17th bucket had made the whole reading invalid, review of #2106). */
+function addModel(state: Checkpoint, name: unknown, delta: Buckets): void {
+  if (delta.every(n => n === 0)) return
+  let model = usageModelName(name)
+  if (!state.models[model] && Object.keys(state.models).filter(m => m !== OTHER_MODELS).length >= MAX_USAGE_MODELS - 1) model = OTHER_MODELS
+  const into = state.models[model] ??= [0, 0, 0, 0]
+  delta.forEach((n, i) => { into[i] += n })
+}
+
 /** Same counting rules as the desktop usage ledger: cached input is included once, reasoning is
  * already inside output, Claude streaming repeats merge, and Codex cumulative snapshots are deltas. */
 function ingest(state: Checkpoint, line: string, target: Target): void {
   if (!line.includes(target.engine === 'claude' ? '"usage"' : '"token_count"')
     && !line.includes('"tool_use"') && !line.includes('"tool_result"') && !line.includes('"response_item"')
-    && !line.includes('"session_meta"') && !line.includes('"turn_context"')) return
+    && !line.includes('"session_meta"') && !line.includes('"turn_context"') && !line.includes('"thread_settings_applied"')) return
   const row = object(JSON.parse(line))
   if (!row) return
   // Forks carry old messages into a new conversation. Only work after the fork belongs to it.
@@ -80,6 +95,10 @@ function ingest(state: Checkpoint, line: string, target: Target): void {
     const id = row.type === 'session_meta' ? object(row.payload)?.id : null
     if (typeof id === 'string') state.sourceSession = id
     if (state.sourceSession !== null && state.sourceSession !== target.sessionId) return
+    // The model of the turns that follow, as the engine's runtime profile reads it (engines/codex/runtimeProfile.ts).
+    const settings = row.type === 'turn_context' ? object(row.payload)
+      : row.type === 'event_msg' && object(row.payload)?.type === 'thread_settings_applied' ? object(object(row.payload)?.thread_settings) : null
+    if (typeof settings?.model === 'string' && settings.model) state.codexModel = usageModelName(settings.model)
   }
   if (row.isSidechain !== true) ingestSessionWork(state.work, row, target.engine, target.cwd)
   ingestOutput(state.output, row, target.engine)
@@ -103,6 +122,7 @@ function ingest(state: Checkpoint, line: string, target: Target): void {
     state.usage[0] += merged[0] + merged[2] + merged[3] - old[0] - old[2] - old[3]
     state.usage[1] += merged[1] - old[1]
     state.usage[2] += merged[2] - old[2]
+    addModel(state, message?.model, merged.map((n, i) => n - old[i]) as Buckets)
     state.observed = true
   } else {
     const payload = object(row.payload)
@@ -129,6 +149,7 @@ function ingest(state: Checkpoint, line: string, target: Target): void {
       state.usage[0] += Math.max(delta[0], delta[1])
       state.usage[1] += delta[2]
       state.usage[2] += delta[1]
+      addModel(state, state.codexModel, [Math.max(0, delta[0] - delta[1]), delta[2], delta[1], 0])
       state.observed = true
     }
   }
@@ -240,8 +261,11 @@ export class AgentTokenUsageCache {
       if (previous) this.onChanged?.(entry.target)
       return
     }
+    const models = Object.entries(state.models)
     entry.value = { totalTokens: state.observed ? state.total : null, updatedAt: state.updatedAt,
       ...(state.observed ? { inputTokens: state.usage[0], outputTokens: state.usage[1], cachedTokens: state.usage[2] } : {}),
+      ...(state.observed && models.length ? { models: Object.fromEntries(models.map(([model, [input, output, cacheRead, cacheWrite]]) =>
+        [model, { input, output, cacheRead, cacheWrite } satisfies ModelTokens])) } : {}),
       ...(output ? { output } : {}), ...(work ? { work } : {}) }
     if (previous?.totalTokens !== entry.value.totalTokens
       || JSON.stringify(previous?.output) !== JSON.stringify(output ?? undefined)
@@ -253,7 +277,8 @@ export class AgentTokenUsageCache {
       if ((await stat(file)).size > MAX_CACHE_BYTES) return empty(key)
       const raw = JSON.parse(await readFile(file, 'utf8')) as Checkpoint
       const version: number = raw.version
-      if ((version === 3 || version === 4) && raw.key === key) {
+      // v5 kept no per-model counts: replayed once like v3 and v4, so a session's counts by model cover all of it.
+      if ((version === 3 || version === 4 || version === 5) && raw.key === key) {
         const work = { ...raw.work, currentOrder: 0, failedOrder: 0 }
         if (validSessionWork(work)) {
           // Receipts may already have been compacted out of the transcript. Replay the available
@@ -267,7 +292,7 @@ export class AgentTokenUsageCache {
         }
       }
       // Replay old transcripts once: v3 skipped ordinary batched code-mode receipts, including PRs.
-      if (raw.version === 5 && raw.key === key && Number.isSafeInteger(raw.total) && raw.total >= 0
+      if (raw.version === 6 && raw.key === key && Number.isSafeInteger(raw.total) && raw.total >= 0
         && Array.isArray(raw.usage) && raw.usage.length === 3 && raw.usage.every(n => Number.isSafeInteger(n) && n >= 0)
         && typeof raw.observed === 'boolean'
         && (raw.updatedAt === null || typeof raw.updatedAt === 'string' && Number.isFinite(Date.parse(raw.updatedAt)))
@@ -277,7 +302,10 @@ export class AgentTokenUsageCache {
         && object(raw.claude) && Object.values(raw.claude).every(validBuckets)
         && object(raw.seen) && Object.values(raw.seen).every(value => value === true)
         && (raw.codex === null || validBuckets(raw.codex)) && validOutputLedger(raw.output)
-        && validSessionWork(raw.work) && (raw.sourceSession === null || typeof raw.sourceSession === 'string')) return raw
+        && validSessionWork(raw.work) && (raw.sourceSession === null || typeof raw.sourceSession === 'string')
+        && object(raw.models) && Object.keys(raw.models).length <= MAX_USAGE_MODELS
+        && Object.entries(raw.models).every(([model, buckets]) => usageModelName(model) === model && validBuckets(buckets))
+        && (raw.codexModel === null || usageModelName(raw.codexModel) === raw.codexModel)) return raw
     } catch { /* First run, corrupt cache, or removed cache: rebuild from the trusted transcript. */ }
     return empty(key)
   }
@@ -305,7 +333,13 @@ export class AgentTokenUsageCache {
       const read = this.options.readSqlite ?? sqliteReadAll
       const database = this.options.opencodeDb ?? join(env.OPENCODE_DATA_DIR, 'opencode.db')
       const limits = { busyTimeoutMs: 20, cliTimeoutMs: 1000, maxBuffer: 4096 }
+      // OpenCode 2 keeps the session in `session_v2` and no longer writes `session`, which holds only what v1
+      // wrote (and nothing of a session v2 began). Its own row is the one to read, then v1's, then v1's before
+      // it counted cache writes.
       let result = await read(database,
+        'SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?',
+        [entry.target.sessionId], limits)
+      if (!result.ok || result.rows.length === 0) result = await read(database,
         'SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?',
         [entry.target.sessionId], limits)
       if (!result.ok) result = await read(database,

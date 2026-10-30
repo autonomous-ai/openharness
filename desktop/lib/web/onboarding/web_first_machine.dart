@@ -11,6 +11,8 @@ import '../../widgets/desktop_chrome.dart';
 import '../../widgets/link_another_machine_dialog.dart'
     show kLinkServerInstallCommand, kLinkServerLoginCommand;
 import '../../widgets/web_download_button.dart';
+import 'saved_computer_rows.dart';
+import 'saved_computers.dart';
 import 'web_your_computers.dart';
 
 /// What a browser shows while none of the account's computers is connected,
@@ -21,48 +23,40 @@ import 'web_your_computers.dart';
 /// The account's computers first, if it has any ([WebYourComputers]): one
 /// waiting on this browser connects right here. Then both ways to set one up,
 /// side by side: the app for a desktop, the CLI for a server. Either signs in
-/// on that computer, which then appears here on its own; the workspace takes
-/// over the moment one connects.
+/// on that computer, which then appears here on its own — the workspace asks
+/// for the machine list while this page shows — and the workspace takes over
+/// the moment one connects.
+///
+/// Until the machine list first answers it lists the computers this browser
+/// kept from the last answer ([saved]), each checking; with none kept it only
+/// says it is looking. If that list cannot be read, it says so with Retry. It
+/// never shows setup steps an account may not need.
 class WebFirstMachine extends StatefulWidget {
   const WebFirstMachine({
     super.key,
     required this.app,
+    this.saved,
     this.openPage = openInNewTab,
   });
 
   final AppNotifier app;
 
+  /// The computers kept in this browser; null keeps none.
+  final SavedComputersWatch? saved;
+
   /// How the download page opens; tests pass a recorder.
   final Future<bool> Function(Uri uri) openPage;
-
-  /// How often the page asks for the machine list while it waits. A computer
-  /// signing in is announced to the account's other windows over their
-  /// connections to its machines — and this one has none yet, so nothing
-  /// would tell it before the five-minute safety net.
-  static const watchEvery = Duration(seconds: 4);
 
   @override
   State<WebFirstMachine> createState() => _WebFirstMachineState();
 }
 
 class _WebFirstMachineState extends State<WebFirstMachine> {
-
   String? _copied;
   Timer? _copiedReset;
-  late final Timer _watch;
-
-  @override
-  void initState() {
-    super.initState();
-    _watch = Timer.periodic(
-      WebFirstMachine.watchEvery,
-      (_) => unawaited(widget.app.rereadMachines()),
-    );
-  }
 
   @override
   void dispose() {
-    _watch.cancel();
     _copiedReset?.cancel();
     super.dispose();
   }
@@ -85,7 +79,26 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
 
   @override
   Widget build(BuildContext context) {
+    final saved = widget.saved;
+    if (saved == null) return _page(null);
+    return ListenableBuilder(
+      listenable: saved,
+      builder: (context, _) => _page(saved.shown),
+    );
+  }
+
+  /// [kept]: the computers to list, checking, until the machine list answers.
+  Widget _page(List<SavedComputer>? kept) {
     grid.AppTheme.watch(context);
+    if (!widget.app.machineInventoryLoaded) {
+      final error = widget.app.machineListError;
+      if (error != null) {
+        return _ListFailed(error: error, onRetry: widget.app.retryMachines);
+      }
+      if (kept == null || kept.isEmpty) {
+        return const Center(child: _Waiting('Finding your computers…'));
+      }
+    }
     final email = widget.app.currentUser?.email;
     final account = email == null || email.isEmpty ? 'this account' : email;
     final options = [
@@ -95,6 +108,7 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
         detail: 'On a Mac or Linux desktop. Open it and sign in as $account.',
         children: [
           FilledButton.icon(
+            style: webOnboardingButton,
             onPressed: () => widget.openPage(WebDownloadButton.uri),
             icon: const Icon(AppIcons.download, size: 16),
             label: const Text('Download app'),
@@ -114,7 +128,8 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
         ],
       ),
     ];
-    final hasComputers = WebYourComputers.listed(widget.app).isNotEmpty;
+    final hasComputers =
+        kept != null || WebYourComputers.listed(widget.app).isNotEmpty;
     return LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = constraints.maxWidth >= 640;
@@ -142,7 +157,9 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
             ),
             const SizedBox(height: 28),
             if (hasComputers) ...[
-              WebYourComputers(app: widget.app),
+              kept != null
+                  ? SavedComputerRows(kept)
+                  : WebYourComputers(app: widget.app),
               const SizedBox(height: 18),
               Text(
                 'Or set up another computer',
@@ -170,7 +187,7 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
                     ],
                   ),
             const SizedBox(height: 24),
-            const Center(child: _Waiting()),
+            const Center(child: _Waiting('Waiting for your computer…')),
           ],
         );
       },
@@ -219,10 +236,50 @@ class _Option extends StatelessWidget {
   );
 }
 
-/// The workspace replaces this page when a computer connects; until then it
-/// says so, so the page does not read as finished.
+/// The machine list could not be read before it ever answered: what went
+/// wrong, and a way to ask again. A failed retry lands back here.
+class _ListFailed extends StatelessWidget {
+  const _ListFailed({required this.error, required this.onRetry});
+
+  final String error;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Semantics(
+        header: true,
+        child: Text(
+          'Could not load your computers',
+          textAlign: TextAlign.center,
+          style: grid.AppType.display(color: DesktopChrome.foreground),
+        ),
+      ),
+      const SizedBox(height: 8),
+      Text(
+        error,
+        textAlign: TextAlign.center,
+        style: DesktopChrome.text(color: DesktopChrome.muted),
+      ),
+      const SizedBox(height: 20),
+      FilledButton.icon(
+        style: webOnboardingButton,
+        onPressed: () => unawaited(onRetry()),
+        icon: const Icon(AppIcons.rotateCw, size: 16),
+        label: const Text('Retry'),
+      ),
+    ],
+  );
+}
+
+/// The workspace replaces this page when the list answers or a computer
+/// connects; until then it says what it waits for, so the page does not read
+/// as finished.
 class _Waiting extends StatelessWidget {
-  const _Waiting();
+  const _Waiting(this.label);
+
+  final String label;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -238,10 +295,7 @@ class _Waiting extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 10),
-        Text(
-          'Waiting for your computer…',
-          style: DesktopChrome.metadata(),
-        ),
+        Text(label, style: DesktopChrome.metadata()),
       ],
     ),
   );

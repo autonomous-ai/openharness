@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../screens/login_screen.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
+import 'saved_super_tabs_row.dart';
 
 class AccountSection extends StatelessWidget {
   const AccountSection({super.key, required this.notifier});
@@ -54,30 +56,51 @@ class AccountSection extends StatelessWidget {
           ),
         );
       }
+      final account = SettingRow(
+        // An account with no name is called by its email, and the email is
+        // the line under it: signing up by email showed the address twice.
+        title: profile != null && profile.displayName != profile.email
+            ? profile.displayName
+            : (local && profile == null ? 'Local session' : 'Signed in'),
+        detail:
+            profile?.email ??
+            (local ? 'Loopback backend' : 'Profile unavailable'),
+        control: OutlinedButton(
+          key: const Key('settings-sign-out-button'),
+          onPressed: () {
+            Navigator.of(context).pop();
+            notifier.logout();
+          },
+          child: Text(local ? 'Disconnect local session' : 'Sign out'),
+        ),
+      );
       return SectionScaffold(
         title: 'Account',
         subtitle: local
             ? 'Connected to a local development session.'
+            // A browser is not "this computer" (docs/naming-system.md).
+            : kIsWeb
+            ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
         child: SingleChildScrollView(
-          child: SettingRow(
-            // An account with no name is called by its email, and the email is
-            // the line under it: signing up by email showed the address twice.
-            title: profile != null && profile.displayName != profile.email
-                ? profile.displayName
-                : (local && profile == null ? 'Local session' : 'Signed in'),
-            detail:
-                profile?.email ??
-                (local ? 'Loopback backend' : 'Profile unavailable'),
-            control: OutlinedButton(
-              key: const Key('settings-sign-out-button'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                notifier.logout();
-              },
-              child: Text(local ? 'Disconnect local session' : 'Sign out'),
-            ),
-          ),
+          // Only the browser's reading, which draws a kept view at once, says
+          // it keeps Super Tabs; Desktop's, drawn once confirmed and another
+          // account's forgotten at sign-in, leaves its page as it was.
+          child:
+              notifier.superTabs.reading.drawsSaved &&
+                  !notifier.superTabs.reading.confirmsSaved
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    account,
+                    const SizedBox(height: 12),
+                    SavedSuperTabsRow(
+                      superTabs: notifier.superTabs,
+                      copies: notifier.browserCopies,
+                    ),
+                  ],
+                )
+              : account,
         ),
       );
     },

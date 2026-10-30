@@ -10,6 +10,7 @@ import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/cli_login.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
@@ -109,6 +110,14 @@ _GridApp _gridApp({
   return app;
 }
 
+class _NoopLogin extends CliLogin {
+  int logoutCalls = 0;
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+  }
+}
+
 class _Source implements UsageSource {
   _Source(this.provider, this.answer);
   @override
@@ -130,10 +139,12 @@ void main() {
     DateTime? reset,
     DateTime? fetched,
     String? account = 'aabbccddeeff0011',
+    String? email = 'dev@example.com',
   }) => ProviderUsage(
     provider: UsageProvider.claude,
     status: UsageStatus.ok,
     account: account,
+    email: email,
     fetchedAt: fetched ?? instant,
     windows: [
       UsageWindow(label: 'Session', usedPercent: session, resetsAt: reset),
@@ -152,7 +163,13 @@ void main() {
           MachineUsage(machineName: 'Shared Mac', readings: [reading()]),
           MachineUsage(
             machineName: 'Other Mac',
-            readings: [reading(account: '1122334455667788', session: 50)],
+            readings: [
+              reading(
+                account: '1122334455667788',
+                email: 'work@example.com',
+                session: 50,
+              ),
+            ],
           ),
         ],
       );
@@ -164,11 +181,11 @@ void main() {
       expect(menu.rows.first['title'], 'Anthropic');
       expect(menu.rows.first['status'], '15% remaining');
       expect(menu.rows.first['details'], contains('Weekly — 70% remaining'));
-      expect(menu.rows.first['account'], 'aabbcc');
+      expect(menu.rows.first['account'], 'dev@example.com');
       expect(menu.rows.first['machines'], ['Shared Mac']);
       expect(menu.rows.first['accountKey'], 'aabbccddeeff0011');
       expect(menu.rows.last['title'], 'Anthropic');
-      expect(menu.rows.last['account'], '112233');
+      expect(menu.rows.last['account'], 'work@example.com');
       expect(menu.rows.last['status'], '50% remaining');
       expect(
         menu.rows.map((row) => row['details']).toString(),
@@ -204,19 +221,156 @@ void main() {
     },
   );
 
-  test('unidentified accounts do not invent an account label', () async {
-    final source = _Source(
-      UsageProvider.claude,
-      () async => reading(account: null),
-    );
-    final usage = UsageController(sources: [source], autoStart: false);
-    final menu = ModelsMenuController(usage: usage, now: () => instant);
-    addTearDown(usage.dispose);
-    addTearDown(menu.dispose);
-    await menu.refresh();
-    expect(menu.rows.single['title'], 'Anthropic');
-    expect(menu.rows.single['account'], '');
+  group('sign-out', () {
+    List<MachineUsage> otherAccount() => [
+      MachineUsage(
+        machineName: 'Other Mac',
+        readings: [
+          reading(account: '1122334455667788', email: 'work@example.com'),
+        ],
+      ),
+    ];
+    bool remoteRow(Map<String, Object?> row) => row['local'] == false;
+
+    test('sign-out forgets remote usage rows', () async {
+      final usage = UsageController(
+        sources: [_Source(UsageProvider.claude, () async => reading())],
+        autoStart: false,
+        remote: () async => otherAccount(),
+      );
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      expect(menu.rows.where(remoteRow), hasLength(1));
+
+      menu.reset();
+
+      expect(menu.rows.where(remoteRow), isEmpty);
+      expect(menu.rows.single['account'], 'dev@example.com');
+    });
+
+    test('a remote read the old account started lands nowhere', () async {
+      final answers = <Completer<List<MachineUsage>>>[];
+      final source = _Source(UsageProvider.claude, () async => reading());
+      final usage = UsageController(
+        sources: [source],
+        autoStart: false,
+        remote: () {
+          answers.add(Completer());
+          return answers.last.future;
+        },
+      );
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final asked = menu.refresh();
+
+      menu.reset();
+      answers.single.complete(otherAccount());
+      await asked;
+
+      expect(menu.rows.where(remoteRow), isEmpty);
+      // The next account reads at once, not a minute after the old one did.
+      final next = menu.refresh();
+      expect(source.calls, 2);
+      answers.last.complete(const []);
+      await next;
+    });
+
+    test('the next account reads while the old one\'s read is held', () async {
+      final locals = <Completer<ProviderUsage>>[];
+      final remotes = <Completer<List<MachineUsage>>>[];
+      final source = _Source(UsageProvider.claude, () {
+        locals.add(Completer());
+        return locals.last.future;
+      });
+      final usage = UsageController(
+        sources: [source],
+        autoStart: false,
+        remote: () {
+          remotes.add(Completer());
+          return remotes.last.future;
+        },
+      );
+      var clock = instant;
+      final menu = ModelsMenuController(usage: usage, now: () => clock);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final old = menu.refresh();
+
+      menu.reset();
+      final next = menu.refresh();
+      expect(source.calls, 2);
+
+      // The old account's read lands late, and fails: it must neither end
+      // nor fail the next account's read.
+      locals.first.completeError(StateError('old account'));
+      remotes.first.complete(otherAccount());
+      await old;
+      clock = instant.add(const Duration(minutes: 2));
+      final reopened = menu.refresh();
+      expect(source.calls, 2);
+
+      locals.last.complete(reading());
+      remotes.last.complete([
+        MachineUsage(
+          machineName: 'Studio',
+          readings: [reading(account: '99aa', email: 'b@example.com')],
+        ),
+      ]);
+      await Future.wait([next, reopened]);
+
+      final remote = menu.rows.where(remoteRow).single;
+      expect(remote['account'], 'b@example.com');
+      expect(remote['status'], '15% remaining');
+    });
+
+    for (final expires in [false, true]) {
+      test('${expires ? 'expiry' : 'sign-out'} resets the window\'s Models '
+          'menu', () async {
+        // Never the real CLI: its logout would sign this computer out.
+        final login = _NoopLogin();
+        final app = AppNotifier(
+          config: AppConfig.dev,
+          authSession: AuthSession(),
+          configStore: null,
+          cliLogin: login,
+        );
+        addTearDown(app.dispose);
+        final menu = app.modelsMenu;
+        var told = 0;
+        menu.addListener(() => told++);
+        if (expires) {
+          app.expireSessionForTest('Session expired.');
+        } else {
+          await app.logout();
+        }
+        expect(login.logoutCalls, expires ? 0 : 1);
+        expect(told, greaterThan(0));
+        expect(app.modelsMenu, same(menu), reason: 'pickers keep listening');
+        expect(menu.rows.where(remoteRow), isEmpty);
+      });
+    }
   });
+
+  test(
+    'readings without email do not expose their internal account key',
+    () async {
+      final source = _Source(
+        UsageProvider.claude,
+        () async => reading(email: null),
+      );
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      expect(menu.rows.single['title'], 'Anthropic');
+      expect(menu.rows.single['account'], '');
+      expect(menu.rows.single['accountKey'], 'aabbccddeeff0011');
+    },
+  );
 
   test(
     'unknown, expired and invalid readings never become made-up percentages',
@@ -527,6 +681,8 @@ void main() {
           tester.widget<TextField>(resourceField).decoration!.hintText,
           'Search models',
         );
+        // The title bar's Models opens with nothing typed to delete.
+        expect(resourceSearch(tester).query, ':');
         expect(app.sent, isEmpty);
         await tester.pumpWidget(const SizedBox());
         app.dispose();

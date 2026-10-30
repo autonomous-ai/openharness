@@ -35,12 +35,15 @@ import { basename, join } from 'node:path'
 import { SHARED_ACTIVITY_WINDOW_FRAME, SHARED_TABS_WINDOW_FRAME, type CoreApi, type ServiceRequests, type TabFrame, type TurnDelivery } from '../core/api.js'
 import { env } from '../config/env.js'
 import { agentProject } from '../lib/agentProject.js'
-import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
+import { agentSettingsPath, askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
+import { primaryRuntime, sessionForPaneId, terminalRouteKey } from '../lib/terminalRuntime.js'
+import { type DirectoryTab, MessageDirectory, type Member } from './directory.js'
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
+import { TOLD_TAB, tellRefusal, toldText } from './tell.js'
+import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
 import { cleanName, type Roster } from './roster.js'
@@ -58,6 +61,7 @@ import { cleanSummary } from '../lib/activitySummary.js'
 import { VERSION } from '../version.js'
 import { createTaskReader, type TaskReader, type TaskResult } from './tasks.js'
 import { MessageStore, type Entry, type LocalDelivery, type Outgoing } from './store.js'
+import { PTY_HOST_INSTANCE_SOURCE } from '../lib/ptyHost/instance.js'
 
 export interface MessagesOptions {
   /** Where its history and waiting deliveries are kept; an isolated fixture's own. */
@@ -102,6 +106,8 @@ export interface AgentMessages {
 
 /** How often the service looks at its notes, its outbox and other machines' deliveries. */
 export const TICK_MS = 5_000
+/** How often a tab id this desk does not list may make the desk be read again (`tabActivity`). */
+export const MISSED_TAB_READ_MS = 15_000
 /** How often a message waiting on another machine is asked about. */
 export const REMOTE_STATUS_MS = 15_000
 /** How long another machine's names for its agents are kept. */
@@ -134,11 +140,12 @@ export const WHO_WAIT_MS = 4_000
 /** How long `harness send` alone waits for the tasks before it gives the roster without them. */
 export const TASKS_WAIT_MS = 4_000
 /** What `harness send` says while this computer has Agent Messages off: where the person turns them on again. */
-export const MESSAGES_OFF_TEXT = 'Agent Messages are off. The person turns on "Agents in the same tab can message each other" in Settings ▸ Experimental, or runs `harness settings agent-messages on`.'
+export const MESSAGES_OFF_TEXT = `Agent Messages are off. ${askThePersonFirst('agent-messages', 'work on without messaging your teammates.')}`
 
 /** How long the windows' `shared_tabs_changed` waits for more of the same change. */
 export const SHARES_COALESCE_MS = 250
-const PANE = /^%\d{1,9}$/
+/** `harness send`'s pane: `$TMUX_PANE` (`%N`, a tmux pane only) or a pty host pane's `<instance>:%N` (`$HARNESS_PANE`). */
+const PANE = new RegExp(`^(?:${PTY_HOST_INSTANCE_SOURCE}:)?%\\d{1,9}$`)
 /** The most messages `harness send` alone gives an agent at once, unread ones first. */
 const UNREAD_MAX = 20
 /** Whether `wanted` is the whole of a name the engine cut short: Codex titles its terminal with the folder cut to fit
@@ -162,7 +169,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   const store = new MessageStore(stateDir)
   // Who started which harness is the agent client's (limits, depth, who may close what), never a way to message: a
   // harness started by another reaches it only through a tab they share, like any teammate (owner, 2026-10-11, on
-  // finding agents messaging each other with no tab turned on).
+  // finding agents messaging each other with no tab turned on). The one use beyond that is `harness tell` (tell.ts):
+  // one way, from the starter, behind a switch of its own the person turns on.
   const lineage = new Ledger(options.ledgerFile ?? ledgerPath(core.dataDir))
   const inbox = new PaneInbox(options.inboxRoot ?? env.HARNESS_AGENT_MESSAGES_DIR)
   /** Other machines' names for their agents, with when they were asked; a branch only for a harness in a shared tab. */
@@ -221,6 +229,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   }
   /** Whether the account keeps the one-line summary from other accounts (Settings ▸ Experimental), read as `messagingOn` is. */
   const summaryHidden = (): boolean => { messagingOn(); return setting.hide }
+  /** Whether a harness's starter may tell it more work (`agents-tell-agents`): read at each use, as few as they are, so
+   *  a switch turned off stops what still waits at the mailbox's next look. */
+  const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
+  /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
+  const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -247,6 +260,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   })
 
   const live = (): RegisteredSession[] => core.agents.live().filter((s) => s.engine !== ('terminal' as string))
+  /** Where a harness's inbox is: its pane by route key (inbox.ts), so equal `%N` ids on two backends never share
+   *  one. None while it has no pane. */
+  const inboxPane = (session: RegisteredSession): string => session.runtimes.length ? terminalRouteKey(primaryRuntime(session)) : ''
   const localAgent = (agentId: string): RegisteredSession | undefined => live().find((s) => s.agentId === agentId)
   const machineName = (machineId: string): string => directory.machineName(machineId) ?? (machineId === self() ? hostname().replace(/\.local$/, '') : idStart(machineId))
 
@@ -257,7 +273,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       if (!session) return null
       // The hook delivers only to this conversation: a Codex sub-agent runs its hooks from its parent's pane, and
       // a pane number tmux gives out again is another's. A Claude Code sub-agent says so itself (`agent_id`).
-      return { pane: session.tmuxPane, session: session.sessionId ?? '', available: session.active && core.agents.terminalAvailable(agentId) }
+      return { pane: inboxPane(session), session: session.sessionId ?? '', available: session.active && core.agents.terminalAvailable(agentId) }
     },
     deliver: (agentId, text, deliveryId) => { core.turns.deliver(agentId, text, deliveryId); options.changed?.() },
     refused: (delivery) => { const v = verdict(delivery); return v && 'refused' in v ? v.refused : null },
@@ -267,6 +283,10 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     ready: () => directory.current() !== null || !directory.on(),
     asleep,
     text: (delivery, message) => {
+      // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
+      if (message.tabId === TOLD_TAB) return toldText(message)
+      // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
+      if (message.tabId === REPLIED_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
       const text = rendered(message, account?.accountId)
       return roster && store.state.noted[delivery.agentId] !== roster.signature ? `${roster.text}\n\n${text}` : text
@@ -301,6 +321,15 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!entry) return { refused: 'the message is no longer kept' }
     const never = forbidden(delivery)
     if (never) return { refused: never }
+    // Told by its starter: no tab carries it, so the tabs say nothing. The switch, and who started it as this machine
+    // records it, are looked at again at each look: turned off meanwhile, it is refused at once. Whether the harness
+    // runs was asked as it was told; a harness away for a moment (a restart) waits as a teammate's message does.
+    if (entry.message.tabId === TOLD_TAB) {
+      const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
+      return refusal ? { refused: refusal.message } : null
+    }
+    // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
+    if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
     if (!directory.current() && directory.on()) return null
     const key = `${delivery.messageId} ${delivery.agentId}`
     const recipient = { machineId: self(), agentId: delivery.agentId }
@@ -578,6 +607,106 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     return { recorded: true }
   }
 
+  /** When each starter told, for the rate limit: the same 30 in 10 minutes a `harness send` sender has. */
+  const toldAt = new Map<string, number[]>()
+
+  /**
+   * `harness tell` (tell.ts): more work for a harness here from the harness that started it. From a pane on this
+   * machine the starter is the pane's harness, never what the request says; from another of the owner's machines,
+   * over the relay, it is that machine's word, as a hand-over's sender is (`deliver`). Either way this machine's own
+   * record must say that starter started it. Queued in the mailbox, which types it once the harness's composer is
+   * free, or gives it at its next tool call while it works.
+   */
+  async function tell(payload: Record<string, unknown>, local: boolean): Promise<Record<string, unknown>> {
+    let from: Member
+    if (local) {
+      const pane = typeof payload.pane === 'string' ? payload.pane : ''
+      const session = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
+      if (!session) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
+      from = { machineId: self(), agentId: session.agentId }
+    } else {
+      const claimed = payload.from as Record<string, unknown> | null | undefined
+      if (typeof claimed?.machineId !== 'string' || !claimed.machineId || typeof claimed.agentId !== 'string' || !claimed.agentId) {
+        throw new MessageError('INVALID_REQUEST', 'Say which harness tells it.')
+      }
+      // This machine's own harnesses tell from their pane.
+      if (claimed.machineId === self()) throw new MessageError('NOT_FROM_THERE', 'A harness on this machine tells from its pane, not over the relay.')
+      from = { machineId: claimed.machineId, agentId: claimed.agentId }
+    }
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId) throw new MessageError('USAGE', 'Name the harness to tell.')
+    if (!text.trim()) throw new MessageError('USAGE', 'Say what to do: harness tell <name> -- <work>')
+    if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
+    const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: (id) => !!localAgent(id) }, from, agentId)
+    if (refusal) throw new MessageError(refusal.code, refusal.message)
+    const key = `${from.machineId}/${from.agentId}`
+    const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)
+    if (times.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `You told your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
+    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
+      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
+    }
+    // Named as it was started: who started it is this machine's record, not the request's.
+    const started = lineage.parentOf({ machineId: self(), agentId })!
+    // The machine's name as the starter's CLI reads it (`machine-name`), as a start's header names it: Agent Messages'
+    // directory knows names only while it is on, and without it this one was headed with the host's name
+    // ("Macbooks-MacBook-Pro-5" for "Mac Auto", 2026-10-26).
+    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(from.machineId)
+    const message: Message = {
+      id: messageId(), tabId: TOLD_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: started.child.name || agentId.slice(0, 8) }],
+      from: { ...from, name: started.by.name || from.agentId.slice(0, 8), engine: started.by.engine || 'claude', machine },
+    }
+    toldAt.set(key, [...times, now()])
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
+    // Asleep (Agent Messages off), the mailbox looks only while something waits: this does now.
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
+  /** When programs replied to harnesses here, for the rate limit: the same 30 in 10 minutes a `tell` has. */
+  const repliedAt: number[] = []
+
+  /**
+   * `harness reply` to a harness in a pane here (replyLocal.ts), from a program acting for the person: a process of the
+   * owner's on this machine, or another of the owner's machines over the relay. Only an idle harness, only with the
+   * person's switch on; queued in the mailbox, which types it once the composer is free.
+   */
+  async function replyLocal(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId) throw new MessageError('USAGE', 'Name the harness to reply to.')
+    if (!text.trim()) throw new MessageError('USAGE', 'Give the words: harness reply <name> -- <words>')
+    if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
+    const session = localAgent(agentId)
+    const activity = session ? (await core.agents.activity([agentId]))[agentId] ?? 'unknown' : 'unknown'
+    const refusal = replyRefusal({ on: replyOn(), live: !!session, activity })
+    if (refusal) throw new MessageError(refusal.code, refusal.message)
+    while (repliedAt.length && now() - repliedAt[0] >= LIMITS.window) repliedAt.shift()
+    if (repliedAt.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `Programs replied to your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
+    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
+      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
+    }
+    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(self())
+    const message: Message = {
+      id: messageId(), tabId: REPLIED_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: core.agents.displayName(session!) || agentId.slice(0, 8) }],
+      from: { machineId: self(), agentId: PERSON_AGENT_ID, name: 'the person', engine: '', machine },
+    }
+    repliedAt.push(now())
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
   function withdrawNote(agentId: string): void {
     const pending = store.state.notes[agentId]
     if (!pending) return
@@ -608,12 +737,13 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       unknown.push(...directory.peers({ machineId: self(), agentId: session.agentId }).filter((m) => m.machineId !== self() && !teammate(m).known))
       if (store.state.noted[session.agentId] === roster.signature) { withdrawNote(session.agentId); continue }
       const current = store.state.notes[session.agentId]
-      if (current?.signature === roster.signature && current.pane === session.tmuxPane && inbox.waiting(current.pane, current.key)) continue
+      const pane = inboxPane(session)
+      if (current?.signature === roster.signature && current.pane === pane && inbox.waiting(current.pane, current.key)) continue
       withdrawNote(session.agentId)
       const noteKey = `0note-${roster.signature}`
       try {
-        inbox.put(session.tmuxPane, noteKey, { session: session.sessionId ?? '', text: roster.text })
-        store.state.notes[session.agentId] = { pane: session.tmuxPane, key: noteKey, signature: roster.signature }
+        inbox.put(pane, noteKey, { session: session.sessionId ?? '', text: roster.text })
+        store.state.notes[session.agentId] = { pane, key: noteKey, signature: roster.signature }
         saveQuietly()
       } catch { /* the next look puts it */ }
     }
@@ -625,7 +755,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   async function send(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     const pane = typeof payload.pane === 'string' ? payload.pane : ''
     if (!PANE.test(pane)) throw new MessageError('NOT_A_HARNESS', 'Run harness send from a harness pane.')
-    const session = live().find((s) => s.tmuxPane === pane)
+    // A bare `%N` is `$TMUX_PANE`, a tmux pane only (`sessionForPaneId`).
+    const session = sessionForPaneId(live(), pane)
     if (!session) throw new MessageError('NOT_A_HARNESS', 'This pane is not a harness Harness knows. Run harness send from an agent\'s pane.')
     // Off is the person's word, answered before the tabs are read: a backend that cannot be reached is not the reason.
     if (!directory.on()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)
@@ -1155,9 +1286,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!messagingOn()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)
     const me = await signedInAs()
     const onDesk = (): DirectoryTab | undefined => directory.current()?.tabs.find((t) => t.id === tabId)
-    // A tab it does not know may be new: the desk is read again for it, but not more than once in POLL_MS, so ids a window
+    // A tab it does not know may be new: the desk is read again for it, but not more than once in MISSED_TAB_READ_MS, so ids a window
     // makes up cannot drive reads of the backend.
-    if (!onDesk() && now() - missedTabAt >= POLL_MS) { missedTabAt = now(); await directory.refresh() }
+    if (!onDesk() && now() - missedTabAt >= MISSED_TAB_READ_MS) { missedTabAt = now(); await directory.refresh() }
     const tab = onDesk()
     if (!tab) throw new MessageError('NOT_A_TAB', 'That tab is not on your desk.')
     const foreign = (m: Member): boolean => !!m.accountId && m.accountId !== me.accountId
@@ -1451,8 +1582,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
 
   const stopHearing = core.turns.onDelivery((event: TurnDelivery) => mailbox.observe(event))
   // Asleep, a changed desk is read when it wakes, not now. Shared tabs read theirs after the desk, whose panes they take.
+  // A machine created, renamed or deleted changes the panes and names the directory lists, as a changed desk does.
   const stopNotices = core.account.onNotice((notice) => {
-    if (notice.type === 'desk_changed' && !asleep()) void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    if ((notice.type === 'desk_changed' || notice.type === 'machines_changed') && !asleep()) {
+      void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    }
   })
 
   // Started only as it wakes, when it is stopped: never twice.
@@ -1538,6 +1672,10 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'status': return statusOf(payload)
           case 'who': return whoAre(payload)
           case 'started': return started(payload)
+          // From a pane here, or another of the owner's machines over the relay: `tell` tells them apart.
+          case 'tell': return tell(payload, asker.local)
+          // A program acting for the person, here or on another of the owner's machines (replyLocal.ts).
+          case 'reply_local': return replyLocal(payload)
           case 'history': return history(payload)
           // The windows' sidebar: every harness of a desk tab, shared or not, with its state and one line on what it does.
           case 'tab_activity': return tabActivity(String(payload.tabId))

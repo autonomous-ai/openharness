@@ -45,7 +45,7 @@ async function loadRegistry() {
 const DEPS: LaunchOverridesDeps = {
   machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
   writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
-  tmuxSupportsSessionEnv: async () => true,
+  capabilities: async () => ({ sessionEnv: true }),
   installCodexHooks: () => true,
 }
 

@@ -20,7 +20,9 @@ enum { PH_HOME_BG = 0x151413,
        PH_LETTER = 0xF4EEE3, PH_LETTER_MID = 0xD9CFBF, PH_LETTER_BACK = 0xBFB3A1, PH_LETTER_INK = 0x1F1A14, PH_LETTER_RULE = 0xE2D8C8,   // the Notices card: a letter
        PH_LETTER_WHO = 0x9A5A2E, PH_LETTER_MORE = 0x9A8A76, PH_LETTER_MARK = 0xD9622B, PH_LETTER_BADGE = 0xFF7A2F,
        PH_TOAST_FILL = 0x1B2A3D, PH_TOAST_EDGE = 0x2A3D55, PH_TOAST_NAME = 0xFFB36B, PH_TOAST_INK = 0xF2F7FC, PH_TOAST_BAR = 0xFF8A3D,   // the notice toast
-       PH_CARD_INK = 0xFFFFFF, PH_PILL_WORK = 0x9DFFC0, PH_PILL_ASK = 0xFFC796 };
+       PH_CARD_INK = 0xFFFFFF, PH_PILL_WORK = 0x9DFFC0, PH_PILL_ASK = 0xFFC796,
+       PH_SWARM1 = 0x6B4FA3, PH_SWARM2 = 0x231A3B,   // the Swarm card's gradient (the Super Tab purple of Notices, darkened toward the ground)
+       PH_LEAD_WORK = 0x3EE05B, PH_LEAD_ASK = 0xFFC796, PH_LEAD_STUCK = 0xFFB0B0 };   // a Lead's status line: working, needs you, stuck (done is white at 60 %)
 
 // Home's equaliser: four 8 px bars 5 px apart (47 wide) in a 36 px box at (x, y), PH_ROOM_GREEN, a triangle wave between 40 % and 100 %, 900 ms.
 void ph_working_mark_big(ht_scene_t *, int x, int y, uint32_t now_ms);
@@ -54,8 +56,17 @@ pod_scene_t ph_card_scene(const pod_model_t *, const pod_agent_t *);
 // side x side square, else its 72 px logo, else a ">_" outline on `fill`.
 // An engine's logo at exactly `size` (a baked one: 44 or 72) at (x, y), else a ">_" outline box of that size on `fill` (0xRRGGBB).
 void ph_engine_logo(ht_scene_t *, int x, int y, int size, const char *engine, unsigned fill);
-// Home's Notices card (ph_overview.c header): while pod_notice_count > 0 it is the page before tab 0; the TABS frame's scroll is the tab index, -1 the Notices card.
+// Home's Notices card (ph_overview.c header): while pod_notice_count > 0 it is the page before tab 0; the TABS frame's scroll is the tab index, POD_HOME_NOTICES (-2) the Notices card.
 // A tap on it is one POD_A_INBOX hit.
+// Home's Swarm card (ph_overview.c header): the pet scene a Lead plays, WORK while it works, ASK when it needs you or is stuck, else REST.
+pod_scene_t ph_lead_scene(pod_lead_state_t);
+// A Lead's status line and its colour (PH_LEAD_*; `dim`, the caller's, for "done"): "working · m:ss" (a remote Lead without a clock: "working"), "needs you", "stuck", "done".
+unsigned ph_lead_status(const pod_lead_t *, uint32_t now_ms, char *line, size_t n, unsigned dim);
+// Home's Working card: the working agents newest turn first (the least pod_agent_secs, ties in model order); returns how many are listed (at most cap).
+int ph_working_list(const pod_model_t *, const pod_agent_t **out, int cap, uint32_t now_ms);
+// The card colours of an engine (the tab cards' mapping; NULL or an unknown engine: the grey pair), and the Working card's: Codex's blue.
+void ph_engine_tint(const char *engine, unsigned *c1, unsigned *c2);
+void ph_working_tint(const pod_model_t *, unsigned *c1, unsigned *c2);
 void ph_card_art(ht_scene_t *, int cx, int cy, int side, const pod_model_t *, const pod_agent_t *, unsigned fill, uint32_t now_ms);
 
 // ---- Agent, Recap, Talk, Notices, Update (ph_agent.c, ph_recap.c, ph_talk.c, ph_inbox.c, ph_ota.c) ----
@@ -88,9 +99,19 @@ int ph_inbox_max_row(const pod_model_t *);
 typedef struct { const char *engine, *name; char text[160]; } ph_notice_line_t;   // name: the agent's, "" when unknown
 int ph_notices_top(const pod_model_t *, int max, ph_notice_line_t *out);
 
+// ---- The Lead view (ph_lead.c): a Swarm card's Lead, its last message in a paper bubble (see the file's header) ----
+// The top frame's Lead (pod_nav_lead): the Swarm's name and the project on top, the bubble (loaded text, "..." loading, no bubble and "No message yet" when empty; an orange
+// inner left edge for a Lead that needs you, red for stuck), the Lead's pet signing it with "Lead" and its status line. No hit. Draws nothing while the model does not hold the Lead.
+void ph_view_lead(pod_out_frame_t *, const pod_nav_t *, pod_model_t *, uint32_t now_ms);
+// A long message scrolls by rows: 46 px a row, the last valid offset (rows past the 7 shown), 0 for any other state.
+int ph_lead_pitch(void);
+int ph_lead_max_row(const pod_nav_t *, const pod_model_t *);
+// Ms to its next change: the pet's next step (no sooner than the Pets beat) and the status line's seconds.
+uint32_t ph_lead_next_ms(const pod_nav_t *, const pod_model_t *, uint32_t now_ms);
+
 // ---- The notice toast (ph_toast.c) ----
 // The toast for unread entry `u` over whatever the frame holds (call it last, as the glue draws it): see the file's header. shown_ms: when it appeared; it
-// slides in over POD_TOAST_SLIDE_MS and its bar runs out at shown_ms + POD_TOAST_MS. Adds one POD_A_BANNER hit (arg 0, id = the agent). Returns the
+// slides in over POD_TOAST_SLIDE_MS and its bar runs out at shown_ms + POD_TOAST_MS (a Super Tab question's bar stays full: pod_model_attention). Adds one POD_A_BANNER hit (arg 0, id = the agent). Returns the
 // card's height. At most 9 runs.
 int ph_toast(pod_out_frame_t *, const pod_model_t *, const pod_unread_t *u, uint32_t shown_ms, uint32_t now_ms);
 
@@ -133,8 +154,6 @@ pod_scene_t ph_room_scene(const pod_model_t *, const pod_agent_t *);
 pod_scene_t ph_work_scene(const pod_agent_t *);
 // The agent's pet in `scene`, 2x, its feet on `foot`, centred on cx (an engine with no pet: its 72 px logo or the ">_" outline). Returns the top of what is drawn.
 int ph_room_pet(ht_scene_t *, const pod_model_t *, const pod_agent_t *, pod_scene_t scene, int cx, int foot, uint32_t now_ms, uint32_t started_ms);
-int ph_room_pet_z(ht_scene_t *, const pod_model_t *, const pod_agent_t *, pod_scene_t scene, int cx, int foot, uint32_t now_ms, uint32_t started_ms,
-                  unsigned zoom8);   // started_ms: when a one-shot scene (SEND, LISTEN) began
 // The room's frame: the scene ground (PH_ROOM_BG), no glow (a flat block bands and shows its edge), the agent's name centred on x 360 (ph_title:
 // ph_sb_26, cut with an ellipsis at 640 px). No dots.
 void ph_room_chrome(pod_out_frame_t *, const pod_nav_t *, const pod_model_t *, const pod_agent_t *);

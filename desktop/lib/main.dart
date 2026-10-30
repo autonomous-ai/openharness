@@ -1,5 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+
 import 'app_shell.dart';
 import 'core/connected_semantics.dart';
+import 'core/linux_webview_runtime.dart';
+import 'ws/ws_conn.dart' show rememberAppVersionForSockets;
+import 'update/started_marker.dart';
 import 'desktop_workspace.dart'
     if (dart.library.js_interop) 'web/web_entry.dart';
 
@@ -10,11 +17,19 @@ import 'desktop_workspace.dart'
 /// its store bar, native builds never compile it.
 /// `../mobile` mounts a phone shell into its own vendored copy of
 /// [startHarness] rather than depending on this package.
-Future<void> main() {
+Future<void> main() async {
   HarnessWidgetsBinding();
-  return startHarness(
+  prepareConsole();
+  await LinuxWebViewRuntime.initialize();
+  unawaited(rememberAppVersionForSockets());
+  await startHarness(
     authenticatedScreen: authenticatedWorkspace,
     frame: appFrame,
     transportPlugins: terminalTransportPlugins,
+  );
+  unawaited(
+    markStartedAfterFirstFrame(
+      firstFrame: WidgetsBinding.instance.waitUntilFirstFrameRasterized,
+    ),
   );
 }

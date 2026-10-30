@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot } from './projectFolder.js'
+import {
+  cloneFailure, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError,
+} from './projectFolder.js'
+
+/** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
+function checkout(folder: string, origin: string | null): void {
+  execFileSync('git', ['init', '-q', folder])
+  if (origin !== null) execFileSync('git', ['-C', folder, 'remote', 'add', 'origin', origin])
+}
 
 describe('project folder preparation', () => {
   let root: string
@@ -41,6 +50,17 @@ describe('project folder preparation', () => {
     await expect(prepareProjectFolder({ source: 'new', name: 'My-Game-v2' }, { root, label: 'Codex', now }))
       .rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
     expect(await readdir(root)).toEqual(['My-Game-v2'])
+  })
+
+  it('names the folder a typed name found, so an app can offer it, and no folder when what is there is a file', async () => {
+    await mkdir(join(root, 'payments'))
+    await expect(prepareProjectFolder({ source: 'new', name: 'payments' }, { root, label: 'Codex', now }))
+      .rejects.toMatchObject({ code: 'PROJECT_EXISTS', folder: join(root, 'payments') })
+    await writeFile(join(root, 'notes'), 'a file, not a project')
+    const refusal = await prepareProjectFolder({ source: 'new', name: 'notes' }, { root, label: 'Codex', now }).catch((error: unknown) => error)
+    expect(refusal).toMatchObject({ code: 'PROJECT_EXISTS' })
+    expect((refusal as ProjectFolderError).folder).toBeUndefined()
+    expect(await readFile(join(root, 'notes'), 'utf8')).toBe('a file, not a project')
   })
 
   it('numbers a suggested name past a folder that exists, instead of refusing it', async () => {
@@ -84,6 +104,104 @@ describe('project folder preparation', () => {
     await expect(prepareProjectFolder(project, { root, clone })).rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
     expect(clone).toHaveBeenCalledTimes(1)
     expect(await readFile(join(folder, 'README.md'), 'utf8')).toBe('saved checkout')
+  })
+
+  it('knows one repository however git spells it, and nothing that names no host', () => {
+    for (const address of ['https://github.com/owner/repo.git', 'https://github.com/owner/repo', 'https://github.com/owner/repo/',
+      'https://GitHub.com/Owner/Repo.git', 'http://github.com/owner/repo', 'https://x-access-token:secret@github.com/owner/repo.git',
+      'git@github.com:owner/repo.git', 'git@github.com:Owner/repo', 'ssh://git@github.com/owner/repo.git', 'ssh://git@github.com:22/owner/repo',
+      'git://github.com/owner/repo.git', '  https://github.com/owner/repo.git\n']) {
+      expect(repositoryIdentity(address), address).toBe('github.com/owner/repo')
+    }
+    expect(repositoryIdentity('https://github.com/owner/other.git')).toBe('github.com/owner/other')
+    expect(repositoryIdentity('https://gitlab.com/owner/repo.git')).toBe('gitlab.com/owner/repo')
+    for (const address of ['/srv/git/repo.git', './repo', 'file:///srv/git/repo.git', 'not a url', '', 'https://github.com/']) {
+      expect(repositoryIdentity(address), address).toBeNull()
+    }
+  })
+
+  it('tells a refused clone from one that failed for another reason, keeping the code the apps know', () => {
+    for (const diagnostic of [
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      'ERROR: Repository not found.\nfatal: Could not read from remote repository.',
+      'git@github.com: Permission denied (publickey).',
+      'remote: Invalid username or token. Password authentication is not supported.\nfatal: Authentication failed',
+    ]) {
+      const error = cloneFailure(diagnostic)
+      expect(error, diagnostic).toBeInstanceOf(RepositoryAccessError)
+      expect(error.code).toBe('CLONE_FAILED')
+      expect(error.message).toContain('GitHub access on the selected machine')
+    }
+    for (const diagnostic of ['fatal: unable to access: Could not resolve host: github.com', 'Host key verification failed.', '']) {
+      const error = cloneFailure(diagnostic)
+      expect(error, diagnostic).not.toBeInstanceOf(RepositoryAccessError)
+      expect(error).toMatchObject({ code: 'CLONE_FAILED', message: 'Could not clone the repository. Check the URL and connection, then retry.' })
+    }
+  })
+
+  it('names the same GitHub repository over the other transport, and nothing for another address', () => {
+    expect(otherGitHubTransport('https://github.com/owner/repo.git')).toBe('git@github.com:owner/repo.git')
+    expect(otherGitHubTransport('git@github.com:owner/repo.git')).toBe('https://github.com/owner/repo.git')
+    for (const url of ['owner/repo', 'https://gitlab.com/owner/repo.git', 'https://github.com/owner/repo/extra', 'ssh://git@github.com/owner/repo', '']) {
+      expect(otherGitHubTransport(url), url).toBeNull()
+    }
+    // Both forms parseProjectFolder makes round-trip to each other.
+    for (const url of ['https://github.com/owner/repo', 'git@github.com:owner/repo']) {
+      const parsed = parseProjectFolder({ projectSource: 'remote', repositoryUrl: url })
+      if (parsed?.source !== 'remote') throw new Error('expected a remote project')
+      const other = otherGitHubTransport(parsed.repositoryUrl)!
+      expect(otherGitHubTransport(other)).toBe(parsed.repositoryUrl)
+      expect(repositoryIdentity(other)).toBe(repositoryIdentity(parsed.repositoryUrl))
+    }
+  })
+
+  it('starts in a checkout of the same repository already at the destination, and never clones it again', async () => {
+    const clone = vi.fn(async () => { throw new Error('must not clone') })
+    // The address asked for and the origin git keeps, in each other's spellings.
+    for (const [asked, origin] of [['owner/repo', 'https://github.com/owner/repo.git'], ['https://github.com/Owner/repo/','git@github.com:owner/repo.git'],
+      ['git@github.com:owner/repo', 'https://github.com/owner/repo'], ['https://github.com/owner/repo.git', 'ssh://git@GitHub.com/owner/repo/']] as const) {
+      const at = await mkdtemp(join(root, 'root-'))
+      checkout(join(at, 'repo'), origin)
+      await writeFile(join(at, 'repo', 'work.txt'), 'local changes')
+      const project = parseProjectFolder({ projectSource: 'remote', repositoryUrl: asked })!
+      expect(await prepareProjectFolder(project, { root: at, clone }), asked).toBe(join(at, 'repo'))
+      expect(await readFile(join(at, 'repo', 'work.txt'), 'utf8')).toBe('local changes')
+      expect(await readdir(at)).toEqual(['repo'])
+    }
+    expect(clone).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a destination holding another repository, a checkout without origin, or a folder inside a checkout', async () => {
+    const clone = vi.fn(async () => { throw new Error('must not clone') })
+    const project = parseProjectFolder({ projectSource: 'remote', repositoryUrl: 'owner/repo' })!
+    checkout(join(root, 'repo'), 'https://github.com/owner/other.git')
+    await expect(prepareProjectFolder(project, { root, clone }))
+      .rejects.toMatchObject({ code: 'PROJECT_EXISTS', message: '“repo” already exists. Select that folder from your projects.' })
+    await rm(join(root, 'repo'), { recursive: true })
+    checkout(join(root, 'repo'), 'https://gitlab.com/owner/repo.git')
+    await expect(prepareProjectFolder(project, { root, clone })).rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
+    await rm(join(root, 'repo'), { recursive: true })
+    checkout(join(root, 'repo'), null)
+    await expect(prepareProjectFolder(project, { root, clone })).rejects.toMatchObject({ code: 'PROJECT_EXISTS' })
+    await rm(join(root, 'repo'), { recursive: true })
+    // The projects folder is itself that repository's checkout: `repo` inside it is a plain folder, not the checkout.
+    checkout(root, 'https://github.com/owner/repo.git')
+    await mkdir(join(root, 'repo'))
+    const refusal = await prepareProjectFolder(project, { root, clone }).catch((error: unknown) => error)
+    expect(refusal).toMatchObject({ code: 'PROJECT_EXISTS' })
+    // A clone's refusal names no folder to start in: only a typed name's does.
+    expect((refusal as ProjectFolderError).folder).toBeUndefined()
+    expect(clone).not.toHaveBeenCalled()
+  })
+
+  it('takes the checkout of the same repository another start made while this one cloned, and leaves no staging', async () => {
+    const project = parseProjectFolder({ projectSource: 'remote', repositoryUrl: 'owner/repo' })!
+    const folder = await prepareProjectFolder(project, { root, clone: async (_, destination) => {
+      await mkdir(destination)
+      checkout(join(root, 'repo'), 'git@github.com:owner/repo.git')
+    } })
+    expect(folder).toBe(join(root, 'repo'))
+    expect(await readdir(root)).toEqual(['repo'])
   })
 
   it('cleans only its private staging on failure and preserves a concurrently created destination', async () => {

@@ -3,7 +3,8 @@ name: CI
 # Fast PR checks: each changed component runs its own Linux unit tests. Native,
 # macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
 # docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
-# only the plan and process checks; the PR run covered the code.
+# only the plan and process checks; the PR run covered the code. After Update branch,
+# a suite whose inputs main's new commits left untouched reuses the earlier head's result.
 # Contributor code runs with a read-only token and no release credentials.
 on:
   pull_request:
@@ -16,7 +17,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, mobile, daemons]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty]
         default: full
   workflow_call:
     inputs:
@@ -35,6 +36,9 @@ env:
 
 # Supersede individual PR jobs, not the whole workflow: an always-running final
 # gate on an obsolete revision must not hold the next revision's scheduling lock.
+# Keep PR event actions separate: synchronize and ready_for_review can arrive
+# together for the same head, and must each complete their own required checks.
+# New synchronize events still supersede older synchronize jobs.
 # Every matrix row has its own group. Explicit runs and merge candidates use run
 # IDs, so their requested validation is preserved. Summaries and the final gate
 # have no lock: an older aggregate can finish after newer work without cancelling it.
@@ -42,10 +46,16 @@ env:
 jobs:
   plan:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-plan
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-plan
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Read-only lookups of an earlier head's ci/required run, whose results an update merge may
+    # reuse (docs/validation-and-release.md#reuse-after-update-branch). No write scope.
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     outputs:
       plan: ${{ steps.select.outputs.plan }}
       ready: ${{ steps.select.outputs.ready }}
@@ -62,8 +72,10 @@ jobs:
       os: ${{ steps.select.outputs.os }}
       provider: ${{ steps.select.outputs.provider }}
       firmware: ${{ steps.select.outputs.firmware }}
+      pro: ${{ steps.select.outputs.pro }}
       mobile: ${{ steps.select.outputs.mobile }}
       daemons: ${{ steps.select.outputs.daemons }}
+      pty: ${{ steps.select.outputs.pty }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,10 +98,11 @@ jobs:
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
-          .github/workflows/desktop-logging-checks.yml
+          .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --output "$RUNNER_TEMP/ci-plan.json"
       - uses: actions/upload-artifact@v4
         with:
@@ -101,7 +114,7 @@ jobs:
 
   process-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     runs-on: ubuntu-latest
@@ -132,6 +145,13 @@ jobs:
           GIT_CONFIG_KEY_0: maintenance.auto
           GIT_CONFIG_VALUE_0: "false"
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      - name: Style allowlists only shrink (desktop/design/desktop-design-system.md)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --quiet --depth=1 --no-tags origin "$BASE_SHA"
+          python3 scripts/check-ui-style.py --against "$BASE_SHA"
       - name: Record source inputs for CI evidence reuse
         run: python3 scripts/ci-source-inputs.py process --record "$RUNNER_TEMP/ci-source-inputs.json"
       - uses: actions/upload-artifact@v4
@@ -144,7 +164,7 @@ jobs:
 
   desktop-tests:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true'
@@ -171,6 +191,8 @@ jobs:
             /docs/images/
             /mobile/pubspec.lock
             /backend/src/lib/communityContract.ts
+            /backend/src/lib/hubMetricsContract.ts
+            /backend/src/superTabs/buddyContract.ts
             /mobile/lib/p2p/terminal_p2p_plugin.dart
             /mobile/lib/p2p/terminal_p2p_link.dart
             /mobile/lib/p2p/terminal_p2p_policy.dart
@@ -184,6 +206,9 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Verify declared source checkout
         run: python3 scripts/ci-source-inputs.py desktop
+      - name: No new hard-coded styles in Swarm UI (desktop/design/desktop-design-system.md)
+        if: matrix.shard == 1
+        run: python3 scripts/check-ui-style.py --only desktop/lib/super_tabs
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
@@ -211,7 +236,7 @@ jobs:
   # deliberately checks core without installing or building this package.
   companion-subsystems:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.companions == 'true'
@@ -243,7 +268,7 @@ jobs:
 
   cli-typecheck:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-typecheck
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cli-typecheck
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
@@ -266,7 +291,7 @@ jobs:
 
   cli-tests:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
@@ -311,7 +336,7 @@ jobs:
   # Unit tests only. Native fixtures and connected-shell checks run in the release workflow.
   tui-test:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-tui-test
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
@@ -339,7 +364,7 @@ jobs:
 
   backend-desk:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
@@ -358,12 +383,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci --no-audit --no-fund
-      - name: Shared desk layout compatibility
-        run: npm test -- src/routes/desk.test.ts
+      # The whole backend unit suite (src/**/*.test.ts, including the shared desk layout test): it once ran only the desk
+      # test, and main broke 48 team-session tests unseen (#1926).
+      - name: Backend unit suite
+        run: npm test
 
   website-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
@@ -371,7 +398,7 @@ jobs:
 
   os-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.os == 'true'
@@ -386,7 +413,7 @@ jobs:
 
   provider-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.provider == 'true'
@@ -414,7 +441,7 @@ jobs:
 
   firmware-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.firmware == 'true'
@@ -469,9 +496,68 @@ jobs:
           python3 devices/harness-pro/firmware/test/test_tree_isolation.py
           python3 devices/harness-pro/firmware/test/test_fonts.py
 
+  pro-firmware-build:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pro-firmware-build
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The ESP-IDF release the Harness Pro is built and flashed with (README: ~/esp/esp-idf-5.5.4).
+    container: espressif/idf:v5.5.4
+    defaults:
+      run:
+        shell: bash
+        working-directory: devices/harness-pro/firmware
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Build the ESP32-P4 firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          # The font generator needs Pillow; the image's system python3 has no pip, so it goes in the IDF environment.
+          python -m pip install pillow==12.1.1
+          idf.py -B build -DPROJECT_VER=0.0.99-ci build
+      - name: Fit the app in its OTA partition
+        run: |
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+          rows = csv.reader(line for line in Path('partitions.csv').read_text().splitlines() if line.strip() and not line.startswith('#'))
+          limit = int(next(row[4] for row in rows if row[0].strip() == 'ota_0').strip(), 0)
+          size = Path('build/harness_pro.bin').stat().st_size
+          print(f'harness_pro.bin: {size} bytes of {limit} in ota_0 ({100 * size / limit:.1f}%)')
+          if size > limit:
+              raise SystemExit('harness_pro.bin does not fit the ota_0 partition')
+          PY
+
+  pro-golden:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pro-golden
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
+    # macOS arm64, where the baseline is recorded: the code-drawn shapes (arcs, juggling balls) use float maths whose
+    # last bits differ between Apple arm64 and Linux x86-64, so the hashes only match on the same platform.
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Compare every Pets screen with the golden hashes
+        working-directory: devices/harness-pro/firmware
+        env:
+          PRO_FONT: fonts/LiberationSans-Regular.ttf
+        run: |
+          python3 -m pip install --user --break-system-packages pillow==12.1.1
+          bash test/golden.sh --check
+
   mobile-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.mobile == 'true'
@@ -481,6 +567,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
+      - name: No new hard-coded styles in Swarm UI (desktop/design/desktop-design-system.md)
+        run: python3 scripts/check-ui-style.py --only mobile/lib/swarm
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
@@ -498,7 +586,7 @@ jobs:
 
   daemons-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.daemons == 'true'
@@ -513,10 +601,56 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
       - run: node --test daemons/tools/card.test.mjs
 
+  # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
+  # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
+  # pty/, term/, the vendored terminal and the CLI's ptyhost files (scripts/ci-plan.py ALSO), and by installer/, whose
+  # model and steps (harness-install.exe) are plain Rust that tests here.
+  pty-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pty-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pty == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            pty
+            term
+            installer
+          shared-key: pty-pr
+          cache-bin: false
+      - name: Terminal and host unit tests
+        run: |
+          cargo test --locked --manifest-path term/Cargo.toml
+          cargo build --locked --manifest-path pty/Cargo.toml
+          cargo test --locked --manifest-path pty/Cargo.toml
+          cargo test --locked --manifest-path installer/Cargo.toml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: cli
+      - name: ptyhost terminal contract
+        working-directory: cli
+        env:
+          RUN_TERMINAL_CONTRACT: '1'
+          HARNESS_PTY_BIN: ${{ github.workspace }}/pty/target/debug/harness-pty
+        run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
-            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, mobile-checks, daemons-checks]
+            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
+            mobile-checks, daemons-checks, pty-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

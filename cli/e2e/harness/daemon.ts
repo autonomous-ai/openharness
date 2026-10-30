@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
+import { localCredentialHeaders } from '../../src/lib/localCredential.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
@@ -56,6 +57,8 @@ export interface EngineConfig {
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
   trustPrompt?: boolean
+  /** Send Claude Code's kitty graphics query on start, then set this title [titleAfterMs] later (fakeEngine.mjs). */
+  graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
 export interface DaemonOptions {
@@ -92,6 +95,8 @@ export interface DaemonOptions {
   port?: number
   /** The fake engines ask whether to trust a folder their config has no answer for (fakeEngine.mjs). */
   trustPrompt?: boolean
+  /** The fake engines send Claude Code's kitty graphics query on start, then set a title (fakeEngine.mjs). */
+  graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
 async function freePort(): Promise<number> {
@@ -248,6 +253,7 @@ export class IsolatedDaemon {
       ...(options.submissionGate ? { submissionGate: true } : {}),
       root, hookLog: join(own, 'fake-engine-hooks.log'),
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
+      ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
     const engine = pathToFileURL(join(here, 'fakeEngine.mjs')).href
     for (const name of ['claude', 'codex']) {
@@ -257,6 +263,13 @@ export class IsolatedDaemon {
     }
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
+    // Engine probes and usage readers must not consult the person's macOS
+    // Keychain merely because the fixture itself runs on a Mac.
+    await writeFile(join(dirs.bin, 'security'), '#!/bin/sh\nexit 44\n', { mode: 0o755 })
+    // Nor does it run anything as root or as another account: a guest's harness goes through `sudo -n` and the guest
+    // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
+    // never turned guest access on.
+    await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
@@ -294,6 +307,9 @@ export class IsolatedDaemon {
       TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
+      // The Swarm switch (harnessd/services.ts), as the run was started with: `HARNESS_SWARM=off npm run test:e2e` runs
+      // every daemon of the suite with the Swarm off. A test's own env still decides.
+      ...(process.env.HARNESS_SWARM !== undefined ? { HARNESS_SWARM: process.env.HARNESS_SWARM } : {}),
       ...options.env,
     })
     // A Claude Code home moved in the environment this run was started from is the person's: the daemon
@@ -431,6 +447,11 @@ export class IsolatedDaemon {
 
   hookCredential(): string {
     return readFileSync(join(this.dataDir, 'hook-credential'), 'utf8').trim()
+  }
+
+  /** Credentials for this daemon's loopback TCP API; its Unix socket needs none. */
+  localHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return { ...extra, ...localCredentialHeaders(this.dataDir) }
   }
 
   /**

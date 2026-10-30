@@ -108,7 +108,7 @@ class ComputerSteps extends StatelessWidget {
 /// Steps as a timeline — each number in a ring, a thread down to the next:
 ///
 /// ```
-/// (1)  Install Harness
+/// (1)  Download and install Harness
 ///  │
 /// (2)  Sign in
 ///      Use ada@gmail.com

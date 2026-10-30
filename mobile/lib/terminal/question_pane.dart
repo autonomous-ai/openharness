@@ -1,12 +1,12 @@
 /// Read an open question dialog straight off the terminal's own buffer.
 ///
 /// ⚠️ **Why this exists at all.** The daemon already watches the pane and
-/// shapes the question — but it publishes it on `commander_question`, which
-/// goes out over `sendCommander` (`webEligible: false`) and `sendLocal`
-/// (loopback only). A phone attached over the relay is in neither audience, so
-/// that frame never arrives here. Until `commander_question` is carried over an
-/// encrypted up-type, the buffer this app already holds is the only source it
-/// has.
+/// shapes the question on `commander_question`, which reaches a phone over the
+/// relay, sealed, since 2026-10-21 (cli core/questions.ts `sendRemote`). A
+/// daemon from before sent it only over `sendCommander` (`webEligible: false`)
+/// and `sendLocal` (loopback only), so from one of those the buffer this app
+/// already holds is the only source it has; and the keyboard on this page reads
+/// the dialog as this very buffer draws it either way.
 ///
 /// ⚠️ **This does NOT feed `blockedAgents`.** The amber ring on a tile, and the
 /// Needs input picker, still read the daemon's frames — an agent this window is

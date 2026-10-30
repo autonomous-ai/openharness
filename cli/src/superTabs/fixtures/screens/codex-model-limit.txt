@@ -1,0 +1,11 @@
+• Ran npx vitest run src/superTabs/terminal.spec.ts
+  └  Test Files  1 passed (1)
+          Tests  33 passed (33)
+
+■ You've hit your usage limit for gpt-5.5-codex. Switch to another model now, or try
+again at 4:05 PM.
+
+
+› Ask Codex to do anything
+
+  100% context left · ? for shortcuts

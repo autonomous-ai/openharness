@@ -47,6 +47,8 @@ class BearerAuthInterceptor extends Interceptor {
         failedToken: options.extra[_tokenKey] as String?,
       );
       options.extra[_retriedKey] = true;
+      // A form is read once: the retry sends a copy, as the first try did.
+      if (options.data case final FormData form) options.data = form.clone();
       handler.resolve(await _dio.fetch<dynamic>(options));
     } catch (error) {
       // The old access token's 401 does not mean a refresh service outage revoked the session.

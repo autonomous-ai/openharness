@@ -1,13 +1,7 @@
-/**
- * A harness another agent started says so in the pull requests it opens: one line beside the engine's own
- * ("🤖 Generated with Claude Code"), so every reader of the pull request, and their agents, sees it was made in
- * Harness (docs/design/2026-10-11-agent-client.md, "Pull requests"). A harness a person started is not marked.
- *
- * Who started a harness is its row's (`startedBy`, sent by `harness new` when an agent runs it); how each engine is
- * told is its launch contract's (`EngineLaunch.attribution`, engines/launches.ts `attributionArgs`). The person turns
- * it on for the account with `harness settings pull-request-line on` or in Settings ▸ Experimental (lib/agentSettings.ts),
- * read at each launch, so a relaunch follows it too.
- */
+/** Legacy agent-spawn instructions remain readable for existing harnesses.
+ * Super Tab supplies its own scoped coordination instructions. New launches
+ * no longer add Harness branding to pull requests, including old accounts
+ * whose saved pullRequestLine compatibility field is still true. */
 import { env } from '../config/env.js'
 import { agentInstructionArgs, launchContract, type AttributionPlace } from '../engines/launches.js'
 import { readAgentSettings } from './agentSettings.js'
@@ -31,16 +25,16 @@ export const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person 
   + 'do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
 
 /**
- * A launch's argv for what Harness tells the agent: the instructions above while agents may start agents, and the pull
- * request line for a harness another agent started while the person has that on. Read at each launch, so a relaunch
- * follows the switches as they are then.
+ * A launch’s argv for legacy agent-spawn instructions, read at each launch.
+ * The retired PR branding preference never changes a new launch.
  */
-export function agentLaunchArgs(engine: string, startedBy: StartedBy | null | undefined, place: AttributionPlace,
+export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | undefined, place: AttributionPlace & { swarmInstructions?: string },
   dataDir: string = env.ADAPTER_DATA_DIR): string[] {
-  const settings = readAgentSettings(dataDir)
+  // Swarm roles route through their Lead; generic spawning advice would invite private worker teams.
+  const instructions = place.swarmInstructions ?? (readAgentSettings(dataDir).agentsStartAgents ? HARNESS_INSTRUCTIONS : null)
   return agentInstructionArgs(engine, {
-    instructions: settings.agentsStartAgents ? HARNESS_INSTRUCTIONS : null,
-    prLine: startedBy === 'agent' && settings.pullRequestLine ? AGENT_ATTRIBUTION_LINE : null,
+    instructions,
+    prLine: null,
   }, place)
 }
 

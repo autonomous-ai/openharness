@@ -88,6 +88,12 @@ class PhoneSheetSection {
   void expand() => _expanded = true;
 }
 
+/// A sheet's rows: its first card, then the cards after it ([showPhoneSheet]).
+typedef PhoneSheetRows = ({
+  List<PhoneSheetAction> actions,
+  List<PhoneSheetSection> sections,
+});
+
 /// The `⋯` menu on a phone page: a title line, then its actions in inset cards.
 ///
 /// The desktop reaches the same actions through a right-click menu, which a phone has no gesture
@@ -102,30 +108,52 @@ class PhoneSheetSection {
 /// caption, or a gap below the card before when it has none. An empty section is left out.
 ///
 /// The page behind stands on the app's sheet veil, dimmed and blurred — see [_PhoneSheetRoute].
+///
+/// [onShown] is handed the sheet's route as it is pushed, for a page that may have to take the
+/// sheet down itself: its rows are read once, as it opens, and something that ends under it — a
+/// Change agent — would otherwise leave it saying what is no longer true.
+///
+/// [rows], with [rebuildOn]: the rows read again each time [rebuildOn] changes, in place of
+/// [actions] and [sections] — for a sheet whose rows wait on an answer asked as it opens (a
+/// computer's Harness OS status, `machine_actions.dart`), which would otherwise only show the
+/// next time it is opened.
 Future<void> showPhoneSheet(
   BuildContext context, {
   required String title,
   List<PhoneSheetAction> actions = const [],
   List<PhoneSheetSection> sections = const [],
   String? titleBranch,
+  void Function(Route<void> route)? onShown,
+  Listenable? rebuildOn,
+  PhoneSheetRows Function()? rows,
 }) {
-  return Navigator.of(context, rootNavigator: true).push(
-    phoneSheetRoute<void>(
-      context,
-      builder: (sheetContext) => SafeArea(
-        child: _TmuxMenu(
-          title: title,
-          branch: titleBranch,
-          actions: actions,
-          sections: sections,
-          onAction: (action) {
-            Navigator.of(sheetContext).pop();
-            action.onTap();
-          },
-        ),
-      ),
+  Widget menu(BuildContext sheetContext) {
+    final now = rows?.call() ?? (actions: actions, sections: sections);
+    return _TmuxMenu(
+      title: title,
+      branch: titleBranch,
+      actions: now.actions,
+      sections: now.sections,
+      onAction: (action) {
+        Navigator.of(sheetContext).pop();
+        action.onTap();
+      },
+    );
+  }
+
+  final route = phoneSheetRoute<void>(
+    context,
+    builder: (sheetContext) => SafeArea(
+      child: rebuildOn == null
+          ? menu(sheetContext)
+          : ListenableBuilder(
+              listenable: rebuildOn,
+              builder: (_, _) => menu(sheetContext),
+            ),
     ),
   );
+  onShown?.call(route);
+  return Navigator.of(context, rootNavigator: true).push(route);
 }
 
 /// The route [showPhoneSheet] pushes, around content of the caller's own — for a sheet that is not
@@ -380,9 +408,7 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
     required super.showDragHandle,
     required super.isScrollControlled,
   }) : super(
-         shape: const RoundedRectangleBorder(
-           borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
-         ),
+         shape: AppControl.sheetShape,
          modalBarrierColor: Colors.black.withValues(alpha: kSheetVeilOpacity),
        );
 

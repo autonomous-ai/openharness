@@ -72,6 +72,7 @@ class TerminalKeyBar extends StatefulWidget {
     this.onPaste,
     this.onPickImage,
     this.onTakePhoto,
+    this.onPickFile,
     this.questionOpen = false,
     this.enginePrompt = false,
     this.hints = const [],
@@ -133,6 +134,10 @@ class TerminalKeyBar extends StatefulWidget {
   final VoidCallback? onPickImage;
   final VoidCallback? onTakePhoto;
 
+  /// Sending any other file, from the same key. Null on a pane whose machine never advertised
+  /// `terminalPasteFileAvailable`, for the same reason.
+  final VoidCallback? onPickFile;
+
   @override
   State<TerminalKeyBar> createState() => _TerminalKeyBarState();
 }
@@ -141,6 +146,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     with WidgetsBindingObserver {
   bool get _canSendImage =>
       widget.onPickImage != null || widget.onTakePhoto != null;
+
+  /// Whether the send key is drawn at all: a picture, or a file, can go.
+  bool get _canSend => _canSendImage || widget.onPickFile != null;
 
   /// Whether the phone's clipboard holds anything `paste` would send: text,
   /// or an image where this pane takes one. The key is drawn only then — a
@@ -213,37 +221,46 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     action();
   }
 
-  /// The image key: asks WHICH picture, then hands off.
+  /// The send key: asks WHICH picture — or a file — then hands off.
   ///
   /// The sheet only appears where there is a choice to make. A build with just
-  /// one of the two wired goes straight there instead — a sheet with a single
+  /// one of them wired goes straight there instead — a sheet with a single
   /// row is a tap spent on nothing.
   void _sendImage(BuildContext context) {
     final pick = widget.onPickImage;
     final photo = widget.onTakePhoto;
-    if (pick == null) {
-      photo?.call();
-      return;
-    }
-    if (photo == null) {
-      pick();
-      return;
-    }
-    showPhoneSheet(
-      context,
-      title: 'Send a picture to this harness',
-      actions: [
+    final file = widget.onPickFile;
+    final actions = [
+      if (pick != null)
         PhoneSheetAction(
           icon: LucideIcons.image300,
           label: 'Choose from library',
           onTap: pick,
         ),
+      if (photo != null)
         PhoneSheetAction(
           icon: LucideIcons.camera300,
           label: 'Take a photo',
           onTap: photo,
         ),
-      ],
+      if (file != null)
+        PhoneSheetAction(
+          icon: LucideIcons.paperclip300,
+          label: 'Choose a file',
+          onTap: file,
+        ),
+    ];
+    if (actions.length == 1) {
+      actions.single.onTap();
+      return;
+    }
+    if (actions.isEmpty) return;
+    showPhoneSheet(
+      context,
+      title: file == null
+          ? 'Send a picture to this harness'
+          : 'Send to this harness',
+      actions: actions,
     );
   }
 
@@ -334,7 +351,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
         _key(
           label: 'clear',
           semanticLabel: 'Clear prompt',
-          wide: true,
+          parts: _wideParts,
           onTap: () {
             _disarm();
             clear();
@@ -347,7 +364,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
         _key(
           label: 'paste',
           semanticLabel: 'Paste',
-          wide: true,
+          parts: _wideParts,
           onTap: () {
             _disarm();
             paste();
@@ -426,10 +443,16 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     // were the same kind of thing, and an image button that looks like `esc`
     // reads as something that will be typed at the agent.
     final apart = <_Slot>[
-      if (_canSendImage)
+      // Named for a picture wherever one can go — the file is one more row behind it — and
+      // for a file only where nothing else can.
+      if (_canSend)
         _key(
-          label: 'img',
-          semanticLabel: 'Send image',
+          label: _canSendImage ? 'img' : 'file',
+          semanticLabel: !_canSendImage
+              ? 'Send file'
+              : widget.onPickFile != null
+              ? 'Send image or file'
+              : 'Send image',
           onTap: () => _sendImage(context),
         ),
       // The way back to a full screen of output, which on a phone is the only
@@ -438,8 +461,10 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
         label: '▾',
         semanticLabel: 'Hide keyboard',
         // ⚠️ `▾` is a SMALL triangle: at the row's size it read as a speck in
-        // the corner, on the key reached for most after typing.
-        scale: 1.6,
+        // the corner, on the key reached for most after typing — which is
+        // also why its cap is wider than the rest. See [_hideParts].
+        scale: 1.8,
+        parts: _hideParts,
         alwaysEnabled: true,
         onTap: widget.onDismissKeyboard,
       ),
@@ -456,13 +481,14 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
           border: Border(top: BorderSide(color: Tty.of(context).dim)),
         ),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: _gap, vertical: 2),
           // Held out of the app-wide text scale like the composer's own type:
           // at a large scale the keys stop fitting the row.
           child: MediaQuery.withNoTextScaling(
             // Every key the same width, the two apart ones included — they are
             // separated by the rule, not by being a different size. Only the
-            // two five-letter words are wider: see [_wideParts].
+            // two five-letter words are wider, and `▾`: see [_wideParts] and
+            // [_hideParts].
             child: widget.hints.isEmpty
                 ? Row(children: [..._row(keys), ..._rule(), ..._row(apart)])
                 : LayoutBuilder(
@@ -476,7 +502,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   }
 
   /// How many parts of the row a key takes: [_keyParts] for most,
-  /// [_wideParts] for `clear` and `paste`.
+  /// [_wideParts] for `clear` and `paste`, [_hideParts] for `▾`.
   ///
   /// ⚠️ **A word as long as `clear` in a cell sized for `esc` is shrunk to half
   /// the size of the rest of the row.** The label scales down to fit rather
@@ -486,13 +512,22 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   static const _keyParts = 3;
   static const _wideParts = 5;
 
+  /// `▾` takes a third more than a key: it is the one reached for most after
+  /// typing, at the row's far end, and a cap the size of an arrow's was a
+  /// small target for it.
+  static const _hideParts = 4;
+
+  /// Between two caps, and from the end caps to the strip's left and right
+  /// edges. Top and bottom are the cap's own inset — see `_KeyCap`.
+  static const _gap = 4.0;
+
   /// A run of keys for the strip's one [Row], each `Expanded` with its
   /// [_Slot.parts] as the flex — so every key on the strip, on either side of
   /// the rule, gets the same width but the wide two, and the row fills the
   /// phone rather than ending in a gap.
   List<Widget> _row(List<_Slot> keys) => [
     for (var index = 0; index < keys.length; index++) ...[
-      if (index > 0) const SizedBox(width: 4),
+      if (index > 0) const SizedBox(width: _gap),
       Expanded(flex: keys[index].parts, child: keys[index].key),
     ],
   ];
@@ -506,14 +541,14 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// longer made.
   List<Widget> _rule() => _canSendImage
       ? [
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Container(width: 1, height: 22, color: AppGlass.hair),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ]
-      : [const SizedBox(width: 4)];
+      : [const SizedBox(width: _gap)];
 
-  /// How wide [_rule] is — `8 + 1 + 8`, or the single gap in its place.
-  double get _ruleWidth => _canSendImage ? 17 : 4;
+  /// How wide [_rule] is — `6 + 1 + 6`, or the single gap in its place.
+  double get _ruleWidth => _canSendImage ? 13 : _gap;
 
   /// The row while the pane offers its own keys: [TerminalKeyBar.hints] at its
   /// head, the fixed keys, then the [KeyHint.trails] ones, scrolling sideways
@@ -525,9 +560,8 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// at the head push them along, and the ones at the tail start where the
   /// visible part of the row ends. [_revealHints] scrolls to whichever arrived.
   Widget _rowWithHints(List<_Slot> keys, List<_Slot> apart, double width) {
-    const gap = 4.0;
     final gaps =
-        gap * (keys.length - 1) + _ruleWidth + gap * (apart.length - 1);
+        _gap * (keys.length - 1) + _ruleWidth + _gap * (apart.length - 1);
     final parts = [
       ...keys,
       ...apart,
@@ -576,7 +610,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// A run of the pane's keys, each as wide as its words.
   List<Widget> _hintRun(List<KeyHint> hints) => [
     for (var i = 0; i < hints.length; i++) ...[
-      if (i > 0) const SizedBox(width: 4),
+      if (i > 0) const SizedBox(width: _gap),
       _hint(hints[i]),
     ],
   ];
@@ -594,7 +628,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// `Expanded`.
   List<Widget> _cells(List<_Slot> keys, double part) => [
     for (var index = 0; index < keys.length; index++) ...[
-      if (index > 0) const SizedBox(width: 4),
+      if (index > 0) const SizedBox(width: _gap),
       SizedBox(width: part * keys[index].parts, child: keys[index].key),
     ],
   ];
@@ -683,7 +717,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     String? semanticLabel,
     bool alwaysEnabled = false,
     bool armed = false,
-    bool wide = false,
+    int parts = _keyParts,
     double scale = 1,
     required VoidCallback onTap,
   }) {
@@ -704,7 +738,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
           onTap: alwaysEnabled ? onTap : () => _send(onTap),
         ),
       ),
-      parts: wide ? _wideParts : _keyParts,
+      parts: parts,
     );
   }
 }
@@ -774,14 +808,38 @@ class _KeyCapState extends State<_KeyCap> {
     setState(() => _down = down);
   }
 
+  /// The key's touch target: the strip's 36pt, less its 2pt above and below.
+  static const _cellHeight = 32.0;
+
+  /// How far the cap sits inside its cell, top and bottom: a 26pt cap, 5pt
+  /// from the strip's edges with the strip's own 2pt. The whole cell takes the
+  /// tap, not only the cap drawn in it.
+  static const _capInset = 3.0;
+
+  static const _capRadius = 5.0;
+
+  /// The cap's fill: a step up from the ground, as a system keyboard's keys
+  /// stand off its own — less of one while the key takes no input.
+  static Color _capFill(Tty tty, {required bool live, required bool pressed}) {
+    final (dead, rest, down) = tty.isLight
+        ? (0.04, 0.08, 0.18)
+        : (0.08, 0.16, 0.30);
+    final alpha = !live ? dead : (pressed ? down : rest);
+    return Color.alphaBlend(tty.text.withValues(alpha: alpha), tty.ground);
+  }
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     final hint = widget.hint;
-    // A terminal's keys: plain words and the font's own arrows, no caps. Armed (ctrl, shift) is
-    // reverse video, as a terminal marks a mode; pressed is fzf's selection ground, on the way
-    // down — no fade.
+    // ⚠️ **Caps, the one place the chrome draws them.** The strip sits on the
+    // system keyboard and is pressed like it, so its keys are drawn as that
+    // keyboard draws its own: a rounded cap a step up from the ground, with a
+    // 1pt edge under it. Bare words over the ground read as a line of text,
+    // not as keys. Armed (ctrl, shift) is still reverse video, as a terminal
+    // marks a mode; pressed lightens the cap on the way down — no fade. Both
+    // drop the edge: the key is down.
     final armed = widget.armed && widget.live;
     final pressed = _down && widget.live;
     final foreground = armed
@@ -799,33 +857,56 @@ class _KeyCapState extends State<_KeyCap> {
       onTapCancel: () => _set(false),
       onTap: widget.onTap,
       child: Container(
-        height: 40,
-        alignment: Alignment.center,
-        color: armed
-            ? tty.text
-            : pressed
-            ? tty.selected
-            : Colors.transparent,
-        child: hint != null
-            ? _hintFace(hint, foreground: foreground, lit: armed || pressed)
-            // Shrinks rather than clips: ten keys share a phone's width.
-            : Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    widget.label ?? '',
-                    maxLines: 1,
-                    style: tty.style(
-                      color: foreground,
-                      size: tty.fontSize * widget.scale,
+        height: _cellHeight,
+        padding: const EdgeInsets.symmetric(vertical: _capInset),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: armed
+                ? tty.text
+                : _capFill(tty, live: widget.live, pressed: pressed),
+            borderRadius: BorderRadius.circular(_capRadius),
+            boxShadow: widget.live && !armed && !pressed
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: tty.isLight ? 0.22 : 0.45,
+                      ),
+                      offset: const Offset(0, 1),
                     ),
-                  ),
-                ),
-              ),
+                  ]
+                : null,
+          ),
+          child: Align(child: _face(tty, hint, foreground, armed, pressed)),
+        ),
       ),
     );
   }
+
+  Widget _face(
+    Tty tty,
+    KeyHint? hint,
+    Color foreground,
+    bool armed,
+    bool pressed,
+  ) => hint != null
+      ? _hintFace(hint, foreground: foreground, lit: armed || pressed)
+      // Shrinks rather than clips: ten keys share a phone's width.
+      : Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              widget.label ?? '',
+              maxLines: 1,
+              style: tty
+                  .style(color: foreground, size: tty.fontSize * widget.scale)
+                  // A scaled glyph drops the line's leading: at 1.2 it was
+                  // the empty line around it, not the glyph, that met the
+                  // cap's height and shrank it to fit.
+                  .copyWith(height: widget.scale == 1 ? null : 1),
+            ),
+          ),
+        );
 
   /// A [_KeyCap.hint]'s face: the key as the pane printed it, then the CLI's
   /// word for what it does, quieter — both in the terminal's own face,

@@ -1,3 +1,31 @@
+// The release's app, engine, manifests and fonts are compressed once at build time
+// (scripts/precompress.mjs): each one's .br, else .gz, copy goes to a browser that takes it.
+// The Content-Type Next sends for the file itself, so every encoding of it says the same.
+const PRECOMPRESSED_TYPES = {
+  js: 'application/javascript; charset=UTF-8',
+  mjs: 'application/javascript; charset=UTF-8',
+  wasm: 'application/wasm',
+  json: 'application/json; charset=UTF-8',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  svg: 'image/svg+xml',
+  html: 'text/html; charset=UTF-8',
+}
+const ENCODINGS = [
+  { name: 'br', suffix: 'br' },
+  { name: 'gzip', suffix: 'gz' },
+]
+// An Accept-Encoding that takes [name]: listed, and not at q=0 (scripts/precompress.mjs).
+const accepts = (acceptsEncoding, name) => [{ type: 'header', key: 'accept-encoding', value: acceptsEncoding(name) }]
+const releaseFile = (ext) => `/harness-web/releases/:path*/:file.${ext}`
+
+async function precompression() {
+  const { PRECOMPRESSED, acceptsEncoding } = await import('./scripts/precompress.mjs')
+  const missing = PRECOMPRESSED.filter((ext) => !PRECOMPRESSED_TYPES[ext])
+  if (missing.length) throw new Error(`No Content-Type for pre-compressed .${missing.join(', .')}`)
+  return { precompressed: PRECOMPRESSED, acceptsEncoding }
+}
+
 module.exports = {
   // Self-contained build (.next/standalone: server.js + pruned node_modules) for a lean
   // production container — the runtime image copies this instead of installing deps.
@@ -9,6 +37,7 @@ module.exports = {
     // '/cli/install.sh' and '/desktop/install.sh' moved to the CDN (see redirects() below) — nothing
     // left here to trace for either.
     '/flash-circle.sh': ['./src/app/flash-circle.sh/flash-circle.sh'],
+    '/flash-circle.ps1': ['./src/app/flash-circle.ps1/flash-circle.ps1'],
     '/hub/[id]': ['./public/open-harnesses/**/*'],
     '/hub/[id]/fork': ['./public/open-harnesses/**/*'],
     '/hub/[id]/download': ['./public/open-harnesses/**/*'],
@@ -30,9 +59,9 @@ module.exports = {
         destination: 'https://harness.autonomous.ai/:path*',
         permanent: true,
       })),
-      // The front door is the Hub (owner, 2026-10-13); the workspace moved to /web. Temporary, so a
-      // browser does not cache it. `hn view` links (/?machine=…&agent=…) still open the viewer here.
-      { source: '/', missing: [{ type: 'query', key: 'machine' }], destination: '/hub', permanent: false },
+      // The front door is the web app again (owner, 2026-10-26; from 2026-10-13 it was the Hub and the
+      // app lived at /web). Old /web links land on it, query and all; temporary, so no browser keeps it.
+      { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
       { source: '/explore', destination: '/hub', permanent: true },
       { source: '/explore/:id', destination: '/hub/:id', permanent: true },
@@ -62,14 +91,19 @@ module.exports = {
   // install and download pages, and installer redirects. Flutter's base
   // href places its assets under /harness-web/ without changing the visible URL.
   async rewrites() {
+    const { precompressed, acceptsEncoding } = await precompression()
     return {
       beforeFiles: [
+        // The browser's first accepted encoding wins; one that takes neither gets the file as is.
+        ...ENCODINGS.flatMap(({ name, suffix }) => precompressed.map((ext) => ({
+          source: releaseFile(ext),
+          has: accepts(acceptsEncoding, name),
+          destination: `/harness-web/releases/:path*/:file.${ext}.${suffix}`,
+        }))),
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
-        // `/` reaches here only as an `hn view` link; everything else there redirects to the Hub.
         { source: '/', destination: '/harness-web/index.html' },
-        { source: '/web', destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
         // Local website previews use the SSO service's native loopback callback.
@@ -83,6 +117,7 @@ module.exports = {
     }
   },
   async headers() {
+    const { precompressed, acceptsEncoding } = await precompression()
     return [
       {
         source: '/:path*',
@@ -111,6 +146,14 @@ module.exports = {
         ],
       })),
       {
+        // The MCP registry domain-auth file: served exactly as written, never cached or rewritten.
+        source: '/.well-known/mcp-registry-auth',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, no-transform' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+      },
+      {
         source: '/os/latest',
         // Cache the GitHub lookup on the server, never the release redirect in a browser or CDN.
         headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
@@ -132,7 +175,21 @@ module.exports = {
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
-      ...['/', '/web', '/s/:id', '/auth/callback', '/callback', '/harness-web', '/harness-web/index.html', '/harness-web/release.json'].map((source) => ({
+      ...precompressed.map((ext) => ({
+        source: releaseFile(ext),
+        headers: [{ key: 'Vary', value: 'Accept-Encoding' }],
+      })),
+      // After the rewrite above the file sent is its .br or .gz copy: say what it holds and how.
+      // In the rewrites' order reversed, so a browser taking both gets brotli's last, which wins.
+      ...[...ENCODINGS].reverse().flatMap(({ name }) => precompressed.map((ext) => ({
+        source: releaseFile(ext),
+        has: accepts(acceptsEncoding, name),
+        headers: [
+          { key: 'Content-Encoding', value: name },
+          { key: 'Content-Type', value: PRECOMPRESSED_TYPES[ext] },
+        ],
+      }))),
+      ...['/', '/s/:id', '/auth/callback', '/callback', '/harness-web', '/harness-web/index.html', '/harness-web/release.json'].map((source) => ({
         source,
         headers: [
           { key: 'Cache-Control', value: 'no-store' },

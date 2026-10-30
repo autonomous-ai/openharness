@@ -1,0 +1,14 @@
+AutoAdminLogon : '0' (String)
+DefaultUserName : 'admin' (String)
+DefaultDomainName : '.' (String)
+DefaultPassword : (absent)
+AutoLogonCount : (absent)
+ForceAutoLogon : (absent)
+## restore Winlogon 08:33:31
+AutoAdminLogon : '0' (String)
+DefaultUserName : 'admin' (String)
+DefaultDomainName : '.' (String)
+DefaultPassword : (absent)
+AutoLogonCount : (absent)
+ForceAutoLogon : (absent)
+restored exactly: True

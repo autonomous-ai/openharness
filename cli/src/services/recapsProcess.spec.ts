@@ -41,7 +41,9 @@ describe('the recaps in their own process', () => {
     const handle = runRecapsService({
       dataDir: temp(), socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
-      create: (core, opts) => { api = core; return createRecaps(core, { recapForce: false, recapWithoutDevice: () => true, ...opts }) },
+      // Never Jev: a test reaches no network, and a key on this computer must not change what it sees.
+      create: (core, opts) => { api = core; return createRecaps(core, { recapForce: false, recapWithoutDevice: () => true,
+        decideTier: async () => ({ tier: 'list', by: 'test', detail: '', ms: 0 }), ...opts }) },
       ...over,
     })
     return { options: options!, api: api!, service, handle }
@@ -64,7 +66,7 @@ describe('the recaps in their own process', () => {
     options.onEvent!(lifecycle({ kind: 'events', session: s1, events: [ended], replay: false }))
     await vi.waitFor(() => expect(core.said('summary')).toHaveLength(1))
     expect(core.query).toHaveBeenCalledWith('lastTurn', { sessionId: 's1' })
-    expect(core.said('summary')[0]).toMatchObject({ frame: { type: 'turn_summary', agentId: 'a1', dbSessionId: 's1' } })
+    expect(core.said('summary')[0]).toMatchObject({ frame: { type: 'turn_summary', agentId: 'a1', dbSessionId: 's1', payload: { tier: 'list' } } })
     expect(core.said('card').map(({ frame }) => frame.payload.kind)).toEqual(['turn_started', 'processing', 'done', 'summary'])
     expect(core.said('recaps').at(-1)).toMatchObject({ sessionId: 's1', recaps: { busy: false, history: [expect.any(String)] } })
     // A change is said once: a beat that changes nothing says nothing more.
@@ -120,14 +122,38 @@ describe('the recaps in their own process', () => {
     expect(() => api.clients.turnSummary({ type: 'turn_summary' })).not.toThrow()
   })
 
-  it('runs on a core API that reaches the core only through these three ways, and holds no credential', async () => {
-    const ways = { turnCard: vi.fn(), turnSummary: vi.fn(), lastTurn: vi.fn(async () => null) }
+  it('runs on a core API that reaches the core only through these four ways, and holds no credential', async () => {
+    const jev = vi.fn(async () => ({ status: 200, body: { data: {} } }))
+    const ways = { turnCard: vi.fn(), turnSummary: vi.fn(), lastTurn: vi.fn(async () => null), jev }
     const api = recapsCoreApi('/data', ways)
     expect(api.dataDir).toBe('/data')
     expect(api.transcripts.lastTurn).toBe(ways.lastTurn)
     expect(api.clients.turnCard).toBe(ways.turnCard)
     expect(api.clients.turnSummary).toBe(ways.turnSummary)
     await expect(api.account.accessToken()).rejects.toThrow('recaps holds no credential')
+    // Of the account's backend, Jev's route alone: anything else answers as no core to ask.
+    expect(await api.account.backend('POST', '/api/route/jev', { state: {} })).toEqual({ status: 200, body: { data: {} } })
+    expect(jev).toHaveBeenCalledWith({ state: {} })
+    expect(await api.account.backend('GET', '/api/route/jev')).toMatchObject({ status: 503 })
+    expect(await api.account.backend('POST', '/api/machines', {})).toMatchObject({ status: 503 })
+    expect(jev).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks the core for Jev, and reads any answer that is not the backend\'s as unavailable', async () => {
+    const { options, api } = setup()
+    const unavailable = { status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }
+    expect(await api.account.backend('POST', '/api/route/jev', { state: 1 })).toEqual(unavailable)
+    const core = connection()
+    options.onConnected!(core.core)
+    core.query.mockResolvedValueOnce({ status: 200, body: { data: { answers: {} } } })
+    expect(await api.account.backend('POST', '/api/route/jev', { state: 1 })).toEqual({ status: 200, body: { data: { answers: {} } } })
+    expect(core.query).toHaveBeenLastCalledWith('jev', { body: { state: 1 } })
+    core.query.mockResolvedValueOnce({ error: 'UNKNOWN_QUERY' })
+    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
+    core.query.mockResolvedValueOnce({ status: 200, body: 'not an object' })
+    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
+    core.query.mockRejectedValueOnce(new Error('the core went away'))
+    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
   })
 
   it('runs on the real service process unless told otherwise', async () => {

@@ -1,0 +1,27 @@
+# s2 the stopped marker: harness stop, then past a 5-minute mark
+stop at VM 18:25:14
+machine stopped (pid 7892).
+{"boot":1792286507337}
+VM 18:31:56, after a 5-minute mark:
+   status     ○ stopped
+   pid        0
+Last Run Time:                        10/17/2026 6:30:01 PM
+Last Result:                          0
+Last Run Time:                        10/17/2026 6:30:01 PM
+Last Result:                          0
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     9672            9404 harness-pty.exe 18:22:54 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe" serve --home C:\Users\hxe2e\.harness\pty --histor
+
+
+
+## reboot with the marker in place (autologon still on)
+(reboot = shutdown + utmctl start at 08:32:17)
+VM up at Mac 08:33:17; last boot (VM clock) 2026-10-17 18:32:23
+running at VM 18:33:29
+   status     ● running · this computer only (not signed in)
+   pid        9012
+2026-10-17 18:33:21.063 [harnessd] service updater started (pid 9964)
+2026-10-17 18:33:23.717 [harnessd] core bound (pid 9940, protocol 6)
+2026-10-17 18:33:23.785 [harnessd] core ready (pid 9940)

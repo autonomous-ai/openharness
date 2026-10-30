@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { BlockList, isIP } from 'node:net'
 import type { RTCPeerConnection, RTCDataChannel, RTCIceCandidateInit } from 'werift'
 import { env } from '../config/env.js'
 import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
+import { armTurnTls } from './turnTlsGuard.js'
 
 export const TERMINAL_P2P_PROTOCOL_VERSION = 1
 export const TERMINAL_P2P_CHANNEL = 'terminal-v1'
@@ -158,10 +160,53 @@ function peerConfig(stunUrls: string[], turn?: TurnChoice, relayOnly = false): C
     // pair is only ever nominated once every direct pair has failed. Setting 'relay' for every session
     // would force it through Cloudflare — and bill for it; `relayOnly` is only ever a machine that
     // reached nothing else last time.
+    iceFilterCandidatePair: relayCanReach,
     // Terminal keyframes can approach 480 KiB. SCTP fragments them, but advertise enough room so
     // the peer never rejects the message at the WebRTC API boundary before fragmentation happens.
     maxMessageSize: 512 * 1024,
   }
+}
+
+/** Addresses no public TURN server can send to: private, carrier-grade NAT (Tailscale), loopback, link-local. */
+const UNREACHABLE_FROM_TURN = new BlockList()
+UNREACHABLE_FROM_TURN.addSubnet('0.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('10.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('100.64.0.0', 10, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('127.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('169.254.0.0', 16, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('172.16.0.0', 12, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('192.168.0.0', 16, 'ipv4')
+UNREACHABLE_FROM_TURN.addAddress('::', 'ipv6')
+UNREACHABLE_FROM_TURN.addAddress('::1', 'ipv6')
+UNREACHABLE_FROM_TURN.addSubnet('fc00::', 7, 'ipv6')
+UNREACHABLE_FROM_TURN.addSubnet('fe80::', 10, 'ipv6')
+
+/**
+ * Keeps every pair but one kind: our TURN allocation paired with a peer address that no TURN server on
+ * the internet can reach. Those pairs can never connect, and with werift they used to cost the whole
+ * negotiation.
+ *
+ * Measured 2026-10-20 against the 8x4090 (Docker and libvirt bridges, so four private host candidates):
+ * Cloudflare answers a ChannelBind to a private peer with a 401 that carries no MESSAGE-INTEGRITY.
+ * werift drops that answer as unverified and retransmits until it times out, about 6.7s per peer, and
+ * it runs ChannelBinds one at a time. Four private peers ahead of the public one outlasted the 25s
+ * negotiation timeout, so every TURN-first negotiation died in `connecting` (0 of 14 in harness.log).
+ * With these pairs dropped, the same relay-only negotiation connected in about 1s, three times of three.
+ *
+ * Host-to-host pairs are kept, so two machines on one LAN or one tailnet still connect directly. If the
+ * backend ever hands out a TURN server inside the peer's own network, this filter has to go.
+ */
+export function relayCanReach(pair: { localCandidate: { type: string }; remoteCandidate: { host: string } }): boolean {
+  if (pair.localCandidate.type !== 'relay') return true
+  // A scope id (`fe80::1%en0`) is not part of the address.
+  let host = pair.remoteCandidate.host.split('%')[0]!
+  // An IPv4 address written as IPv6 (`::ffff:10.0.0.1`) is the IPv4 address.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host)
+  if (mapped) host = mapped[1]!
+  const family = isIP(host)
+  // A name (an mDNS `.local` candidate) is left to ICE: nothing here knows where it points.
+  if (family === 0) return true
+  return !UNREACHABLE_FROM_TURN.check(host, family === 4 ? 'ipv4' : 'ipv6')
 }
 
 /** Shared by both sides: same validation, same reason. Anything malformed degrades to STUN-only. */
@@ -196,6 +241,17 @@ function turnChoice(turn: TerminalP2pTurn | undefined, udpReachable: boolean | n
 export function isRelayedPair(local: string, remote?: string): boolean {
   const relay = /\btyp relay\b/
   return relay.test(local) || (typeof remote === 'string' && relay.test(remote))
+}
+
+/**
+ * The nominated pair as `<ours>→<peer's>` candidate types and whether it crosses TURN, for the
+ * channel-open line. A phone on 4G sits behind its carrier's NAT, so a direct pair is rare there and
+ * every key pays the round trip through Cloudflare instead; without this the log could not say which
+ * path a slow round of typing ran on.
+ */
+export function describePair(local: string, remote?: string): string {
+  const type = (line?: string): string => /\btyp (\w+)/.exec(line ?? '')?.[1] ?? '?'
+  return `${type(local)}→${type(remote)} (${isRelayedPair(local, remote) ? 'TURN' : 'direct'})`
 }
 
 function channelCanSend(channel: RTCDataChannel | null): channel is RTCDataChannel {
@@ -314,7 +370,11 @@ export class TerminalP2pInitiator {
     // strand it: nothing holds a reference any more, so its UDP sockets would never be closed.
     if (this.finished) return
     this.step('stun-raced')
-    const pc = new RTCPeerConnection(peerConfig(stunUrls, turnChoice(this.deps.policy.turn, udpReachable), this.deps.relayOnly))
+    const turn = turnChoice(this.deps.policy.turn, udpReachable)
+    // Before gather dials. A TLS reset on this socket used to reject an unhandled promise
+    // and exit the gateway (armTurnTls).
+    armTurnTls(turn)
+    const pc = new RTCPeerConnection(peerConfig(stunUrls, turn, this.deps.relayOnly))
     const channel = pc.createDataChannel(TERMINAL_P2P_CHANNEL, { ordered: true })
     this.pc = pc
     this.channel = channel
@@ -509,6 +569,9 @@ interface ResponderEntry {
   timeout: ReturnType<typeof setTimeout>
   disconnectGraceTimer: ReturnType<typeof setTimeout> | null
   closing: boolean
+  /** How the answer's time was spent, said once it is sent and once the channel opens: the phone's own log
+   *  times only its side (offer to answer took ~0.7s on 2026-10-15, with no line here saying where). */
+  timing: { offeredAt: number; stunMs: number; libraryMs: number; turn: boolean }
 }
 
 /** Target side: one responder per authenticated source connId. */
@@ -602,6 +665,15 @@ export class TerminalP2pResponderPool {
   }
 
   async closeConnection(connId: string, reason = 'closed', notifyPeer = true): Promise<void> {
+    // A connection that is gone takes its offers still in flight with it. One inside its STUN race has no
+    // entry yet, and finding its generation unchanged it went on to build a responder — a TURN allocation
+    // with it — for nobody, kept to the negotiation timeout. P2P signals no longer queue behind the
+    // connection's other frames (the gateway's `signalChains`), which is what lets a disconnect overtake its
+    // offer (review, 2026-10-19).
+    if (reason === 'client_disconnected') {
+      this.offerSeq.delete(connId)
+      this.shadowOfferSeq.delete(connId)
+    }
     const entry = this.entries.get(connId)
     if (entry && !entry.closing) {
       this.entries.delete(connId)
@@ -679,10 +751,14 @@ export class TerminalP2pResponderPool {
       : []
     // The offerer raced these too, and may well have landed on a different server. That is fine: a
     // srflx candidate is each peer's own public address, so the two sides need not agree on who to ask.
+    const offeredAt = performance.now()
     const selection = await this.selectStunUrls(offeredStunUrls)
+    const selectedAt = performance.now()
     const { RTCPeerConnection } = await import('werift')
     if (!stillCurrent()) return null
     const turn = turnChoice(readTurn(payload.turn), selection.udpReachable)
+    // Same guard as the offerer: this is the side that dials turns:443 when UDP did not answer.
+    armTurnTls(turn)
     const pc = new RTCPeerConnection(peerConfig(selection.urls, turn))
     const entry: ResponderEntry = {
       sessionId: payload.sessionId,
@@ -691,6 +767,7 @@ export class TerminalP2pResponderPool {
       ready: false,
       closing: false,
       disconnectGraceTimer: null,
+      timing: { offeredAt, stunMs: selectedAt - offeredAt, libraryMs: performance.now() - selectedAt, turn: !!turn },
       timeout: setTimeout(() => {
         if (entry.ready) this.deps.onUnavailable?.(connId, 'negotiation_timeout')
         void (stillCurrent() ? this.closeConnection(connId, 'negotiation_timeout') : this.closeShadow(connId, 'negotiation_timeout'))
@@ -745,6 +822,9 @@ export class TerminalP2pResponderPool {
         if (state === 'open') {
           entry.ready = true
           clearTimeout(entry.timeout)
+          const pair = entry.pc.iceTransports.map((t) => t.getSelectedCandidatePair?.()).find((p) => p?.local?.candidate)
+          const over = pair ? `, over ${describePair(pair.local.candidate, pair.remote?.candidate)}` : ''
+          console.log(`[terminal-p2p] conn=${connId.slice(0, 8)} channel open +${Math.round(performance.now() - entry.timing.offeredAt)}ms after the offer${over}`)
         } else if ((state === 'closed' || state === 'closing') && entry.ready) {
           entry.ready = false
           if (this.entries.get(connId) === entry) this.deps.onUnavailable?.(connId, 'channel_closed')
@@ -788,6 +868,10 @@ export class TerminalP2pResponderPool {
         protocolVersion: TERMINAL_P2P_PROTOCOL_VERSION,
         sdp: local.sdp,
       })
+      const { offeredAt, stunMs, libraryMs, turn } = entry.timing
+      const total = performance.now() - offeredAt
+      console.log(`[terminal-p2p] conn=${connId.slice(0, 8)} answered +${Math.round(total)}ms after the offer`
+        + ` (stun ${Math.round(stunMs)}ms, peer library ${Math.round(libraryMs)}ms, gather and answer ${Math.round(total - stunMs - libraryMs)}ms${turn ? ', with TURN' : ''})`)
     } catch {
       await close('answer_failed')
     }

@@ -1,9 +1,10 @@
 import 'package:xterm/xterm.dart';
 
-const _mediaExtensions =
-    r'png|jpe?g|gif|webp|avif|heic|heif|bmp|tiff?|svg|ico|'
-    r'mp4|m4v|mov|webm|mkv|avi|mpe?g|ogv|3gp';
+const _imageExtensions = r'png|jpe?g|gif|webp|avif|heic|heif|bmp|tiff?|svg|ico';
+const _videoExtensions = r'mp4|m4v|mov|webm|mkv|avi|mpe?g|ogv|3gp';
+const _mediaExtensions = '$_imageExtensions|$_videoExtensions';
 final _mediaSuffix = RegExp('\\.(?:$_mediaExtensions)\$', caseSensitive: false);
+final _videoSuffix = RegExp('\\.(?:$_videoExtensions)\$', caseSensitive: false);
 final _markdownLink = RegExp(
   r'!?\[[^\]\r\n]*\]\((<[^>\r\n]+>|(?:[^()\r\n]|\([^()\r\n]*\))+)\)',
 );
@@ -25,6 +26,11 @@ final _relativeMedia = RegExp(
 );
 
 bool isMediaPath(String path) => _mediaSuffix.hasMatch(path);
+
+/// Whether a media path is a video rather than a picture — which of the two players the in-app
+/// preview (`phone/media_preview_page.dart`) opens it in. Read from the same list the links are
+/// found with, so a new extension is underlined and opened in the right player in one edit.
+bool isVideoPath(String path) => _videoSuffix.hasMatch(path);
 
 bool _isTarget(String target) {
   final uri = Uri.tryParse(target);

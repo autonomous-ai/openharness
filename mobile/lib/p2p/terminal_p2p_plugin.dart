@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:harness_mobile/logging/app_log.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/ws/terminal_transport_plugin.dart';
 
@@ -141,9 +142,9 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// lived. Rare while an open waited for the channel; routine once it stopped waiting
   /// ([prepareOpen]), because the launch's first open and the channel now come up side by side.
   ///
-  /// After the first keyframe and not at `terminal_ready`: the migration's first phase is a resync
-  /// whose ANSWERING keyframe is what [observeWsBinary] takes as "drained, flip now" — started
-  /// before the open's own keyframe, that keyframe would be taken for the answer.
+  /// After the first keyframe and not at `terminal_ready`: the machine skips a resync that lands
+  /// while the open's own keyframe is still being taken, and the move is then confirmed only by the
+  /// stream's next frame — as late as its 5 s sync.
   final _promoteAfterFirstFrame = <String>{};
 
   /// streamId → when its migration to p2p started.
@@ -227,8 +228,18 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   bool _p2pEligible = false;
 
   /// Whether the first negotiation has been started — by the first terminal to open
-  /// ([prepareOpen]). Every later one is [_scheduleRetry]'s, budget and all.
+  /// ([prepareOpen]), or to come up ([_startForFirstTerminal]). Every later one is
+  /// [_scheduleRetry]'s, budget and all.
   bool _p2pStarted = false;
+
+  /// Starts this connection's channel for its first terminal — see [onSessionReady]. Once only: a
+  /// channel that failed or was demoted since is [_scheduleRetry]'s to bring back.
+  void _startForFirstTerminal(String why) {
+    if (!_p2pEligible || _p2pStarted) return;
+    _p2pStarted = true;
+    _log('starting · $why');
+    _startP2p();
+  }
 
   @override
   void onSessionReady() {
@@ -487,16 +498,9 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     final firstKeyframe =
         header.kind == TerminalBinaryKind.keyframe &&
         _promoteAfterFirstFrame.remove(streamId);
-    if (header.kind == TerminalBinaryKind.keyframe &&
-        _migrating.containsKey(streamId) &&
-        !_p2pStreams.contains(streamId)) {
-      // Phase 1 of a live migration completing: the responder's reply to our WS-side
-      // resync proves it has drained this stream as of now — safe to trigger phase 2.
-      await _commitMigration(streamId);
-    } else if (_p2pStreams.contains(streamId) &&
-        !_migrating.containsKey(streamId)) {
-      // Suppressed while migrating: during phase 2 the responder may still emit
-      // relay-routed output until ITS flip lands, and that is not p2p breaking.
+    if (_p2pStreams.contains(streamId) && !_migrating.containsKey(streamId)) {
+      // Suppressed while migrating: the responder may still emit relay-routed output
+      // until ITS flip lands, and that is not p2p breaking.
       // Nor after it, for what the relay was already carrying — see [_lateOnRelay].
       if (_lateOnRelay(streamId, localFrame)) return;
       await _demote('relay_binary_received');
@@ -507,6 +511,10 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   }
 
   void _handleP2pData(Object data) {
+    // When the channel handed the frame over, against when its turn in the inbound line came — the
+    // two halves of a move that took ~1 s with the machine's keyframe sent 0.13 s after the channel
+    // opened (iPhone 14, 2026-10-19).
+    final arrivedMs = kTypingTrace ? typingNowMs() : 0;
     host.enqueueInbound(() async {
       if (_disposed) return;
       if (data is String) {
@@ -519,6 +527,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         }
         final type = wrapped['type'];
         if (type is! String || !terminalP2pUpTypes.contains(type)) return;
+        if (kTypingTrace) _traceP2pIn(type, '', null, arrivedMs);
         final clear = host.codec.decodeFrame(wrapped);
         if (clear == null) return;
         final plain = <String, dynamic>{
@@ -546,6 +555,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
           return;
       }
       final streamId = header.streamId;
+      if (kTypingTrace) {
+        _traceP2pIn(
+          header.kind.name,
+          streamId,
+          peekTerminalLocalSeq(local),
+          arrivedMs,
+        );
+      }
       // The first numbered frame the channel brings for this stream: the line below which a relay
       // frame is a late one — see [_lateOnRelay].
       if (!_p2pFloor.containsKey(streamId)) {
@@ -565,6 +582,23 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       }
       await host.deliverBinary(local);
     });
+  }
+
+  /// One frame off the channel: how long it waited in the inbound line behind what came before it.
+  /// Every keyframe and every frame of a stream still moving is said; other frames only when they
+  /// waited, and only while somebody types.
+  void _traceP2pIn(String kind, String streamId, int? seq, int arrivedMs) {
+    final waited = typingNowMs() - arrivedMs;
+    final moving = streamId.isNotEmpty && _migrating.containsKey(streamId);
+    final line =
+        'p2p in $kind${streamId.isEmpty ? '' : ' stream=${_short(streamId)}'}'
+        '${seq == null ? '' : ' seq=$seq'} arrived t=$arrivedMs, waited ${waited}ms in the inbound line'
+        '${moving ? ' (stream still moving)' : ''}';
+    if (moving || kind == 'keyframe') {
+      typingEvent(line);
+    } else if (waited >= 10) {
+      typingNote(line);
+    }
   }
 
   Future<void> _noteTerminalResponse(
@@ -589,6 +623,13 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         requestId.isNotEmpty &&
         streamId.isNotEmpty) {
       _streams.add(streamId);
+      // ⚠️ **The open that never asked (2026-10-19).** A terminal reopened as the socket comes back —
+      // a resume after a while in the background — is sent before the session is ready, and the
+      // socket skips [prepareOpen] for a frame that cannot go yet. Its channel then never started:
+      // a Galaxy S23 on 4G typed 26s over the relay (~160ms an echo) after a resume, until opening
+      // another agent's terminal started one. Started here instead, the stream rides the relay
+      // meanwhile and moves over once the channel is up, as any open made before it does.
+      _startForFirstTerminal('first terminal on this machine, opened before the session was up');
       final openedOnChannel = _pendingOpens.remove(requestId);
       if (openedOnChannel && wire == _Wire.p2p) {
         _p2pStreams.add(streamId);
@@ -648,21 +689,15 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// 2500ms, the channel taking 1.7–2.8s to connect); without the wait, 3.5s.
   ///
   /// What it costs instead: the first seconds of a stream ride the relay — a relay round trip per
-  /// keystroke and relay bandwidth — and each such stream is moved over with two resyncs, which
-  /// the terminal takes as two keyframes. Both are cheaper than a blank screen.
+  /// keystroke and relay bandwidth — and each such stream is moved over with a resync, which the
+  /// terminal takes as one more keyframe ([_promote]). Both are cheaper than a blank screen.
   ///
   /// Nothing is reported to the backend for it (it used to send `open_wait_elapsed`): no wait ran
   /// out, and the channel's own outcome is still reported when it lands or gives up.
   @override
   Future<bool> prepareOpen(String requestId) async {
     if (_disposed) return false;
-    // The connection's first terminal is what starts its channel — see [onSessionReady]. Once
-    // only: a channel that failed or was demoted since is [_scheduleRetry]'s to bring back.
-    if (_p2pEligible && !_p2pStarted) {
-      _p2pStarted = true;
-      _log('starting · first terminal on this machine');
-      _startP2p();
-    }
+    _startForFirstTerminal('first terminal on this machine');
     final link = _link;
     if (link == null || _policy == null || !link.isReady) return false;
     _pendingOpens.add(requestId);
@@ -804,20 +839,30 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _scheduleRetry();
   }
 
-  /// Migrate every stream already open on this connection onto p2p, in two phases
-  /// that both reuse `terminal_resync`: (1) here, over the wire the stream is on now
-  /// (the relay) — a drain barrier the responder answers with a fresh keyframe over
-  /// that same path; (2) [_commitMigration], once that keyframe arrives, a second
-  /// resync over p2p, which is what makes the responder flip its routing too.
+  /// Migrate every stream already open on this connection onto p2p — see [_promote].
   void _promoteOpenStreams() {
     for (final streamId in _streams) {
       _promote(streamId);
     }
   }
 
-  /// Phase 1 of moving one relay stream onto the channel: a resync over the socket, whose answering
-  /// keyframe [observeWsBinary] then commits. A stream already on the channel, or already on its
-  /// way, is left alone.
+  /// Moves one relay stream onto the channel: a `terminal_resync` over the channel itself, which
+  /// makes the responder route the stream's output there and answer with a keyframe on it. The
+  /// stream's own frames ride the channel from the moment it is sent ([sendJson]); the move is
+  /// confirmed by the first frame the channel brings for it ([_confirmMigration]). A stream already
+  /// on the channel, or already on its way, is left alone.
+  ///
+  /// ⚠️ **One resync, not two (2026-10-19).** A first resync went over the relay as a drain barrier,
+  /// and only its answering keyframe sent this one: every move cost a relay round trip (~0.4–0.7 s
+  /// of typing over the relay) and one more keyframe, which replaces the whole terminal — three
+  /// keyframes for each terminal opened while the channel came up (iPhone 14, 2026-10-19). Nothing
+  /// needs the barrier: a relay frame still on its way after the move is told apart by number
+  /// ([_lateOnRelay]), the machine orders the two wires' frames by their seal counters, and its input
+  /// queue puts a keystroke that took the faster wire back behind the one still on the relay. Both
+  /// came with this change's CLI (`fix/cli-terminal-input-latency`). A machine older than that has
+  /// neither, and is no worse off than with the barrier, which never covered that window either: a
+  /// relay frame sealed before the move and landing after it demotes the stream there, and a
+  /// keystroke that overtook one is refused once and realigned (`TERMINAL_INPUT_INVALID`).
   ///
   /// Either way it no longer waits in [_promoteAfterFirstFrame]: that is a stream's one attempt,
   /// and a stream walked here has had it — a migration that then goes unanswered is swept
@@ -829,11 +874,13 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     }
     _migrating[streamId] = _now();
     _log('migrate · start stream=${_short(streamId)}');
+    // A failure here abandons THIS stream's move only, never the channel: [sendJson] takes it off
+    // [_migrating] and the stream stays on the relay.
     unawaited(
       host.send({
         'type': 'terminal_resync',
         'payload': {'streamId': streamId},
-      }),
+      }, force: TransportVia.plugin),
     );
   }
 
@@ -905,20 +952,6 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// Enough of a stream id to tell a launch's few streams apart in the log.
   static String _short(String streamId) =>
       streamId.length > 8 ? streamId.substring(0, 8) : streamId;
-
-  Future<void> _commitMigration(String streamId) async {
-    final link = _link;
-    if (link == null || !link.isReady) {
-      _migrating.remove(streamId);
-      return;
-    }
-    // [_migrating] is deliberately NOT cleared here — only once a p2p-delivered frame
-    // for this stream actually arrives, the real proof the responder flipped.
-    await host.send({
-      'type': 'terminal_resync',
-      'payload': {'streamId': streamId},
-    }, force: TransportVia.plugin);
-  }
 
   void _sweepMigrations() {
     if (_migrating.isEmpty) return;

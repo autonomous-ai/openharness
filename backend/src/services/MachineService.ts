@@ -1,4 +1,4 @@
-import type { Machine } from '@prisma/client'
+import type { Machine, Prisma } from '@prisma/client'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { selectManagerId } from '../lib/managers.js'
 import { provisionViaManager } from '../lib/provision.js'
@@ -14,6 +14,8 @@ import { env } from '../config/env.js'
 import { encryptMachineCredential } from '../lib/machineCredential.js'
 import { machineBillingService } from './MachineBillingService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
 
 /** The agent's tier / how it runs Claude, resolved through its plan.
  *  'self' | 'managed' = a docker agent-node on a manager host; 'remote' = the user's own computer
@@ -55,6 +57,12 @@ export interface OwnerMachine {
   // Hostname of the COMPUTER on its last connect (remote machines) — secondary detail on the card,
   // never the name. Null if no computer has ever connected.
   hostname: string | null
+  // How that computer signed in on its last connect: `team` for a Mac's team account (lib/teamSession.ts),
+  // `computer` for any other sign-in, null before it was recorded.
+  sessionKind: 'team' | 'computer' | null
+  // A team machine's Mac: the machineId of the account's own machine on the computer whose Harness Team account this
+  // is. A list shows that Mac once, this machine folded into it. Null for every other machine.
+  hostMachineId: string | null
 }
 
 interface PlanInfo {
@@ -74,7 +82,18 @@ function assertRequesterEnvironment(binding: Machine, requester: MachineRequeste
   }
 }
 
-function toOwner(b: Machine, status = 'unknown', agentCount = 0, plan?: PlanInfo, engine = 'claude'): OwnerMachine {
+/** The fields an owner view is built from: the list reads only these, never the api key or billing references. */
+const OWNER_VIEW_SELECT = {
+  machineId: true, computerId: true, workspaceId: true, planId: true, autonomousEnv: true, authMode: true,
+  billingStatus: true, createdAt: true, name: true, hostname: true, sessionKind: true, hostMachineId: true,
+} as const satisfies Prisma.MachineSelect
+type OwnerViewRow = Pick<Machine, keyof typeof OWNER_VIEW_SELECT>
+
+/** Machines one list returns at most, newest first. A computer account is capped at 20 (HARNESS_DEVICE_AUTH_MACHINE_LIMIT);
+ *  past this an account is far outside any real one, and the log says the list was cut. */
+export const MACHINE_LIST_MAX = 200
+
+function toOwner(b: OwnerViewRow, status = 'unknown', agentCount = 0, plan?: PlanInfo, engine = 'claude'): OwnerMachine {
   return {
     machineId: b.machineId,
     computerId: b.computerId ?? null,
@@ -90,6 +109,9 @@ function toOwner(b: Machine, status = 'unknown', agentCount = 0, plan?: PlanInfo
     engine: normalizeEngine(engine),
     name: b.name ?? null,
     hostname: b.hostname ?? null,
+    sessionKind: b.sessionKind === 'team' || b.sessionKind === 'computer' ? b.sessionKind : null,
+    // Only while it is a team machine: one a normal sign-in took over is a machine of its own again.
+    hostMachineId: b.sessionKind === 'team' ? b.hostMachineId ?? null : null,
   }
 }
 
@@ -149,7 +171,7 @@ function firstUsableComputerMachine(rows: Machine[]): Machine | undefined {
 /** Resolve each agent's plan display name via its binding's planId. authMode comes from the BINDING
  *  (denormalized at create, backfilled at boot) — never from the plan, so a later plan-doc edit can't
  *  flip a live agent's mode. Missing/legacy → self. */
-async function plansByMachine(bindings: Machine[]): Promise<Map<string, PlanInfo>> {
+async function plansByMachine(bindings: Array<Pick<Machine, 'machineId' | 'planId' | 'authMode'>>): Promise<Map<string, PlanInfo>> {
   const out = new Map<string, PlanInfo>()
   const planIds = [...new Set(bindings.map((b) => b.planId).filter((id): id is string => !!id))]
   const plans = planIds.length ? await prisma.subscriptionPlan.findMany({ where: { id: { in: planIds } } }) : []
@@ -204,7 +226,7 @@ function hasManagedCampaignBilling(binding: Machine): boolean {
 /** Best-effort node status + engine per machineId, read directly from the shared Mongo `machine_nodes`
  *  collection (the agent-manager owns writes; the backend just reads). `machine_nodes.engine` is an
  *  optional per-machine override; when absent, fall back to the owning manager's MACHINE_ENGINE mirror. */
-async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { status: string; engine: string }>> {
+async function nodeInfoByAgent(bindings: Array<Pick<Machine, 'machineId'>>): Promise<Map<string, { status: string; engine: string }>> {
   const out = new Map<string, { status: string; engine: string }>()
   const ids = bindings.map((b) => b.machineId)
   if (!ids.length) return out
@@ -240,7 +262,7 @@ async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { statu
  *  A presence read that FAILED is `unknown`, never `offline`: a daemon takes `offline` as evidence and
  *  labels that computer's models "seems offline" (grid-reads-without-waking issue 03). */
 async function applyRemoteStatus(
-  bindings: Machine[],
+  bindings: Array<Pick<Machine, 'machineId'>>,
   plans: Map<string, PlanInfo>,
   info: Map<string, { status: string; engine: string }>,
 ): Promise<void> {
@@ -419,6 +441,10 @@ export const machineService = {
     computerId: string,
     label: string,
     claimedMachineId?: string,
+    /** How the computer is signing in, recorded on a machine created now (`Machine.sessionKind`). */
+    sessionKind?: 'team' | 'computer',
+    /** A team machine's Mac, recorded on a machine created now (`Machine.hostMachineId`). */
+    hostMachineId?: string,
   ): Promise<{ machine: Machine; created: boolean }> {
     // A caller that still holds a machine id we have DELETED must be told so, never quietly given a
     // new machine. Deletion is soft, so `machineAlive` below simply does not find the old row — and
@@ -491,6 +517,8 @@ export const machineService = {
           // Seeded from the computer's hostname so the card is never a bare id. The owner can rename it;
           // a later connect only ever refreshes `hostname`, never this.
           name: label.trim().slice(0, 120) || null,
+          ...(sessionKind ? { sessionKind } : {}),
+          ...(hostMachineId ? { hostMachineId } : {}),
         },
       })
       await publishDeviceMachineListChanged(userId, { reason: 'created' }).catch(() => { /* best effort */ })
@@ -499,13 +527,45 @@ export const machineService = {
     })
   },
 
-  /** List a user's agents (with best-effort live status). Includes the api key (owner only). */
+  /**
+   * The machine a team session (lib/teamSession.ts) is: its own computer's, created on first sight as a team machine.
+   * Refused (403, which the CLI takes as signed out) for any other computer, and for a computer the account runs under
+   * a normal sign-in — a team session must never become one of the person's machines.
+   */
+  async resolveForTeamComputer(
+    user: AuthUser,
+    computerId: string,
+    label: string,
+    claimedMachineId?: string,
+  ): Promise<{ machine: Machine; created: boolean }> {
+    const refuse = (): AppError => new AppError(TEAM_SESSION_MESSAGE, 403, TEAM_SESSION_LIMITED)
+    if (user.harnessSessionKind !== 'team' || !user.harnessComputerId || computerId !== user.harnessComputerId) throw refuse()
+    const held = await prisma.machine.findMany({ where: { userId: user.sub, computerId, ...machineAlive }, select: { sessionKind: true } })
+    if (held.some((row) => row.sessionKind !== 'team')) throw refuse()
+    // The Mac this team account lives on, as its owner's computer said when the code was minted (routes/auth.ts): from the
+    // session, never from what the team daemon sends, so a team session cannot set or change it.
+    const hostMachineId = user.harnessSessionId
+      ? (await prisma.harnessSession.findUnique({ where: { id: user.harnessSessionId }, select: { hostMachineId: true } }))?.hostMachineId ?? undefined
+      : undefined
+    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label, claimedMachineId, 'team', hostMachineId)
+    // Another sign-in took the row between the check and here: still not this session's machine.
+    if (resolved.machine.sessionKind !== 'team') throw refuse()
+    if (hostMachineId && resolved.machine.hostMachineId !== hostMachineId) {
+      return { ...resolved, machine: await prisma.machine.update({ where: { machineId: resolved.machine.machineId }, data: { hostMachineId } }) }
+    }
+    return resolved
+  },
+
+  /** List a user's agents (with best-effort live status). Never the api key: it is not even read. */
   async listForUser(userId: string, autonomousEnv?: AutonomousEnvironment): Promise<OwnerMachine[]> {
     const rows = await prisma.machine.findMany({
       where: { userId, ...(autonomousEnv ? { autonomousEnv } : {}), ...machineAlive },
       orderBy: { createdAt: 'desc' },
+      select: OWNER_VIEW_SELECT,
+      take: MACHINE_LIST_MAX,
     })
     if (rows.length === 0) return []
+    if (rows.length === MACHINE_LIST_MAX) logger.warn('machine list cut at its limit', { userId, limit: MACHINE_LIST_MAX })
     const ids = rows.map((b) => b.machineId)
     const [info, counts, plans] = await Promise.all([nodeInfoByAgent(rows), countByMachine(ids), plansByMachine(rows)])
     await applyRemoteStatus(rows, plans, info)
@@ -632,6 +692,14 @@ export const machineService = {
       // down-frames to the adapter socket; connId '' = not client-scoped.
       await publishDown(machineId, { connId: '', frame: { type: 'machine_revoked' } }).catch(() => { /* best effort */ })
       await clearAgentPresence(machineId).catch(() => { /* best effort */ })
+      // A team sign-in bound to this computer ends with it (lib/teamSession.ts), whatever kind of sign-in served the row
+      // last: a team daemon must not come back as a new machine for the same computer.
+      if (binding.computerId) {
+        await prisma.harnessSession.updateMany({
+          where: { userId: binding.userId, kind: 'team', computerId: binding.computerId, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+          data: { revokedAt: new Date() },
+        }).catch((err: unknown) => logger.warn('team session revoke failed', { machineId, error: String(err) }))
+      }
     } else {
       // Managed: reap the container + node row in the background (idempotent on the manager → retryable).
       void destroyNodeWithRetry(machineId, binding.managerId)

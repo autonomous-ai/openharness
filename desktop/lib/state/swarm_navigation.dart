@@ -844,6 +844,28 @@ List<SwarmDestination> rankSwarmLocations(
   ];
 }
 
+Future<void> _attachSearchHarness(
+  AppNotifier app,
+  String machineId,
+  String agentId, {
+  required String swarmId,
+  PaneSplitRequest? split,
+  bool autoTile = false,
+}) {
+  final attachment = app.assignAgentToPane(
+    null,
+    machineId,
+    agentId,
+    swarmId: swarmId,
+    split: split,
+    autoTile: autoTile,
+  );
+  // Membership is synchronous; a slow terminal connection must not leave a
+  // visible ordinary harness carrying the draft's lead-creation behavior.
+  app.finishSuperTabDraftNavigation(swarmId);
+  return attachment;
+}
+
 Future<bool> activateSwarmSearchSelection(
   AppNotifier app,
   SwarmSearchSelection selection, {
@@ -853,7 +875,40 @@ Future<bool> activateSwarmSearchSelection(
   HarnessPlacement? placement,
   TakeOver? takeOver,
 }) async {
+  final opened = await _activateSwarmSearchSelection(
+    app,
+    selection,
+    destinationSwarmId: destinationSwarmId,
+    projects: projects,
+    split: split,
+    placement: placement,
+    takeOver: takeOver,
+  );
+  if (opened) app.finishSuperTabDraftNavigation(destinationSwarmId);
+  return opened;
+}
+
+Future<bool> _activateSwarmSearchSelection(
+  AppNotifier app,
+  SwarmSearchSelection selection, {
+  required String destinationSwarmId,
+  List<SavedSwarmProject> projects = const [],
+  PaneSplitRequest? split,
+  HarnessPlacement? placement,
+  TakeOver? takeOver,
+}) async {
   final destination = selection.destination;
+  final source = app.swarms
+      .where((tab) => tab.id == destinationSwarmId)
+      .firstOrNull;
+  // Search opens native work. Only the separate Add agent flow contributes it
+  // to a shared conversation, so a completed Super Tab cannot be its canvas.
+  if (source?.isSuperTab == true && source?.superTabId != null) {
+    if (split != null) return false;
+    if (placement != null || destination.external != null) {
+      placement = HarnessPlacement.newTab;
+    }
+  }
   if (destination.external case final external?) {
     final machineId = destination.machineId;
     if (machineId == null || split != null) return false;
@@ -879,7 +934,69 @@ Future<bool> activateSwarmSearchSelection(
     }
     return true;
   }
-  if (placement != null) {
+  if (selection.agents.isNotEmpty) {
+    var target = app.swarms
+        .where((swarm) => swarm.id == destinationSwarmId)
+        .firstOrNull;
+    if (target == null || split != null) return false;
+    final separateTab =
+        placement == HarnessPlacement.newTab ||
+        (target.isSuperTab && target.superTabId != null);
+    final currentPanes = separateTab ? const <TerminalPane>[] : target.panes;
+    final catalog = SwarmSearchCatalog().read(app, projects);
+    final byId = {for (final row in catalog) row.id: row};
+    final members = <SwarmDestination>[];
+    final seen = <String>{};
+    for (final chosen in selection.agents) {
+      final row = byId[chosen.id];
+      if (row?.agentId == null ||
+          !(app.machineStates[row!.machineId]?.agents.any(
+                (agent) => agent.id == row.agentId,
+              ) ??
+              false)) {
+        return false;
+      }
+      if (seen.add(row.id) &&
+          !currentPanes.any(
+            (pane) =>
+                pane.machineId == row.machineId && pane.agentId == row.agentId,
+          )) {
+        members.add(row);
+      }
+    }
+    if (members.isEmpty ||
+        currentPanes.length + members.length > AppNotifier.maxPanes) {
+      return false;
+    }
+    // Validate the complete selection before recording any membership. Every
+    // add records its destination synchronously, before attachment can wait.
+    for (final row in members) {
+      await _resumeStoppedDestination(app, row);
+    }
+    if (!app.swarms.contains(target)) return false;
+    if (separateTab) {
+      app.newSwarm();
+      target = app.activeSwarm;
+    }
+    final openedTab = target;
+    await Future.wait([
+      for (final row in members)
+        _attachSearchHarness(
+          app,
+          row.machineId!,
+          row.agentId!,
+          swarmId: openedTab.id,
+        ),
+    ]);
+    return app.swarms.contains(openedTab) &&
+        members.every(
+          (row) => openedTab.panes.any(
+            (pane) =>
+                pane.machineId == row.machineId && pane.agentId == row.agentId,
+          ),
+        );
+  }
+  if (placement != null && !destination.isGroup) {
     final machineId = destination.machineId;
     final agentId = destination.agentId;
     if (machineId == null || agentId == null || destination.isCommand) {
@@ -927,8 +1044,8 @@ Future<bool> activateSwarmSearchSelection(
       app.newSwarm();
       target = app.activeSwarm;
     }
-    await app.assignAgentToPane(
-      null,
+    await _attachSearchHarness(
+      app,
       machineId,
       agentId,
       swarmId: target.id,
@@ -941,54 +1058,6 @@ Future<bool> activateSwarmSearchSelection(
       (pane) => pane.machineId == machineId && pane.agentId == agentId,
     );
   }
-  if (selection.agents.isNotEmpty) {
-    final target = app.swarms
-        .where((swarm) => swarm.id == destinationSwarmId)
-        .firstOrNull;
-    if (target == null || split != null) return false;
-    final catalog = SwarmSearchCatalog().read(app, projects);
-    final byId = {for (final row in catalog) row.id: row};
-    final members = <SwarmDestination>[];
-    final seen = <String>{};
-    for (final chosen in selection.agents) {
-      final row = byId[chosen.id];
-      if (row?.agentId == null ||
-          !(app.machineStates[row!.machineId]?.agents.any(
-                (agent) => agent.id == row.agentId,
-              ) ??
-              false)) {
-        return false;
-      }
-      if (seen.add(row.id) &&
-          !target.panes.any(
-            (pane) =>
-                pane.machineId == row.machineId && pane.agentId == row.agentId,
-          )) {
-        members.add(row);
-      }
-    }
-    if (members.isEmpty ||
-        target.panes.length + members.length > AppNotifier.maxPanes) {
-      return false;
-    }
-    // Validate the complete selection before recording any membership. Every
-    // add records its destination synchronously, before attachment can wait.
-    for (final row in members) {
-      await _resumeStoppedDestination(app, row);
-    }
-    if (!app.swarms.contains(target)) return false;
-    await Future.wait([
-      for (final row in members)
-        app.addAgentToSwarm(row.machineId!, row.agentId!, swarmId: target.id),
-    ]);
-    return app.swarms.contains(target) &&
-        members.every(
-          (row) => target.panes.any(
-            (pane) =>
-                pane.machineId == row.machineId && pane.agentId == row.agentId,
-          ),
-        );
-  }
   if (selection.action == SwarmSearchAction.open && !destination.isGroup) {
     return activateSwarmDestination(
       app,
@@ -999,7 +1068,7 @@ Future<bool> activateSwarmSearchSelection(
   if (selection.action == SwarmSearchAction.addHere) {
     if (destination.agentId == null) {
       if (split != null || destination.isCommand) return false;
-      final target = app.swarms
+      var target = app.swarms
           .where((swarm) => swarm.id == destinationSwarmId)
           .firstOrNull;
       final catalog = SwarmSearchCatalog().read(app, projects);
@@ -1009,11 +1078,15 @@ Future<bool> activateSwarmSearchSelection(
           !setEquals(destination.members, live.members)) {
         return false;
       }
+      final separateTab =
+          placement == HarnessPlacement.newTab ||
+          (target.isSuperTab && target.superTabId != null);
+      final currentPanes = separateTab ? const <TerminalPane>[] : target.panes;
       final members = catalog
           .where(
             (row) =>
                 destination.members.contains(row.id) &&
-                !target.panes.any(
+                !currentPanes.any(
                   (pane) =>
                       pane.machineId == row.machineId &&
                       pane.agentId == row.agentId,
@@ -1021,7 +1094,7 @@ Future<bool> activateSwarmSearchSelection(
           )
           .toList();
       if (members.isEmpty ||
-          target.panes.length + members.length > AppNotifier.maxPanes ||
+          currentPanes.length + members.length > AppNotifier.maxPanes ||
           members.any(
             (row) =>
                 !(app.machineStates[row.machineId]?.agents.any(
@@ -1031,21 +1104,31 @@ Future<bool> activateSwarmSearchSelection(
           )) {
         return false;
       }
-      if (target.panes.isEmpty && target.name == Swarm.defaultName) {
-        app.renameSwarm(target.id, destination.title);
-      }
       // Every membership is recorded before awaiting any attachment. A slow
       // machine cannot retarget the add or hold up the other agents.
       for (final row in members) {
         await _resumeStoppedDestination(app, row);
       }
       if (!app.swarms.contains(target)) return false;
+      if (separateTab) {
+        app.newSwarm();
+        target = app.activeSwarm;
+      }
+      final openedTab = target;
+      if (openedTab.panes.isEmpty && openedTab.name == Swarm.defaultName) {
+        app.renameSwarm(openedTab.id, destination.title);
+      }
       await Future.wait([
         for (final row in members)
-          app.addAgentToSwarm(row.machineId!, row.agentId!, swarmId: target.id),
+          _attachSearchHarness(
+            app,
+            row.machineId!,
+            row.agentId!,
+            swarmId: openedTab.id,
+          ),
       ]);
       return members.every(
-        (row) => target.panes.any(
+        (row) => openedTab.panes.any(
           (pane) =>
               pane.machineId == row.machineId && pane.agentId == row.agentId,
         ),
@@ -1067,23 +1150,29 @@ Future<bool> activateSwarmSearchSelection(
         (split != null && !app.isPaneSplitCurrent(split))) {
       return false;
     }
-    await app.assignAgentToPane(
-      null,
+    var target = app.swarms.singleWhere((s) => s.id == destinationSwarmId);
+    if (target.isSuperTab && target.superTabId != null) {
+      app.newSwarm();
+      target = app.activeSwarm;
+    }
+    final targetId = target.id;
+    await _attachSearchHarness(
+      app,
       destination.machineId!,
       destination.agentId!,
-      swarmId: destinationSwarmId,
+      swarmId: targetId,
       split: split,
     );
-    if (app.activeSwarmId == destinationSwarmId) {
+    if (app.activeSwarmId == targetId) {
       app.revealAgentView(
         destination.machineId!,
         destination.agentId!,
-        preferredSwarmId: destinationSwarmId,
+        preferredSwarmId: targetId,
       );
     }
     return app.swarms.any(
       (s) =>
-          s.id == destinationSwarmId &&
+          s.id == targetId &&
           s.panes.any(
             (p) =>
                 p.machineId == destination.machineId &&
@@ -1123,12 +1212,18 @@ Future<bool> activateSwarmSearchSelection(
   final target = app.swarms
       .where((swarm) => swarm.id == destinationSwarmId)
       .firstOrNull;
-  if (target != null && target.panes.isEmpty) {
+  if (target != null &&
+      placement != HarnessPlacement.newTab &&
+      target.panes.isEmpty &&
+      (!target.isSuperTab || target.superTabId == null)) {
     app.selectSwarm(target.id);
   } else {
     app.newSwarm(name: group.title);
   }
-  await app.seedSwarm(group.title, agents);
+  final opened = app.activeSwarmId;
+  final attachment = app.seedSwarm(group.title, agents);
+  app.finishSuperTabDraftNavigation(opened);
+  await attachment;
   return true;
 }
 
@@ -1142,6 +1237,7 @@ bool canOpenSwarmGroup(
 
 Swarm? _matchingGroupSwarm(AppNotifier app, SwarmDestination destination) {
   bool matches(Swarm swarm) =>
+      !swarm.isSuperTab &&
       // Empty tabs only match their name; two empty projects are distinct.
       (destination.members.isNotEmpty || swarm.name == destination.title) &&
       swarm.panes.length == destination.members.length &&
@@ -1656,26 +1752,35 @@ Future<bool> activateSwarmDestination(
     return false;
   }
   await _resumeStoppedDestination(app, destination);
-  if (!app.swarms.any((s) => s.id == destinationSwarmId)) return false;
-  await app.addAgentToSwarm(
+  var target = app.swarms.where((s) => s.id == destinationSwarmId).firstOrNull;
+  if (target == null) return false;
+  if (target.isSuperTab && target.superTabId != null) {
+    app.newSwarm();
+    target = app.activeSwarm;
+  }
+  final targetId = target.id;
+  await _attachSearchHarness(
+    app,
     destination.machineId!,
     destination.agentId!,
-    swarmId: destinationSwarmId,
+    swarmId: targetId,
   );
-  if (app.activeSwarmId == destinationSwarmId) {
+  if (app.activeSwarmId == targetId) {
     final pane = app.focusedPane;
     if (pane?.machineId == destination.machineId &&
         pane?.agentId == destination.agentId) {
       app.focusPane(pane!.id, reveal: true);
     }
   }
-  return app.swarms.any(
+  final opened = app.swarms.any(
     (s) =>
-        s.id == destinationSwarmId &&
+        s.id == targetId &&
         s.panes.any(
           (p) =>
               p.machineId == destination.machineId &&
               p.agentId == destination.agentId,
         ),
   );
+  if (opened) app.finishSuperTabDraftNavigation(targetId);
+  return opened;
 }

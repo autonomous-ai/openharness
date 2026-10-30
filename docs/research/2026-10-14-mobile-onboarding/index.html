@@ -85,7 +85,7 @@
   .ph .st.err { color: var(--pred); }
   .ph .st .ic { color: var(--pyellow); font-size: 3.6cqw; vertical-align: -.6cqw; margin-right: 1.5cqw; }
   @keyframes blink { 50% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .ph .st .cur, .ph .caret { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .ph .st .cur, .ph .caret, .ph .out .cur.blink { animation: none; } }
   .ph .foot { position: absolute; left: 9cqw; right: 9cqw; bottom: 10.8cqw; }
   .ph .foot > * + .btn { margin-top: 2.56cqw; }
   .ph .quiet { height: 11.3cqw; display: grid; place-items: center; font: 500 3.33cqw var(--mono); color: var(--pfaint); }
@@ -213,6 +213,21 @@
   .ph .out .box { display: block; border-left: .6cqw solid #6d8cff; background: #222220; padding: 2.4cqw 3cqw; margin: 3cqw 0 1.4cqw; white-space: pre-wrap; }
   .ph .out .logo { font-size: 2.15cqw; line-height: 1.05; color: #d4d4cc; display: block; width: max-content; margin: 4cqw auto 0; }
   .ph .out .cur { display: inline-block; width: 1.8cqw; height: 3.6cqw; background: #e5e5e0; vertical-align: -.6cqw; }
+  .ph .out .cur.blink { animation: blink 1s steps(1) infinite; }
+  /* The keyboard the first session opens with: the key bar (terminal_key_bar.dart) over the system's keys. */
+  .ph .kb { position: absolute; left: 0; right: 0; bottom: 0; height: 66cqw; background: #2c2c2e; z-index: 3; padding: 1.6cqw 1.6cqw 0; overflow: hidden; }
+  .ph .kb .bar { display: flex; gap: 1.4cqw; font: 3cqw/1 var(--mono); color: var(--pt); white-space: nowrap; }
+  .ph .kb .bar span { background: #3d3d3f; border-radius: 1.4cqw; padding: 2cqw 2.6cqw; }
+  .ph .kb .rows { margin-top: 3cqw; display: grid; gap: 2.2cqw; }
+  .ph .kb .row { display: flex; gap: 1.3cqw; justify-content: center; }
+  .ph .kb .row i { flex: 0 0 8.2cqw; height: 10cqw; border-radius: 1.4cqw; background: #5c5c5e; }
+  .ph .kb .row i.w { flex-basis: 44cqw; }
+  /* The first session's suggestion over the mic, with its Send (first_task_suggestion.dart). */
+  .ph .sug { position: absolute; left: 4cqw; right: 4cqw; bottom: 30cqw; z-index: 2; background: var(--pg); padding: 1.5cqw 0 1.5cqw; }
+  .ph .sug .l { text-align: center; font: 3.33cqw/1.45 var(--mono); color: var(--pt); margin-bottom: 1.8cqw; }
+  .ph .sug .pill { display: flex; align-items: center; gap: 2cqw; border: .3cqw solid #55554f; border-radius: 6cqw; padding: 1cqw 1cqw 1cqw 3.6cqw; font: 3cqw/1.35 var(--mono); color: var(--pt); }
+  .ph .sug .pill span { flex: 1; }
+  .ph .sug .pill b { background: var(--pgreen); color: #111; border-radius: 5cqw; padding: 2.2cqw 4.4cqw; font-weight: 600; }
   .ph .sline { position: absolute; left: 4cqw; right: 4cqw; bottom: 30cqw; text-align: center; font: 3.33cqw/1.45 var(--mono); color: var(--pt); background: var(--pg); padding: 2cqw 0 1.5cqw; z-index: 2; }
   .ph .mic { position: absolute; left: 50%; bottom: 12cqw; width: 15.4cqw; height: 15.4cqw; transform: translateX(-50%); border-radius: 50%; background: #262626;
     border: .4cqw solid #44443f; display: grid; place-items: center; z-index: 2; box-shadow: 0 1.5cqw 4cqw rgba(0,0,0,.6); font-size: 6.6cqw; color: var(--pt); }
@@ -339,13 +354,14 @@
     <a href="#ready">3 · Ready</a> →
     <a href="#session">4 · Your session</a>.<br>
     Google or Apple; Continue with email and QR code sit under them as one line of words. No Skip, no sample, no tour.
-    <a href="#existing-users">Phones already in use</a> that are signed out enter at the welcome; signed-in phones open on their last session.</div>
+    <a href="#existing-users">Phones already in use</a> that are signed out enter at the welcome; signed-in phones open on their last session.<br>
+    <b>Updated 2026-10-23</b> (<a href="https://github.com/autonomous-ai/openharness/pull/1634">#1634</a>): <a href="#session">section 4</a>, the first session's keyboard, typed task, Send and mic.</div>
   <p class="note">Every word on these screens comes from one file, <code>mobile/lib/phone/welcome/onboarding_copy.dart</code>, so the same step reads the same on every screen.</p>
   <div class="principles">
     <div><b>One screen, then your work</b>No tour on the phone. The first screen says what Harness does in one line, and two buttons sign you in right there.</div>
     <div><b>The phone finds the computer</b>"On your computer, go to autonomous.ai/go". Signed in there with the same account, the computer joins and the phone moves on by itself.</div>
-    <div><b>Straight into the session</b>The phone opens the session the computer opened, with one line by the mic. No list to pick from, no tips.</div>
-    <div><b>Nothing else on these screens</b>No page dots, no sample link, no notification prompt. Notifications are asked for after the first thing you send.</div>
+    <div><b>Straight into the session</b>The phone opens the session the computer opened. A fresh one opens with its task in the prompt and the keyboard up; any other with one line by the mic. No list to pick from, no tips.</div>
+    <div><b>Nothing else on these screens</b>No page dots, no sample link, no notification prompt, no microphone prompt. Notifications are asked for after the first thing you send.</div>
   </div>
 
   <!-- ===================== 1. WELCOME ===================== -->
@@ -646,8 +662,8 @@
     A computer that turns out to want a password, or that the account says is down, ends the wait: what home shows for those is what to do about them (<a href="#arrival">section 5</a>).</p>
 
   <!-- ===================== 4. SESSION ===================== -->
-  <h2 id="session">4. Your session: one line by the mic</h2>
-  <p class="lede">The phone has no first-session logic of its own: it opens the session the computer opened and says one line over the mic until the first thing is sent. Every other session is in Find, a swipe right away.</p>
+  <h2 id="session">4. Your session: the task ready to send</h2>
+  <p class="lede">The phone opens the session the computer opened. A fresh one — OpenCode with the desktop's starter, or Claude Code or Codex at an empty prompt — opens with its task in the prompt and the keyboard up: Return sends it, or change it first. Any other session gets one line over the mic until the first thing is sent. Every other session is in Find, a swipe right away.</p>
   <div class="flow">
     <div class="step">
       <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
@@ -655,12 +671,38 @@
         <div class="out"><span class="logo">                                 ▄
 █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
 █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
-▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</span><span class="box"><span class="u">make a small web page that shows today's date</span><span class="cur" style="margin-left:.6cqw"></span>
+▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</span><span class="box"><span class="u">make a small web page that shows today's date</span><span class="cur blink" style="margin-left:.6cqw"></span>
+<span class="bl">Build</span> <span class="dim">·</span> Muse Spark 1.3 Free</span></div>
+        <div class="kb"><div class="bar"><span>esc</span><span>^C</span><span>tab</span><span>clear</span><span>paste</span><span>⇧</span><span>ctrl</span><span>←</span></div><div class="rows"><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i class="w"></i><i></i></div></div></div>
+        </div>
+      <p class="cap"><b>New to coding agents.</b> OpenCode with the desktop's starter task typed in, not sent. The keyboard is up and the caret blinks at the end of the task: Return sends it.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>first-project</b><span>MacBook Pro:first-project</span></div>
+        <div class="out"><span class="logo">                                 ▄
+█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</span><span class="box"><span class="u">make a small web page that shows today's date</span>
 <span class="bl">Build</span> <span class="dim">·</span> Muse Spark 1.3 Free</span><span class="dim"> ctrl+p commands</span></div>
-        <div class="sline">Send it, or say anything.</div>
+        <div class="sug"><div class="l">Send it, or say anything.</div><div class="pill"><span>make a small web page that shows today's date</span><b>Send</b></div></div>
         <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
         <div class="home"></div></div>
-      <p class="cap"><b>New to coding agents.</b> OpenCode with the desktop's starter task typed in, not sent.</p>
+      <p class="cap"><b>The keyboard put away.</b> The task as it now stands, with Send. The mic sends it too: it shows itself listening but records nothing and asks for no microphone, and its second tap sends the prompt.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>my-app</b><span>MacBook Pro:my-app</span></div>
+        <div class="out"><span class="cc">╭───────────────────────────────╮</span>
+<span class="cc">│</span> <span class="cc">✻</span> <span class="u">Welcome to Claude Code!</span>     <span class="cc">│</span>
+<span class="cc">│</span>   <span class="dim">/help for help</span>              <span class="cc">│</span>
+<span class="cc">│</span>   <span class="dim">cwd: ~/my-app</span>               <span class="cc">│</span>
+<span class="cc">╰───────────────────────────────╯</span>
+
+<span class="u">&gt; Explain this project to me</span><span class="cur blink" style="margin-left:.6cqw"></span></div>
+        <div class="kb"><div class="bar"><span>esc</span><span>^C</span><span>tab</span><span>clear</span><span>paste</span><span>⇧</span><span>ctrl</span><span>←</span></div><div class="rows"><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="row"><i></i><i></i><i class="w"></i><i></i></div></div></div>
+        </div>
+      <p class="cap"><b>Agents, but no past sessions.</b> A fresh Claude Code or Codex: the phone types the first New Harness idea into its empty prompt, not sent, and the keyboard is up. Put away, the line is "Say what to build, or send this:" over the same task and its Send.</p>
     </div>
     <div class="step">
       <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
@@ -682,21 +724,6 @@
     </div>
     <div class="step">
       <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
-        <div class="ttl"><b>my-app</b><span>MacBook Pro:my-app</span></div>
-        <div class="out"><span class="cc">╭───────────────────────────────╮</span>
-<span class="cc">│</span> <span class="cc">✻</span> <span class="u">Welcome to Claude Code!</span>     <span class="cc">│</span>
-<span class="cc">│</span>   <span class="dim">/help for help</span>              <span class="cc">│</span>
-<span class="cc">│</span>   <span class="dim">cwd: ~/my-app</span>               <span class="cc">│</span>
-<span class="cc">╰───────────────────────────────╯</span>
-
-<span class="u">&gt;</span> <span class="cur"></span></div>
-        <div class="sline">Say what to build.</div>
-        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
-        <div class="home"></div></div>
-      <p class="cap"><b>Agents, but no past sessions.</b> A fresh session at an empty prompt.</p>
-    </div>
-    <div class="step">
-      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
         <div class="ttl"><b>docs-review</b><span>studio:harness</span><span>⑂ main</span></div>
         <div class="out" style="top:38cqw"><span class="ok">⏺</span> <span class="u">Update(docs/onboarding.html)</span>
   <span class="dim">⎿  +41 −12</span>
@@ -713,9 +740,9 @@
   </div>
   <div class="tablewrap"><table>
     <tr><th>Who</th><th>The desktop's first tab</th><th>The phone opens</th><th>By the mic, once</th></tr>
-    <tr><td>New to coding agents</td><td>OpenCode with a starter task typed, not sent; Codex and Claude Code beside it on their own sign-in</td><td>OpenCode, the task waiting</td><td class="m">Send it, or say anything.</td></tr>
+    <tr><td>New to coding agents</td><td>OpenCode with a starter task typed, not sent; Codex and Claude Code beside it on their own sign-in</td><td>OpenCode, the task waiting in its box, keyboard up</td><td class="m">Send it, or say anything. — the task, with Send</td></tr>
     <tr><td>Already uses Claude Code or Codex</td><td>Their most recently active conversations, resumed</td><td>The most recent one, history and all</td><td class="m">Pick up where you left off.</td></tr>
-    <tr><td>Has agents, no past sessions</td><td>A fresh session for each agent</td><td>That agent, at an empty prompt</td><td class="m">Say what to build.</td></tr>
+    <tr><td>Has agents, no past sessions</td><td>A fresh session for each agent</td><td>That agent, the first New Harness idea typed into its prompt, keyboard up</td><td class="m">Say what to build, or send this: — the task, with Send</td></tr>
     <tr><td>Harness already on the computer</td><td>Nothing changes</td><td>The session most recently in use</td><td class="m">Talk to it.</td></tr>
   </table></div>
 
@@ -738,7 +765,9 @@
     </div>
   </div>
   <p class="note" style="line-height:1.7"><b>Which session:</b> after ②, the computer set up for this phone; signed in to an account that already has computers, the first of them to be ready. The phone opens the session most recently in use there.<br>
-    <b>The line</b> sits centred over the mic in the terminal's ground and goes with the first send. It is never shown in the sample.<br>
+    <b>The line</b> sits centred over the mic in the terminal's ground and goes with the first send. In a fresh session it carries the task with a Send: the prompt as it stands at the tap, so what was changed on the keyboard is what goes, replacing what the prompt holds, never joined to it. An OpenCode box emptied on the keyboard still offers the desktop's starter, never a task the screen did not show; a prompt holding a paste the agent shows as a marker (<code>[Pasted text #1 +12 lines]</code>) goes by Return as it is. It is never shown in the sample.<br>
+    <b>The keyboard</b> comes up once, as soon as the fresh session's prompt is drawn, with the caret blinking at the end of the task — not over a question the agent asks first, such as Claude Code's trust prompt, which is answered where it is drawn. Put away, it stays away. The first send — Return, Send or the mic — puts it away once the prompt has emptied, so what the harness does with the task is on screen; a Return that sent nothing (a file picked after <code>@</code>) keeps it up, and so does Return after the first send.<br>
+    <b>The mic in a fresh session</b> sends the task and records nothing: the listening face and meter, no microphone permission prompt (one in the middle of the onboarding costs more than the words are worth), and its second tap sends the prompt as it stands. Only that session's mic: Find's and New's record as always. While a question is on screen it records, since a spoken answer is for the question. From the first send on it records again, and the permission is asked the first time it does.<br>
     <b>No tips before the first look.</b> The four Focus tips used to come over the first session, then the notification prompt. Now neither: the tips come back only from Settings ▸ Show the tips again.<br>
     <b>A computer linked by its password</b> (not by sign-in) opens on "Pick up where you left off", a list of every session to tap into, rather than guessing one.</p>
 
@@ -751,7 +780,7 @@
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on">harness</span><span class="tab">docs</span><span class="sp"></span><span class="avatar">A</span></div>
         <div class="panes"><div class="pn"><b>Claude Code · docs-review</b>⏺ Update(docs/onboarding.html)<br>&nbsp;&nbsp;⎿ +41 −12<br><br>⏺ The page is ready for review. Push it?</div><div class="pn"><b>Codex · api-server</b>• Tracing the 9am spike…</div></div>
         <div class="addph"><div class="t">Add your phone</div><svg viewBox="-2 -2 25 25" shape-rendering="crispEdges"><use href="#qr"/></svg>
-          <div class="l1">Scan with the Harness app.</div><div class="l2">No app yet? <u>App Store</u> · <u>Google Play</u></div><span class="cl">Close</span></div>
+          <div class="l1">Scan with the Harness mobile app.</div><div class="l2">No app yet? <u>App Store</u> · <u>Google Play</u></div><span class="cl">Close</span></div>
       </div>
       <p class="cap"><b>On the Mac: Add Phone.</b> In the Harness menu, the avatar menu, and the phone icon in the tab row until the account has a phone. When the phone arrives it turns to "Ada's iPhone is ready."</p>
     </div>
@@ -903,7 +932,7 @@
     <tr><td>The computer joins</td><td class="m">MacBook Pro is ready.</td><td class="m">Waiting for its first session▌ (only if there is none yet)</td><td></td><td></td></tr>
     <tr><td>Pairing by the scan</td><td class="m">Connecting to MacBook Pro…</td><td class="m">Keep “Add Phone” open on MacBook Pro.</td><td class="m">Scan again · Use its password instead (after a failure)</td><td></td></tr>
     <tr><td>③ The session, by the mic</td><td colspan="4" class="m">Send it, or say anything. · Pick up where you left off. · Say what to build. · Talk to it.</td></tr>
-    <tr><td>Desktop, Add Phone</td><td class="m">Add your phone</td><td class="m">Scan with the Harness app. · No app yet? App Store · Google Play</td><td class="m">Close</td><td></td></tr>
+    <tr><td>Desktop, Add Phone</td><td class="m">Add your phone</td><td class="m">Scan with the Harness mobile app. · No app yet? App Store · Google Play</td><td class="m">Close</td><td></td></tr>
   </table></div>
   <p class="note" style="line-height:1.7"><b>Type and space:</b> 35 pt side margins and one left edge on every onboarding screen. The headline is 22 pt mono semibold, up to three lines, always at the same height. The picture sits in the middle and never moves between screens of a layout. Buttons are 52 pt; the quiet line and the status line are 13 pt.</p>
 

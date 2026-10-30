@@ -1,0 +1,105 @@
+# users 2026-10-18 07:46:51 +07
+No valid response was provided.
+Alias name     Users
+Comment        Users are prevented from making accidental or intentional system-wide changes and can run most applications
+
+Members
+
+-------------------------------------------------------------------------------
+NT AUTHORITY\Authenticated Users
+NT AUTHORITY\INTERACTIVE
+The command completed successfully.
+
+Alias name     Administrators
+Comment        Administrators have complete and unrestricted access to the computer/domain
+
+Members
+
+-------------------------------------------------------------------------------
+admin
+Administrator
+The command completed successfully.
+
+hxe2e S-1-5-21-1000000001-1000000002-1000000003-1006
+hxe2e2 S-1-5-21-1000000001-1000000002-1000000003-1007
+Alias name     Users
+Comment        Users are prevented from making accidental or intentional system-wide changes and can run most applications
+
+Members
+
+-------------------------------------------------------------------------------
+hxe2e
+hxe2e2
+NT AUTHORITY\Authenticated Users
+NT AUTHORITY\INTERACTIVE
+The command completed successfully.
+
+Alias name     Administrators
+Comment        Administrators have complete and unrestricted access to the computer/domain
+
+Members
+
+-------------------------------------------------------------------------------
+admin
+Administrator
+The command completed successfully.
+
+spawn ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no hxe2e@192.168.65.3 powershell -NoProfile -EncodedCommand <base64: appends the Mac key to authorized_keys>
+hxe2e@192.168.65.3's password: 
+#< CLIXML
+win-testvm\hxe2e
+win-testvm\hxe2e
+spawn ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no hxe2e2@192.168.65.3 powershell -NoProfile -EncodedCommand <base64: appends the Mac key to authorized_keys>
+hxe2e2@192.168.65.3's password: 
+#< CLIXML
+win-testvm\hxe2e2
+win-testvm\hxe2e2
+
+SUCCESS: Specified value was saved.
+
+SUCCESS: Specified value was saved.
+ Volume in drive C has no label.
+ Volume Serial Number is 341A-60C0
+
+ Directory of C:\Users\hxe2e
+
+10/17/2026  05:47 PM    <DIR>          .
+10/17/2026  05:47 PM    <DIR>          ..
+10/17/2026  05:47 PM    <DIR>          .ssh
+10/17/2026  05:47 PM    <DIR>          AppData
+10/17/2026  05:47 PM    <JUNCTION>     Application Data [C:\Users\hxe2e\AppData\Roaming]
+10/17/2026  05:47 PM    <JUNCTION>     Cookies [C:\Users\hxe2e\AppData\Local\Microsoft\Windows\INetCookies]
+04/01/2024  01:45 AM    <DIR>          Desktop
+10/17/2026  05:47 PM    <DIR>          Documents
+04/01/2024  01:45 AM    <DIR>          Downloads
+04/01/2024  01:45 AM    <DIR>          Favorites
+04/01/2024  01:45 AM    <DIR>          Links
+10/17/2026  05:47 PM    <JUNCTION>     Local Settings [C:\Users\hxe2e\AppData\Local]
+04/01/2024  01:45 AM    <DIR>          Music
+10/17/2026  05:47 PM    <JUNCTION>     My Documents [C:\Users\hxe2e\Documents]
+10/17/2026  05:47 PM    <JUNCTION>     NetHood [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\Network Shortcuts]
+10/14/2026  11:09 PM           262,144 NTUSER.DAT
+10/17/2026  05:47 PM           217,088 ntuser.dat.LOG1
+10/17/2026  05:47 PM                 0 ntuser.dat.LOG2
+10/17/2026  05:47 PM                 0 NTUSER.DAT{51900262…}.TM.blf
+10/17/2026  05:47 PM                 0 NTUSER.DAT{51900262…}.TMContainer00000000000000000001.regtrans-ms
+10/17/2026  05:47 PM                 0 NTUSER.DAT{51900262…}.TMContainer00000000000000000002.regtrans-ms
+10/17/2026  05:47 PM                20 ntuser.ini
+04/01/2024  01:45 AM    <DIR>          Pictures
+10/17/2026  05:47 PM    <JUNCTION>     PrintHood [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\Printer Shortcuts]
+10/17/2026  05:47 PM    <JUNCTION>     Recent [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\Recent]
+04/01/2024  01:45 AM    <DIR>          Saved Games
+10/17/2026  05:47 PM    <JUNCTION>     SendTo [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\SendTo]
+10/17/2026  05:47 PM    <JUNCTION>     Start Menu [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\Start Menu]
+10/17/2026  05:47 PM    <JUNCTION>     Templates [C:\Users\hxe2e\AppData\Roaming\Microsoft\Windows\Templates]
+04/01/2024  01:45 AM    <DIR>          Videos
+               7 File(s)        479,252 bytes
+              23 Dir(s)  53,737,930,752 bytes free
+
+HKEY_CURRENT_USER\Environment
+    Path    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;
+    TEMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    TMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    PORT    REG_SZ    18474
+    ADAPTER_UPDATE_URL    REG_SZ    http://192.168.65.1:8799/cli/metadata.json
+

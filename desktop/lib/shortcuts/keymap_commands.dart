@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../logging/debug_surface.dart';
+import '../super_tabs/buddy_chat.dart' show kBuddyChat;
 import 'app_shortcuts.dart';
 import 'keymap.dart';
 import 'keymap_keyboard.dart';
@@ -29,6 +30,11 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
+    if (id == 'swarm.quick_switcher') {
+      return [
+        defaultTargetPlatform == TargetPlatform.macOS ? 'cmd+k' : 'ctrl+k',
+      ];
+    }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
     // Use the companion chord already used by the other Alt-prefix platform.
     if (kIsWeb && id == 'app.daemon_talk') return const ['alt+shift+a'];
@@ -36,9 +42,29 @@ class HarnessCommand {
       final linux = linuxAltCommandKeys[id];
       if (linux != null) return linux;
     }
+    if (ctrlWorkspacePrefix) {
+      final windows = windowsCommandKeys[id];
+      if (windows != null) return windows;
+    }
     return action == null
         ? extraKeys.map(platformWorkspaceBinding).toList(growable: false)
         : _workspaceKeys[action] ?? const [];
+  }
+
+  /// Ctrl twins of Mac defaults. Existing Windows keys still take precedence.
+  List<String> get outsideTerminalKeys {
+    if (!ctrlWorkspacePrefix) return const [];
+    return action == null
+        ? [
+            for (final keys in extraKeys)
+              if (!keys.contains(' '))
+                ?windowsCtrlAliasForStroke(KeyStroke.parse(keys)),
+          ]
+        : [
+            for (final shortcut in [...kAppShortcuts, ...kSwarmShortcuts])
+              if (shortcut.action == action)
+                ?windowsCtrlAlias(shortcut.activator),
+          ];
   }
 
   final ShortcutAction? action;
@@ -198,6 +224,24 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
+  ),
+  const HarnessCommand(
+    'swarm.quick_switcher',
+    'Switch conversation',
+    ShortcutGroup.navigate,
+    context: KeymapContext.swarmChat,
+    keywords: ['Swarm', 'chat', 'people', 'agents'],
+  ),
+  // The current project's Buddy chat, in a Swarm tab, where the PM's private
+  // lines land since Buddies replaced Chat with PM: the id stays, so a key a
+  // person bound to it keeps working. K for "talk": free on every platform
+  // (Alt+Shift+K on Linux, the web and Windows).
+  const HarnessCommand(
+    'swarm.chat_with_pm',
+    kBuddyChat,
+    ShortcutGroup.navigate,
+    extraKeys: ['cmd+shift+k'],
+    keywords: ['Buddy', 'product manager', 'PM', 'Swarm'],
   ),
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
@@ -495,7 +539,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'models.manage',
-    'Manage models',
+    'Your models',
     ShortcutGroup.actions,
     keywords: ['download', 'start', 'stop', 'local', 'API'],
   ),
@@ -618,7 +662,7 @@ final harnessCommands = <HarnessCommand>[
     'app.store',
     'Harness Store',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+s'],
+    extraKeys: ['cmd+ctrl+s'],
     keywords: ['install', 'browse harnesses', 'packages', 'extensions'],
     nativeAction: 'store',
   ),
@@ -688,6 +732,13 @@ final harnessCommands = <HarnessCommand>[
     'Pause quick start',
     ShortcutGroup.actions,
     keywords: ['hide guide', 'dismiss tutorial'],
+  ),
+  const HarnessCommand(
+    'super_tab.new',
+    'New Swarm',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+s'],
+    hidden: true,
   ),
   if (kDebugSurfaceEnabled)
     const HarnessCommand(
@@ -936,19 +987,52 @@ final harnessCommandById = {
   for (final command in harnessCommands) command.id: command,
 };
 final _defaultBindingsByPlatform = <TargetPlatform, List<KeyBinding>>{};
-List<KeyBinding> get harnessDefaultBindings =>
-    _defaultBindingsByPlatform.putIfAbsent(
-      defaultTargetPlatform,
-      () => [
-        for (final command in harnessCommands)
-          for (final keys in command.keys)
-            KeyBinding(
-              keys: keys.split(' ').map(KeyStroke.parse),
-              command: command.id,
-              context: command.context,
-            ),
-      ],
-    );
+List<KeyBinding> get harnessDefaultBindings => _defaultBindingsByPlatform
+    .putIfAbsent(defaultTargetPlatform, _readDefaultBindings);
+
+List<KeyBinding> _readDefaultBindings() {
+  final defaults = <KeymapContext, Set<String>>{};
+  for (final command in harnessCommands) {
+    (defaults[command.context] ??= {}).addAll(command.keys);
+  }
+  // The Mac action table owns alias collisions before string-only commands:
+  // Reload keeps Ctrl+R even though Split Right also has a Mac Cmd+R default.
+  final aliases = <HarnessCommand, List<String>>{};
+  for (final command in [
+    ...harnessCommands.where((command) => command.action != null),
+    ...harnessCommands.where((command) => command.action == null),
+  ]) {
+    for (final keys in command.outsideTerminalKeys) {
+      if (defaults[command.context]!.add(keys)) {
+        (aliases[command] ??= []).add(keys);
+      }
+    }
+  }
+  final bindings = <KeyBinding>[];
+  for (final command in harnessCommands) {
+    for (final keys in command.keys) {
+      bindings.add(
+        KeyBinding(
+          keys: keys.split(' ').map(KeyStroke.parse),
+          command: command.id,
+          context: command.context,
+        ),
+      );
+    }
+    for (final keys in aliases[command] ?? const <String>[]) {
+      bindings.add(
+        KeyBinding(
+          keys: keys.split(' ').map(KeyStroke.parse),
+          command: command.id,
+          context: command.context,
+          outsideTerminal: true,
+        ),
+      );
+    }
+  }
+  return bindings;
+}
+
 final _defaultKeymapsByPlatform = <TargetPlatform, ResolvedKeymap>{};
 ResolvedKeymap get harnessDefaultKeymap =>
     _defaultKeymapsByPlatform.putIfAbsent(

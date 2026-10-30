@@ -1,5 +1,6 @@
 import 'support/launch_menu.dart';
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -377,9 +378,15 @@ void main() {
     final box = NewHarnessController(app, machineId: 'm', home: root.path);
     addTearDown(box.dispose);
     box.focusField(NewHarnessField.project);
+    final listed = Completer<void>();
+    void onListing() {
+      if (!box.listing && !listed.isCompleted) listed.complete();
+    }
+    box.addListener(onListing);
     box.setQuery('~/au');
-    // The listing is read off the disk, then the field refreshes itself.
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // Wait for the disk listing, rather than a host-dependent isolate delay.
+    await listed.future.timeout(const Duration(seconds: 3));
+    box.removeListener(onListing);
     expect(found(box), ['auth', 'authz']);
     expect((box.matchCount, box.total), (2, 3));
     // zsh's Tab: first as much as every candidate agrees on…
@@ -745,8 +752,14 @@ void main() {
     final box = NewHarnessController(app, machineId: 'm', home: root.path);
     addTearDown(box.dispose);
     box.focusField(NewHarnessField.project);
+    final listed = Completer<void>();
+    void onListing() {
+      if (!box.listing && !listed.isCompleted) listed.complete();
+    }
+    box.addListener(onListing);
     box.setQuery('~/auth');
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await listed.future.timeout(const Duration(seconds: 3));
+    box.removeListener(onListing);
     expect(box.complete(), '~/auth');
     expect(box.complete(), '~/authn');
     // Down leaves the walk: the line is what was typed again, and the

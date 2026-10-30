@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 const mocks = vi.hoisted(() => ({
   prisma: {
+    $transaction: vi.fn(),
     machine: { findFirst: vi.fn() },
     machineShare: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     machineShareAdd: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
@@ -17,6 +18,7 @@ vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof impor
 import { machineShareRoutes, SHARE_EMAILS_MAX } from './machineShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
+import { logger } from '../utils/logger.js'
 
 const M1 = 'ab'.repeat(16)
 const dee = { sub: 'dee', email: 'Dee@Acme.io', role: 'user', autonomousEnv: 'prod' as const }
@@ -31,6 +33,7 @@ describe('sharing a machine', () => {
   const auth = { authorization: 'Bearer fixture' }
   beforeEach(async () => {
     vi.resetAllMocks()
+    mocks.prisma.$transaction.mockImplementation(async work => work(mocks.prisma))
     mocks.auth.mockResolvedValue(dee)
     mocks.prisma.machine.findFirst.mockResolvedValue(machine)
     mocks.prisma.machineShare.findUnique.mockResolvedValue(null)
@@ -44,7 +47,7 @@ describe('sharing a machine', () => {
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
     await app.register(machineShareRoutes); await app.ready()
   })
-  afterEach(async () => { await app.close() })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
   const put = (payload: unknown, machineId = M1) =>
     app.inject({ method: 'PUT', url: `/api/machines/${machineId}/share`, headers: auth, payload: payload as any })
 
@@ -82,19 +85,30 @@ describe('sharing a machine', () => {
   })
 
   it('writes normalized addresses (never the owner’s own) and the owner’s domain, and tells everyone affected', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => logger)
     mocks.prisma.machineShare.findUnique.mockResolvedValueOnce(row({ emails: ['old@acme.io'], domain: null }))
     mocks.prisma.user.findMany.mockResolvedValue([{ id: 'ann' }, { id: 'kim' }, { id: 'dee' }])
     mocks.prisma.machineShareAdd.findMany.mockImplementation(async (args: { select?: unknown }) => args.select ? [{ userId: 'lee' }] : [])
     const res = await put({ emails: [' Ann@Gmail.com ', 'ann@gmail.com', 'DEE@acme.io', 'ghost@x.invalid'], sameDomain: true })
     expect(res.statusCode).toBe(200)
     expect(mocks.prisma.machineShare.upsert).toHaveBeenCalledWith({ where: { machineId: M1 },
-      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' },
-      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' } })
+      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) },
+      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) } })
     expect(res.json().data).toEqual({ emails: ['ann@gmail.com'], sameDomain: true, domain: 'acme.io', members })
     expect(mocks.shareChanged).toHaveBeenCalledWith(M1)
     expect(mocks.prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { OR: [
       { email: { in: ['old@acme.io', 'ann@gmail.com'] } }, { email: { endsWith: '@acme.io' } }] } }))
     expect(mocks.listChanged.mock.calls.map(c => c[0]).sort()).toEqual(['ann', 'kim', 'lee'])
+    // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the machine whose sharing changed.
+    expect(info).toHaveBeenCalledWith('machine share: told everyone it changed', { machineId: M1, ownerId: 'dee', told: 3 })
+  })
+
+  it('retries a concurrent policy update before choosing versions for the resulting grants', async () => {
+    mocks.prisma.$transaction.mockRejectedValueOnce({ code: 'P2034' })
+    const res = await put({ emails: ['ann@gmail.com'], sameDomain: false })
+    expect(res.statusCode).toBe(200)
+    expect(mocks.prisma.$transaction).toHaveBeenCalledTimes(2)
+    expect(mocks.prisma.machineShare.upsert).toHaveBeenCalledOnce()
   })
 
   it('refuses everyone at a public domain', async () => {
@@ -112,6 +126,25 @@ describe('sharing a machine', () => {
     expect(mocks.prisma.machineShare.deleteMany).toHaveBeenCalledWith({ where: { machineId: M1 } })
     expect(mocks.prisma.machineShareAdd.deleteMany).toHaveBeenCalledWith({ where: { machineId: M1 } })
     expect(mocks.prisma.machineShare.upsert).not.toHaveBeenCalled()
+    expect(mocks.shareChanged).toHaveBeenCalledWith(M1)
+  })
+
+  it('tells no one when the owner’s daemon writes the policy it already holds', async () => {
+    // A daemon whose own policy names an address the backend drops (the owner's own, a `.invalid` one) never
+    // reads back what it wrote, so it writes again every two minutes; each write told every member to re-read.
+    mocks.prisma.machineShare.findUnique.mockResolvedValueOnce(row({ emails: ['bob@x.io', 'ann@gmail.com'] }))
+    mocks.prisma.user.findMany.mockResolvedValue([{ id: 'ann' }])
+    const res = await put({ emails: ['ann@gmail.com', 'DEE@acme.io', 'bob@x.io'], sameDomain: true })
+    expect(res.statusCode).toBe(200)
+    expect(mocks.listChanged).not.toHaveBeenCalled()
+    expect(mocks.shareChanged).not.toHaveBeenCalled()
+  })
+
+  it('tells everyone affected when only the domain changes', async () => {
+    mocks.prisma.machineShare.findUnique.mockResolvedValueOnce(row({ domain: null }))
+    mocks.prisma.user.findMany.mockResolvedValue([{ id: 'kim' }])
+    expect((await put({ emails: ['ann@gmail.com'], sameDomain: true })).statusCode).toBe(200)
+    expect(mocks.listChanged.mock.calls.map(c => c[0])).toEqual(['kim'])
     expect(mocks.shareChanged).toHaveBeenCalledWith(M1)
   })
 
@@ -148,6 +181,15 @@ describe('sharing a machine', () => {
       expect(mocks.prisma.machineShareAdd.upsert).toHaveBeenCalledWith({ where: { machineId_userId: { machineId: M1, userId: 'kim' } },
         create: { machineId: M1, userId: 'kim' }, update: {} })
       expect(mocks.listChanged.mock.calls.map(c => c[0])).toEqual(['dee', 'kim'])
+    })
+
+    it('answers added when a racing identical add stored it first', async () => {
+      mocks.prisma.machineShare.findUnique.mockResolvedValue(row({ emails: [] }))
+      mocks.prisma.machineShareAdd.upsert.mockRejectedValueOnce(Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })).mockResolvedValueOnce({})
+      const res = await add()
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toEqual({ added: true })
+      expect(mocks.prisma.machineShareAdd.upsert).toHaveBeenCalledTimes(2)
     })
 
     it('needs no add for a named address', async () => {

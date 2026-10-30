@@ -1,11 +1,13 @@
 /** A descriptor's first record, fenced again after all asynchronous ownership reads. */
 import { constants, openSync, closeSync, fstatSync, readSync, type BigIntStats } from 'node:fs'
 import { lstat } from 'node:fs/promises'
+import { posix } from 'node:path'
 import type { SessionStoreContract } from '../facets/sessionStore.js'
 import { identityBytes, IdentityReadUnavailable } from './identityScan.js'
 import { firstRecordMeta, type SessionMeta } from './sessionRecords.js'
 import { NativeEvidenceBudget, nativeText, nativeUnavailable } from './nativeEvidence.js'
 import { nativeFileKey } from './nativePaths.js'
+import { hostPlatform } from './windowsFiles.js'
 
 export type NativeFirstRecord = NonNullable<SessionStoreContract['first']>
 const stamp = (info: BigIntStats) => `${nativeFileKey(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
@@ -23,10 +25,14 @@ export function firstLine(bytes: Buffer, maxBytes: number): string {
   return nativeUnavailable('the native rollout header is incomplete or exceeds its limit')
 }
 
-/** The same conclusive record rules serve descriptors, registry loading and hook admission. */
-export function nativeSessionMeta(line: string, first: NativeFirstRecord): SessionMeta {
+/** The same conclusive record rules serve descriptors, registry loading and hook admission. The session's folder is
+ *  absolute for the platform: a POSIX path off Windows, a drive path on Windows. A UNC share, a rooted path with no
+ *  drive, a POSIX path or a `\\?\` path is no folder an interactive Codex session starts in there: refused, with this
+ *  header's own reason (B4.15). */
+export function nativeSessionMeta(line: string, first: NativeFirstRecord, platform: NodeJS.Platform = hostPlatform()): SessionMeta {
   const meta = firstRecordMeta(line, first)
-  if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !meta.cwd.startsWith('/')))) return nativeUnavailable('the native rollout header is invalid')
+  const absolute = (path: string) => platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(path) : posix.isAbsolute(path)
+  if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !absolute(meta.cwd)))) return nativeUnavailable('the native rollout header is invalid')
   const record: unknown = JSON.parse(line)
   const field = (path: readonly string[]) => path.reduce((at: any, key) => at && typeof at === 'object' && !Array.isArray(at) ? at[key] : undefined, record)
   if (first.source) {

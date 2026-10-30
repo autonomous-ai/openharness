@@ -166,7 +166,12 @@ void main() {
           LogicalKeyboardKey.keyM,
           LogicalKeyboardKey.keyI,
         ]) {
-          await key(tester, shortcut, cmd: true);
+          await key(
+            tester,
+            shortcut,
+            cmd: true,
+            ctrl: shortcut == LogicalKeyboardKey.keyS,
+          );
           await tester.pumpAndSettle();
           if (shortcut == LogicalKeyboardKey.keyN) {
             expect(find.byType(NewHarnessForm), findsOneWidget);
@@ -244,7 +249,7 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyS, cmd: true, ctrl: true);
         expect(app.activeSwarm.isStore, isTrue);
         await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
@@ -326,11 +331,11 @@ void main() {
       expect(resourceScope(''), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyS, cmd: true, ctrl: true);
       expect(app.activeSwarm.isStore, isTrue);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       await tester.pumpAndSettle();
-      await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyS, cmd: true, ctrl: true);
       await tester.pumpAndSettle();
       expect(app.activeSwarm.isStore, isTrue);
       await key(tester, LogicalKeyboardKey.keyI, cmd: true);

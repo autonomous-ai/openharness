@@ -1,0 +1,341 @@
+import 'dart:async';
+
+import 'package:clock/clock.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/profile_sheet.dart';
+
+import 'super_tab_profile_actions_test.dart' show picture;
+import 'super_tab_roster_test.dart' show RosterFixture;
+import 'support/super_tab_fixture.dart';
+
+Map<String, dynamic> lastCommand(ConversationServer server) =>
+    Map<String, dynamic>.from(server.posts.last['command'] as Map);
+
+Future<SuperTabController> openSheet(
+  WidgetTester tester,
+  ConversationServer server, {
+  String? agentId,
+  Future<Uint8List?> Function()? pick,
+}) async {
+  await tester.binding.setSurfaceSize(const Size(1200, 900));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final c = server.controller();
+  addTearDown(c.dispose);
+  await c.refresh();
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showSuperTabProfile(
+              context,
+              c,
+              agentId: agentId,
+              pickPicture: pick ?? () async => null,
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('Open'));
+  await tester.pumpAndSettle();
+  return c;
+}
+
+void main() {
+  testWidgets('your own row opens your profile from Edit profile', (
+    tester,
+  ) async {
+    final f = RosterFixture();
+    addTearDown(f.dispose);
+    await f.initialize();
+    await f.show(tester);
+    await tester.tap(find.byKey(const ValueKey('super-person-owner')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('super-profile-edit')));
+    await tester.pumpAndSettle();
+    expect(find.text('Your profile'), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-status-text')), findsOneWidget);
+    await f.close(tester);
+  });
+
+  testWidgets('a preset becomes your avatar at once', (tester) async {
+    final server = ConversationServer();
+    final c = await openSheet(tester, server);
+    await tester.tap(find.byKey(const ValueKey('super-avatar-preset-fox')));
+    await tester.pumpAndSettle();
+    expect(lastCommand(server), {
+      'type': 'member.avatar',
+      'avatar': {'kind': 'preset', 'key': 'fox'},
+    });
+    expect(c.snapshot!.people.single.avatar, isNotNull);
+    await tester.tap(find.text('Use default'));
+    await tester.pumpAndSettle();
+    expect(lastCommand(server), {'type': 'member.avatar', 'avatar': null});
+  });
+
+  testWidgets('an uploaded picture is resized and set', (tester) async {
+    final server = ConversationServer();
+    final bytes = (await tester.runAsync(() => picture(500, 300)))!;
+    await openSheet(tester, server, pick: () async => bytes);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Upload picture…'));
+      for (var i = 0; i < 50 && server.avatarUploads.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(server.avatarUploads, hasLength(1));
+    expect(lastCommand(server)['avatar'], {'kind': 'upload', 'id': 'avatar-1'});
+  });
+
+  testWidgets(
+    'a status is picked, cleared after an hour, and cleared by hand',
+    (tester) async {
+      final server = ConversationServer();
+      final now = DateTime.utc(2026, 10, 27, 9);
+      await withClock(Clock.fixed(now), () async {
+        await openSheet(tester, server);
+        await tester.tap(find.byKey(const ValueKey('super-status-☕')));
+        await tester.pump();
+        expect(find.widgetWithText(TextField, 'Coffee break'), findsOneWidget);
+        await tester.ensureVisible(find.text('Save status'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-status-clears')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('In 1 hour').last);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save status'));
+        await tester.pumpAndSettle();
+        expect(lastCommand(server), {
+          'type': 'member.status',
+          'status': {
+            'text': 'Coffee break',
+            'emoji': '☕',
+            'until': '2026-10-27T10:00:00.000Z',
+          },
+        });
+        await tester.ensureVisible(find.text('Clear status'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Clear status'));
+        await tester.pumpAndSettle();
+        expect(lastCommand(server), {'type': 'member.status', 'status': null});
+      });
+    },
+  );
+
+  testWidgets('an agent’s sheet changes its avatar and has no status', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    server.state['agents'] = [
+      {
+        'id': 'agent-1',
+        'name': 'Kai',
+        'machineId': 'm',
+        'harnessId': 'h',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      },
+    ];
+    await openSheet(tester, server, agentId: 'agent-1');
+    expect(find.text('Kai’s avatar'), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-status-text')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('super-avatar-preset-owl')));
+    await tester.pumpAndSettle();
+    expect(lastCommand(server), {
+      'type': 'agent.avatar',
+      'agentId': 'agent-1',
+      'avatar': {'kind': 'preset', 'key': 'owl'},
+    });
+  });
+
+  group('username', () {
+    final field = find.byKey(const ValueKey('super-username-field'));
+    final save = find.byKey(const ValueKey('super-username-save'));
+    String text(WidgetTester tester) =>
+        tester.widget<TextField>(field).controller!.text;
+    bool enabled(WidgetTester tester) =>
+        tester.widget<ButtonStyleButton>(save).onPressed != null;
+
+    testWidgets('shows your name and saves a new one', (tester) async {
+      final server = ConversationServer();
+      final c = await openSheet(tester, server);
+      expect(text(tester), 'owner');
+      expect(
+        find.text('How people see and tag you in this Swarm.'),
+        findsOneWidget,
+      );
+      // Nothing to save until it changes.
+      expect(enabled(tester), isFalse);
+      await tester.enterText(field, 'River');
+      await tester.pump();
+      expect(enabled(tester), isTrue);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server), {
+        'type': 'member.username',
+        'username': 'River',
+      });
+      expect(c.snapshot!.people.single.username, 'river');
+      expect(text(tester), 'river');
+      expect(enabled(tester), isFalse);
+    });
+
+    testWidgets('Enter in the field saves too', (tester) async {
+      final server = ConversationServer();
+      await openSheet(tester, server);
+      await tester.enterText(field, 'pilot');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server)['username'], 'pilot');
+    });
+
+    testWidgets(
+      'a taken name says so under the field and keeps what you typed',
+      (tester) async {
+        final server = ConversationServer();
+        await openSheet(tester, server);
+        server.refuse = {'code': 'USERNAME_TAKEN', 'message': 'dee is taken.'};
+        await tester.enterText(field, 'dee');
+        await tester.pump();
+        await tester.tap(save);
+        await tester.pumpAndSettle();
+        expect(find.text('dee is taken.'), findsOneWidget);
+        expect(text(tester), 'dee');
+        // Above Picture: the reason sits with the field it is about.
+        expect(
+          tester.getTopLeft(find.text('dee is taken.')).dy,
+          lessThan(tester.getTopLeft(find.text('Picture')).dy),
+        );
+      },
+    );
+
+    testWidgets(
+      'a save that lands keeps what was typed while it was on its way',
+      (tester) async {
+        final server = _GatedUsernameServer();
+        final c = await openSheet(tester, server);
+        await tester.enterText(field, 'river');
+        await tester.pump();
+        await tester.tap(save);
+        await tester.pump();
+        await tester.enterText(field, 'pilot');
+        await tester.pump();
+        server.gate.complete();
+        await tester.pumpAndSettle();
+        expect(c.snapshot!.people.single.username, 'river');
+        expect(text(tester), 'pilot');
+        // The newer name is still there to save.
+        expect(enabled(tester), isTrue);
+      },
+    );
+
+    testWidgets('an empty name cannot be saved', (tester) async {
+      final server = ConversationServer();
+      await openSheet(tester, server);
+      await tester.enterText(field, '   ');
+      await tester.pump();
+      expect(enabled(tester), isFalse);
+    });
+
+    testWidgets('an agent’s sheet has no username', (tester) async {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        {
+          'id': 'agent-1',
+          'name': 'Kai',
+          'machineId': 'm',
+          'harnessId': 'h',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      await openSheet(tester, server, agentId: 'agent-1');
+      expect(field, findsNothing);
+    });
+  });
+
+  testWidgets('a refusal is shown in the sheet', (tester) async {
+    final server = ConversationServer();
+    await openSheet(tester, server);
+    server.refuse = {'code': 'FORBIDDEN', 'message': 'Not allowed here.'};
+    await tester.tap(find.byKey(const ValueKey('super-avatar-preset-cat')));
+    await tester.pumpAndSettle();
+    expect(find.text('Not allowed here.'), findsOneWidget);
+  });
+
+  testWidgets('the agent’s contributor changes its avatar from its details', (
+    tester,
+  ) async {
+    for (final contributor in ['owner', 'someone-else']) {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        {
+          'id': 'agent-1',
+          'name': 'Kai',
+          'machineId': 'm',
+          'harnessId': 'h',
+          'contributorId': contributor,
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showSuperTabAgentDetails(
+                  context,
+                  c,
+                  null,
+                  c.snapshot!.agent('agent-1')!,
+                  (_) {},
+                ),
+                child: const Text('Details'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SuperTabAvatar), findsOneWidget);
+      if (contributor != 'owner') {
+        expect(find.text('Change avatar'), findsNothing);
+      } else {
+        await tester.tap(find.text('Change avatar'));
+        await tester.pumpAndSettle();
+        expect(find.text('Kai’s avatar'), findsOneWidget);
+      }
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    }
+  });
+}
+
+/// Holds a username save until [gate] completes (review of #2088).
+class _GatedUsernameServer extends ConversationServer {
+  final gate = Completer<void>();
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    if (method == 'POST' &&
+        (body?['command'] as Map?)?['type'] == 'member.username') {
+      await gate.future;
+    }
+    return super.request(method, path, body: body);
+  }
+}

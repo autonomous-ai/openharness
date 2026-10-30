@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -18,6 +19,7 @@ class _Daemon {
   _Daemon(this.server, this.name) {
     server.listen((request) async {
       hits.add(request.uri.path);
+      credentials.add(request.headers.value(daemonCredentialHeader));
       if (WebSocketTransformer.isUpgradeRequest(request)) {
         final ws = await WebSocketTransformer.upgrade(request);
         ws.listen((data) {
@@ -57,6 +59,7 @@ class _Daemon {
   final HttpServer server;
   final String name;
   final List<String> hits = [];
+  final List<String?> credentials = [];
   int selects = 0;
 
   static Future<_Daemon> tcp() async =>
@@ -78,7 +81,10 @@ void main() {
 
   setUp(() async {
     // Socket paths are capped near 104 bytes; the default temp dir is longer.
-    scratch = await Directory('/tmp').createTemp('hsock-');
+    scratch = await (Platform.isWindows
+            ? Directory.systemTemp
+            : Directory('/tmp'))
+        .createTemp('hsock-');
     socketPath = '${scratch.path}/daemon.sock';
     identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(_computerId);
@@ -104,6 +110,16 @@ void main() {
   );
 
   group('defaultDaemonSocketPath', () {
+    test('uses USERPROFILE when a Windows shell also sets HOME', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'USERPROFILE': r'C:\Users\me', 'HOME': '/c/Users/me'},
+          isWindows: true,
+        ),
+        r'C:\Users\me\.harness\cli\data',
+      );
+    });
+
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),
@@ -130,6 +146,78 @@ void main() {
         LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).candidate,
         isNull,
       );
+    });
+  });
+
+  group('local credential', () {
+    final credential = 'A' * 42 + '_';
+
+    test('is the hook-credential file in the daemon data directory', () {
+      final env = {'ADAPTER_DATA_DIR': scratch.path};
+      expect(readDaemonCredential(environment: env), isNull);
+      File('${scratch.path}/hook-credential').writeAsStringSync('$credential\n');
+      expect(readDaemonCredential(environment: env), credential);
+      // Anything that is not a credential the CLI made is not sent.
+      File('${scratch.path}/hook-credential').writeAsStringSync('short');
+      expect(readDaemonCredential(environment: env), isNull);
+    });
+
+    test('is never read under flutter test', () {
+      expect(
+        LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).tcpHeaders(),
+        isEmpty,
+      );
+    });
+
+    test('goes with REST over the port, never down the socket', () async {
+      final tcp = await start(_Daemon.tcp());
+      final unix = await start(_Daemon.unix(socketPath));
+      final transport = LocalDaemonTransport(
+        candidate: socketPath,
+        credential: () => credential,
+      )..useSocket();
+      final api = ApiClient(
+        config: configFor(tcp),
+        session: AuthSession(),
+        localTransport: transport,
+      );
+
+      expect(await api.me(), {'via': 'unix'});
+      expect(unix.credentials, [null]);
+
+      await unix.close();
+      daemons.remove(unix);
+      if (File(socketPath).existsSync()) File(socketPath).deleteSync();
+      expect(await api.me(), {'via': 'tcp'});
+      expect(tcp.credentials.last, credential);
+    });
+
+    test('goes with the local WebSocket over the port', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(
+        candidate: socketPath,
+        credential: () => credential,
+      )..useTcp();
+      final conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        localWsUri: Uri.parse('ws://127.0.0.1:${tcp.server.port}/api/local-ws'),
+        localTransport: transport,
+      );
+      addTearDown(conn.close);
+      await conn.connect();
+      for (var i = 0; i < 100 && tcp.selects == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(tcp.selects, 1);
+      expect(tcp.credentials, [credential]);
     });
   });
 

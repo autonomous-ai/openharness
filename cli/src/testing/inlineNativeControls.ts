@@ -5,7 +5,7 @@ import { nativeControlFor } from '../engines/nativeControls.js'
 import { createNativeControl, type CodexNativeDeps } from '../engines/codex/nativeControl.js'
 import { launch as codexLaunch } from '../engines/codex/launch.js'
 import { sessionCodexHome } from '../lib/engineHomes.js'
-import { argvTokens, processRows } from '../lib/tmux.js'
+import { argvTokens, processRows } from '../lib/processTable.js'
 
 export function inlineNativeControls(over: Partial<NativeControlsDeps> = {}) {
   return createNativeControls({ call: async () => ({ error: 'SERVICE_UNAVAILABLE' }), servers: { codex: codexLaunch.sharedServer! },

@@ -35,11 +35,13 @@ code = r'''
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
 #include "sys/config_store.h"
 #include "sys/ram_telemetry.h"
+#include "sys/last_words.h"
 #include "app/pro_touch.h"
 #include "pro_display.h"
 #include "pro_frame.h"
@@ -84,6 +86,8 @@ void vTaskDelay(TickType_t t) { (void)t; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
 esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
 size_t heap_caps_get_free_size(unsigned c) { (void)c; return 0; }
 size_t heap_caps_get_largest_free_block(unsigned c) { (void)c; return 0; }
 uint8_t config_load_brightness(void) { return 220; }
@@ -105,9 +109,12 @@ pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO
 // The cable: what pro_app and pro_voice send.
 static struct { int opens, cancels; char cancel_id[24]; } CAB;
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) { CHECK(LOCK_DEPTH == 0); (void)t; (void)tab; (void)lead; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 bool pro_cable_voice_cancel(const char *id) { CHECK(LOCK_DEPTH == 0); CAB.cancels++; snprintf(CAB.cancel_id, sizeof CAB.cancel_id, "%s", id); return true; }
 
 // The recorder: the capture and sender tasks are replaced by flags the test flips.
@@ -266,7 +273,7 @@ static void booting(void) {   // no machines.end yet: the gate does not wait for
 }
 static void question_agent_says_why(void) {
     situation(); to_agent(1);
-    pro_app_question("a2", "Which one?");
+    pro_app_question("a2", "r1", "Which one?", NULL, POD_ATTN_NONE);
     render();
     CHECK(!hit(POD_A_TALK, 0));
     press_stale();
@@ -525,7 +532,7 @@ def check_sources():
 check_sources()
 cc = os.environ.get("CC", "cc")
 sanitize = "-fsanitize=" + os.environ.get("SANITIZERS", "undefined,bounds")
-include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"), "-I", str(HERE / "host_stubs"),
+include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"),
            "-I", str(POD)]
 failures = []
 with tempfile.TemporaryDirectory(prefix="harness-pro-voice-") as directory:
@@ -540,11 +547,11 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-voice-") as directory:
     source.write_text(code)
     modules = sorted(POD.glob("*.c")) + sorted(POD.glob("*/*.c")) + [APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c", AUDIO / "pro_voice.c", DISP / "scroll.c",
                                          DISP / "pro_canvas.c", DISP / "terminal.c", fonts]
-    # The voice state machine runs on the touch, render and cable_link tasks (6 KB stack): no frame past 1 KB.
+    # The voice state machine runs on the touch, render and cable_link tasks: no frame past 1 KB.
     subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wframe-larger-than=1024", "-O1", "-DHT_FACE_PX=720",
                     "-DPRO_VOICE_TEST_HOOK", *include, "-c", str(AUDIO / "pro_voice.c"), "-o", os.devnull], check=True)
     executable = directory / "pro_voice_gate"
-    subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-O1", "-g", sanitize,
+    subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g", sanitize,
                     "-DHT_FACE_PX=720", "-DPRO_VOICE_TEST_HOOK", *include, str(source), *map(str, modules), "-lpthread", "-o", str(executable)],
                    check=True)
     result = subprocess.run([str(executable)], text=True, capture_output=True)

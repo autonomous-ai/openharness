@@ -23,11 +23,12 @@ const shareImage = (harness: OpenHarness) => harness.cover && !harness.cover.end
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const harness = await readHarness((await params).id);
-  if (!harness) return { title: 'Open harness' };
+  // Not read here (unpublished, a staging publication, or a slow Hub): nothing for a search engine to keep.
+  if (!harness) return { title: 'Open harness', robots: { index: false } };
   const image = shareImage(harness), title = harness.title, description = harness.description;
   return {
     title, description, alternates: { canonical: harnessPath(harness) },
-    openGraph: { type: 'article', title, description, authors: [harness.authorName], ...(image ? { images: [{ url: image, width: 900, height: 600 }] } : {}) },
+    openGraph: { type: 'article', title, description, url: harnessPath(harness), siteName: 'Harness Hub', authors: [harness.authorName], ...(image ? { images: [{ url: image, width: 900, height: 600 }] } : {}) },
     twitter: { card: image ? 'summary_large_image' : 'summary', title, description },
   };
 }

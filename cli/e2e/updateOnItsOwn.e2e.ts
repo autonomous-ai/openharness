@@ -42,7 +42,7 @@ describe('a core with no master', () => {
   const installed = () => readFileSync(join(cliDir(), 'cli.js'))
   const rejected = () => JSON.parse(readFileSync(join(cliDir(), 'update-rejected.json'), 'utf8')) as string[]
   const status = async (): Promise<Row | null> =>
-    fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json() as Promise<Row>).catch(() => null)
+    fetch(`http://127.0.0.1:${daemon!.port}/api/status`, { headers: daemon!.localHeaders() }).then((response) => response.json() as Promise<Row>).catch(() => null)
   /** The pids answering on the daemon's port: whatever runs it now. */
   const listeners = (): number[] => {
     try {
@@ -51,10 +51,10 @@ describe('a core with no master', () => {
   }
   /** What the daemon has said: what this test's process printed, and the log file the master the core
    *  started writes to (core/main.ts `startMasterHere`). */
-  const logs = (): string => {
+  const logs = (source = daemon!): string => {
     let file = ''
-    try { file = readFileSync(join(daemon!.dataDir, 'harness.log'), 'utf8') } catch { /* none yet */ }
-    return `${daemon!.log()}\n${file}`
+    try { file = readFileSync(join(source.dataDir, 'harness.log'), 'utf8') } catch { /* none yet */ }
+    return `${source.log()}\n${file}`
   }
   const parentOf = (pid: number): number => Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim())
   const rows = async (client: LocalClient): Promise<Row[]> =>
@@ -164,7 +164,7 @@ describe('a core with no master', () => {
     const d = await IsolatedDaemon.create({ scriptPath: join(cliDir(), 'cli.js'), noMaster: true, env: environment() })
     daemon = d
     ;(d.options as { launch?: string[] }).launch = [join(CLI_ROOT, 'e2e/harness/olderReleaseHandoff.mjs'), join(cliDir(), 'cli.js'), join(d.dataDir, 'adapter.pid'), mayLeave]
-    onTestFailed(() => { console.log(`---- daemon log\n${logs().split('\n').slice(-150).join('\n')}`) })
+    onTestFailed(() => { console.log(`---- daemon log\n${logs(d).split('\n').slice(-150).join('\n')}`) })
     await d.start()
     expect((await status())?.harnessd).toBeFalsy()
     const client = await LocalClient.connect(d)

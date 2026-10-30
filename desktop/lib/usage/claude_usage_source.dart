@@ -33,6 +33,7 @@ class ClaudeUsageSource implements UsageSource {
     final token = await _credentials.claude();
     if (token == null) return signedOut(provider);
     final accountId = await _credentials.claudeAccountId();
+    final email = await _credentials.claudeAccountEmail();
     // An expired token is spent as a sign-in rather than as a round trip: this
     // app does not refresh what the CLI owns, so the request could only fail.
     if (token.isExpired) {
@@ -56,6 +57,7 @@ class ClaudeUsageSource implements UsageSource {
       return claudeUsageFromAnswer(
         statusCode: response.statusCode,
         body: response.data,
+        email: email,
         account: accountId == null
             ? null
             : usageAccountKey(provider, accountId),
@@ -73,6 +75,7 @@ class ClaudeUsageSource implements UsageSource {
   static ProviderUsage _mapWindows(
     Map<Object?, Object?> data, {
     String? account,
+    String? email,
   }) {
     final windows = <UsageWindow>[
       ?_window('Session', data['five_hour']),
@@ -97,6 +100,7 @@ class ClaudeUsageSource implements UsageSource {
       windows: windows,
       fetchedAt: DateTime.now(),
       account: account,
+      email: email,
     );
   }
 
@@ -123,6 +127,7 @@ ProviderUsage claudeUsageFromAnswer({
   required int? statusCode,
   required Object? body,
   String? account,
+  String? email,
 }) {
   final failure = usageFailureFor(UsageProvider.claude, statusCode);
   if (failure != null) return failure;
@@ -133,5 +138,5 @@ ProviderUsage claudeUsageFromAnswer({
       message: 'Claude answered in a shape this build cannot read',
     );
   }
-  return ClaudeUsageSource._mapWindows(body, account: account);
+  return ClaudeUsageSource._mapWindows(body, account: account, email: email);
 }

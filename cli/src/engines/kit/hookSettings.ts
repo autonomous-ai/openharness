@@ -13,33 +13,56 @@ import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HookSettings } from '../
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { command, HOOK_SCRIPT, isOurs, foreignHookBlocks, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
+import { hostPlatform } from './windowsFiles.js'
 
 /** The engines whose hooks run the notify.mjs command. */
-export type HookEngine = Parameters<typeof command>[1]
+export type HookEngine = Parameters<typeof hookArgv>[1]
 
 /** The home an engine's settings are in when core names none. */
 export function defaultHookHome(settings: HookSettings): string {
   return 'setting' in settings.home ? env[settings.home.setting] : join(homedir(), settings.home.inHome)
 }
 
-export async function installHookSettings(engine: HookEngine, settings: HookSettings, port: number, home: string = defaultHookHome(settings), options: NativeHookOptions = {}): Promise<boolean> {
+/**
+ * The hook of ours that [settings]' engine runs, as its runner on [platform] takes [argv]. That is one line, or, for an
+ * engine that starts a program itself (Claude Code's exec form on Windows), the program and its `args`. Null on
+ * Windows for an engine that declares no runner there.
+ */
+export function notifyHookEntry(settings: HookSettings, argv: string[], platform: NodeJS.Platform = hostPlatform()): { command: string; args?: string[] } | null {
+  const runner = platform === 'win32' ? settings.win32Runner : 'bash'
+  if (!runner) return null
+  const quoted = quoteHookCommand(runner, argv)
+  return Array.isArray(quoted) ? { command: quoted[0], args: quoted.slice(1) } : { command: quoted }
+}
+
+export async function installHookSettings(engine: HookEngine, settings: HookSettings, port: number, home: string = defaultHookHome(settings), options: NativeHookOptions = {},
+  platform: NodeJS.Platform = hostPlatform()): Promise<boolean> {
   const files = [join(home, settings.file), ...(settings.reviewed ? [join(home, settings.reviewed.file)] : [])]
-  const cmd = command(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment)
   // A startup refresh and a launch share the entire installation. Releasing the
   // reservation between notify and Messages let each revoke the other's second
   // stage, so a healthy launch could be held by the daemon's own refresh.
   try {
+    // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
+    // is a failed install with its reason, not a rejection (B4.1 review).
+    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)
+    if (!entry) return hooksNotOnWindows(engine)
     return await runHookPreparation(files, async attempt => {
-      await installNotifyHooks(engine, settings, port, home, options, attempt)
-      const required = files.map(file => inspectHookFile(file))
-      const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
-      if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired)
+      await installNotifyHooks(settings, port, home, entry, attempt, platform)
+      // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is
+      // installed there yet (Phase B4 notes), so neither is the confirmation of the required files that stage uses.
+      if (platform !== 'win32') {
+        const required = files.map(file => inspectHookFile(file))
+        const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
+        if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired)
+      }
       return true
-    }, { ...options, identity: JSON.stringify([engine, settings, port, home, cmd, env.HARNESS_AGENT_MESSAGES_DIR]) })
+    }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
+    const line = hooksNotInstalled(engine, err, platform)
+    if (line) { console.error(line); return false }
     console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
       name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), err)
     return false
@@ -110,7 +133,7 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
  * `{verb}` or `{tool}` once for each agent verb. In groups that are added together or not at all: the rules naming no
  * verb, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the same command.
  */
-function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
+export function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
   const paths: Record<string, string> = {
     launcher: join(env.HARNESS_BIN_DIR, 'harness'), node: managedNodePath(), cli: join(env.ADAPTER_CLI_DIR, 'cli.js'),
   }
@@ -157,7 +180,7 @@ function touches(theirs: string, ours: string): boolean {
 }
 
 /** The head of Harness's rules file: what it is for, and that Harness keeps it. */
-const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${HARNESS_AGENT_VERBS.join(', ')})\n`
+export const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${HARNESS_AGENT_VERBS.join(', ')})\n`
   + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
   + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
 
@@ -171,11 +194,18 @@ function writeRulesFile(file: string, rules: string): void {
   renameSync(temporary, file)
 }
 
-async function installNotifyHooks(engine: HookEngine, settings: HookSettings, port: number, home: string, options: NativeHookOptions, attempt: HookPreparationAttempt): Promise<boolean> {
+async function installNotifyHooks(settings: HookSettings, port: number, home: string, entry: { command: string; args?: string[] }, attempt: HookPreparationAttempt,
+  platform: NodeJS.Platform): Promise<boolean> {
   const file = join(home, settings.file)
-  const cmd = command(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment)
   const say = (line: string): string => line.replace(/\{(file|script|port)\}/g, (_, name: string) =>
     name === 'file' ? file : name === 'script' ? HOOK_SCRIPT : String(port))
+  // Ours as this platform reads a hook: on Windows a line for its runner, or exec form (kit/notifyHooks.ts isManagedHook).
+  const isOurs = (block: HookBlock): boolean => Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
+  // A hook already there is the current one when its line is. On Windows its arguments too: exec form keeps them in
+  // `args`, so a check of `command` alone saw any port as current (B4.2 review), and there a line with a stray `args`
+  // is drift. Off Windows the line alone decides, as it always has (mac/Linux unchanged).
+  const sameHook = (hook: CommandHook | undefined): boolean => hook?.command === entry.command
+    && ((platform !== 'win32' && entry.args === undefined) || JSON.stringify(hook.args) === JSON.stringify(entry.args))
   const { messages } = settings
   const observed = inspectHookFile(file)
   const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings
@@ -192,24 +222,24 @@ async function installNotifyHooks(engine: HookEngine, settings: HookSettings, po
     const blocks = current.hooks[event] ?? []
     // Collapse any duplicate "ours" blocks (e.g. from an earlier path) down to a single one, and keep every
     // non-ours block untouched.
-    const foreign = foreignHookBlocks(blocks)
+    const foreign = foreignHookBlocks(blocks, isOurs)
     const ours = blocks.filter(isOurs)
     if (ours.length !== 1) changed = true // none yet, or duplicates to drop
     const existing = ours[0]
     if (existing) {
       // A prior block with a different command (moved checkout / dev↔dist / changed port / interpreter) is
       // overwritten in place by the canonical one below.
-      const existingCmd = settings.upToDate.command === 'first-ours'
-        ? existing.hooks?.find((h) => isOurs({ hooks: [h] }))?.command
-        : existing.hooks?.[0]?.command
-      if (existingCmd !== cmd) { changed = true; updated = true }
+      const existingHook = settings.upToDate.command === 'first-ours'
+        ? existing.hooks?.find((h) => isOurs({ hooks: [h] }))
+        : existing.hooks?.[0]
+      if (!sameHook(existingHook)) { changed = true; updated = true }
       if (settings.upToDate.matcher && existing.matcher !== matcher) changed = true
     }
-    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: settings.timeout }] }]
+    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: settings.timeout }] }]
   }
 
   const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings) : null
+  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform) : null
   reviewed?.verify()
   if (!changed) {
     const published = await observed.replace(next, attempt)

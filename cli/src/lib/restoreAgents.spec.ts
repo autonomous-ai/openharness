@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
+import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
+import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
@@ -121,7 +123,7 @@ it.each([false, 'unknown'] as const)('keeps an unrecognized inert launch held af
   const restart = createAgentRestarter({
     registry: { ...h.deps.registry, resolve: (id: string) => h.rows.get(id) },
     restartJobs: new AgentRestartCoordinator(), purgeBusy: () => false,
-    stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: null, restartHeld: () => null,
+    stopJobs: new Map(), pinnedControls: new Set(), terminals: { backendFor: () => undefined }, restartHeld: () => null,
   } as unknown as RestartDeps)
   expect(await restart(entry.agentId)).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
   expect(h.launches).toEqual([])
@@ -313,8 +315,8 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.revision = id => restartJobs.revision(id)
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
-    const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent, tmuxBackend: null,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {} })
+    const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
+      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -535,13 +537,13 @@ describe('restoreAgents — a survey that could not tell', () => {
 
   it('each held restore reads a fresh tmux inventory, preserving its pane until it actually disappears', async () => {
     const h = harness([row({ launch: heldLaunch('store') })])
-    let panes: Array<{ tmuxPane: string }> = []
+    let panes: TerminalRuntimeRef[] = []
     const list = vi.fn(async () => ({ ok: true as const, panes }))
-    h.deps.survey = () => tmuxSurvey(list, async () => ({ ok: false, unknown: false }))
+    h.deps.survey = () => terminalSurvey(list, async () => ({ ok: false, unknown: false }))
     h.deps.only = new Set(['agent-a'])
     h.deps.buildLaunch = async () => ({ held: 'store' })
     await restoreAgents(h.deps)
-    panes = [{ tmuxPane: '%0' }]
+    panes = [{ backend: 'tmux', paneId: '%0' }]
     await restoreAgents(h.deps)
     expect(h.paneCreates).toBe(1)
     panes = []
@@ -550,21 +552,26 @@ describe('restoreAgents — a survey that could not tell', () => {
     expect(list).toHaveBeenCalledTimes(3)
   })
 
-  it('the tmux survey reads one pane listing, again only after a read that failed', async () => {
-    const listings: Array<{ ok: true; panes: Array<{ tmuxPane: string }> } | { ok: false }> = [
-      { ok: false }, { ok: true, panes: [{ tmuxPane: '%3' }] },
-    ]
-    let reads = 0
-    const survey = tmuxSurvey(async () => { reads++; return listings.shift()! }, async (pane) =>
-      pane === '%1' ? { ok: true, identity: identity(1) } : { ok: false, unknown: pane === '%2' })
-    const runtime = (paneId: string): TmuxRuntimeRef => ({ backend: 'tmux', paneId })
-    expect(await survey.livePane!(runtime('%3'))).toBe('unknown')
-    expect(await survey.livePane!(runtime('%3'))).toBe(true)
-    expect(await survey.livePane!(runtime('%5'))).toBe(false)
-    expect(reads).toBe(2)
-    expect(await survey.liveProcess(row(), runtime('%1'))).toEqual(identity(1))
-    expect(await survey.liveProcess(row(), runtime('%2'))).toBe('unknown')
-    expect(await survey.liveProcess(row(), runtime('%3'))).toBeNull()
+  it('the survey reads one pane listing per backend, again only after a read that failed', async () => {
+    const tmux = (paneId: string): TerminalRuntimeRef => ({ backend: 'tmux', paneId })
+    const pty = (paneId: string): TerminalRuntimeRef => ({ backend: 'ptyhost', instance: 'p1', paneId })
+    const listings = new Map<string, Array<{ ok: true; panes: TerminalRuntimeRef[] } | { ok: false }>>([
+      ['tmux', [{ ok: false }, { ok: true, panes: [tmux('%3')] }]],
+      ['ptyhost', [{ ok: true, panes: [pty('%5')] }]],
+    ])
+    const reads: string[] = []
+    const survey = terminalSurvey(async (runtime) => { reads.push(runtime.backend); return listings.get(runtime.backend)!.shift()! }, async (runtime) =>
+      runtime.paneId === '%1' ? { ok: true, identity: identity(1) } : { ok: false, unknown: runtime.paneId === '%2' })
+    expect(await survey.livePane!(tmux('%3'))).toBe('unknown')
+    expect(await survey.livePane!(tmux('%3'))).toBe(true)
+    expect(await survey.livePane!(tmux('%5'))).toBe(false)
+    // The same pane id on another backend is another pane: listed by its own backend, once.
+    expect(await survey.livePane!(pty('%3'))).toBe(false)
+    expect(await survey.livePane!(pty('%5'))).toBe(true)
+    expect(reads).toEqual(['tmux', 'tmux', 'ptyhost'])
+    expect(await survey.liveProcess(row(), tmux('%1'))).toEqual(identity(1))
+    expect(await survey.liveProcess(row(), tmux('%2'))).toBe('unknown')
+    expect(await survey.liveProcess(row(), pty('%3'))).toBeNull()
   })
 })
 
@@ -635,15 +642,76 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.calls).toEqual([])
   })
 
+  it('rebuilds a ptyhost row in a pane of its own backend, and binds it there', async () => {
+    const pty = (paneId: string): TerminalRuntimeRef => ({ backend: 'ptyhost', instance: 'p1', paneId })
+    const h = harness([row({ runtimes: [pty('%3')], primaryRuntimeKey: 'ptyhost\u0000p1\u0000%3' })])
+    h.deps.restorable = (runtime) => runtime.backend === 'ptyhost'
+    const created: TerminalRuntimeRef[] = []
+    h.deps.createPane = async (entry, launch, control) => {
+      h.paneCreates++; h.launched.push({ agentId: entry.agentId, launch }); control?.onDispatch?.()
+      const runtime = pty(`%${10 + h.paneCreates}`); created.push(runtime)
+      return { ok: true, runtime }
+    }
+    const respawned: TerminalRuntimeRef[] = []
+    const respawn = h.deps.respawn
+    h.deps.respawn = async (runtime, launch, control) => { respawned.push(runtime); return respawn(runtime, launch, control) }
+    h.probes.set('%11', [identity(11)])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(created).toEqual([pty('%11')])
+    expect(h.rows.get('agent-a')!.runtimes).toEqual([pty('%11')])
+    expect(respawned).toEqual([pty('%11')])
+    await settled(h, 1, 1)
+    expect(h.calls).toContain('triggerHint:%11')
+  })
+
+  it('launches a held ptyhost row into its inert shell through respawn with the token, asking its own pane', async () => {
+    const pty: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p1', paneId: '%3' }
+    const entry = row({ runtimes: [pty], launch: { state: 'held', service: 'native', nativeToken: 'held-token', detail: 'Held' } })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    h.deps.restorable = (runtime) => runtime.backend === 'ptyhost'
+    h.deps.waitingPane = vi.fn(async () => true as const)
+    const controls: Array<{ runtime: TerminalRuntimeRef; token?: string }> = []
+    const respawn = h.deps.respawn
+    h.deps.respawn = async (runtime, launch, control) => { controls.push({ runtime, token: control?.expectedHeldToken }); return respawn(runtime, launch, control) }
+    h.probes.set('%3', [identity(3)])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.restored).toEqual(['agent-a'])
+    expect(h.deps.waitingPane).toHaveBeenCalledWith(pty, 'held-token')
+    expect(controls).toEqual([{ runtime: pty, token: 'held-token' }])
+    expect(h.paneCreates).toBe(0)
+  })
+
+  it('a row with no runtime on a restorable backend is skipped, its tmux pane preferred when it has one', async () => {
+    const pty: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p1', paneId: '%1' }
+    const h = harness([row({ agentId: 'both', runtimes: [pty, { backend: 'tmux', paneId: '%3' }] }), row({ agentId: 'pty-only', runtimes: [pty] })])
+    h.deps.restorable = () => true
+    h.probes.set('%0', [identity(5)])
+    const restoredOn: TerminalRuntimeRef[] = []
+    const livePane = h.deps.livePane!
+    h.deps.livePane = async (runtime) => { restoredOn.push(runtime); return livePane(runtime) }
+    await restoreAgents({ ...h.deps, only: new Set(['both']) })
+    expect(restoredOn[0]).toEqual({ backend: 'tmux', paneId: '%3' })
+    const none = harness([row({ agentId: 'pty-only', runtimes: [pty] })])
+    expect((await restoreAgents(none.deps)).skipped).toEqual([{ agentId: 'pty-only', reason: 'no tmux pane' }])
+  })
+
   it('skips rows with no tmux pane and failed launches, saying why', async () => {
     const h = harness([
-      row({ agentId: 'paneless', runtimes: [{ backend: 'unknown', sessionName: 's', paneId: 'p' } as unknown as TerminalRuntimeRef] }),
+      row({ agentId: 'paneless', runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1' }] }),
       row({ agentId: 'broken', launch: { state: 'failed', error: 'START_TIMEOUT' } }),
     ])
     const summary = await restoreAgents(h.deps)
     expect(summary.restored).toEqual([])
     expect(summary.skipped.map((s) => s.agentId)).toEqual(['paneless', 'broken'])
     expect(h.paneCreates).toBe(0)
+  })
+
+  it('leaves a guest\'s harness stopped: rebuilt here it would run as the owner, with the owner\'s keys', async () => {
+    const h = harness([row({ agentId: 'guests', guest: 'kim@acme.io' })])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.skipped).toEqual([{ agentId: 'guests', reason: 'a guest\'s harness' }])
+    expect(h.paneCreates).toBe(0); expect(h.respawns).toBe(0)
   })
 
   it('puts a grid agent back on its grid, key and all, when the row kept its launch', async () => {
@@ -684,6 +752,29 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.respawns).toBe(0)
     expect(h.launched[0].launch.argv).toEqual([])
     expect(h.calls.at(-1)).toBe('setLaunch:gridded:failed:GRID_ENGINE_UNSUPPORTED')
+  })
+
+  it('a launch Windows refuses fails that row alone: the rest of the pass is restored', async () => {
+    const h = harness([row(), row({ agentId: 'agent-b', sessionId: 'session-b', tmuxPane: '%1' })])
+    h.probes.set('%0', [identity(500)])
+    h.probes.set('%1', [identity(501)])
+    // The core's restore launch (core/agents/restoreLaunch.ts) over a launch that throws for agent-a, as
+    // buildEngineLaunchArgv does for a batch-file engine cmd.exe would misread. Thrown, it skipped the whole pass.
+    h.deps.buildLaunch = createRestoreLaunch({
+      workspaceMissing: () => null,
+      relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
+      downgradedPermission: async () => ({ bypassPermission: false }),
+      prepareSessionResume: () => {}, refreshGridWebSearch: () => {},
+      launch: (entry) => {
+        if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
+        return { argv: [entry.engine, '--resume', entry.sessionId] }
+      },
+    })
+    const summary = await restoreAgents(h.deps)
+    expect(summary.restored).toEqual(['agent-b'])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason: expect.stringContaining('claude.cmd is a batch file') }])
+    expect(h.calls).toContain('setLaunch:agent-a:failed:ENGINE_LAUNCH_REFUSED')
+    await settled(h, 1, 1)
   })
 
   it('a Codex profile agent comes back under its own CODEX_HOME', async () => {

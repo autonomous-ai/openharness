@@ -36,7 +36,8 @@ void main() {
     expect(find.text('See what’s shared'), findsNothing);
     expect(find.text('How did your latest task go?'), findsNothing);
     expect(find.text('Rate task outcome'), findsNothing);
-    expect(find.textContaining('Help improve'), findsNothing);
+    // A row like Experimental's others: its one line of what it does, without the page's rating and receipts.
+    expect(find.textContaining('Help improve'), findsOneWidget);
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
     expect(find.byType(Switch), findsNothing);

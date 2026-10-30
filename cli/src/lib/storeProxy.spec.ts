@@ -2,6 +2,8 @@
 import http, { type Server } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { STORE_PATH_RE as FROM_HOOK_SERVER, startHookServer, type HookServerHandlers } from '../hookServer.js'
+import { env } from '../config/env.js'
+import { readHookCredential } from './hookAuth.js'
 import { routeStoreRequest, STORE_PATH_RE, type StoreHandler, type StoreRoute } from './storeProxy.js'
 
 describe('STORE_PATH_RE', () => {
@@ -86,10 +88,12 @@ describe('the store proxy on the hook server', () => {
     server = started.server
     return started.port
   }
-  /** A raw request: the path goes out exactly as written, `..` and all, which fetch would not do. */
+  /** A raw request: the path goes out exactly as written, `..` and all, which fetch would not do. As this OS user's
+   *  process sends it over the port: with the daemon's local credential (lib/localCredential.ts). */
   const send = (port: number, method: string, path: string, headers: Record<string, string> = {}, body?: string): Promise<{ status: number; json: unknown }> =>
     new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+      const credentialed = { 'x-harness-local': readHookCredential(env.ADAPTER_DATA_DIR) ?? '', ...headers }
+      const req = http.request({ host: '127.0.0.1', port, method, path, headers: credentialed }, (res) => {
         let text = ''
         res.setEncoding('utf8')
         res.on('data', (chunk: string) => { text += chunk })

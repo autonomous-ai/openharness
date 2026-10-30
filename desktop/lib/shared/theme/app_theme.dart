@@ -1441,7 +1441,12 @@ abstract final class AppDesktop {
   static const double tabRadius = 10;
   static const double tabShoulder = 8;
   static const double tabTopInset = 6;
-  static const double tabCloseInset = 8;
+
+  /// A tab's ×: the pane close button's 28pt square target, centred on the
+  /// tab's body (the 40pt row less [tabTopInset]) with one 3pt gap above,
+  /// below, and to the body's straight right side, [tabShoulder] in.
+  static const double tabCloseSize = 28;
+  static const double tabCloseInset = tabShoulder + 3;
   static const double tabMinWidth = 128;
   static const double tabMaxWidth = 256;
   static const double tabBarTrailingInset = 12;
@@ -1449,6 +1454,12 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// Between one sidebar row and the next (design system: Geometry).
+  static const double listRowGap = 2;
+
+  /// A count badge's text from its capsule's ends, as in Notifications' count.
+  static const double badgeInset = 5;
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;

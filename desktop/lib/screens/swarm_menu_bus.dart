@@ -8,12 +8,12 @@ import '../core/test_run.dart';
 ///
 /// On macOS the state the title bar draws crosses to AppKit over the
 /// `harness/swarm_tabs` channel and the actions come back over it; the Swift
-/// side owns that half. Linux has no native menu bar to hand the payloads to,
-/// so this bus is ALSO where the Linux menu bar (`widgets/linux_menu_bar.dart`)
+/// side owns that half. Linux and Windows have no native menu bar to hand the payloads to,
+/// so this bus is ALSO where the Linux menu bar (`widgets/in_window_menu_bar.dart`)
 /// reads them from and the path its rows dispatch back through — one contract,
 /// two hosts, and Dart keeps a single switch (`_onNative`) for either side.
 class SwarmMenuBus {
-  /// The platform default: the channel on macOS, the state model on Linux.
+  /// The platform default: the channel on macOS, the state model on Linux and Windows.
   ///
   /// Never the channel under test, whatever the host: the Linux bar's tests
   /// run on macOS machines too, and there the channel has nobody on the other
@@ -27,7 +27,7 @@ class SwarmMenuBus {
   /// native-tabs path must keep talking to something a test can mock.
   SwarmMenuBus.forChannel() : _channelBacked = true;
 
-  /// macOS hands the payloads to AppKit; Linux keeps them here for the bar.
+  /// macOS hands the payloads to AppKit; Linux and Windows keep them here for the bar.
   final bool _channelBacked;
 
   final SwarmMenuState state = SwarmMenuState();

@@ -213,26 +213,62 @@ function promptMarker(engine: AgentEngine): RegExp {
   return /[›❯]/u
 }
 
+const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━]{3,})?\s*$/
+/** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. Claude
+ *  Code cuts the row at the pane's width, so its start is enough: a mode's `⏵⏵`/`⏸`, or `? for sh…`. A 42-column pane on
+ *  DESKTOP-0TFH0OJ (2026-10-26) showed `⏵⏵ bypass permissions on (shift+tab to`, its composer read as absent, and every
+ *  Swarm message typed into it was held before its Enter as `prompt_hidden`. */
+const CLAUDE_FOOTER = /^\s+(?:\? for sh|[⏵⏸]+\s|.*\(shift\+tab to cycle\))/
+/**
+ * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
+ * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it
+ * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only the bottom box counts: `>` at the start of the line under its top rule,
+ * and under its bottom rule Claude Code's own footer, with nothing but indented rows. A shell prompt (`PS C:\>`), or a
+ * `>` quoted or framed in output above more output, indented or not, must never read as an idle Claude Code (review of
+ * #1649). A box whose footer is not drawn reads as no composer: held, never typed into. Mac and Linux are unchanged.
+ */
+export function claudeWindowsComposer(lines: string[]): number {
+  if (process.platform !== 'win32') return -1
+  const visible = lines.map(stripAnsi)
+  const bottom = visible.findLastIndex((line) => COMPOSER_RULE.test(line))
+  const below = visible.slice(bottom + 1)
+  if (bottom < 2 || below.some((line) => line.trim() && !/^\s/.test(line)) || !below.some((line) => CLAUDE_FOOTER.test(line))) return -1
+  const top = visible.slice(0, bottom).findLastIndex((line) => COMPOSER_RULE.test(line))
+  return top >= 0 && top + 1 < bottom && /^>(?:[\u00a0 ]|$)/.test(visible[top + 1]) ? top + 1 : -1
+}
+
 export function inspectPane(engine: AgentEngine, capture: string, takeover: Takeover = () => null, planPattern = /\bplan mode on\b/i): PaneInspection {
   if (engine === 'opencode') return inspectGutterBoxPane(capture, true)
   if (engine === 'copilot') return inspectGutterBoxPane(capture, false)
   if (engine === 'grok') return inspectGrokPane(capture)
   const rawLines = capture.split('\n')
-  const marks = promptMarker(engine)
-  const promptIndex = latestPromptLine(rawLines, marks)
+  const boxed = engine === 'claude' ? claudeWindowsComposer(rawLines) : -1
+  const promptIndex = Math.max(latestPromptLine(rawLines, promptMarker(engine)), boxed)
+  // ANSI before a boxed `>` is not text, so the raw line is searched for the first `>`.
+  const [marks, rawMarks] = promptIndex === boxed && boxed >= 0 ? [/^>/, />/] : [promptMarker(engine), promptMarker(engine)]
   const prompt = promptIndex >= 0 ? rawLines[promptIndex] : ''
   const currentUi = currentPaneUi(rawLines, promptIndex)
   const dialog = DIALOG_UI.test(currentUi) || takeover(capture, currentUi) !== null
   const plan = planPattern.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
-  const rawMarker = prompt.search(marks)
+  const rawMarker = prompt.search(rawMarks)
   const rawTail = rawMarker >= 0 ? prompt.slice(rawMarker + 1) : ''
-  const placeholder = hasPlaceholderSgr(rawTail)
-  if (placeholder) visible = ''
+  // Devin 3000.11 greys its placeholder in truecolor, with no dim or italic: all of it muted, it is the placeholder.
+  const placeholder = hasPlaceholderSgr(rawTail) || (engine === 'devin' && allVisibleTextIsMuted(rawTail))
+  if (placeholder || IDE_CONTEXT_CHIPS.test(visible)) visible = ''
   const draft = visible.length > 0
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
 }
+
+/**
+ * Claude Code shows what the connected IDE has open or selected as a chip in the empty composer, `❯ [⧉ In .env]` or
+ * `❯ [⧉ Selected 3 lines from a.ts]`, in a colour of its own (not dim, not grey). It is context sent with the next
+ * message, not text anyone typed. Read as a draft, an idle pane held every Super Tab delivery as
+ * `team_waiting_draft`, and the same message was retried every second (2026-10-21, 10:44-10:49, 266 times).
+ * ONLY chips and nothing else: any word typed beside one is a real draft and still holds.
+ */
+const IDE_CONTEXT_CHIPS = /^(?:\[⧉ [^\]]+\]\s*)+$/u
 
 /** The latest composer prompt line; picker rows use the same glyphs, but numbered rows are not prompts. */
 function latestPromptLine(rawLines: string[], marks: RegExp): number {
@@ -262,7 +298,7 @@ export function paneModal(engine: AgentEngine, capture: string, readTakeover: Ta
   return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
 }
 
-const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|(?<!between )Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
 
 /** The approval prompts among them. */
 /**

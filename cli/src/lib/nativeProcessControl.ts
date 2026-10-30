@@ -1,10 +1,10 @@
 /** Joined, bounded kernel evidence for control. Discovery's partial image reader is not authority. */
 import { execFile } from 'node:child_process'
 import { constants, closeSync, fstatSync, openSync, opendirSync, readlinkSync, readSync, statSync } from 'node:fs'
-import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { IdentityReadUnavailable, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import type { NativeDescriptor } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget, nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
-import { bundledProcessImageHelper, invalidateProcessImageHelper } from './nativeProcessImages.js'
+import { bundledProcessImageHelper, invalidateProcessImageHelper, parseNativeProcessImages } from './nativeProcessImages.js'
 import { psEnv } from './childLocale.js'
 
 export interface NativeControlRow {
@@ -141,7 +141,9 @@ function linuxControl(pids: readonly number[], parent: number, budget: NativeEvi
     if (!parent) return []
     const tasks = entries(`/proc/${parent}/task`, 128), ids: number[] = []
     if (!tasks.length) return nativeUnavailable('the native task pool is empty')
-    for (const task of tasks) {
+    // In thread order, as /proc lists them: a directory read elsewhere (a test's tmpfs, a hashed ext4) lists in
+    // its own order, and the children came back in it (CI, 2026-10-20: [44, 43] for [43, 44]).
+    for (const task of [...tasks].sort((a, b) => Number(a) - Number(b))) {
       const text = bytes(`/proc/${parent}/task/${task}/children`, 1024)
       if (!/^(?:\d+\s+)*$/.test(text)) return nativeUnavailable('the native child pool is malformed')
       for (const value of text.trim().split(/\s+/).filter(Boolean)) {
@@ -205,6 +207,19 @@ function linuxControl(pids: readonly number[], parent: number, budget: NativeEvi
   }
 }
 
+/** A live process with no kernel image path cannot show control evidence until it restarts. */
+async function replacedImage(path: string, pids: readonly number[], budget: NativeEvidenceBudget): Promise<boolean> {
+  try {
+    const timeout = Math.min(budget.probe(), 1000)
+    const stdout = await new Promise<string>(resolve => {
+      execFile(path, ['--paths', ...pids.map(String)], { encoding: 'utf8', timeout, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL', env: psEnv() },
+        (_error, out) => resolve(typeof out === 'string' ? out : ''))
+    })
+    const { unavailable } = parseNativeProcessImages(stdout, new Set(pids))
+    return [...unavailable].some(pid => { try { process.kill(pid, 0); return true } catch { return false } })
+  } catch { return false }
+}
+
 /** No ps/lsof wait separates the last process and descriptor observations. This does not
  * freeze an external process; immutable core ownership is still checked by every caller. */
 export async function nativeProcessControl(pids: readonly number[], parent: number, budget: NativeEvidenceBudget): Promise<NativeControlSnapshot> {
@@ -213,6 +228,7 @@ export async function nativeProcessControl(pids: readonly number[], parent: numb
   if (process.platform === 'linux') return linuxControl(pids, parent, budget)
   if (process.platform !== 'darwin') return nativeUnavailable('native control evidence is unavailable on this platform')
   let timer: ReturnType<typeof setTimeout> | undefined
+  let probeFailed: string | undefined
   try {
     const helper = await Promise.race([bundledProcessImageHelper({ retryUnavailable: true }), new Promise<null>(resolve => {
       timer = setTimeout(() => resolve(null), budget.remaining())
@@ -224,13 +240,19 @@ export async function nativeProcessControl(pids: readonly number[], parent: numb
         { encoding: 'buffer', timeout, maxBuffer: 5 * 1024 * 1024, killSignal: 'SIGKILL', env: psEnv() },
         (error, stdout, stderr) => {
           if (error && ['ENOENT', 'ENOTDIR', 'EACCES', 'ENOEXEC'].includes(String(error.code))) invalidateProcessImageHelper(helper.key)
-          if (error || stderr.length) reject(new IdentityReadUnavailable('the native control probe did not complete'))
+          if (error || stderr.length) {
+            probeFailed = helper.path
+            reject(new IdentityReadUnavailable('the native control probe did not complete'))
+          }
           else resolve(stdout)
         })
     })
     budget.step(bytes.length)
     return parseNativeProcessControl(nativeText(bytes), pids, parent, budget)
   } catch (error) {
+    if (probeFailed && await replacedImage(probeFailed, pids, budget)) {
+      throw new IdentityReadUnavailable(REPLACED_PROGRAM)
+    }
     if (error instanceof IdentityReadUnavailable) throw error
     return nativeUnavailable('the native control probe could not start')
   } finally { if (timer) clearTimeout(timer) }

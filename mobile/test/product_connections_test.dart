@@ -170,6 +170,96 @@ void main() {
     },
   );
 
+  group('the app going to the background', () {
+    /// How many dials of [flow] started and ended each way, apart from the duration buckets.
+    Future<Map<String, int>> outcomes(String flow) async {
+      final all = await sent();
+      return {
+        for (final outcome in const [
+          'started',
+          'ok',
+          'failed',
+          'cancelled',
+          'unknown',
+        ])
+          if (all.containsKey('ui_phone_${flow}_$outcome'))
+            outcome: all['ui_phone_${flow}_$outcome']!,
+      };
+    }
+
+    test(
+      'ends the app\'s own dial and the person\'s as cancelled, once each',
+      () async {
+        await signIn();
+        dial('own');
+        connections.manual('asked');
+        dial('asked');
+
+        connections.cancelOpen();
+        connections.cancelOpen();
+
+        expect(await outcomes('connect_auto'), {'started': 1, 'cancelled': 1});
+        expect(await outcomes('connect_user'), {'started': 1, 'cancelled': 1});
+      },
+    );
+
+    test('leaves nothing for the socket\'s answer, or the asked-for deadline, to count', () async {
+      await signIn();
+      dial('own');
+      connections.manual('asked');
+      connections.cancelOpen();
+
+      dial('own', up: true);
+      dial('asked', down: true);
+      dial('asked', up: true);
+      // Past the 1 ms deadline the dial would otherwise have been failed at.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(await outcomes('connect_auto'), {'started': 1, 'cancelled': 1});
+      expect(await outcomes('connect_user'), {'started': 1, 'cancelled': 1});
+    });
+
+    test('keeps the outcome of a dial that had finished', () async {
+      await signIn();
+      dial('up');
+      dial('up', up: true);
+      dial('locked');
+      dial('locked', down: true, failed: true);
+      connections.manual('answered', connected: true);
+
+      connections.cancelOpen();
+
+      expect(await outcomes('connect_auto'), {
+        'started': 2,
+        'ok': 1,
+        'failed': 1,
+      });
+      expect(await outcomes('connect_user'), {'started': 1, 'ok': 1});
+    });
+
+    test('is followed by a new count when the app dials again', () async {
+      await signIn();
+      dial('m');
+      connections.cancelOpen();
+
+      dial('m');
+      dial('m', up: true);
+
+      expect(await outcomes('connect_auto'), {
+        'started': 2,
+        'cancelled': 1,
+        'ok': 1,
+      });
+    });
+
+    test('with nothing open counts nothing', () async {
+      await signIn();
+      connections.cancelOpen();
+      expect(await outcomes('connect_auto'), isEmpty);
+      expect(await outcomes('connect_user'), isEmpty);
+    });
+  });
+
   test('no connection key ever reaches a report', () async {
     await signIn();
     dial('PRIVATE_MACHINE');

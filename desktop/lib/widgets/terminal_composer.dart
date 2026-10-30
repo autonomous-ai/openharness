@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/app_shortcuts.dart' show ctrlWorkspacePrefix;
 import '../theme/app_theme.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_session.dart';
@@ -23,18 +25,26 @@ class TerminalComposer extends StatefulWidget {
     required this.session,
     required this.focusNode,
     this.inputEnabled = true,
+    this.initialText = '',
+    this.onSubmitted,
+    this.onPasteNonText,
   });
 
   final TerminalSession session;
   final FocusNode focusNode;
   final bool inputEnabled;
+  final String initialText;
+  final VoidCallback? onSubmitted;
+  final Future<void> Function()? onPasteNonText;
 
   @override
   State<TerminalComposer> createState() => _TerminalComposerState();
 }
 
 class _TerminalComposerState extends State<TerminalComposer> {
-  final TextEditingController _controller = TextEditingController();
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialText,
+  );
 
   @override
   void initState() {
@@ -103,6 +113,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
         return;
       }
       _controller.clear();
+      widget.onSubmitted?.call();
     } finally {
       _sending = false;
     }
@@ -133,6 +144,49 @@ class _TerminalComposerState extends State<TerminalComposer> {
     );
   }
 
+  Future<void> _pasteClipboard() async {
+    final target = widget.session;
+    final streamId = target.streamId;
+    final focusNode = widget.focusNode;
+    final onPasteNonText = widget.onPasteNonText;
+    bool stillOwnsPaste() =>
+        mounted &&
+        identical(widget.session, target) &&
+        target.streamId == streamId &&
+        widget.inputEnabled &&
+        target.acceptsInput &&
+        identical(widget.focusNode, focusNode) &&
+        focusNode.hasFocus;
+    if (!stillOwnsPaste()) return;
+
+    final bool hasText;
+    try {
+      hasText = await Clipboard.hasStrings();
+    } on PlatformException {
+      if (mounted && stillOwnsPaste()) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text('Could not read the clipboard. Try Paste again.'),
+          ),
+        );
+      }
+      return;
+    }
+    // The platform check may finish after focus, control, or the pane's agent changed.
+    if (!mounted || !stillOwnsPaste()) return;
+    if (hasText) {
+      final fieldContext = focusNode.context;
+      if (fieldContext != null && fieldContext.mounted) {
+        Actions.maybeInvoke(
+          fieldContext,
+          const PasteTextIntent(SelectionChangedCause.keyboard),
+        );
+      }
+    } else {
+      await onPasteNonText?.call();
+    }
+  }
+
   /// Enter sends; ⌥⏎ and Shift+Enter compose another line.
   ///
   /// ⌥⏎ is the one the muscle memory comes with — it is how Claude Code and Codex take a second
@@ -144,6 +198,15 @@ class _TerminalComposerState extends State<TerminalComposer> {
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
+    }
+    if (ctrlWorkspacePrefix &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isAltPressed &&
+        !HardwareKeyboard.instance.isMetaPressed &&
+        !HardwareKeyboard.instance.isShiftPressed) {
+      if (event is KeyDownEvent) unawaited(_pasteClipboard());
+      return KeyEventResult.handled;
     }
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||
@@ -219,70 +282,74 @@ class _TerminalComposerState extends State<TerminalComposer> {
                   ),
                 ),
                 Expanded(
-                  child: Shortcuts(
-                    // Terminal-style line editing: readline's Ctrl+W/Ctrl+U are missing from
-                    // Flutter's own default text-editing shortcuts on every platform, unlike
-                    // Option/Cmd+Backspace and Ctrl+A/E, which the field already gets for free.
-                    shortcuts: const <ShortcutActivator, Intent>{
-                      SingleActivator(LogicalKeyboardKey.keyW, control: true):
-                          DeleteToNextWordBoundaryIntent(forward: false),
-                      SingleActivator(LogicalKeyboardKey.keyU, control: true):
-                          DeleteToLineBreakIntent(forward: false),
-                    },
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: widget.focusNode,
-                      enabled: enabled,
-                      minLines: 1,
-                      maxLines: 6,
-                      // The message is going to a terminal, so it is shown in the terminal's own face:
-                      // what is typed here should look like what will land over there.
-                      style: terminalStyle
-                          .toTextStyle(color: grid.AppPalette.textPrimary)
-                          .copyWith(letterSpacing: 0),
-                      textInputAction: TextInputAction.newline,
-                      keyboardType: TextInputType.multiline,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        filled: false,
-                        // ⚠️ THE BOX, unpinned from the theme — and `withNoTextScaling` above does
-                        // NOT reach it. `inputDecorationTheme` gives every field a minimum of
-                        // `AppControl.heightFieldScaled` and a padding multiplied by
-                        // `AppFont.uiScale` — a plain static, not a MediaQuery, so no scaling scope
-                        // can hold it back. Left inherited, raising the UI size grows this field
-                        // (36 → 48.9 at the top of the range) past the surface's own 48, which
-                        // shrinks the Expanded holding the terminal, which drops a row, which sends a
-                        // `terminal_resize` to the remote agent. The composer only appears for REMOTE
-                        // machines, so that is the only case where it would ever have bitten.
-                        //
-                        // The surface above owns this box's height now, so the field asks for no
-                        // minimum of its own — and `contentPadding` below is stated rather than
-                        // inherited for the same reason. Measured by
-                        // `terminal_ui_scale_isolation_test.dart`.
-                        constraints: const BoxConstraints(minHeight: 0),
-                        hintText: enabled
-                            ? 'Message harness…  ·  ↵ send'
-                            : 'Connecting to terminal…',
-                        // InputDecorator merges this with the app-wide field hint
-                        // style. Set tracking explicitly so the UI-control font's
-                        // letter spacing cannot leak into terminal typography.
-                        hintStyle: terminalStyle
-                            .toTextStyle(
-                              color: enabled
-                                  ? grid.AppPalette.textSecondary
-                                  : grid.AppPalette.textFaint,
-                            )
+                  child: KeymapComposer(
+                    focusNode: widget.focusNode,
+                    paste: _pasteClipboard,
+                    child: Shortcuts(
+                      // Terminal-style line editing: readline's Ctrl+W/Ctrl+U are missing from
+                      // Flutter's own default text-editing shortcuts on every platform, unlike
+                      // Option/Cmd+Backspace and Ctrl+A/E, which the field already gets for free.
+                      shortcuts: const <ShortcutActivator, Intent>{
+                        SingleActivator(LogicalKeyboardKey.keyW, control: true):
+                            DeleteToNextWordBoundaryIntent(forward: false),
+                        SingleActivator(LogicalKeyboardKey.keyU, control: true):
+                            DeleteToLineBreakIntent(forward: false),
+                      },
+                      child: TextField(
+                        controller: _controller,
+                        focusNode: widget.focusNode,
+                        enabled: enabled,
+                        minLines: 1,
+                        maxLines: 6,
+                        // The message is going to a terminal, so it is shown in the terminal's own face:
+                        // what is typed here should look like what will land over there.
+                        style: terminalStyle
+                            .toTextStyle(color: grid.AppPalette.textPrimary)
                             .copyWith(letterSpacing: 0),
-                        contentPadding: const EdgeInsets.fromLTRB(
-                          0,
-                          12,
-                          14,
-                          12,
+                        textInputAction: TextInputAction.newline,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: false,
+                          // ⚠️ THE BOX, unpinned from the theme — and `withNoTextScaling` above does
+                          // NOT reach it. `inputDecorationTheme` gives every field a minimum of
+                          // `AppControl.heightFieldScaled` and a padding multiplied by
+                          // `AppFont.uiScale` — a plain static, not a MediaQuery, so no scaling scope
+                          // can hold it back. Left inherited, raising the UI size grows this field
+                          // (36 → 48.9 at the top of the range) past the surface's own 48, which
+                          // shrinks the Expanded holding the terminal, which drops a row, which sends a
+                          // `terminal_resize` to the remote agent. The composer only appears for REMOTE
+                          // machines, so that is the only case where it would ever have bitten.
+                          //
+                          // The surface above owns this box's height now, so the field asks for no
+                          // minimum of its own — and `contentPadding` below is stated rather than
+                          // inherited for the same reason. Measured by
+                          // `terminal_ui_scale_isolation_test.dart`.
+                          constraints: const BoxConstraints(minHeight: 0),
+                          hintText: enabled
+                              ? 'Message harness…  ·  ↵ send'
+                              : 'Connecting to terminal…',
+                          // InputDecorator merges this with the app-wide field hint
+                          // style. Set tracking explicitly so the UI-control font's
+                          // letter spacing cannot leak into terminal typography.
+                          hintStyle: terminalStyle
+                              .toTextStyle(
+                                color: enabled
+                                    ? grid.AppPalette.textSecondary
+                                    : grid.AppPalette.textFaint,
+                              )
+                              .copyWith(letterSpacing: 0),
+                          contentPadding: const EdgeInsets.fromLTRB(
+                            0,
+                            12,
+                            14,
+                            12,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
                         ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
                       ),
                     ),
                   ),

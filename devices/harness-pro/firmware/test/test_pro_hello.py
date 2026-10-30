@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as d:
     src = Path(d) / "hello.c"
     src.write_text(code)
     exe = Path(d) / "hello"
-    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-Wno-unused-function", "-o", str(exe), str(src)], check=True)
+    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-o", str(exe), str(src)], check=True)
     lines = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
 
 # The settings object: every key the app's DeviceSettings.fromJson requires, with its JSON type. Otherwise the app
@@ -67,7 +67,7 @@ lines = [l for l in lines if not l.startswith("S.")]
 
 assert lines[0] == "type=hello", lines
 pairs = [tuple(x.split("=", 1)) for x in lines[1:]]
-# Exactly these keys, in this order (owner decision 7 + the activity capability).
+# Exactly these keys, in this order (owner decision 7 + the activity capability + the Super Tab wait).
 assert pairs == [
     ("fw", "0.0.0"),
     ("product", "harness"),
@@ -79,6 +79,8 @@ assert pairs == [
     ("activity", "steps-v1"),
     ("stats", "turn-v1"),
     ("player", "library-v1"),
+    ("superTab", "wait-v1"),
+    ("swarmCard", "v1"),
     ("ota", "v1"),
     ("mac", "aa"),
     ("settings", "{"),

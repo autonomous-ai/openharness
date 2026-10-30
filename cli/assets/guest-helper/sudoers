@@ -1,0 +1,7 @@
+# Harness guest helper (cli/src/lib/guestHelperInstall.ts), installed at /etc/sudoers.d/harness-guests.
+# Lets the machine's owner run the guest helper as root without a password, so the owner's daemon can
+# create a guest's account and run that guest's harnesses as it. The helper validates every argument.
+# The variables kept are the ones a guest's harness may be given (the helper's GUEST_ENV_KEYS): their
+# values travel in the environment, never on a command line every account can read in `ps`.
+Defaults!/usr/local/libexec/harness/guest-helper env_keep += "TERM COLORTERM LANG LC_* ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL HARNESS_RELAY_TOKEN HARNESS_HOOK_TOKEN HARNESS_HOOK_URL HARNESS_AGENT_ID CODEX_HOME"
+{{OWNER}} ALL=(root) NOPASSWD: /usr/local/libexec/harness/guest-helper *

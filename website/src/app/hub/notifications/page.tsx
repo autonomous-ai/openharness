@@ -5,6 +5,7 @@ import { Bell } from 'lucide-react';
 import { Header, SignIn } from '../components/Header';
 import { NotificationRow, NotificationSkeleton } from './NotificationRow';
 import { useNotifications, type NotificationsState } from './useNotifications';
+import { useHubView } from '../components/useHubView';
 import community from '../community.module.css';
 import styles from './notifications.module.css';
 
@@ -28,6 +29,7 @@ function Body({ state, retry }: ReturnType<typeof useNotifications>) {
 /** The reader's notifications, latest first. */
 export default function NotificationsPage() {
   const notifications = useNotifications();
+  useHubView('notifications');
   return <><Header /><main className={`${community.wrap} ${styles.inbox}`}>
     <header className={styles.head}><h1>Notifications</h1><p>{subtitle(notifications.state)}</p></header>
     <Body {...notifications} />

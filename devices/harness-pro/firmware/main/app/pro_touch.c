@@ -4,12 +4,12 @@
 #include <stdatomic.h>
 
 #include "app/pro_app.h"
+#include "task_stacks.h"
 
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define TOUCH_STACK 10240   // SRC's Pro stack: a tap runs Pod's gesture and (after the lock is released) a cable send
 #define DEAD_AFTER 8        // failed reads in a row before the controller counts as dead in the log
 
 static atomic_uint s_presses, s_failures, s_streak, s_last_press_ms;
@@ -68,7 +68,7 @@ static void touch_task(void *arg)
 
 void pro_touch_start(void)
 {
-    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "pro_touch", TOUCH_STACK, NULL, 7, NULL, 1);
+    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "pro_touch", STACK_TOUCH, NULL, 7, NULL, 1);
     assert(ok == pdPASS);
     (void)ok;
 }

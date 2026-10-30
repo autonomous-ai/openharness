@@ -1,0 +1,168 @@
+# Task B4.12: OpenCode on Windows on Arm, measured on the Windows VM (admin@192.168.65.3, Win11 ARM64,
+# Windows NT 10.0.26100, npm 11.19.0, node v24.20.0) on 2026-10-17 (UTC 17:36-17:49).
+#
+# Method (controller rulings): nothing is installed globally. Every candidate goes into its own prefix under
+# C:\work\b4\oc-*. The admin profile's global OpenCode (used by C:\work\e2e) is read, never changed.
+# `ssh -t` gives no screen to read, so each binary runs inside a fresh pseudo console (kernel32 CreatePseudoConsole,
+# 120x32) from a PowerShell script (C:\work\b4\cap\capture.ps1, removed afterwards). The script captures every byte
+# the console emits, waits 15 s (or until the process exits), sends Ctrl+C, waits 3 s, then closes the console.
+# OpenCode's own state is kept off the admin profile: XDG_DATA_HOME / XDG_CONFIG_HOME / XDG_STATE_HOME / XDG_CACHE_HOME
+# point to C:\work\b4\oc-home, the working folder is C:\work\b4\oc-proj, and OPENCODE_DISABLE_AUTOUPDATE=1.
+# "Draws" means: alternate-screen or other TUI escape sequences, and no bun:ffi error, within 15 s.
+# Raw captures below are escaped: \e = ESC, \a = BEL, \r \n literal; long runs are shown as <N spaces> and
+# <N x ESC[K CRLF>.
+
+## 0. Control: the capture passes a TUI's sequences through
+$ capture.ps1 -Cmd '"C:\Program Files\nodejs\node.exe" C:\work\b4\cap\control.js' -Seconds 4
+  (control.js writes ESC[?1049h ESC[?1000h CONTROL-ALT-SCREEN, one stderr line, then idles)
+pid=9332
+still running after 4 s; sending Ctrl+C
+captured 315 bytes
+alternate screen (ESC[?1049h): True
+raw: \e[?9001h\e[?1004h\e[?25l\e[2J\e[m\e[H\e]0;C:\Program Files\nodejs\node.exe\a\e[?25h\e[?1049h\e[?25lCONTROL-ALT-SCREEN\e[K\r\n<31 x ESC[K CRLF>\e[K\e[1;19H\e[?25hcontrol stderr line\r\n\e[?9001l\e[?1004l
+=> The capture is reliable: the alternate screen and stderr arrive.
+
+## 1.1 Latest version and the installed one (before anything else)
+$ ssh admin@192.168.65.3 "npm view opencode-ai version & %APPDATA%\npm\opencode.cmd --version & npm ls -g opencode-ai"
+1.19.3
+1.19.0
+C:\Users\admin\AppData\Roaming\npm
+`-- opencode-ai@1.19.0
+$ PE machine of %APPDATA%\npm\node_modules\opencode-ai\bin\opencode.exe
+global exe PE machine: AA64   (176610696 bytes, SHA256 8C19744A387A5567A27B314A9771CC723B72DEC7EBBA18EDF98DCE3465694C48)
+PROCESSOR_ARCHITECTURE: ARM64
+$ npm view opencode-ai@latest optionalDependencies
+  opencode-windows-arm64, opencode-windows-x64 and opencode-windows-x64-baseline (and the other platforms), all 1.19.3
+
+## 1.2 Latest native Arm build (1.19.3), in its own prefix
+$ ssh admin@192.168.65.3 "mkdir C:\work\b4\oc-arm & cd /d C:\work\b4 && npm i --prefix C:\work\b4\oc-arm opencode-ai@1.19.3"
+added 2 packages in 22s
+npm warn install-scripts 1 package has install scripts not yet covered by allowScripts:
+npm warn install-scripts   opencode-ai@1.19.3 (postinstall: node ./postinstall.mjs)
+$ PE machine of the installed programs
+C:\work\b4\oc-arm\node_modules\opencode-ai\bin\opencode.exe            AA64  176878472 bytes  1940B4E543A0969EBF5C476D1AF6C72FAD3598245ED0B47F4D20A98A2BFD8E01
+C:\work\b4\oc-arm\node_modules\opencode-windows-arm64\bin\opencode.exe AA64  176878472 bytes  1940B4E543A0969EBF5C476D1AF6C72FAD3598245ED0B47F4D20A98A2BFD8E01
+$ run-oc.ps1 -Exe C:\work\b4\oc-arm\node_modules\opencode-ai\bin\opencode.exe -Extra --version
+exited by itself after 873 ms, exit code 0
+raw: \e[?9001h\e[?1004h\e[?25l\e[2J\e[m\e[H1.19.3\r\n...
+$ run-oc.ps1 -Exe C:\work\b4\oc-arm\node_modules\opencode-ai\bin\opencode.exe -Seconds 15     (the TUI)
+command: "C:\work\b4\oc-arm\node_modules\opencode-ai\bin\opencode.exe"
+cwd: C:\work\b4\oc-proj
+pid=1596
+exited by itself after 1856 ms, exit code 1
+captured 272 bytes
+alternate screen (ESC[?1049h): False
+mouse tracking (ESC[?1000h/1002h/1003h/1006h): False
+bun:ffi mentioned: True
+raw: [?9001h[?1004h[?25l[2J[m[91m[1m[HError: [mUnexpected error
+]0;C:\work4\oc-arm
+ode_modules\opencode-aiin\opencode.exe[?25h
+Failed to initialize OpenTUI render library: bun:ffi dlopen() is not available in this build (TinyCC is disabled)
+[?9001l[?1004l
+visible:
+  Error: Unexpected error
+  Failed to initialize OpenTUI render library: bun:ffi dlopen() is not available in this build (TinyCC is disabled)
+left running from C:\work\b4\oc-*: 0
+=> The latest Arm build (1.19.3) still stops before its screen opens (F14 unchanged since 1.19.0).
+
+## 1.3 The x64 build under Windows on Arm's emulation
+$ ssh admin@192.168.65.3 "mkdir C:\work\b4\oc-x64 & cd /d C:\work\b4\oc-x64 && npm pack opencode-windows-x64@1.19.3 && tar -xf opencode-windows-x64-1.19.3.tgz"
+npm notice 181.0MB bin/opencode.exe   (package.json: "os": ["win32"], "cpu": ["x64"], no "bin")
+opencode-windows-x64-1.19.3.tgz
+PE machine C:\work\b4\oc-x64\package\bin\opencode.exe: 8664
+$ run-oc.ps1 -Exe C:\work\b4\oc-x64\package\bin\opencode.exe -Extra --version
+exited by itself after 7086 ms, exit code 0      (prints 1.19.3)
+$ run-oc.ps1 -Exe C:\work\b4\oc-x64\package\bin\opencode.exe -Seconds 15     (the TUI, first run)
+pid=6636
+still running after 15 s; sending Ctrl+C
+exited after Ctrl+C, exit code 3221225477      (0xC0000005, access violation)
+captured 8420 bytes
+alternate screen (ESC[?1049h): True
+mouse tracking (ESC[?1000h/1002h/1003h/1006h): True
+bun:ffi mentioned: False
+visible text: none (two frames of blank cells, no logo, no prompt)
+$ run-oc.ps1 -Exe C:\work\b4\oc-x64\package\bin\opencode.exe -Seconds 60     (the TUI, second run, given longer)
+pid=8604
+exited by itself after 13653 ms, exit code 3221225477      (0xC0000005, access violation, no key sent)
+captured 8420 bytes
+alternate screen (ESC[?1049h): True
+mouse tracking (ESC[?1000h/1002h/1003h/1006h): True
+bun:ffi mentioned: False
+raw: [?9001h[?1004h[?2031h[>0q[?u]99;i=opentui-notifications:p=?;\e[2J[m]0;C:\work4\oc-x64\packagein\opencode.exe[?25l]1337;Capabilities\e]66;w=1; \e]66;s=2; \e[?1049h[>4;1m[?2027h[?2004h[?1000h[?1002h[?1003h[?1006h[14t[H<31 x ESC[K CRLF>[K[120C]4;0;?[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2026h[?2026l[38;2;255;255;255m[H<3840 spaces>[32;241H[?2027h[?2004h[?1004h[m[?2026h[?2026l[38;2;255;255;255m[H<3840 spaces>[32;241H[m[?9001l[?1004l
+visible text: none
+opencode.log (C:\work\b4\oc-home\data\opencode\log): "creating instance", "bootstrapping", config loads, "init"; nothing after.
+=> The x64 (AVX2) build opens the alternate screen, draws only blank frames, and crashes with an access violation
+   within 14 s under emulation. It does not show OpenCode's screen.
+
+## 1.3b (extra) The x64 baseline build under emulation, for the record
+$ ssh admin@192.168.65.3 "mkdir C:\work\b4\oc-x64b & cd /d C:\work\b4\oc-x64b && npm pack opencode-windows-x64-baseline@1.19.3 && tar -xf opencode-windows-x64-baseline-1.19.3.tgz"
+$ run-oc.ps1 -Exe C:\work\b4\oc-x64b\package\bin\opencode.exe -Seconds 30
+pid=10112
+still running after 30 s; sending Ctrl+C
+still running 3 s after Ctrl+C
+terminated
+captured 14299 bytes
+alternate screen (ESC[?1049h): True
+mouse tracking (ESC[?1000h/1002h/1003h/1006h): True
+raw: [?9001h[?1004h[?2031h[>0q[?u]99;i=opentui-notifications:p=?;\e[2J[m]0;C:\work4\oc-x64b\packagein\opencode.exe[?25l]1337;Capabilities\e]66;w=1; \e]66;s=2; \e[?1049h[>4;1m[?2027h[?2004h[H<31 x ESC[K CRLF>[K[120C[?1000h[?1002h[?1003h[?1006h[14t]4;0;?[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2027h[?2004h[?1004h[?2026h[?2026l[38;2;255;255;255m[H<3840 spaces>[32;241H[?2027h[?2004h[?1004h[m[?2026h[?2026l[38;2;255;255;255m[H<3840 spaces>[32;241H[?2026h[?2026l[m[38;2;255;255;255m[48;2;10;10;10m[H<3840 spaces>[32;241H[m]0;OpenCode[?2026h]12;#eeeeee[1 q[?2026l[38;2;128;128;128m[48;2;10;10;10m[10;42H[19X[38;2;238;238;238m[1m[20C<13 spaces>▄     [38;2;128;128;128m[22m[11;42H█▀▀█ █▀▀█ █▀▀█ █▀▀▄[38;2;238;238;238m[1m[1C█▀▀▀ █▀▀█ █▀▀█ █▀▀█[38;2;128;128;128m[22m[12;42H█[48;2;40;40;40m  [48;2;10;10;10m█ █[48;2;40;40;40m  [48;2;10;10;10m█ █[48;2;40;40;40m▀▀▀[48;2;10;10;10m █[48;2;40;40;40m  [48;2;10;10;10m█[38;2;238;238;238m[1m[1C█[48;2;67;67;67m   [48;2;10;10;10m █[48;2;67;67;67m  [48;2;10;10;10m█ █[48;2;67;67;67m  [48;2;10;10;10m█ █[48;2;67;67;67m▀▀▀[38;2;128;128;128m[48;2;10;10;10m[22m[13;42H▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀[38;2;40;40;40m▀▀[38;2;128;128;128m▀[38;2;238;238;238m[1m[1C▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀[38;2;92;156;245m[22m[16;24H┃[38;2;255;255;255m[48;2;30;30;30m[74X[38;2;92;156;245m[48;2;10;10;10m[17;24H┃[38;2;255;255;255m[48;2;30;30;30m  [38;2;128;128;128mAsk anything… "Fix broken tests"[40X[38;2;92;156;245m[48;2;10;10;10m[18;24H┃[38;2;255;255;255m[48;2;30;30;30m[74X[38;2;92;156;245m[48;2;10;10;10m[19;24H┃[38;2;255;255;255m[48;2;30;30;30m  [38;2;92;156;245mBuild [38;2;128;128;128m· [38;2;238;238;238mBig Pickle [38;2;128;128;128mOpenCode[45X[38;2;92;156;245m[48;2;10;10;10m[20;24H╹[38;2;30;30;30m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀[38;2;238;238;238m[21;72Htab [38;2;128;128;128magents[38;2;238;238;238m[2Cctrl+p [38;2;128;128;128mcommands[38;2;245;167;66m[25;33H● Tip [38;2;128;128;128mRun [38;2;238;238;238m/connect [38;2;128;128;128mto add an AI provider and start coding[31;3HC:\work4\oc-proj[92C1.19.3[17;27H[?25h[m[?9001l[?1004l
+visible words: ▄ █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█ … (the OpenCode logo) ┃ Ask anything… "Fix broken tests" ┃
+  Build · Big Pickle OpenCode … tab agents ctrl+p commands ● Tip Run /connect to add an AI provider and start coding
+  C:\work\b4\oc-proj 1.19.3
+=> The x64 *baseline* build draws OpenCode's screen under emulation and stays up. No npm install puts it in place
+   on this machine (1.4), so it is recorded here and not used by the decision rule.
+
+## 1.4 Whether npm installs the x64 build on Arm (own prefix, not -g)
+$ ssh admin@192.168.65.3 "mkdir C:\work\b4\oc-cpu & cd /d C:\work\b4 && npm i --prefix C:\work\b4\oc-cpu opencode-ai@1.19.3 --cpu=x64"
+npm error code 1
+npm error path C:\work\b4\oc-cpu\node_modules\opencode-ai
+npm error command failed
+npm error command C:\WINDOWS\system32\cmd.exe /d /s /c node ./postinstall.mjs
+npm error It seems your package manager failed to install the right opencode CLI package. Try manually installing "opencode-windows-arm64".
+$ dir /s /b C:\work\b4\oc-cpu | find /c /v ""
+0
+=> npm rolled the install back: no opencode.exe at all, so no PE machine to read. The cause is opencode-ai's
+   postinstall.mjs: it picks the platform package from os.arch() of the node that runs it (arm64 here), so it only
+   accepts opencode-windows-arm64, which --cpu=x64 left out. (On an x64 node it would also probe AVX2:
+   IsProcessorFeaturePresent(40) is False on this VM from Arm PowerShell.)
+
+## 1.5 Restore and clean-up
+Nothing global was installed, so nothing is restored.
+$ rmdir /s /q C:\work\b4\oc-arm, oc-x64, oc-x64b, oc-cpu, oc-home, oc-proj, cap
+$ dir /a /b C:\work\b4      (before the B4 install)  -> empty
+$ ssh admin@192.168.65.3 "%APPDATA%\npm\opencode.cmd --version & npm ls -g opencode-ai"
+1.19.0
+`-- opencode-ai@1.19.0
+=> The global OpenCode is unchanged (1.19.0, Arm). C:\work\e2e was not touched.
+
+## 2. Decision
+A: no, the latest Arm build (1.19.3) does not draw.
+B: no, the x64 build crashes (0xC0000005) under emulation without drawing OpenCode's screen, and step 1.4 leaves no
+   x64 opencode.exe (the install fails).
+=> C: Harness reports OpenCode unavailable on Windows on Arm, before a pane opens.
+
+## 7. Windows check (B4 install at C:\work\b4, port 18475; C:\work\e2e not touched)
+Build and copy the B4 install (recipe), then:
+$ ssh admin@192.168.65.3 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\work\b4\launch.ps1"
+create rc=0 pid=8304
+$ ssh admin@192.168.65.3 "C:\work\b4\cli.cmd status"
+   status     ● running · backend connected
+   version    v0.4.18-dev.bb867f7e4.dirty
+   state      C:\work\b4\data
+   local api  http://127.0.0.1:18475
+$ ssh admin@192.168.65.3 "C:\work\b4\run.cmd create opencode"
+Error: timeout waiting for connected      (ws closed 4404 NO_PEER_LINK)
+  The driver selects the computer id (C:\work\b4\computer-id), but a signed-in daemon serves under its account's
+  machine id (5d96588ab036f5195ebdb708c930d868, from `machine=` in harness.log). Re-run with the driver's
+  ADAPTER_COMPUTER_ID_FILE pointed at a file holding that id (a one-off C:\work\b4\drun.cmd, removed afterwards):
+$ ssh admin@192.168.65.3 "C:\work\b4\drun.cmd create opencode & C:\work\b4\drun.cmd list"
+17:48:21.545 create opencode → ENGINE_LAUNCH_REFUSED OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.
+(list: no agent)
+$ harness-pty.exe ps --json: 166 processes, 0 opencode.exe, so no pane started.
+$ ssh admin@192.168.65.3 "C:\work\b4\stop.cmd"
+machine stopped (pid 8272).
+The idle B4 pty host (C:\work\b4\dist\pty\harness-pty.exe, pid 7120, no panes) was then ended by pid after its path
+was checked.
+$ %APPDATA%\npm\opencode.cmd --version
+1.19.0
+
+Outcome: C

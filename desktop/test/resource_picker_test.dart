@@ -174,6 +174,7 @@ class _ModelSelectionApp extends ModelManagerTestApp {
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) async {
     final answer = await super.controlLocalModel(
       machineId,
@@ -853,8 +854,9 @@ void main() {
         expect(app.downloads, isEmpty);
         await key(tester, LogicalKeyboardKey.escape);
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+        // Served by another machine on your grid: listed under its machine and grid.
         final usable = search(tester).rows
-            .firstWhere((row) => row.title == 'qwen3.8-27b');
+            .firstWhere((row) => row.title.startsWith('qwen3.8-27b · '));
         search(tester)
             .move(search(tester).rows.indexOf(usable) - search(tester).cursor);
         await tester.pump();
@@ -959,7 +961,7 @@ void main() {
         );
         app.notifyListeners();
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
-        expect(search(tester).selected!.title, 'qwen3.8-27b');
+        expect(search(tester).selected!.title, 'qwen3.8-27b · M2 · home');
         await tester.enterText(field, ':Anthropic');
         await tester.pumpAndSettle();
         expect(search(tester).canSelectModel(search(tester).selected), isFalse);
@@ -1046,9 +1048,10 @@ void main() {
         (row) => '${machine.key}'.contains('model-row-machine:${row.id}'),
       );
       final name = sharedRow.title.substring(0, sharedRow.title.indexOf(' · '));
+      // The machine, and the grid it serves on.
       expect(
         machine.text.substring(machine.from),
-        sharedRow.title.split(' · ').last,
+        sharedRow.title.substring(name.length + ' · '.length),
       );
       final nameLine = tester.widget<SearchResultText>(
         find.byWidgetPredicate(
@@ -1108,13 +1111,14 @@ void main() {
         );
         expect(app.focusedPaneId, pane);
         expect(
-          search(tester).rows.any((row) => row.title == 'qwen3.8-27b'),
+          search(tester).rows
+              .any((row) => row.title.startsWith('qwen3.8-27b · ')),
           isTrue,
         );
         await tester.enterText(field, ':mac.lan');
         await tester.pump();
-        expect(search(tester).selected!.title, 'qwen3.8-27b');
-        expect(find.text('On your machines'), findsOneWidget);
+        expect(search(tester).selected!.title, 'qwen3.8-27b · mac.lan · home');
+        expect(find.text('Shared · home'), findsOneWidget);
         expect(find.text('mac.lan'), findsOneWidget);
         if (mac) await capture(tester, 'own-machine-model');
         await key(tester, LogicalKeyboardKey.escape);

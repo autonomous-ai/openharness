@@ -1,0 +1,7 @@
+12:28:17.609 create terminal → f8c886da… launch=ready (48 ms)
+12:28:17.709 create claude → 20d8966b… launch=starting (55 ms)
+12:28:19.316 create codex → cd88c448… launch=starting (573 ms)
+12:28:32.395 PASS terminal f8c886da still terminal and active 12 s after create — engine=terminal status=active pane=%1005
+12:28:32.401 PASS claude 20d8966b still claude and active 12 s after create — engine=claude status=active pane=%1006
+12:28:32.404 PASS codex cd88c448 still codex and active 12 s after create — engine=codex status=active pane=%1007
+12:28:32.407 SUMMARY 3/3 passed

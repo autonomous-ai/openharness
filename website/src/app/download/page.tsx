@@ -1,8 +1,7 @@
 "use client";
 
-// The web app at /web is a separate Flutter app; workspace links need a full document navigation.
+// The web app at the root is a separate Flutter app; workspace links need a full document navigation.
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import styles from "./page.module.css";
 import { buildsFor } from "@/lib/desktopPlatform";
@@ -18,7 +17,7 @@ const commands = [
 
 type CommandId = (typeof commands)[number]["id"];
 
-/** Public /download page. The web app (the shared Flutter workspace) is at /web; the root opens the Hub. */
+/** Public /download page. The root serves the web app (the shared Flutter workspace). */
 export default function Page() {
   const [copied, setCopied] = useState<CommandId | null>(null);
   const [copyError, setCopyError] = useState(false);
@@ -47,7 +46,7 @@ export default function Page() {
     <div className={styles.page}>
       <header className={styles.bar}>
         <nav className={styles.navigation} aria-label="Harness">
-          <Link className={styles.brand} href="/hub">Harness</Link>
+          <a className={styles.brand} href={webAppPath}>Harness</a>
           <span className={styles.activeTab} aria-current="page">Downloads</span>
         </nav>
         <a className={styles.textAction} href={webAppPath}>[ Open web app ]</a>

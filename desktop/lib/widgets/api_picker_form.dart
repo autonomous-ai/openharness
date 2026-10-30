@@ -27,10 +27,15 @@ class ApiPickerForm extends StatefulWidget {
     this.onSwitchPane,
     this.connectionId,
     this.removing = false,
+    this.swarmShares,
   });
   final ApiConnectionsController controller;
   final String? connectionId;
   final bool removing;
+
+  /// In a Swarm's Your models: how many of this API's models are shared with the Swarm, which stop when it is
+  /// deleted (the CLI takes them off first). Null elsewhere.
+  final int? swarmShares;
   final ValueChanged<String?> onClose;
   final ValueChanged<bool> onFocusChanged;
   final VoidCallback? onSwitchPane;
@@ -470,6 +475,36 @@ class ApiPickerFormState extends State<ApiPickerForm> {
     _ => null,
   };
 
+  /// What deleting takes from the Swarm, in a quiet warning beside the sentence.
+  Widget _sharesNote(int shares) {
+    final warn = grid.AppPalette.warn;
+    return Container(
+      key: const ValueKey('api-form:shares-note'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: warn.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: warn.withValues(alpha: .30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(AppIcons.triangleAlert, size: 14, color: warn),
+          const SizedBox(width: 8),
+          // Wraps in a narrow pane rather than running past it.
+          Flexible(
+            child: Text(
+              shares == 1
+                  ? '1 model stops being shared with this Swarm'
+                  : '$shares models stop being shared with this Swarm',
+              style: DesktopChrome.text(size: 12, color: warn),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _actionButton(({String id, String label, VoidCallback? run}) action) {
     final node = _buttons.putIfAbsent(
       action.id,
@@ -632,9 +667,21 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                           !widget.removing &&
                           _editing!.provider != 'custom')
                         Text(_editing!.baseUrl, style: muted),
-                      if (widget.removing)
+                      if (widget.removing && desktop) ...[
+                        const SizedBox(height: 12),
+                        // Plain, and true for any API: a custom one's name ("hehe") made "your hehe account" read oddly.
                         Text(
-                          'Remove this saved connection and key?',
+                          'This removes the API and its saved key from ${controller.hostLabel}.',
+                          style: style.copyWith(height: 1.5),
+                        ),
+                        // The CLI takes its models off every Swarm they are shared with first (services/models.ts).
+                        if ((widget.swarmShares ?? 0) > 0) ...[
+                          const SizedBox(height: 12),
+                          _sharesNote(widget.swarmShares!),
+                        ],
+                      ] else if (widget.removing)
+                        Text(
+                          'Remove this saved connection and key? Any Swarm it is shared with stops using it.',
                           style: style,
                         ),
                       if (controller.loading && !controller.saving)
@@ -770,68 +817,102 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                         Text('Saving…', style: muted),
                         SizedBox(height: cell.height),
                       ],
-                      _keys(
-                        desktop && _editing == null
-                            ? Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  for (final action in _actions)
-                                    Padding(
-                                      padding: const EdgeInsets.only(bottom: 8),
-                                      child: _actionButton(action),
-                                    ),
-                                ],
-                              )
-                            : Wrap(
-                                direction: _editing == null
-                                    ? Axis.vertical
-                                    : Axis.horizontal,
-                                spacing: desktop ? 8 : cell.width * 2,
-                                runSpacing: desktop ? 8 : cell.height,
-                                children: [
-                                  for (final action in _shownActions)
-                                    _actionButton(action),
-                                ],
-                              ),
-                        buttons: true,
-                      ),
+                      // Delete on the desktop: its buttons are the bar at the foot, as every other card's actions.
+                      if (!(desktop && widget.removing))
+                        _keys(
+                          desktop && _editing == null
+                              ? Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (final action in _actions)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        child: _actionButton(action),
+                                      ),
+                                  ],
+                                )
+                              : Wrap(
+                                  direction: _editing == null
+                                      ? Axis.vertical
+                                      : Axis.horizontal,
+                                  spacing: desktop ? 8 : cell.width * 2,
+                                  runSpacing: desktop ? 8 : cell.height,
+                                  children: [
+                                    for (final action in _shownActions)
+                                      _actionButton(action),
+                                  ],
+                                ),
+                          buttons: true,
+                        ),
                     ],
                   ),
                 ),
               ),
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: cell.width * 2,
-                  vertical: cell.height,
+              if (desktop && widget.removing)
+                _keys(
+                  Container(
+                    key: const ValueKey('api-form:delete-bar'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border(top: BorderSide(color: DesktopChrome.rim)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        for (final id in const ['cancel', 'delete'])
+                          for (final action in _actions.where(
+                            (action) => action.id == id,
+                          )) ...[
+                            if (id == 'delete') const SizedBox(width: 8),
+                            _actionButton(action),
+                          ],
+                      ],
+                    ),
+                  ),
+                  buttons: true,
+                )
+              else
+                Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: cell.width * 2,
+                    vertical: cell.height,
+                  ),
+                  child: Text(
+                    [
+                      for (final (command, label) in [
+                        (
+                          'picker.accept',
+                          _editing == null || widget.removing
+                              ? 'select'
+                              : 'save',
+                        ),
+                        (
+                          'picker.complete',
+                          desktop ||
+                                  widget.onSwitchPane == null ||
+                                  _visibleFields.isNotEmpty
+                              ? 'next'
+                              : 'pane',
+                        ),
+                        ('picker.cancel', 'back'),
+                      ])
+                        if (effectiveCommandHint(
+                              context,
+                              command,
+                              contextKind: KeymapContext.picker,
+                            )
+                            case final hint?)
+                          '${hint.replaceAll('⇥', 'Tab').replaceAll('↵', 'Enter')} $label',
+                    ].join('  ·  '),
+                    style: desktop ? DesktopChrome.metadata() : muted,
+                  ),
                 ),
-                child: Text(
-                  [
-                    for (final (command, label) in [
-                      (
-                        'picker.accept',
-                        _editing == null || widget.removing ? 'select' : 'save',
-                      ),
-                      (
-                        'picker.complete',
-                        desktop ||
-                                widget.onSwitchPane == null ||
-                                _visibleFields.isNotEmpty
-                            ? 'next'
-                            : 'pane',
-                      ),
-                      ('picker.cancel', 'back'),
-                    ])
-                      if (effectiveCommandHint(
-                            context,
-                            command,
-                            contextKind: KeymapContext.picker,
-                          )
-                          case final hint?)
-                        '${hint.replaceAll('⇥', 'Tab').replaceAll('↵', 'Enter')} $label',
-                  ].join('  ·  '),
-                  style: desktop ? DesktopChrome.metadata() : muted,
-                ),
-              ),
             ],
           ),
         ),

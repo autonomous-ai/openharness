@@ -3,11 +3,59 @@ import { TAB_KEY_OFF, TAB_RELAY_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, daemonIn, isSession, processCoreApi, UNASKED, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+
+it('grants typed deliveries only in its connected service namespace and refuses a missing or failed core', async () => {
+  const ask = vi.fn(async () => ({ leased: true }))
+  const api = processCoreApi('/data', 'worker', { ask })
+  expect(await api.turns.leaseDeliveries('other', {})).toBe(false)
+  expect(ask).not.toHaveBeenCalled()
+  expect(await api.turns.leaseDeliveries('worker', { delivery: 100 })).toBe(true)
+  expect(ask).toHaveBeenCalledWith('lease_deliveries', { leases: { delivery: 100 } })
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(await api.turns.leaseDeliveries('worker', {})).toBe(false)
+  expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
+})
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
+  it('validates native observation pages and never advances a cursor on an unavailable core', async () => {
+    const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }, page = { cursor, observations: [], gap: false }
+    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ page }))
+    const api = processCoreApi('/data', 'worker', { ask })
+    expect(await api.transcripts.nativeTurns!('native')).toEqual(page)
+    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native' })
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toEqual(page)
+    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native', cursor })
+    ask.mockResolvedValueOnce({ page: { ...page, observations: [{}] } })
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
+    ask.mockRejectedValueOnce(new Error('Disconnected'))
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
+    expect(await processCoreApi('/data', 'worker').transcripts.nativeTurns!('native')).toBeNull()
+  })
+  it('accepts only the requested native creation receipt from the core', async () => {
+    const id = 'creation-fixture-1234', observation = { creationId: id, state: 'cancelled' }
+    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ observation }))
+    const api = processCoreApi('/data', 'worker', { ask })
+    expect(await api.agents.creationStatus!(id)).toEqual(observation)
+    expect(ask).toHaveBeenCalledWith('creation_status', { creationId: id })
+    ask.mockResolvedValueOnce({ observation: { ...observation, creationId: 'other' } })
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    ask.mockResolvedValueOnce({})
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    ask.mockRejectedValueOnce(new Error('Core unavailable'))
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    expect(await processCoreApi('/data', 'worker').agents.creationStatus!(id)).toBeNull()
+  })
+  it('retains the observed runtime profile and treats absent or malformed older projections as unknown', () => {
+    const api = processCoreApi('/data', 'worker')
+    const selectedModel = 'runtime-v1:a1:claude:opus@high'
+    expect(api.agents.runtimeProfile({ ...agent('a1'), selectedModel } as ShownAgent)).toBe(selectedModel)
+    for (const value of [undefined, null, 42, {}]) {
+      expect(api.agents.runtimeProfile({ ...agent('a1'), selectedModel: value } as ShownAgent)).toBeNull()
+    }
+  })
   it('reads only an exact validated usage snapshot, without reading a transcript', async () => {
     const target = usageTarget(agent('a', { transcriptPath: '/fixture/session', registeredAt: 1 }))
     expect(await processCoreApi('/data', 'projects').usage!(target)).toBeNull()
@@ -20,6 +68,19 @@ describe('the core API a light service runs on in its own process', () => {
     }
     ask.mockRejectedValueOnce(new Error('offline'))
     expect(await api.usage!(target)).toBeNull()
+  })
+  it('reads an agent’s usage fresh through the core, validated, and nothing without a core', async () => {
+    expect(await processCoreApi('/data', 'superTabs').usageFresh!('a')).toBeNull()
+    const ask = vi.fn(async (_type: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ value: { totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' } }))
+    const api = processCoreApi('/data', 'superTabs', { ask })
+    expect(await api.usageFresh!('a')).toEqual({ totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' })
+    expect(ask).toHaveBeenCalledWith('agentUsageFresh', { agentId: 'a' })
+    for (const answer of [{}, { error: 'STALE_USAGE_TARGET' }, { value: { totalTokens: -1 } }]) {
+      ask.mockResolvedValueOnce(answer)
+      expect(await api.usageFresh!('a')).toBeNull()
+    }
+    ask.mockRejectedValueOnce(new Error('offline'))
+    expect(await api.usageFresh!('a')).toBeNull()
   })
   it('answers the agents from what the core last said, by agent id or session id', () => {
     const live = [agent('a1'), agent('a2')]
@@ -97,7 +158,9 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(withSummaries.agents.summaries(['a1'])).resolves.toEqual({})
     expect(api.account.signedIn()).toBe(false)
     expect(api.account.environment()).toBe('')
-    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
+    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    // What the devices' process starts from before it asks the core for the list.
+    await expect(UNASKED.account.machines()).resolves.toEqual({ status: 503, body: {} })
     api.clients.sendLocal({ type: 'dial_focus', payload: {} })
     expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
     expect(api.clients.hasWindow()).toBe(false)
@@ -141,6 +204,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(listeners).toHaveLength(1)
   })
 
+  it('lists the account\'s machines the way it reads the backend, and no more than that read may ask', async () => {
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } }))
+    const api = processCoreApi('/data', 'superTabs', { ask })
+    expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    expect(ask).toHaveBeenCalledOnce()
+    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/machines' })
+    // A service the core does not answer for (it is not an experiment) gets the core's refusal, not a list.
+    ask.mockResolvedValueOnce({ error: 'NOT_AN_EXPERIMENT' })
+    expect(await processCoreApi('/data', 'store', { ask }).account.machines()).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
+  })
+
   it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {
     expect(processCoreApi('/data', 'cloud').cloud).toBeUndefined()
     const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => { throw new Error('gone') })
@@ -150,6 +224,47 @@ describe('the core API a light service runs on in its own process', () => {
     doors.unask('cloud_1', 'cloud_q_1')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_ask', 'cloud_unask'])
+  })
+
+  it('gives the Super Tab service its door only with a core to ask, and never waits on or throws from it', async () => {
+    expect(processCoreApi('/data', 'superTabs').superTabs).toBeUndefined()
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
+    processCoreApi('/data', 'superTabs', { ask }).superTabs!.attention([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(ask).toHaveBeenCalledWith('super_tab_attention', { items: [] })
+  })
+
+  it('tells the core the Swarm cards and recaps as two queries, never waiting on or throwing from them', async () => {
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
+    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
+    const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
+    doors.cards([])
+    doors.cardRecap(recap)
+    doors.shareObservers()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(ask).toHaveBeenCalledWith('super_tab_cards', { items: [] })
+    expect(ask).toHaveBeenCalledWith('super_tab_card_recap', { recap })
+    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
+  })
+
+  it('asks the core to read and type a member\'s terminal, and answers plainly when the core cannot be asked', async () => {
+    const ask = vi.fn(async (query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
+      query === 'super_tab_screen' ? { ok: true, text: 'Allow?', hold: 'permission_open' } : { ok: true })
+    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
+    expect(await doors.screen('h1', 20)).toEqual({ ok: true, text: 'Allow?', hold: 'permission_open' })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_screen', { agentId: 'h1', scrollback: 20 })
+    expect(await doors.input('h1', 'yes', ['Enter'])).toEqual({ ok: true })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
+    expect(await doors.inputIfScreen('h1', ['Escape'], 'Update available')).toEqual({ ok: true })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })
+    ask.mockRejectedValue(new Error('gone'))
+    expect(await doors.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
+    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
+    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
+    ask.mockResolvedValue({ error: 'NOT_SUPER_TABS' })
+    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'NOT_SUPER_TABS' })
+    ask.mockResolvedValue({})
+    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'The terminal could not be reached.' })
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
@@ -260,4 +375,62 @@ describe('the core API a light service runs on in its own process', () => {
     expect(isSession(agent('a1'))).toBe(true)
     expect(isSession({ sessionId: 's' })).toBe(false)
   })
+})
+
+it('asks for native stop evidence and treats an absent or failed link as unknown', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ stopped: true }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.stopped!('a')).toBe(true)
+  expect(ask).toHaveBeenLastCalledWith('stopped', { agentId: 'a' })
+  ask.mockResolvedValueOnce({ stopped: false })
+  expect(await api.agents.stopped!('a')).toBe(false)
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.stopped!('a')).toBe(false)
+  expect(await processCoreApi('/data', 'superTabs').agents.stopped!('a')).toBe(false)
+})
+
+it('asks whether an agent is gone and treats an absent or failed link as not gone', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ gone: true }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.gone!('a')).toBe(true)
+  expect(ask).toHaveBeenLastCalledWith('gone', { agentId: 'a' })
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.gone!('a')).toBe(false)
+  expect(await processCoreApi('/data', 'superTabs').agents.gone!('a')).toBe(false)
+})
+
+it('carries the exact native close identity through the service process and fails closed without the core', async () => {
+  const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z' }
+  const ask = vi.fn(async () => ({ closed: true as const }))
+  expect(await processCoreApi('/data', 'superTabs', { ask }).agents.closeSwarm!(request)).toEqual({ closed: true })
+  expect(ask).toHaveBeenCalledWith('close_swarm', request)
+  ask.mockRejectedValueOnce(new Error('Gone'))
+  expect(await processCoreApi('/data', 'superTabs', { ask }).agents.closeSwarm!(request)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  expect(await processCoreApi('/data', 'superTabs').agents.closeSwarm!(request)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+})
+
+it('asks the core to reopen a Lead or close a member, and fails closed without it', async () => {
+  const ask = vi.fn(async (query: string): Promise<Record<string, unknown>> => query === 'keep_lead_alive' ? { ok: true } : { closed: true })
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: true })
+  expect(ask).toHaveBeenLastCalledWith('keep_lead_alive', { agentId: 'lead' })
+  expect(await api.agents.closeMember!('worker')).toEqual({ closed: true })
+  expect(ask).toHaveBeenLastCalledWith('close_member', { agentId: 'worker' })
+  expect(await api.agents.closeMember!('worker', 'super-0123456789abcdef')).toEqual({ closed: true })
+  expect(ask).toHaveBeenLastCalledWith('close_member', { agentId: 'worker', creationId: 'super-0123456789abcdef' })
+  ask.mockResolvedValueOnce({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
+  ask.mockResolvedValueOnce({ ok: false, error: 'NOT_A_LEAD' })
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'NOT_A_LEAD' })
+  ask.mockResolvedValueOnce({ ok: false })
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  ask.mockResolvedValueOnce({ ok: 'yes' })
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.closeMember!('worker')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  const alone = processCoreApi('/data', 'superTabs')
+  expect(await alone.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  expect(await alone.agents.closeMember!('worker')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
 })

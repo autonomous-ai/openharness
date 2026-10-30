@@ -25,10 +25,12 @@ type ReadPipe = UnblockedReader<AnonRead>;
 type WritePipe = UnblockedWriter<AnonWrite>;
 
 pub struct Pty {
-    // XXX: Backend is required to be the first field, to ensure correct drop order. Dropping
-    // `conout` before `backend` will cause a deadlock (with Conpty).
-    backend: Backend,
+    // hn: `conout` is dropped first (upstream drops `backend` first). Closing the pseudoconsole
+    // (`backend`'s drop) may wait until its output is drained or the output pipe is broken;
+    // with `conout` dropped, its reader thread ends and closes the pipe, so the close never
+    // waits on a drain that nobody does.
     conout: ReadPipe,
+    backend: Backend,
     conin: WritePipe,
     child_watcher: ChildExitWatcher,
 }
@@ -155,12 +157,30 @@ fn push_escaped_arg(cmd: &mut String, arg: &str) {
     }
 }
 
+/// hn: the program, as the C runtime and `CreateProcessW(NULL, …)` read argv[0]: up to the first space or tab
+/// unless quoted, with no backslash escapes. A path with a space (`C:\Users\John Doe\…\claude.exe`) is quoted,
+/// or Windows would try to run `C:\Users\John.exe`. A program name cannot hold a `"` (Rust's std refuses one), so
+/// one is passed as it is and the spawn fails to find it.
+fn push_program(cmd: &mut String, program: &str) {
+    if !program.contains('"') && (program.is_empty() || program.contains([' ', '\t'])) {
+        cmd.push('"');
+        cmd.push_str(program);
+        cmd.push('"');
+    } else {
+        cmd.push_str(program);
+    }
+}
+
 fn cmdline(config: &Options) -> String {
     let default_shell = Shell::new("powershell".to_owned(), Vec::new());
     let shell = config.shell.as_ref().unwrap_or(&default_shell);
 
     let mut cmd = String::new();
-    cmd.push_str(&shell.program);
+    if config.escape_args {
+        push_program(&mut cmd, &shell.program);
+    } else {
+        cmd.push_str(&shell.program);
+    }
 
     for arg in &shell.args {
         cmd.push(' ');
@@ -230,10 +250,25 @@ mod test {
             drain_on_exit: true,
             env: Default::default(),
             escape_args: false,
+            job: None,
+            env_remove: Vec::new(),
         };
         assert_eq!(cmdline(&options), "echo hello world");
 
         options.escape_args = true;
         assert_eq!(cmdline(&options), "echo \"hello world\"");
+        // hn: a program path with a space is quoted when the arguments are escaped; never escaped like an argument.
+        options.shell = Some(Shell {
+            program: r"C:\Users\John Doe\bin\claude.exe".to_string(),
+            args: vec!["--resume".to_string(), "a b".to_string()],
+        });
+        assert_eq!(cmdline(&options), r#""C:\Users\John Doe\bin\claude.exe" --resume "a b""#);
+        options.shell = Some(Shell { program: r"C:\Tools\".to_string(), args: vec![] });
+        assert_eq!(cmdline(&options), r"C:\Tools\");
+        options.shell = Some(Shell { program: String::new(), args: vec![] });
+        assert_eq!(cmdline(&options), r#""""#);
+        options.escape_args = false;
+        options.shell = Some(Shell { program: "cmd /c echo".to_string(), args: vec!["hi there".to_string()] });
+        assert_eq!(cmdline(&options), "cmd /c echo hi there");
     }
 }

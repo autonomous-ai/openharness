@@ -14,7 +14,7 @@
  * and a recent turn, as queries; the rest as notices.
  */
 import type { AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
-import { WIFI_FALLBACKS, readFallback, type CoreApi, type WifiPort, type WifiReceipt } from './api.js'
+import { WIFI_FALLBACKS, readFallback, type CoreApi, type WifiAddon, type WifiPort, type WifiReceipt } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 export interface WifiLinkDeps {
@@ -60,6 +60,17 @@ export function createWifiLink(deps: WifiLinkDeps) {
       const answer = await deps.call('receipt', { deviceId, idempotencyKey }, WIFI_WAIT_MS)
       if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.receipt).value as WifiReceipt
       return { receipt: (answer.receipt ?? null) as AutonomousDeviceReceipt | null }
+    },
+    // A person's or an agent's, as `receipt` is: asked with a deadline. The link answers a service that is
+    // down and one that missed the deadline alike, so a proposal with no answer may still have been sent:
+    // said as unknown, to be retried with the same key, never as a stopped service.
+    addon: async (op, input) => {
+      const answer = await deps.call('addon', { op, input }, WIFI_WAIT_MS)
+      if (typeof answer.error !== 'string') return answer as WifiAddon
+      if (op === 'propose') {
+        return { error: { code: 'OUTCOME_UNKNOWN', message: 'No answer in time: the proposal may have been sent. Retry with the same key (--key) to send it at most once.' } }
+      }
+      return readFallback(WIFI_FALLBACKS.addon).value as WifiAddon
     },
     // Its own process: the master stops it.
     stop: async () => {},

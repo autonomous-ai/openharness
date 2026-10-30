@@ -9,10 +9,56 @@ import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/attached_task_delivery.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
+import 'package:harness/ws/ws_conn.dart';
+
+import 'swarm_state_test.dart' show createApp;
+
+/// A machine that makes the harness asked for, and never opens its terminal.
+class _Machine extends WsConn {
+  _Machine()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+  final creates = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    switch (type) {
+      case 'engines_probe':
+        return {
+          'engines': [
+            {'engine': 'claude', 'installed': true},
+          ],
+        };
+      case 'git_project_info':
+        return {'isGit': false};
+      case 'agent_create':
+        creates.add(Map.of(payload));
+        return {
+          'creationId': payload['creationId'],
+          'state': 'created',
+          'agent': {'id': 'made', 'name': 'Made', 'engine': 'claude'},
+        };
+      default:
+        return {};
+    }
+  }
+}
 
 class _Notifier extends AppNotifier {
   _Notifier()
@@ -60,6 +106,8 @@ class _Notifier extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -120,6 +168,43 @@ void main() {
     // id, which is the one outcome a test can see without a machine.
     expect(problems.single, contains('without its files'));
   });
+
+  testWidgets(
+    'a created harness is handed its files, and one whose pane never opens is said',
+    (tester) async {
+      final machine = _Machine();
+      final notifier = createApp(
+        connectionForTest: (_) => machine,
+        connected: true,
+      );
+      addTearDown(notifier.dispose);
+      notifier.machineStates['m']!
+        ..terminalPasteFileAvailable = true
+        ..terminalPasteRawAvailable = true;
+      final problems = <String>[];
+      final files = HarnessAttachments(onDeliveryProblem: problems.add)
+        ..add([HarnessAttachment('shot.png', Uint8List(4))]);
+      final box = NewHarnessController(
+        notifier,
+        machineId: 'm',
+        engine: 'claude',
+        folder: '/work/desk',
+        task: 'đọc ảnh',
+        attachments: files,
+      );
+      addTearDown(box.dispose);
+      expect(await box.create(), NewHarnessOutcome.created);
+      // Created without its task, which waits for the files.
+      expect(machine.creates.single.containsKey('prompt'), isFalse);
+      expect(files.files, isEmpty);
+      await tester.pump(kAttachedTaskOpenTimeout - const Duration(seconds: 1));
+      expect(problems, isEmpty);
+      await tester.pump(const Duration(seconds: 2));
+      expect(problems, [
+        'The harness did not open in time. Attach the files in its pane.',
+      ]);
+    },
+  );
 
   test('without files the task still launches with the engine', () async {
     final notifier = app();

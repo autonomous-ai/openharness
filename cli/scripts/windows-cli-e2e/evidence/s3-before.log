@@ -1,0 +1,51 @@
+# s3 before the update (08:43:04), daemon on N=0.4.19-e2e.1
+01:43:05.184 create terminal → c66db6da… launch=ready (113 ms)
+{"id":"c66db6da…","engine":"terminal","status":"active","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+01:43:06.136 create claude → 47324568… launch=starting (67 ms)
+{"id":"47324568…","engine":"claude","status":"active","launch":"starting","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+PS C:\Users\hxe2e\proj> Write-Output ('BEFORE_' + (40+2))
+BEFORE_42
+PS C:\Users\hxe2e\proj>
+## claude screen
+                                             ░▓▓███▓▓░
+ *                                 ░░░░
+                                 ░░░░░░░░
+                               ░░░░░░░░░░░░░░░░
+       █████████                                        *
+      ██▄█████▄██                        *
+       █████████      *
+.......█ █   █ █..........................................
+ Let's get started.
+ Choose the text style that looks best with your terminal
+ To change this later, run /theme
+       Auto (match terminal)
+ > √   Dark mode
+       Light mode
+       Dark mode (colorblind-friendly)
+       Light mode (colorblind-friendly)
+       Dark mode (ANSI colors only)
+       Light mode (ANSI colors only)
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1  function greet() {
+  2 -  console.log("Hello, World!");
+  2 +  console.log("Hello, Claude!");
+  3  }
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Syntax theme: Monokai Extended (ctrl+t to disable)
+## procs 08:43:22
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     2312            2712 node.exe        18:42:42 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.19-e2e.1\
+     3344            2312 node.exe        18:42:42 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     5656            2312 node.exe        18:42:42 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     4900            5028 OpenConsole.exe 18:43:05 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a0
+      744            5028 powershell.exe  18:43:05 powershell.exe -NoLogo                                                                                        
+     3824            5028 OpenConsole.exe 18:43:06 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1fc
+     5768            5028 claude.exe      18:43:06 C:\Users\hxe2e\.local\bin\claude.exe                                                                          
+
+
+
+SHA256 hash of C:\Users\hxe2e\.harness\cli\notify.mjs:
+9abc2e827b66f67a35566707b7575d09820dc9a967699e9f48707ba775271ece

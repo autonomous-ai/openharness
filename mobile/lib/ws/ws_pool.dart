@@ -3,6 +3,7 @@ import 'dart:async';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
 
+import '../core/client_build.dart';
 import '../core/models.dart';
 import '../logging/app_log.dart';
 import 'ws_conn.dart';
@@ -20,6 +21,9 @@ class WsPool {
   /// wire to the machine (see [TerminalTransportPlugin]).
   final TerminalTransportPluginFactory? transportPlugins;
   final AccessTokenProvider accessTokenProvider;
+
+  /// Handed to every relay connection: what the build says of itself in the socket's query.
+  final Future<ClientBuild> Function()? clientBuild;
   final void Function(String message) onAuthFailure;
   final void Function(String machineId, int code, String reason)?
   onLocalFailure;
@@ -36,6 +40,7 @@ class WsPool {
     this.relayCodecs,
     this.transportPlugins,
     required this.accessTokenProvider,
+    this.clientBuild,
     required this.onAuthFailure,
     this.onLocalFailure,
     required this.onEvent,
@@ -78,6 +83,7 @@ class WsPool {
       autonomousEnv: autonomousEnv,
       relayCodecs: relayCodecs,
       transportPlugins: transportPlugins,
+      clientBuild: clientBuild,
       machineId: machineId,
       accessTokenProvider: accessTokenProvider,
       onAuthFailure: (message) {

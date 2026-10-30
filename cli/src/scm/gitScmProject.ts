@@ -29,6 +29,8 @@ export class GitScmProject implements ScmProject {
   async prepareIsolated(source: string, options: PrepareOptions): Promise<{ cwd: string; launchRecord: ScmLaunchRecord }> {
     const cwd = await prepareGitProject(source, {
       root: options.root, worktree: true, ref: options.base,
+      ...(options.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
+      ...(options.offline ? { offline: true } : {}),
       ...(options.name !== undefined ? {
         branchName: options.name, existingBranch: options.existing === true, placeholder: options.placeholder === true,
       } : {}),

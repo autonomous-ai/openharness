@@ -57,7 +57,7 @@ describe('control-plane SSO auth middleware', () => {
     const res = await request()
     expect(res.statusCode).toBe(200)
     expect(res.json().user.sub).toBe('internal-1')
-    expect(authenticate).toHaveBeenCalledWith('sso-token', 'prod')
+    expect(authenticate).toHaveBeenCalledWith('sso-token', 'prod', { allowTeamSession: true })
   })
 
   it('keeps only the native SSO flow public and rejects legacy machine-key routes', () => {
@@ -99,7 +99,9 @@ describe('control-plane SSO auth middleware', () => {
   })
 })
 
-it('exempts only the exact credential-free setup endpoint from authentication', () => {
+it('exempts only the exact credential-free setup and Hub endpoints from authentication', () => {
   expect(shouldSkipAuth('/api/product-usage/setup')).toBe(true)
-  for (const path of ['/api/product-usage/report', '/api/product-usage/settings', '/api/product-usage/setup/extra']) expect(shouldSkipAuth(path)).toBe(false)
+  expect(shouldSkipAuth('/api/product-usage/hub')).toBe(true)
+  for (const path of ['/api/product-usage/report', '/api/product-usage/settings', '/api/product-usage/setup/extra',
+    '/api/product-usage/hub/extra']) expect(shouldSkipAuth(path)).toBe(false)
 })

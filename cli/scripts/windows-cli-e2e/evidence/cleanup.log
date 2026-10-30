@@ -1,0 +1,48 @@
+# cleanup on the VM (2026-10-18 09:24:55)
+remove: 0
+rights: none (2)
+hxe2e processes: 0 
+hxe2e profile removal failed: The process cannot access the file because it is being used by another process. 
+remove: 0
+rights: none (2)
+hxe2e2 processes: 0 
+hxe2e2 profile removed
+## hxe2e's profile: its hives were still loaded (as in B3.21/B5.12); forced unload, then removed
+\Registry\User\S-1-5-21-1000000001-1000000002-1000000003-1006 -> 0x00000000
+\Registry\User\S-1-5-21-1000000001-1000000002-1000000003-1006_Classes -> 0x00000000
+C:\Users\hxe2e exists: False
+ProfileList key exists: False
+HKU loaded: False
+## final state (09:26:19)
+
+User accounts for \\
+
+-------------------------------------------------------------------------------
+admin                    Administrator            DefaultAccount           
+Guest                    WDAGUtilityAccount       
+The command completed with one or more errors.
+
+admin
+Public
+TaskName:      \HxE2ERun-hxe2e
+TaskName:      \HxE2ERun-hxe2e2
+SHA256 hash of C:\Windows\System32\drivers\etc\hosts:
+2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+File Not Found
+(no 1847x listener above means none)
+fake CDN CAs in Root: 0
+Winlogon AutoAdminLogon=0 DefaultUserName=admin DefaultDomainName=. DefaultPassword present=False
+The directory is not empty.
+e2e
+## the run's one-shot tasks (astask.sh left them registered: its wait loop exited cmd before the delete)
+SUCCESS: The scheduled task "HxE2ERun-hxe2e" was successfully deleted.
+SUCCESS: The scheduled task "HxE2ERun-hxe2e2" was successfully deleted.
+no Harness or HxE2ERun task left
+admin e2e folders removed
+C:\work has nothing of this run
+## the account: machines this run registered (09:27:04)
+
+  ✓ Deleted 7e92c45a (WIN-TESTVM).
+    If that computer is running the daemon it signs out and stops on its own.
+
+machine 7e92c45a… is gone from the account

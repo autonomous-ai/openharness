@@ -2,6 +2,11 @@
 class MachineResources {
   const MachineResources({
     this.cpuPercent,
+    this.deviceType,
+    this.chip,
+    this.os,
+    this.projectDiskFreeBytes,
+    this.projectDiskTotalBytes,
     this.memoryUsedBytes,
     this.memoryTotalBytes,
     this.memoryPressure,
@@ -11,6 +16,8 @@ class MachineResources {
     this.gpus = const [],
   });
 
+  final String? deviceType, chip, os;
+  final double? projectDiskFreeBytes, projectDiskTotalBytes;
   final double? cpuPercent, memoryUsedBytes, memoryTotalBytes;
   final String? memoryPressure;
   final double? swapUsedBytes, diskFreeBytes, diskTotalBytes;
@@ -56,7 +63,16 @@ class MachineResources {
         diskTotal > 0 &&
         diskFree <= diskTotal;
     final pressure = json['memoryPressure'];
+    String? label(String key) =>
+        json[key] is String && (json[key] as String).length <= 120
+        ? json[key] as String
+        : null;
     return MachineResources(
+      deviceType: label('deviceType'),
+      chip: label('chip'),
+      os: label('os'),
+      projectDiskFreeBytes: number('projectDiskFreeBytes'),
+      projectDiskTotalBytes: number('projectDiskTotalBytes'),
       cpuPercent: cpu != null && cpu <= 100 ? cpu : null,
       memoryUsedBytes: memoryValid ? used : null,
       memoryTotalBytes: memoryValid ? total : null,

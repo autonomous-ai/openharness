@@ -5,7 +5,8 @@
  * that finds a conversation until it is purged. A close never takes a turn that is still working unless
  * it was asked to; a purge leaves nothing of the conversation behind.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import * as zlib from 'node:zlib'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -88,6 +89,33 @@ describe('how an agent\'s life ends', () => {
       return now?.status === 'active' && now.sessionId === agent.sessionId ? now : null
     }, 60_000, 500)
     await turn(client, agent.id, 'after opening it again')
+    client.close()
+  })
+
+  it('Codex: a retained harness reopens the same conversation after cold-rollout compression', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'compressed-resume')
+    await turn(client, agent.id, 'History before compression')
+    expect(await close(client, agent, 'now')).toMatchObject({ closed: true })
+    await stopped(client, agent.id)
+    const [file] = transcriptsOf(d, agent.sessionId)
+    const original = readFileSync(file)
+    const compressed = (zlib as typeof zlib & { zstdCompressSync: (value: Buffer) => Buffer }).zstdCompressSync(original)
+    writeFileSync(file + '.zst', compressed)
+    unlinkSync(file)
+    // This is the request sent by Open in Desktop search, through the real daemon and resume guards.
+    const reopened = await client.request('agent_resume', { agentId: agent.id }, 90_000)
+    expect(reopened.error, JSON.stringify(reopened)).toBeUndefined()
+    await until('the compressed conversation to reopen', async () => {
+      const now = await row(client, agent.id)
+      return now?.status === 'active' && now.sessionId === agent.sessionId ? now : null
+    }, 60_000, 500)
+    expect(readFileSync(file).subarray(0, original.length)).toEqual(original)
+    expect(readFileSync(file + '.zst')).toEqual(compressed)
+    await turn(client, agent.id, 'History after compression')
+    expect(readFileSync(file, 'utf8')).toContain('History before compression')
+    expect(readFileSync(file, 'utf8')).toContain('History after compression')
     client.close()
   })
 

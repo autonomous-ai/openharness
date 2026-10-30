@@ -2,11 +2,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   opendirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 as winPath } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
+import { directorySyncSupported } from '../../lib/secureState.js'
+import { hostPlatform, journalFlushFlags } from './windowsFiles.js'
 
 const MAX_RECORDS = MAX_CATALOG_HOMES * 2 + 2
 const MAX_BYTES = 64 * 1024
@@ -24,10 +26,36 @@ const deadline = () => {
   const until = performance.now() + NATIVE_EVIDENCE_MS
   return () => { if (performance.now() > until) throw unavailable('exceeded its work deadline') }
 }
-function inspect(info: BigIntStats, directory = false): void {
-  if (!(directory ? info.isDirectory() : info.isFile())
-    || (typeof process.getuid === 'function' && info.uid !== BigInt(process.getuid()))
+/**
+ * A journal entry is a plain file or folder of this account's that no one else can write. Windows: NTFS gives Node no
+ * owner (uid 0) and reports every file 0o100666 and folder 0o40666, so only the type is checked. The data folder's place in
+ * the profile (secureState.ts `windowsStateRoots`) is what protects it there. A link or junction is neither to lstat,
+ * so it is still refused.
+ */
+export function inspectJournalEntry(info: BigIntStats, directory = false, platform: NodeJS.Platform = hostPlatform()): void {
+  if (!(directory ? info.isDirectory() : info.isFile())) throw unavailable('has an unsafe owner, type or write permission')
+  if (platform === 'win32') return
+  if ((typeof process.getuid === 'function' && info.uid !== BigInt(process.getuid()))
     || (info.mode & 0o022n)) throw unavailable('has an unsafe owner, type or write permission')
+}
+const inspect = (info: BigIntStats, directory = false): void => inspectJournalEntry(info, directory)
+
+/** A home folder as the catalog stores it: absolute, as this platform spells one. */
+export function homeIsAbsolute(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
+  return platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/')
+}
+/** A Windows home that is a network share (`\\server\share`) or a device path (`\\?\`, `\\.\`): `homeIsAbsolute` refuses it. */
+export function homeIsNetworkOrDevice(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
+  return platform === 'win32' && /^[\\/]{2}/.test(home)
+}
+const FOLDER_OF: Record<string, string> = { CODEX_HOME: '.codex', CLAUDE_CONFIG_DIR: '.claude' }
+const HOME_NAMES = new Set(['HOME'])
+/** The sentence a person sees when a setting names a network or device path: the setting, then what to set it to. */
+export function networkHomeSentence(variable: string, profile: string): string {
+  const folder = FOLDER_OF[variable]
+  if (HOME_NAMES.has(variable)) return `${variable} names a network or device path, which Harness does not use for an engine home on Windows. Set it to your profile folder on this computer's drive, such as ${profile}.`
+  return `${variable} names a network or device path, which Harness does not use for an engine home on Windows. `
+    + `Set it to a folder on this computer's drive${folder ? `, such as ${winPath.join(profile, folder)}` : ''}.`
 }
 function read(file: string, check: () => void, max = MAX_BYTES + 1024): FileRead | null {
   check()
@@ -65,7 +93,7 @@ function merge(...catalogs: HomeCatalog[]): HomeCatalog {
   const result = empty()
   for (const catalog of catalogs) for (const engine of ENGINES) {
     if (!catalog || !Array.isArray(catalog[engine]) || catalog[engine].length > MAX_CATALOG_HOMES
-      || catalog[engine].some(home => typeof home !== 'string' || !home.startsWith('/') || home.length > 4096 || home.includes('\0'))) {
+      || catalog[engine].some(home => typeof home !== 'string' || !homeIsAbsolute(home) || home.length > 4096 || home.includes('\0'))) {
       throw unavailable('contains an invalid home list')
     }
     for (const home of catalog[engine]) if (!result[engine].includes(home)) result[engine].push(home)
@@ -95,7 +123,7 @@ function parse(text: string, previous: string | null): RecordValue {
   for (const engine of ENGINES) {
     const homes = value.homes[engine]
     if (!Array.isArray(homes) || homes.length > MAX_CATALOG_HOMES
-      || homes.some(home => typeof home !== 'string' || !home.startsWith('/') || home.length > 4096 || home.includes('\0'))
+      || homes.some(home => typeof home !== 'string' || !homeIsAbsolute(home) || home.length > 4096 || home.includes('\0'))
       || new Set(homes).size !== homes.length) throw unavailable('contains an invalid home list')
   }
   return value
@@ -208,7 +236,9 @@ function syncDirectory(directory: string, check: () => void, ancestor = false): 
     const info = fstatSync(fd, { bigint: true })
     if (ancestor) { if (!info.isDirectory()) throw unavailable('has an unavailable ancestor directory') }
     else inspect(info, true)
-    fsyncSync(fd); check()
+    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+    if (directorySyncSupported()) fsyncSync(fd)
+    check()
   }
   finally { closeSync(fd) }
 }
@@ -242,11 +272,16 @@ function seal(entry: Entry, index: number, found: State, staging: string, check:
   // Another writer may finish a crashed writer's complete immutable record. No lock or partial slot is reaped.
   const source = read(entry.path, check)
   if (!source || digest(source.text) !== entry.digest) throw unavailable('changed before durability confirmation')
-  const fd = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  try {
-    if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
-    fsyncSync(fd)
-  } finally { closeSync(fd) }
+  // On Windows, opening O_RDWR changes ctime without writing. The staged writer fsynced before linkSync, so a
+  // second flush would invalidate the version we just read instead of proving anything more.
+  const flags = journalFlushFlags()
+  if (flags !== null) {
+    const fd = openSync(entry.path, flags)
+    try {
+      if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+  }
   syncDirectory(found.directory, check)
   // Confirmations live outside the journal: losing its newest record cannot look like an older complete pool.
   const marker = index ? join(found.confirmations, String(index).padStart(3, '0') + '.committed') : found.marker

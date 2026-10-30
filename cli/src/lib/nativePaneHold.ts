@@ -8,6 +8,15 @@ export function heldPaneFormat(token: string): string {
   return `#{&&:#{==:#{m:*${NATIVE_LAUNCH_MARKER}=*,#{pane_start_command}},0},#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${token}*,#{pane_start_command}}}}`
 }
 
+/**
+ * `heldPaneFormat`'s predicate over a start command the caller already has (the pty host's `startCommand`):
+ * a held shell's, under [token], and not a native launch's. The pty host checks the same one itself before
+ * a respawn (pty/src/panes.rs `held_by`).
+ */
+export function isHeldStartCommand(startCommand: string, token: string): boolean {
+  return token !== '' && !startCommand.includes(`${NATIVE_LAUNCH_MARKER}=`) && startCommand.includes('harness-held') && startCommand.includes(token)
+}
+
 export function nativePaneHold(token: string, tmuxBinary: string | null, heldCommand: string, node: string, owner: string): string {
   // This tag is captured by core, never read from a post-rc environment. Older
   // tmux keeps pane ownership in this prefix when a pane moves between windows.

@@ -1,0 +1,52 @@
+# engines for hxe2e (per-user), 2026-10-18 08:37:20
+## %APPDATA%\npm on the user PATH (as Node's installer does for the user who ran it), raw REG_EXPAND_SZ
+before: [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Users\hxe2e\.harness\bin
+after:  [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Users\hxe2e\.harness\bin;%APPDATA%\npm
+## Claude Code: irm https://claude.ai/install.ps1 | iex
+Setting up Claude Code...
+
+Checking installation status...
+Installing Claude Code native build latest...
+Setting up launcher and shell integration...
+‼ Setup notes:
+  ● Native installation exists but C:\Users\hxe2e\.local\bin is not in your PATH. Add it by opening: System Properties → Environment Variables → Edit User PATH → New → Add the path above. Then restart your terminal.
+
+√ Claude Code successfully installed!
+
+  Version: 2.1.302
+
+  Location: C:\Users\hxe2e\.local\bin\claude.exe
+
+
+  Next: Run claude --help to get started
+
+‼ Setup notes:
+  ● Native installation exists but C:\Users\hxe2e\.local\bin is not in your PATH. Add it by opening: System Properties → Environment Variables → Edit User PATH → New → Add the path above. Then restart your terminal.
+
+
+? Installation complete!
+
+exit=0
+## %USERPROFILE%\.local\bin on the user PATH, as Claude's installer asks
+after:  [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Users\hxe2e\.harness\bin;%APPDATA%\npm;%USERPROFILE%\.local\bin
+## npm install -g @openai/codex opencode-ai; npm install -g --allow-scripts=@kilocode/cli @kilocode/cli
+
+added 4 packages in 30s
+npm warn install-scripts 1 package has install scripts not yet covered by allowScripts:
+npm warn install-scripts   opencode-ai@1.19.3 (postinstall: node ./postinstall.mjs)
+npm warn install-scripts
+npm warn install-scripts Run `npm install -g --allow-scripts=opencode-ai` to allow these scripts once, or `npm config set allow-scripts=opencode-ai --location=user` to allow them for all global installs.
+
+added 2 packages in 10s
+exit=0
+C:\Users\hxe2e\.local\bin\claude.exe
+C:\Users\hxe2e\AppData\Roaming\npm\codex
+C:\Users\hxe2e\AppData\Roaming\npm\codex.cmd
+C:\Users\hxe2e\AppData\Roaming\npm\opencode
+C:\Users\hxe2e\AppData\Roaming\npm\opencode.cmd
+C:\Users\hxe2e\AppData\Roaming\npm\kilo
+C:\Users\hxe2e\AppData\Roaming\npm\kilo.cmd
+2.1.302 (Claude Code)
+codex-cli 0.163.0
+1.19.3
+7.8.12

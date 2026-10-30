@@ -1,0 +1,31 @@
+{
+  "vectors": [
+    {
+      "token": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "pipe": "\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef",
+      "pipeId": "0123456789abcdef0123456789abcdef",
+      "nonceTail": "fedcba9876543210fedcba9876543210",
+      "nonce": "0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210",
+      "auth": "0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210.7bb055a0642d5d0737c64cb687a1b311cf9a5f3b5171eb07e2ca62746538ae6b",
+      "proof": "8a80a4fdf8779308ca3800cd94105b7acb55e670181b2dcd677b4a12c6e6b680"
+    },
+    {
+      "token": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "pipe": "\\\\.\\pipe\\harness-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "pipeId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nonceTail": "00000000000000000000000000000000",
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000",
+      "auth": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000.5e8d4b75330b9347aafc864f1ab633c17f338c5a712f8359ca862b3e22cbe945",
+      "proof": "e7004b26705701d71eeca42a70ecc8c5d982614d7200772ac07c2463669f5ae6"
+    },
+    {
+      "token": "5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5fc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "pipe": "\\\\.\\pipe\\harness-9e107d9d372bb6826bd81d3542a419d6",
+      "pipeId": "9e107d9d372bb6826bd81d3542a419d6",
+      "nonceTail": "e4d909c290d0fb1ca068ffaddf22cbd0",
+      "nonce": "9e107d9d372bb6826bd81d3542a419d6e4d909c290d0fb1ca068ffaddf22cbd0",
+      "auth": "9e107d9d372bb6826bd81d3542a419d6e4d909c290d0fb1ca068ffaddf22cbd0.338ebab3cd3a77733845ba6fef43236c48f818be1de26a0d85e78e39d203e2f7",
+      "proof": "8cc530d39b9c51ccbe92334e20635d7dc06cb2f04a4f4e87eea0d3147e444fd7"
+    }
+  ]
+}

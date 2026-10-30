@@ -1,0 +1,40 @@
+# can a -dev install update from ADAPTER_UPDATE_URL? offer 0.4.20-e2e.1 to 0.4.18-dev.win1 (08:40:22)
+{
+  "cli": {
+    "version": "0.4.20-e2e.1",
+    "cli": {
+      "url": "http://192.168.65.1:8799/0.4.20-e2e.1/cli.js",
+      "sha256": "fb7c5d617772fc0037c9123d9e9a20a71e991f798e9456fef6960968fa8d25d0",
+      "size": 9696279
+    },
+    "notify": {
+      "url": "http://192.168.65.1:8799/0.4.20-e2e.1/notify.mjs",
+      "sha256": "a177f39fba13310105094b80a2149fcc3df4e63a27cb36b0fd88cdd3f4a8430c",
+      "size": 95339
+    }
+  }
+}
+## the Mac server's log
+192.168.65.1 - - [18/Oct/2026 08:40:24] "GET /cli/metadata.json HTTP/1.1" 200 -
+192.168.65.3 - - [18/Oct/2026 08:40:45] "GET /cli/metadata.json HTTP/1.1" 200 -
+## the VM (08:40:49)
+2026-10-17 18:40:05.619 [hooks] Kilo discovery plugin already installed
+2026-10-17 18:40:05.623 [hooks] Pi discovery extension already installed
+2026-10-17 18:40:05.651 [hooks] Amp plugin already installed
+2026-10-17 18:40:05.656 [hooks] Command Code session hooks already installed
+2026-10-17 18:40:05.680 [hooks] Copilot lifecycle hooks already installed
+2026-10-17 18:40:06.382 [hooks] installed OpenCode discovery plugin → C:\Users\hxe2e\.config\opencode\plugin\launcher-register.js
+2026-10-17 18:40:06.382 [hooks] (takes effect on the next opencode session start)
+2026-10-17 18:40:06.386 [hooks] OpenCode 2 TUI discovery plugin already installed
+## after the second poll (08:41:57)
+192.168.65.3 - - [18/Oct/2026 08:40:45] "GET /cli/metadata.json HTTP/1.1" 200 -
+192.168.65.3 - - [18/Oct/2026 08:41:45] "GET /cli/metadata.json HTTP/1.1" 200 -
+2026-10-17 17:53:47.082 [update] check failed (will retry): fetch failed
+2026-10-17 17:54:47.060 [update] check failed (will retry): fetch failed
+2026-10-17 17:55:47.078 [update] check failed (will retry): fetch failed
+2026-10-17 17:56:47.071 [update] check failed (will retry): fetch failed
+2026-10-17 18:22:53.854 [update] self-update on · v0.4.18-dev.win1 · every 60s
+2026-10-17 18:25:03.579 [update] self-update on · v0.4.18-dev.win1 · every 60s
+2026-10-17 18:33:22.468 [update] self-update on · v0.4.18-dev.win1 · every 60s
+2026-10-17 18:40:04.782 [update] self-update on · v0.4.18-dev.win1 · every 60s
+## offer withdrawn (metadata.json removed) 08:42:24, before installing N from the fake CDN

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { isAppProductUsageReport } from './appProductUsageReport.js'
+import { appProductUsageReport, APP_USAGE_VOCABULARY, isAppProductUsageReport } from './appProductUsageReport.js'
 import { HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
-import { PRODUCT_USAGE_UI_METRICS } from './productUsageContract.js'
+import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_UI_METRICS } from './productUsageContract.js'
 
 const native = JSON.parse(readFileSync(new URL('../../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
 const { context: _context, ...legacy } = native
@@ -55,5 +55,63 @@ it('refuses arbitrary context, non-Desktop attribution, daemon counts and malfor
   for (const key of ['id', 'revision', 'schemaVersion', 'day', 'counters']) {
     const missing = { ...native }; delete missing[key]
     expect(isAppProductUsageReport(missing)).toBe(false)
+  }
+})
+
+it('drops names this contract does not know yet, says so once, and refuses everything else as before', () => {
+  // A newer Desktop's report used to be refused whole, and the Desktop drops a refused packet for good.
+  const counters = { ...native.counters, health_desktop_frame_from_the_future: 3, PRIVATE_CANARY: 'any value' }
+  const kept = appProductUsageReport({ ...native, counters })
+  expect(kept).toEqual({ ...native, counters: { ...native.counters, health_desktop_report_unknown_metric: 1 } })
+  expect(JSON.stringify(kept)).not.toMatch(/future|PRIVATE_CANARY/)
+  // A UI-only report has no surface to count that under, as at the backend.
+  expect(appProductUsageReport({ ...old, counters: { ...old.counters, ui_desktop_from_the_future: 1 } })).toEqual(old)
+  // A full report with one unknown name stays within 32 counters once it is counted.
+  const full = Object.fromEntries(HEALTH_MEASURES.slice(0, 31).map(m => [`health_desktop_${m}`, 1]))
+  expect(Object.keys(appProductUsageReport({ ...native, counters: { ...full, PRIVATE_CANARY: 1 } })!.counters)).toHaveLength(32)
+  // Unchanged reports are forwarded as they are.
+  expect(appProductUsageReport(native)).toBe(native)
+  for (const refused of [
+    // Nothing known left.
+    { ...native, counters: { PRIVATE_CANARY: 1 } },
+    // A known name an app may not file is not unknown: a daemon's, hn's, the phone's, the backend's own.
+    ...['turns_started', 'health_cli_collector_days', 'health_tui_funnel_first_work', 'ui_phone_sign_in_ok',
+      'health_desktop_report_unknown_metric'].map(key => ({ ...native, counters: { [key]: 1, PRIVATE_CANARY: 1 } })),
+    // A known name's bad value, and more than 32 names, unknown ones included.
+    { ...native, counters: { health_desktop_collector_days: 0, PRIVATE_CANARY: 1 } },
+    { ...native, counters: { ...full, [`health_desktop_${HEALTH_MEASURES[31]}`]: 1, PRIVATE_CANARY: 1 } },
+    { ...native, prompt: 'PRIVATE_CANARY', counters: { ...native.counters, PRIVATE_CANARY: 1 } },
+  ]) expect(appProductUsageReport(refused), JSON.stringify(refused)).toBeUndefined()
+})
+
+it('announces vocabulary 6 including first-arrival, invite and existing Add Phone names', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(6)
+  for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
+    expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
+  }
+  // The Add Phone card's flow and each way into Add Phone, from a Desktop, forwarded as they are.
+  const addPhone = { ...native, counters: { ui_desktop_phone_offer_started: 1, ui_desktop_phone_offer_ok: 1,
+    ui_desktop_phone_offer_after_work_started: 1, ui_desktop_phone_offer_after_work_cancelled: 1,
+    ui_desktop_phone_offer_away_waited_ok: 1, ui_desktop_phone_offer_away_finished_unknown: 1,
+    ui_desktop_phone_offer_cancelled: 1, ui_desktop_phone_offer_over_1m: 1,
+    ...Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_METRICS.map(metric => [metric, 1])) } }
+  expect(appProductUsageReport(addPhone)).toBe(addPhone)
+  expect(PRODUCT_USAGE_ADD_PHONE_METRICS).toEqual(['ui_desktop_add_phone_offer', 'ui_desktop_add_phone_titlebar',
+    'ui_desktop_add_phone_menu', 'ui_desktop_add_phone_account', 'ui_desktop_add_phone_machines', 'ui_desktop_add_phone_command'])
+  // Only a Desktop report with its context files them: not the legacy UI-only form.
+  expect(appProductUsageReport({ ...old, counters: { ui_desktop_add_phone_menu: 1 } })).toBeUndefined()
+})
+
+it('forwards returning offers, every skip reason and every pairing source in vocabulary 6', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(6)
+  const metrics = [
+    ...['started', 'ok', 'cancelled', 'unknown', 'under_1s', 'over_1m'].map(x => `ui_desktop_phone_offer_returning_${x}`),
+    ...['has_phone', 'no_device_list', 'already_shown', 'stopped', 'cap_reached', 'not_signed_in',
+      'viewer', 'card_showing', 'no_storage', 'account_changed', 'read_limit'].map(x => `ui_desktop_phone_offer_skipped_${x}`),
+    ...['offer', 'titlebar', 'menu', 'account', 'machines', 'command'].map(x => `ui_desktop_add_phone_paired_${x}`),
+  ]
+  for (const metric of metrics) {
+    const report = { ...native, counters: { [metric]: 1 } }
+    expect(appProductUsageReport(report), metric).toEqual(report)
   }
 })

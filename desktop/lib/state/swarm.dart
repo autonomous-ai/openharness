@@ -33,7 +33,12 @@ class Swarm {
   /// Marks a deliberately opened tab so subsequent actions use its destination.
   bool isNewTabPage;
   bool get isBlankNewTab =>
-      isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;
+      isNewTabPage &&
+      (kind == 'harness' || (isSuperTab && superTabId == null)) &&
+      panes.isEmpty &&
+      presets.isEmpty;
+  bool get isSuperTab => kind == 'superTab';
+  String? superTabId;
   bool get isStore => kind == 'store';
   bool get isCompanions => kind == 'companions';
   bool get isDevices => kind == 'devices';
@@ -99,7 +104,7 @@ class Swarm {
   }
 
   bool get isEmptyStarter =>
-      name == defaultName && panes.isEmpty && presets.isEmpty;
+      !isSuperTab && name == defaultName && panes.isEmpty && presets.isEmpty;
 
   PaneArrangement? get manualLayout => paneSizes['${panes.length}:manual'];
 
@@ -176,6 +181,7 @@ class Swarm {
       if (titleMachineId != null) 'titleMachineId': titleMachineId,
       if (titleAgentId != null) 'titleAgentId': titleAgentId,
       if (kind != 'harness') 'kind': kind,
+      if (superTabId != null) 'superTabId': superTabId,
       if (isOrchestrator) 'orchestratorId': orchestratorId,
       if (isOrchestrator) 'orchestratorMachineId': orchestratorMachineId,
       'focus': agents.indexWhere((p) => p.id == focusedPaneId),
@@ -256,6 +262,7 @@ class ClosedSwarm extends ClosedWork {
        titleMachineId = swarm.titleMachineId,
        titleAgentId = swarm.titleAgentId,
        kind = swarm.kind,
+       superTabId = swarm.superTabId,
        orchestratorId = swarm.orchestratorId,
        orchestratorMachineId = swarm.orchestratorMachineId,
        gridColumns = swarm.gridColumns,
@@ -284,6 +291,7 @@ class ClosedSwarm extends ClosedWork {
 
   /// So a closed store tab reopens as the store, not as an empty harness tab.
   final String kind;
+  final String? superTabId;
   final String? orchestratorId, orchestratorMachineId;
   final String? engine;
   final int index;

@@ -187,7 +187,7 @@ describe('Agent Messages in its own process', () => {
       const theCore = fakeCore({
         dataDir: root,
         daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },
-        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null },
+        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null },
         account: { backend, identity: async () => ({ accountId: 'u-alice', email: 'alice@x.io' }), signedIn: () => true,
           tabKey: new TabSessions(() => identity, () => TEST_ACCOUNT.machineId), tabRelay: relay },
       })
@@ -215,6 +215,44 @@ describe('Agent Messages in its own process', () => {
     }
   })
 
+  it('reads the account\'s tabs again when the core hears the machine list changed, through the real link', async () => {
+    // Its timer reads only every 5 minutes (messages/directory.ts): a machine added, renamed or deleted reaches the edge host
+    // as the core's notice, which the link forwards, as it forwards the desk's.
+    const root = mkdtempSync(join(tmpdir(), 'messages-process-machines-'))
+    try {
+      setAgentSettingsForTest(root, { agentMessages: true })
+      const backend = vi.fn(async (method: string, path: string) => (method === 'GET' && path === '/api/agent-messages'
+        ? { status: 200, body: { success: true, data: { revision: 1, machines: [{ machineId: TEST_ACCOUNT.machineId, name: 'studio' }],
+          tabs: [{ id: 'app', name: 'app', panes: [{ machineId: TEST_ACCOUNT.machineId, agentId: 'lead' }] }] } } as Record<string, unknown> }
+        : { status: 404, body: {} as Record<string, unknown> }))
+      const theCore = fakeCore({
+        dataDir: root,
+        daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },
+        agents: { live: () => [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }], displayName: () => 'lead', terminalAvailable: () => true, dsh: () => null },
+        account: { backend, signedIn: () => true },
+      })
+      const { runServiceProcess } = await import('./process.js')
+      const process = runMessagesService({ dataDir: root, socketPath: '/s', machineId: 'm', token: 't' })
+      const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
+      const link = createMessagesLink({ core: theCore, notify: (frame) => { options.onEvent!(frame.payload); return true } })
+      options.onConnected!({ query: async (query, payload) => link.answer(query, payload ?? {}) })
+      await flush()
+      const reads = () => backend.mock.calls.filter(([method, path]) => method === 'GET' && path === '/api/agent-messages').length
+      const first = reads()
+      expect(first).toBeGreaterThan(0)
+      link.notice({ type: 'machines_changed', reason: 'renamed' })
+      await flush()
+      expect(reads()).toBe(first + 1)
+      link.notice({ type: 'connectors_changed', revision: 1 })
+      await flush()
+      expect(reads()).toBe(first + 1)
+      process.stop()
+    } finally {
+      signedOutForTest()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('under a core from before shared tabs, every share action says to restart on the new version, and send in its own tab still works', async () => {
     // Version skew (plan Task D3, case 1): the edge host is this build's, the core is not, which a master that cannot
     // re-execute leaves running (e2e/messagesSkew.e2e.ts). That core answers as core/messagesLink.ts did before shared
@@ -227,7 +265,7 @@ describe('Agent Messages in its own process', () => {
         ? ok({ revision: 1, machines: [{ machineId: TEST_ACCOUNT.machineId, name: 'studio' }],
           tabs: [{ id: 'app', name: 'app', panes: ['lead', 'api'].map((agentId) => ({ machineId: TEST_ACCOUNT.machineId, agentId })) }] })
         : { status: 404, body: {} as Record<string, unknown> }))
-      const live = [{ ...agent('lead'), tmuxPane: '%1', active: true }, { ...agent('api'), tmuxPane: '%2', active: true }]
+      const live = [{ ...agent('lead'), tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], active: true }, { ...agent('api'), tmuxPane: '%2', runtimes: [{ backend: 'tmux' as const, paneId: '%2' }], active: true }]
       const theCore = fakeCore({
         dataDir: root,
         daemon: { command: 'harness', port: 1, machineId: () => TEST_ACCOUNT.machineId, autonomousEnv: 'prod' },

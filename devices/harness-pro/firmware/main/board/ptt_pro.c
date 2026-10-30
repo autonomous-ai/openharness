@@ -7,6 +7,7 @@
 
 #include "board_pins.h"
 #include "pro_button_filter.h"
+#include "task_stacks.h"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -75,5 +76,5 @@ static void ptt_task(void *arg)
 
 void ptt_start(void)
 {
-    xTaskCreate(ptt_task, "ptt", 4096, NULL, 5, NULL);
+    xTaskCreate(ptt_task, "ptt", STACK_PTT, NULL, 5, NULL);
 }

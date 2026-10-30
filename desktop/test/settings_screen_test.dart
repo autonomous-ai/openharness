@@ -101,6 +101,8 @@ void main() {
         'Keyboard shortcuts',
         'Connectors',
         'Usage',
+        'Routing',
+        'Tab invites',
         'Experimental',
         'About',
         'Debug',
@@ -357,10 +359,9 @@ void main() {
         ),
       );
       semantics.dispose();
-      // Search → matching nav row → usage sharing (Desktop) → creature.
+      // Search → matching nav row → creature: usage sharing is a row further down, below Mark pull requests.
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      if (!kIsWeb) await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();

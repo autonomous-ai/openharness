@@ -1,6 +1,4 @@
-import '../core/apple_fonts.dart';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
+import '../core/runtime_platform.dart';
 
 /// The default terminal face, per platform.
 ///
@@ -68,18 +66,43 @@ const linuxTerminalFontFallback = <String>[
   'monospace',
 ];
 
+/// The face used by the standard Windows PowerShell terminal.
+const windowsTerminalFontFamily = 'Consolas';
+
+const windowsTerminalFontFallback = <String>[
+  'Cascadia Mono',
+  'Courier New',
+  'monospace',
+];
+
 /// The default face for the platform this build is running on.
 ///
 /// A getter, not a `const`: the answer depends on the host. The per-platform
 /// constants above stay `const` so `TerminalFontChoice` can still name them
 /// from its const constructor.
-String get terminalFontFamily => kIsWeb
-    ? webTerminalFontFamily
-    : (hasAppleFonts ? macTerminalFontFamily : linuxTerminalFontFamily);
+String terminalFontFamilyFor(String operatingSystem) {
+  if (operatingSystem == 'web') return webTerminalFontFamily;
+  if (operatingSystem == 'macos' || operatingSystem == 'ios') {
+    return macTerminalFontFamily;
+  }
+  if (operatingSystem == 'windows') return windowsTerminalFontFamily;
+  return linuxTerminalFontFamily;
+}
 
-List<String> get terminalFontFallback => kIsWeb
-    ? const []
-    : (hasAppleFonts ? macTerminalFontFallback : linuxTerminalFontFallback);
+List<String> terminalFontFallbackFor(String operatingSystem) {
+  if (operatingSystem == 'web') return const [];
+  if (operatingSystem == 'macos' || operatingSystem == 'ios') {
+    return macTerminalFontFallback;
+  }
+  if (operatingSystem == 'windows') return windowsTerminalFontFallback;
+  return linuxTerminalFontFallback;
+}
+
+String get terminalFontFamily =>
+    terminalFontFamilyFor(RuntimePlatform.operatingSystem);
+
+List<String> get terminalFontFallback =>
+    terminalFontFallbackFor(RuntimePlatform.operatingSystem);
 
 /// The default terminal font size — the same on every platform.
 const terminalFontSize = 13.0;

@@ -98,6 +98,48 @@ void main() {
       },
     );
 
+    test('a terminal with no folder is sent no cwd at all, and the machine '
+        'opens it at home', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (p) => created(p, 'shell');
+
+      final error = await measured(
+        rig,
+        'm',
+        rig.app.createAgent('m', engine: 'terminal', folder: null),
+      );
+
+      expect(error, isNull);
+      final asked = rig.conn('m').payloadsOf('agent_create').single;
+      expect(asked['engine'], 'terminal');
+      // Absent, not empty: the CLI opens a terminal at home only when cwd is missing, and
+      // refuses an empty one as INVALID_CWD.
+      expect(asked.containsKey('cwd'), isFalse);
+      expect(asked['bypassPermission'], isFalse);
+      expect(asked.containsKey('permissionMode'), isFalse);
+    });
+
+    test('a given folder is sent as it is, an empty one too', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (p) =>
+          p['cwd'] == '' ? throw refusal('INVALID_CWD') : created(p, 'shell');
+
+      await measured(
+        rig,
+        'm',
+        rig.app.createAgent('m', engine: 'terminal', folder: '/work'),
+      );
+      // An agent with no folder and nothing to make one is sent the empty cwd it always was, and
+      // the machine refuses it — null is a terminal's, never "anywhere".
+      await rig.app.createAgent('m', engine: 'claude', folder: '');
+
+      final [terminal, agent] = rig.conn('m').payloadsOf('agent_create');
+      expect(terminal['cwd'], '/work');
+      expect(agent['cwd'], '');
+    });
+
     test(
       'a Codex profile is sent only where the machine can take one',
       () async {
@@ -299,6 +341,8 @@ void main() {
     for (final (code, says) in [
       ('TMUX_UNAVAILABLE', 'needs tmux'),
       ('UNSUPPORTED', 'Update the harness CLI'),
+      ('PTY_HOST_UNAVAILABLE', 'could not open a terminal'),
+      ('ENGINE_LAUNCH_REFUSED', 'cannot start on'),
       ('INVALID_ENGINE', 'Update the harness CLI on Machine m'),
     ]) {
       test('$code is worded for a person', () async {
@@ -312,6 +356,30 @@ void main() {
         );
       });
     }
+
+    test('ENGINE_LAUNCH_REFUSED shows the machine\'s own sentence', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      const long =
+          "CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows. Set it to a folder on this computer's drive, such as C:\\Users\\ann\\.codex.";
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw refusal('ENGINE_LAUNCH_REFUSED', detail: long);
+      expect(
+        await rig.app.createAgent('m', engine: 'codex', folder: '/work'),
+        long,
+      );
+    });
+
+    test('ENGINE_LAUNCH_REFUSED with an empty detail falls back', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw refusal('ENGINE_LAUNCH_REFUSED', detail: '');
+      expect(
+        await rig.app.createAgent('m', engine: 'codex', folder: '/work'),
+        contains('cannot start on'),
+      );
+    });
 
     test('an engine refused with its own reason says it', () async {
       final rig = await signedInWith({'m': []});
@@ -1002,6 +1070,10 @@ void main() {
   });
 
   group('stopping, renaming, restarting', () {
+    /// The desktop's sentence for a restart nobody can vouch for either way.
+    const restartUnconfirmed =
+        'Could not confirm the restart. Check the terminal before restarting again.';
+
     test('a stop takes the agent off the phone and out of its tab', () async {
       final rig = await signedInWith({
         'm': ['a', 'b'],
@@ -1030,6 +1102,59 @@ void main() {
       expect(await rig.app.deleteAgent('ghost', 'a'), 'Machine not found');
 
       expect(rig.app.stateOf('m')!.agents.single.id, 'a');
+    });
+
+    test('a stop the machine says to ask again is asked again, then goes', () async {
+      // IDENTITY_UNAVAILABLE: the conversation file changed under the machine's lookup.
+      final rig = await signedInWith({
+        'm': ['a', 'b'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      var asked = 0;
+      rig.conn('m').answers['agent_delete'] = (_) => ++asked == 1
+          ? {'error': 'IDENTITY_UNAVAILABLE', 'held': true, 'retryable': true}
+          : {'deleted': true};
+
+      expect(await rig.app.deleteAgent('m', 'a'), isNull);
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(2));
+      expect(rig.app.stateOf('m')!.agents.map((a) => a.id), ['b']);
+    });
+
+    test('asks again at most twice, then says why', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      rig.conn('m').answers['agent_delete'] = (_) =>
+          {'error': 'IDENTITY_UNAVAILABLE', 'retryable': true};
+
+      expect(
+        await rig.app.deleteAgent('m', 'a'),
+        'Delete failed: IDENTITY_UNAVAILABLE',
+      );
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(3));
+      expect(rig.app.stateOf('m')!.agents.single.id, 'a');
+    });
+
+    test('a stop it could not confirm is not asked again', () async {
+      // STOP_UNCONFIRMED asks for a look at the harness first, not another stop.
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      rig.conn('m').answers['agent_delete'] = (_) => {'error': 'STOP_UNCONFIRMED'};
+
+      expect(
+        await rig.app.deleteAgent('m', 'a'),
+        'Delete failed: STOP_UNCONFIRMED',
+      );
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(1));
     });
 
     test('a rename is trimmed, sent, and shown', () async {
@@ -1154,17 +1279,258 @@ void main() {
         (await rig.app.restartAgent('m', 'a')).error,
         'Restart failed: NOPE',
       );
+      // No answer is not a refusal: the restart may have happened (see the tests below).
       rig.conn('m').answers['agent_restart'] = (_) => throw StateError('down');
-      expect(
-        (await rig.app.restartAgent('m', 'a')).error,
-        startsWith('Restart failed'),
-      );
+      expect((await rig.app.restartAgent('m', 'a')).error, restartUnconfirmed);
       rig.conn('m').answers['agent_restart'] = (_) => {
         'agent': {'bad': true},
       };
       final odd = await rig.app.restartAgent('m', 'a');
       expect(odd.error, isNull);
       expect(odd.resumed, isTrue, reason: 'absent reads as resumed');
+    });
+
+    // ⚠️ The machine works through one connection's requests in order, so a second
+    // `agent_restart` sent while the first runs is a second restart once the first is done — the
+    // engine that just came back is replaced again.
+    test('a second restart while one runs joins it, sending nothing', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      final reply = Completer<Map<String, dynamic>>();
+      rig.conn('m').answers['agent_restart'] = (_) => reply.future;
+
+      final first = rig.app.restartAgent('m', 'a');
+      final second = rig.app.restartAgent('m', 'a');
+      await settle();
+
+      expect(rig.conn('m').payloadsOf('agent_restart'), hasLength(1));
+      expect(identical(first, second), isTrue);
+
+      reply.complete({'agent': agentJson('a'), 'resumed': false});
+      final results = await Future.wait([first, second]);
+      expect([for (final result in results) result.resumed], [false, false]);
+      expect([for (final result in results) result.error], [null, null]);
+      expect(rig.conn('m').payloadsOf('agent_restart'), hasLength(1));
+    });
+
+    test('a restart on its way is told, and is over once it answers', () async {
+      final rig = await signedInWith({
+        'm': ['a', 'b'],
+      });
+      addTearDown(rig.app.dispose);
+      final reply = Completer<Map<String, dynamic>>();
+      rig.conn('m').answers['agent_restart'] = (_) => reply.future;
+      var heard = 0;
+      rig.app.addListener(() => heard++);
+
+      final restart = rig.app.restartAgent('m', 'a');
+
+      expect(rig.app.agentRestarting('m', 'a'), isTrue);
+      expect(heard, isPositive, reason: 'the menu hears that it started');
+      expect(rig.app.agentRestarting('m', 'b'), isFalse);
+      expect(rig.app.agentRestarting('other', 'a'), isFalse);
+      final before = heard;
+
+      reply.complete({'resumed': true});
+      await restart;
+      await settle();
+
+      expect(rig.app.agentRestarting('m', 'a'), isFalse);
+      expect(heard, greaterThan(before), reason: 'and that it ended');
+    });
+
+    test('a machine that is not there is never restarting', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+
+      final restart = rig.app.restartAgent('ghost', 'a');
+
+      expect(rig.app.agentRestarting('ghost', 'a'), isFalse);
+      expect((await restart).error, 'Machine not found');
+    });
+
+    test('a restart that ended — done, refused or unanswered — can be pressed '
+        'again', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      final answers = rig.conn('m').answers;
+
+      answers['agent_restart'] = (_) => {'resumed': true};
+      expect((await rig.app.restartAgent('m', 'a')).error, isNull);
+      expect(rig.app.agentRestarting('m', 'a'), isFalse);
+
+      answers['agent_restart'] = (_) => throw refusal('AGENT_BUSY');
+      expect((await rig.app.restartAgent('m', 'a')).error, isNotNull);
+      expect(rig.app.agentRestarting('m', 'a'), isFalse);
+
+      answers['agent_restart'] = (_) =>
+          throw const WsRequestTimeout('agent_restart');
+      expect((await rig.app.restartAgent('m', 'a')).error, restartUnconfirmed);
+      expect(rig.app.agentRestarting('m', 'a'), isFalse);
+
+      answers['agent_restart'] = (_) => {'resumed': true};
+      expect((await rig.app.restartAgent('m', 'a')).error, isNull);
+      expect(
+        rig.conn('m').payloadsOf('agent_restart'),
+        hasLength(4),
+        reason: 'each one sent, none joined to one already over',
+      );
+    });
+
+    test('other agents, and the same agent on another machine, restart on '
+        'their own', () async {
+      final rig = await signedInWith({
+        'm': ['a', 'b'],
+        'n': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      final reply = Completer<Map<String, dynamic>>();
+      rig.conn('m').answers['agent_restart'] = (_) => reply.future;
+      rig.conn('n').answers['agent_restart'] = (_) => reply.future;
+
+      final restarts = [
+        rig.app.restartAgent('m', 'a'),
+        rig.app.restartAgent('m', 'b'),
+        rig.app.restartAgent('n', 'a'),
+      ];
+      await settle();
+
+      expect(
+        [
+          for (final asked in rig.conn('m').payloadsOf('agent_restart'))
+            asked['agentId'],
+        ],
+        ['a', 'b'],
+      );
+      expect(rig.conn('n').payloadsOf('agent_restart'), hasLength(1));
+      expect(rig.app.agentRestarting('m', 'b'), isTrue);
+      expect(rig.app.agentRestarting('n', 'a'), isTrue);
+      reply.complete({'resumed': true});
+      await Future.wait(restarts);
+    });
+
+    test('a refused restart is told in the desktop\'s words, not as the '
+        'socket\'s error', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      Future<String?> refusedWith(WsRequestFailure failure) async {
+        rig.conn('m').answers['agent_restart'] = (_) => throw failure;
+        return (await rig.app.restartAgent('m', 'a')).error;
+      }
+
+      expect(
+        await refusedWith(refusal('AGENT_BUSY')),
+        'Another operation is changing this harness. Wait for it to finish, then retry.',
+      );
+      expect(
+        await refusedWith(refusal('UNSUPPORTED_ON_REMOTE')),
+        'Update the harness CLI on this machine to restart a harness.',
+      );
+      expect(
+        await refusedWith(refusal('UNSUPPORTED')),
+        'Update the harness CLI on this machine to restart a harness.',
+      );
+      // The machine's own sentence, when it sends one.
+      expect(
+        await refusedWith(
+          refusal(
+            'CWD_NOT_FOUND',
+            detail: 'The saved project folder is no longer available.',
+          ),
+        ),
+        'The saved project folder is no longer available.',
+      );
+      expect(
+        await refusedWith(refusal('NO_ACTIVE_PROCESS')),
+        'Restart failed: NO_ACTIVE_PROCESS',
+      );
+    });
+
+    test('a restart whose outcome is unknown is not called a failure', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      Future<String?> answeredWith(
+        FutureOr<Map<String, dynamic>> Function(Map<String, dynamic>) answer,
+      ) async {
+        rig.conn('m').answers['agent_restart'] = answer;
+        return (await rig.app.restartAgent('m', 'a')).error;
+      }
+
+      // The reply did not come in time: the machine may be restarting it still.
+      expect(
+        await answeredWith(
+          (_) => throw const WsRequestTimeout('agent_restart'),
+        ),
+        restartUnconfirmed,
+      );
+      // The socket dropped under the request.
+      expect(
+        await answeredWith((_) => throw Exception('connection closed')),
+        restartUnconfirmed,
+      );
+      // A relaunch the machine did not see come up, which may still have — the desktop's reading.
+      expect(
+        await answeredWith(
+          (_) => throw refusal(
+            'RESTART_FAILED',
+            detail: 'claude did not come back up after restart',
+          ),
+        ),
+        restartUnconfirmed,
+      );
+      expect(
+        await answeredWith((_) => throw refusal('INTERNAL')),
+        restartUnconfirmed,
+      );
+      expect(
+        await answeredWith((_) => throw refusal('CREATION_STORAGE_FAILED')),
+        restartUnconfirmed,
+      );
+      expect(
+        await answeredWith((_) => {'error': 'RESTART_FAILED'}),
+        restartUnconfirmed,
+      );
+    });
+
+    // Getting the new engine up can take the machine longer than the 20s a request waits by
+    // default — and a phone that gave up there said the restart had failed while it still ran.
+    test('a restart waits longer than a request usually does', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+
+      await rig.app.restartAgent('m', 'a');
+
+      expect(
+        rig.conn('m').timeouts['agent_restart'],
+        greaterThan(const Duration(seconds: 30)),
+      );
+    });
+
+    test('a restart that answers after the app let go is harmless', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      final reply = Completer<Map<String, dynamic>>();
+      rig.conn('m').answers['agent_restart'] = (_) => reply.future;
+
+      final restart = rig.app.restartAgent('m', 'a');
+      await settle();
+      rig.app.dispose();
+      reply.complete({'agent': agentJson('a', name: 'late'), 'resumed': true});
+
+      expect((await restart).error, isNull);
     });
   });
 
@@ -1465,6 +1831,19 @@ void main() {
       expect(
         await rig.app.retargetAgentToGridModel('m', 'a', 'qwen'),
         contains('still responding'),
+      );
+
+      rig.conn('m').answers['agent_retarget'] = (_) =>
+          throw refusal('ENGINE_LAUNCH_REFUSED', detail: 'Use another engine.');
+      expect(
+        await rig.app.retargetAgentToGridModel('m', 'a', 'qwen'),
+        'Use another engine.',
+      );
+      rig.conn('m').answers['agent_retarget'] = (_) =>
+          throw refusal('PTY_HOST_UNAVAILABLE', detail: 'harness-pty is not installed');
+      expect(
+        await rig.app.clearAgentGrid('m', 'a'),
+        "This machine's terminals did not answer. Run harness start there, then try again.",
       );
 
       // Silence is not a refusal: the machine may have done it.

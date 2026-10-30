@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "pod/pod_model.h"
+#include "pod/pod_mem.h"   // pod_big_alloc_fail: the host hook that simulates out of memory
 #include "pod/home/ph.h"   // ph_room_scene, ph_card_scene: the scene a working agent plays
 
 static int checks;
@@ -864,6 +865,44 @@ static void pod_model_test_offline_members(void) {
     pod_model_agents_end(&M);
 }
 
+// Entries live 6 h from receipt, by a signed difference, so they survive the uint32 wrap of the device clock.
+static void pod_model_test_unread_expiry(void) {
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 1000);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS - 1);   // 5 h 59 m 59.999 s
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 0);
+    // Across the wrap: received 1 s before it, the clock a little past 6 h later.
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 0xFFFFFC00u);
+    pod_model_unread_add(&M, "a2", "Beta", "second", 1, 0xFFFFFC00u + 3600000u);   // 1 h later, past the wrap
+    pod_model_clock(&M, 0xFFFFFC00u + POD_UNREAD_TTL_MS - 1);
+    CHECK(M.unread_count == 2);
+    pod_model_clock(&M, 0xFFFFFC00u + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 1 && !strcmp(M.unread[0].agent, "a2"));
+    // A newer entry of the same agent restarts its clock; an asking agent's entry goes when its question closes.
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 1000);
+    pod_model_unread_add(&M, "a1", "Alpha", "again", 1, 5000);
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 5000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 0);
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "a finished one", 1, 100);
+    pod_model_question(&M, "a1", "Which?");
+    pod_model_unread_ask(&M, "a1", "Alpha", "Which?", 200);
+    CHECK(M.unread_count == 1 && M.unread[0].ask && !strcmp(M.unread[0].text, "Which?"));
+    pod_model_question_close(&M, "a1");
+    CHECK(M.unread_count == 0);
+    pod_model_unread_add(&M, "a1", "Alpha", "a finished one", 1, 300);   // not a question's: it stays
+    pod_model_question(&M, "a1", "Which?");
+    pod_model_question_close(&M, "a1");
+    CHECK(M.unread_count == 1);
+}
+
 static void pod_model_test_unread(void) {
     fresh();
     CHECK(M.unread_count == 0);
@@ -1075,6 +1114,117 @@ static void pod_model_test_work_alt(void) {
     }
     pod_model_random(NULL);
 }
+// The Swarm cards: the list the daemon sent, a Lead's cached recap kept across a new list while the Lead stays.
+static pod_swarm_t card(const char *id, const char *tab, const char *lead_ids[], int n) {
+    pod_swarm_t s;
+    memset(&s, 0, sizeof s);
+    snprintf(s.id, sizeof s.id, "%s", id);
+    snprintf(s.tab, sizeof s.tab, "%s", tab);
+    snprintf(s.name, sizeof s.name, "Swarm %s", id);
+    s.count = (uint16_t)n; s.lead_n = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(s.leads[i].id, sizeof s.leads[i].id, "%s", lead_ids[i]);
+        s.leads[i].state = POD_LEAD_WORK;
+        s.leads[i].since_s = 60;
+    }
+    return s;
+}
+
+static void ids_of(const char *a, const char *b, const char *c, const char *d) {
+    char ids[4][ID_MAX];
+    const char *src[4] = {a, b, c, d};
+    int n = 0;
+    for (int i = 0; i < 4; i++) if (src[i]) { memset(ids[n], 0, ID_MAX); snprintf(ids[n++], ID_MAX, "%s", src[i]); }
+    pod_model_supertab_ids(&M, ids, n);
+}
+
+static void pod_model_test_swarm_cards(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"a", "b", "c"}, *l2[] = {"x"};
+    pod_swarm_t s1 = card("S1", "T1", l1, 3), s2 = card("S2", "", l2, 1), s3 = card("S3", "T3", l2, 1);
+
+    // ordering: a supertab before the id list is ignored; after it, it lands; a listed Swarm not received stays absent
+    pod_model_supertab(&M, &s1, 500);
+    CHECK(M.swarm_n == 0);
+    ids_of("S1", "S2", "S3", NULL);
+    CHECK(M.swarm_n == 0 && M.want_n == 3);
+    pod_model_supertab(&M, &s3, 1000);   // arrives first, S1 and S2 later: card order still follows the list
+    pod_model_supertab(&M, &s1, 1000);
+    CHECK(M.swarm_n == 2 && !strcmp(M.swarms[0].id, "S1") && !strcmp(M.swarms[1].id, "S3"));
+    pod_model_supertab(&M, &s2, 1000);
+    CHECK(M.swarm_n == 3 && !strcmp(M.swarms[1].id, "S2") && M.swarms[0].lead_n == 3 && M.swarms[0].leads[0].since_s == 60 && M.swarms[0].leads[0].since_at_ms == 1000);
+    pod_swarm_t stray = card("S9", "", l2, 1);
+    pod_model_supertab(&M, &stray, 1000);   // not in the list
+    CHECK(M.swarm_n == 3 && pod_model_swarm(&M, "S9") == NULL);
+    CHECK(pod_model_swarm(&M, "S2") == &M.swarms[1] && pod_model_swarm(&M, "nope") == NULL && pod_model_swarm(&M, "") == NULL);
+    CHECK(pod_model_swarm_for_tab(&M, "T1") == &M.swarms[0] && pod_model_swarm_for_tab(&M, "T9") == NULL && pod_model_swarm_for_tab(&M, "") == NULL);
+
+    // a recap for a Lead: LOADED with the text; none:true is EMPTY; an unknown Lead is dropped. Only a Lead that was asked for (LOADING) takes one: a late reply
+    // for a Lead already left (NONE) is ignored, not kept stale
+    pod_model_supertab_recap(&M, "S1", "b", "late", 1, false);
+    CHECK(M.swarms[0].leads[1].recap == POD_RECAP_NONE && M.swarms[0].leads[1].text == NULL);
+    pod_model_supertab_loading(&M, "S1", "b");
+    pod_model_supertab_loading(&M, "S1", "c");
+    pod_model_supertab_recap(&M, "S1", "b", "hello there", 1792560000u, false);
+    CHECK(M.swarms[0].leads[1].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[1].text, "hello there") && M.swarms[0].leads[1].text_at == 1792560000u);
+    pod_model_supertab_recap(&M, "S1", "c", "", 5, true);
+    CHECK(M.swarms[0].leads[2].recap == POD_RECAP_EMPTY && M.swarms[0].leads[2].text == NULL);
+    pod_model_supertab_recap(&M, "S1", "zz", "x", 1, false);
+    pod_model_supertab_recap(&M, "S9", "a", "x", 1, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_NONE);
+    pod_model_supertab_recap(&M, "S1", "b", "newer", 6, false);   // an open (LOADED) Lead takes a refresh: replaces, no leak (the sanitizer build sees one)
+    CHECK(!strcmp(M.swarms[0].leads[1].text, "newer"));
+    pod_model_supertab_loading(&M, "S2", "x");
+    pod_model_supertab_recap(&M, "S2", "x", "second", 7, false);
+    // out of memory: the Lead stays LOADING (the retry asks again), not cold
+    pod_model_supertab_loading(&M, "S1", "a");
+    pod_big_alloc_fail = 1;
+    pod_model_supertab_recap(&M, "S1", "a", "no room", 8, false);
+    pod_big_alloc_fail = 0;
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADING && M.swarms[0].leads[0].text == NULL);
+    pod_model_supertab_close(&M, "S1", "a");
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_NONE);
+
+    // a new supertab for S1: Leads still present keep their recap (even reordered, even when their state changed); gone ones free theirs
+    const char *n1[] = {"c", "b", "d"};
+    pod_swarm_t next = card("S1", "T1", n1, 3);
+    next.leads[1].state = POD_LEAD_ASK;
+    pod_model_supertab(&M, &next, 2000);
+    CHECK(M.swarm_n == 3 && M.swarms[0].leads[0].recap == POD_RECAP_EMPTY && M.swarms[0].leads[1].recap == POD_RECAP_LOADED &&
+          !strcmp(M.swarms[0].leads[1].text, "newer") && M.swarms[0].leads[1].state == POD_LEAD_ASK &&
+          M.swarms[0].leads[2].recap == POD_RECAP_NONE && M.swarms[0].leads[2].text == NULL);
+    CHECK(!strcmp(M.swarms[1].leads[0].text, "second"));   // the others untouched
+    // a Lead that went and came back starts cold
+    const char *n2[] = {"c"}, *n3[] = {"c", "b"};
+    pod_swarm_t one = card("S1", "", n2, 1), two = card("S1", "", n3, 2);
+    pod_model_supertab(&M, &one, 3000);
+    pod_model_supertab(&M, &two, 4000);
+    CHECK(M.swarms[0].leads[1].recap == POD_RECAP_NONE && M.swarms[0].leads[1].text == NULL);
+
+    // a new id list drops the Swarms it leaves out (texts freed) and reorders the rest
+    ids_of("S3", "S2", NULL, NULL);
+    CHECK(M.swarm_n == 2 && !strcmp(M.swarms[0].id, "S3") && !strcmp(M.swarms[1].id, "S2") && !strcmp(M.swarms[1].leads[0].text, "second"));
+    ids_of(NULL, NULL, NULL, NULL);
+    CHECK(M.swarm_n == 0 && M.want_n == 0);
+
+    // caps: 20 ids keep 16 (a repeat is skipped)
+    char many[20][ID_MAX];
+    for (int i = 0; i < 20; i++) { memset(many[i], 0, ID_MAX); snprintf(many[i], ID_MAX, "s%d", i); }
+    pod_model_supertab_ids(&M, many, 20);
+    CHECK(M.want_n == SWARMS_CARD_MAX);
+    for (int i = 0; i < SWARMS_CARD_MAX; i++) { pod_swarm_t c = card(many[i], "", l2, 1); pod_model_supertab(&M, &c, 6000); }
+    CHECK(M.swarm_n == SWARMS_CARD_MAX);
+
+    // focus is kept as a pending request; the link dropping forgets the list, the texts and the focus
+    pod_model_supertab_loading(&M, "s0", "x");
+    pod_model_supertab_recap(&M, "s0", "x", "kept?", 1, false);
+    pod_model_supertab_focus(&M, "s0", "x");
+    CHECK(M.focus_pending && !strcmp(M.focus_tab, "s0") && !strcmp(M.focus_lead, "x"));
+    pod_model_link(&M, true);
+    pod_model_link(&M, false);
+    CHECK(M.swarm_n == 0 && M.want_n == 0 && !M.focus_pending);
+    pod_model_reset(&M);   // frees whatever a list still holds
+}
 int main(void) {
     pod_model_test_work_alt();
     pod_model_test_states();
@@ -1104,8 +1254,10 @@ int main(void) {
     pod_model_test_recent();
     pod_model_test_offline_members();
     pod_model_test_unread();
+    pod_model_test_unread_expiry();
     pod_model_test_console_data();
     pod_model_test_step_total_and_fresh();
+    pod_model_test_swarm_cards();
     printf("Pod model: PASS (%d checks)\n", checks);
     return 0;
 }

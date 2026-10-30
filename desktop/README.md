@@ -2,15 +2,19 @@
 
 Harness Desktop is the native Flutter client for browsing Harness machines and
 interacting with their terminal-backed agents. **macOS is the primary supported and tested
-experience.** Linux builds exist, with feature parity still in progress; Windows support is
-planned and its runner is unexercised. Native embedded harness viewers require macOS;
+experience.** Linux builds exist, with feature parity still in progress.
+Windows 10 and 11 (x64 and arm64) run the full local app, as "this computer" with the CLI
+installed by `install.ps1 -Desktop`; the trusted pipe, native notifications, tray, `harness://`
+links and self-install are still being added (see
+[the design](../docs/superpowers/specs/2026-10-18-windows-desktop-design.md)).
+Native embedded harness viewers require macOS;
 the browser renders managed viewers on their connected machine.
 
 `hn view` can open a viewer companion at `/?viewer=1&machine=<id>&agent=<id>`.
 This owner-only destination uses normal sign-in and machine linking. It does not restore or
 save the workspace, join the shared desk, or attach a terminal. OAuth returns to the same
-viewer after sign-in. The website root serves it while `machine` is in the query; any other
-visit to `/` redirects to the Hub, and the hosted workspace is at `/web`, where sign-in returns.
+viewer after sign-in. The website root serves it while `machine` is in the query; otherwise
+the root is the hosted workspace, where sign-in returns (`/web` redirects there).
 Publish the browser build before the corresponding native hn release so the entry point
 recognizes the viewer destination.
 
@@ -165,6 +169,7 @@ cd desktop
 flutter pub get
 flutter test
 flutter run -d macos   # or: flutter run -d linux
+flutter run -d windows   # on Windows
 ```
 
 Useful validation commands:
@@ -174,6 +179,7 @@ dart analyze
 bash scripts/build-macos-debug.sh
 flutter build macos --release
 flutter build linux --release   # must run on an Ubuntu host — no cross-compiling
+flutter build windows --release # on Windows; the "Windows desktop" workflow builds x64 and arm64
 ```
 
 The macOS debug script uses the same renderer as the host's release build: Skia on

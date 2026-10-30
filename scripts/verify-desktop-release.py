@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify all six public Desktop downloads concurrently, without storing the binaries.
+"""Verify all nine public Desktop downloads concurrently, without storing the binaries.
 
 Uses the updater's Dart user agent, full SHA-256/size checks and curl's total
 transfer deadline (a socket idle timeout alone does not bound a slow transfer).
@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 KEYS = (
     "desktop-macos", "desktop-macos-dmg", "desktop-macos-arm64",
     "desktop-macos-arm64-dmg", "desktop-linux-x64", "desktop-linux-arm64",
+    "desktop-windows-x64", "desktop-windows-arm64", "desktop-windows-installer",
 )
 MANIFEST = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json"
 USER_AGENT = "Dart/3.13 (dart:io)"
@@ -136,7 +137,7 @@ def main(argv=None):
     parser.add_argument("version")
     parser.add_argument("--manifest-url", default=MANIFEST)
     parser.add_argument("--receipt", type=Path, default=Path(".harness/desktop-release-verification.json"))
-    parser.add_argument("--jobs", type=int, choices=range(1, 7), default=3)
+    parser.add_argument("--jobs", type=int, choices=range(1, len(KEYS) + 1), default=3)
     parser.add_argument("--timeout", type=int, choices=range(1, 301), default=90, metavar="SECONDS")
     args = parser.parse_args(argv)
     receipt = verify(args.version, args.manifest_url, args.jobs, args.timeout)

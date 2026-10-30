@@ -5,8 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cJSON.h"
-
 // The second byte pair of the frame names the product; this names it again in the hello (cable_frame.h).
 #define CABLE_PRODUCT "harness"
 #define CABLE_PROTO_VERSION 3   // 3: + question.close (a question answered on another client)
@@ -26,6 +24,11 @@ bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity);
 // Never waits (the render task sends it); false when it could not go out, and pro_app asks again.
 bool pro_cable_request_library(int offset, uint32_t request);
 
+// The Swarm cards' three frames to the daemon, `t` one of "supertab.recap.get" (the Lead's last message), "supertab.open" (the
+// recap on screen; `lead` NULL or "" when it closes) and "supertab.select" (pick the Lead on the desktop). Anything else, or
+// no `tab`, sends nothing. Never waits (the render and touch tasks send it); a busy link loses it, so the caller asks again.
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead);
+
 // Voice: begin sends voice.begin and remembers `upload_id` (<= 23 chars) to match the reply; pcm is a CABLE_TYPE_PCM
 // frame (16-bit mono); end finishes the recording (the reply arrives as pro_app_voice_result); abort/cancel discard it.
 bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id);
@@ -41,8 +44,10 @@ bool pro_cable_library_supported(void);  // welcome.features names player.librar
 const char *pro_cable_fw_version(void);
 
 // ---- seams ----
-// Host-test only (nothing on the device reads them): messages dropped as malformed / ignored as unknown.
+// Messages dropped as malformed / ignored as unknown, cumulative (the heartbeat prints them; the host tests read them).
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown);
+// Frames the daemon's `seq` numbering showed missing (each one asked for a resync), cumulative.
+uint32_t pro_cable_seq_gaps(void);
 // cable_link's callbacks (also what test_pro_cable.c feeds). on_frame runs on the cable_link task.
 void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size_t payload_len, void *ctx);
 void pro_cable_tick(void *ctx);

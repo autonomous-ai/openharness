@@ -382,12 +382,14 @@ void main() {
       await request.response.close();
     });
     try {
+      var now = DateTime(2026, 10, 28, 12);
       final api = ApiClient(
         config: AppConfig(
           apiBaseUrl: 'http://unused.invalid',
           localCliBaseUrl: 'http://127.0.0.1:${server.port}',
         ),
         session: AuthSession(),
+        clock: () => now,
       );
       final first = await api.machines();
       expect(first.map((m) => m.machineId), ['owned', 'shared']);
@@ -400,16 +402,22 @@ void main() {
         shared.copyWith(name: 'Updated').sharedHarnesses.single.id,
         'grant',
       );
+      // An outage keeps the grants last read, and is not a stale list that recovery reads again.
+      api.sharesChanged();
       shareStatus = 503;
       expect((await api.machines()).last.machineId, 'shared');
-      expect(api.lastMachinesStale, isTrue);
+      expect(api.lastMachinesStale, isFalse);
+      // Taken back: read once the wait after the outage is over.
+      now = now.add(ApiClient.sharesRetryDelays.first);
       shareStatus = 200;
       shares = [];
       expect((await api.machines()).map((m) => m.machineId), ['owned']);
       expect(api.lastMachinesStale, isFalse);
+      api.sharesChanged();
       shareStatus = 404;
       expect((await api.machines()).single.machineId, 'owned');
       expect(api.lastMachinesStale, isFalse);
+      api.sharesChanged();
       shareStatus = 401;
       await expectLater(api.machines(), throwsA(isA<ApiException>()));
     } finally {

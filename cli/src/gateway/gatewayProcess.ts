@@ -76,20 +76,20 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
    *  the session's own error. */
   const { accessToken } = accountLink((query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))))
 
-  /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on: what comes after it
-   *  on the link (a new `start`) must not wait for the old link's goodbye. */
+  /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
+   *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
   let pendingStart: Payload | null = null
-  const stop = (): void => {
+  const stop = (): Promise<void> => {
     pendingStart = null
     const was = running
     running = null
     for (const session of windows.values()) session.detach()
     windows.clear()
-    void was?.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${error instanceof Error ? error.message : String(error)}`))
+    return was ? was.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${error instanceof Error ? error.message : String(error)}`)) : Promise.resolve()
   }
 
   const begin = (payload: Payload): void => {
-    stop()
+    void stop()
     const started = (options.start ?? startGateway)({
       events,
       machineId: text(payload.machineId),
@@ -154,7 +154,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // dial would ask the core for a token on a link this process does not know is up yet, and wait a second
     // to try again. Started once it knows.
     if (kind === 'start') { if (core) begin(payload); else pendingStart = payload; return }
-    if (kind === 'stop') { stop(); return }
+    if (kind === 'stop') { void stop(); return }
     if (kind === 'windowOpen') { void openWindow(payload); return }
     const gateway = running
     if (!gateway) return
@@ -167,7 +167,13 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       case 'thisComputerOnly': port.serveThisComputerOnly(); return
       case 'hold': port.holdRequests(); return
       case 'open': port.openRequests(); return
-      case 'broadcast': port.broadcast(record(payload.frame)); return
+      case 'broadcast': {
+        // A guest's harness's event goes to the group (which cannot open it) and sealed to that guest's sessions.
+        const guest = text(payload.guest)
+        if (guest) port.broadcast(record(payload.frame), guest)
+        else port.broadcast(record(payload.frame))
+        return
+      }
       case 'commander': port.commander(record(payload.frame)); return
       case 'user': port.user(record(payload.frame)); return
       case 'reply': port.reply(connId, text(payload.type), payload.requestId, record(payload.payload)); return
@@ -286,7 +292,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
   }
 
-  return (options.run ?? runServiceProcess)({
+  const service = (options.run ?? runServiceProcess)({
     name: 'gateway',
     socketPath: options.socketPath,
     machineId: options.machineId,
@@ -302,7 +308,19 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
     onDisconnected: () => {
       core = null
-      stop()
+      void stop()
     },
   })
+  return {
+    // The process is going (the master's SIGTERM, the master gone, services/process.ts `leave`): the gateway and its
+    // usage collector stop first, while the link is still up, and the process waits for them. Closing the link alone
+    // left them to its close event, which the exit came before: the collector never wrote its clean exit, and
+    // `harness stop`, updates, sign-in restarts, service installs and OS logouts all counted as unclean restarts
+    // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
+    stop: async () => {
+      const stopping = stop()
+      await service.stop()
+      await stopping
+    },
+  }
 }

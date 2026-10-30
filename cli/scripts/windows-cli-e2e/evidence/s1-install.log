@@ -1,0 +1,74 @@
+# s1 install 2026-10-18 07:47:32 +07 (Mac), 17:47:32 VM
+# ssh hxe2e@VM "powershell -NoProfile -EncodedCommand <irm https://cdn.autonomous.ai/harness/staging/cli/install.ps1 | iex>"
+# stdout below; PowerShell's CLIXML copy of the same Write-Host lines on stderr is dropped (its timestamps are quoted)
+Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
+  Downloading Node v22.23.2 (win32-arm64)...
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  Downloading Harness 0.4.18-dev.win1...
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  Downloading the terminal host 0.4.18...
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  OK added C:\Users\hxe2e\.harness\bin to your PATH
+✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.
+  logs ~\.harness\cli\data\harness.log   ·   harness service status
+  Harness starts when you sign in to Windows; it is not running now: run 'harness start'.
+
+  OK harness 0.4.18-dev.win1 installed.
+
+  Set this computer up with three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Useful:
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  harness works in this window now. Terminals that were already open see it once they are reopened.
+# stderr CLIXML timestamps (VM): start 17:47:34.87, Node OK 17:47:48.01, CLI OK 17:47:51.41, pty OK 17:47:51.77,
+# PATH OK 17:47:52.10, "Harness starts when you sign in" 17:48:54.16 (harness service install waited ~62 s), installed 17:48:54.23
+real 82.28
+exit=0
+0.4.18-dev.win1
+## harness status | findstr running || harness start  (07:49:40)
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● started · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        7500
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.
+real 15.23
+user 0.00
+sys 0.00
+## new connection: harness status (07:49:55)
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        7500
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+

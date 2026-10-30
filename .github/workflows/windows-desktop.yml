@@ -1,0 +1,522 @@
+name: Windows desktop
+
+# On demand (Actions -> Windows desktop -> Run workflow): build the Harness desktop app for Windows and run the
+# desktop suite on each architecture's own runner (docs/superpowers/specs/2026-10-18-windows-desktop-design.md,
+# section 4.1). Heavy and manual, like the other OS workflows; PR CI is unchanged.
+# The suite runs whole. A test that assumes POSIX fails on Windows and is recorded in
+# desktop/test/windows_known_failures.txt; desktop/tool/windows_test_baseline.py fails the job on any other failure,
+# and on any failure in the files that test the Windows branches themselves.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build both Windows desktop zips for staging'
+        type: boolean
+        required: false
+        default: false
+      version:
+        description: 'Desktop version to stamp (X.Y.Z or prerelease); release mode only'
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'Check both zips and write proposed staging entries without uploading'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  # A release never cancels a test run and cannot be cancelled by a later run.
+  group: "windows-desktop-${{ github.ref }}-${{ inputs.release && github.run_id || 'test' }}"
+  cancel-in-progress: "${{ !inputs.release }}"
+
+permissions:
+  contents: read
+
+env:
+  # release-desktop.yml's FLUTTER_VERSION, the one toolchain pin for desktop artifacts. Bump both together.
+  FLUTTER_VERSION: '3.47.2'
+
+jobs:
+  mode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.mode.outputs.release }}
+      version: ${{ steps.mode.outputs.version }}
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+    steps:
+      - id: mode
+        shell: bash
+        env:
+          RELEASE: ${{ inputs.release }}
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          release=${RELEASE:-false} version=${VERSION:-} dry_run=${DRY_RUN:-true}
+          if [[ "$release" == true && ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::version '$version' is not X.Y.Z[-prerelease]"
+            exit 1
+          fi
+          { echo "release=$release"; echo "version=$version"; echo "dry_run=$dry_run"; } >> "$GITHUB_OUTPUT"
+          echo "mode: release=$release version=$version dry_run=$dry_run"
+
+  build-test:
+    needs: mode
+    if: ${{ needs.mode.outputs.release != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      # Each runner tests its own native Harness.exe launcher and stand-in app.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Harness.exe tests
+        working-directory: pty
+        run: |
+          cargo test --locked --lib desktop
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher unit tests failed ($LASTEXITCODE)" }
+          cargo test --locked --test desktop_launch --test desktop_install
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher integration tests failed ($LASTEXITCODE)" }
+          # Reuse the cached lib-test build as the Rust peer of Dart's lock test.
+          $messages = cargo test --locked --no-run --lib --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher lib-test artifact build failed ($LASTEXITCODE)" }
+          $artifacts = @($messages | ForEach-Object {
+            try { $_ | ConvertFrom-Json } catch { $null }
+          } | Where-Object {
+            $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'harness_pty' -and
+            $_.target.kind -contains 'lib' -and $_.profile.test -eq $true -and $_.executable
+          })
+          if ($artifacts.Count -ne 1) { throw "Expected one Rust lib-test executable, found $($artifacts.Count)" }
+          $lockTestExe = $artifacts[0].executable
+          if (-not (Test-Path -LiteralPath $lockTestExe -PathType Leaf)) { throw "Rust lock test executable is missing: $lockTestExe" }
+          "HARNESS_RUST_LOCK_TEST_EXE=$lockTestExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # harness-install.exe (docs/superpowers/specs/2026-10-19-windows-installer-design.md §4.2): its logic, its
+      # Windows calls (WinINet, the machine, the mutex), its resources and quiet runs, on each architecture.
+      - name: harness-install.exe tests
+        working-directory: installer
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { throw "harness-install tests failed ($LASTEXITCODE)" }
+      # The release ships one x64 harness-install.exe; on this arm64 runner it runs emulated, as on an Arm PC, and must
+      # still see an arm64 machine (Review Focus 4). Measured on the ARM64 VM: all 36 + 8 pass emulated.
+      - name: harness-install.exe tests, x64 emulated
+        if: matrix.arch == 'arm64'
+        working-directory: installer
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo test --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "harness-install x64 tests failed under emulation ($LASTEXITCODE)" }
+      # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
+      # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Name node.exe for the tests
+        id: node
+        run: |
+          "path=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      # A clone of the pinned tag rather than subosito/flutter-action: Flutter's own bootstrap then fetches the
+      # Dart SDK for the runner's architecture, arm64 included.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Check the Flutter pin, and get packages
+        run: |
+          flutter config --no-analytics
+          flutter --version
+          $version = flutter --version --machine | ConvertFrom-Json
+          if ($version.frameworkVersion -ne $env:FLUTTER_VERSION) { throw "Flutter is $($version.frameworkVersion), not $env:FLUTTER_VERSION" }
+          flutter pub get
+      - name: Build
+        run: flutter build windows --release
+      - name: Check the executable's name and version resource
+        run: |
+          $exe = "build\windows\${{ matrix.arch }}\runner\Release\harness-desktop.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe is missing: BINARY_NAME (windows/CMakeLists.txt) must be harness-desktop" }
+          $dll = "build\windows\${{ matrix.arch }}\runner\Release\harness_pipe_io.dll"
+          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "$dll is missing" }
+          $info = (Get-Item -LiteralPath $exe).VersionInfo
+          if ($info.FileDescription -ne 'Harness' -or $info.ProductName -ne 'Harness') {
+            throw "FileDescription '$($info.FileDescription)' and ProductName '$($info.ProductName)' must both be Harness"
+          }
+          "OK $exe : $($info.FileDescription), $($info.ProductName) $($info.ProductVersion)"
+      - name: Build the launcher for packaging proof
+        working-directory: pty
+        run: |
+          cargo build --locked --bin harness-desktop-launcher
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher build failed ($LASTEXITCODE)" }
+      - name: C4.7 package smoke
+        working-directory: .
+        run: |
+          # Use the already-built Flutter Release bundle; the copy is private so its .started source marker survives.
+          $bundle = (Resolve-Path -LiteralPath "desktop/build/windows/${{ matrix.arch }}/runner/Release" -ErrorAction Stop).Path
+          $launcher = (Resolve-Path -LiteralPath 'pty/target/debug/harness-desktop-launcher.exe' -ErrorAction Stop).Path
+          $icon = (Resolve-Path -LiteralPath 'desktop/windows/runner/resources/app_icon.ico' -ErrorAction Stop).Path
+          $root = Join-Path $env:RUNNER_TEMP ("Nguyễn Văn A' & 100%! package-" + [guid]::NewGuid().ToString('N'))
+          $source = Join-Path $root 'bundle'
+          $out = Join-Path $root 'out'
+          $extract = Join-Path $root 'extract'
+          try {
+            New-Item -ItemType Directory -Path $root,$extract -Force | Out-Null
+            Copy-Item -LiteralPath $bundle -Destination $source -Recurse -Force
+            $exe = Join-Path $source 'harness-desktop.exe'
+            $dll = Join-Path $source 'harness_pipe_io.dll'
+            $data = Join-Path $source 'data/app.so'
+            $version = ((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -split '\+')[0]
+            foreach ($file in @($exe,$dll,$data,$launcher,$icon)) {
+              if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Package input missing $file" }
+            }
+            $marker = Join-Path $source '.started'
+            [IO.File]::WriteAllText($marker, 'source marker')
+            $before = @{}
+            foreach ($file in @($exe,$dll,$data,$launcher,$icon,$marker)) {
+              $before[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+            }
+            $lines = @(& pwsh desktop/scripts/package-windows.ps1 -Version $version -Arch '${{ matrix.arch }}' -Launcher $launcher -Bundle $source -OutDir $out)
+            if ($LASTEXITCODE -ne 0 -or $lines.Count -ne 1 -or $lines[0] -notmatch '^(.*\.zip) ([0-9a-f]{64}) ([0-9]+)$') {
+              throw "Package did not return one zip/hash/size line: $lines"
+            }
+            $zip = $Matches[1]; $declaredHash = $Matches[2]; [int64]$declaredSize = $Matches[3]
+            if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $declaredHash -or
+                (Get-Item -LiteralPath $zip).Length -ne $declaredSize) { throw 'Zip checksum or size differs from package output' }
+            Add-Type -AssemblyName System.IO.Compression
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+            try { $entries = @($archive.Entries | ForEach-Object { $_.FullName }) } finally { $archive.Dispose() }
+            foreach ($name in @('Harness.exe','Harness.ico','current',"app/$version/harness-desktop.exe", "app/$version/harness_pipe_io.dll", "app/$version/data/app.so")) {
+              if ($entries -notcontains $name) { throw "Zip missing $name" }
+            }
+            if (@($entries | Where-Object { $_ -match '\\' -or $_ -match '(^|/)\.started$' }).Count) {
+              throw 'Zip has a backslash entry or inherited .started marker'
+            }
+            Copy-Item -LiteralPath $zip -Destination (Join-Path $extract 'archive.zip')
+            Push-Location -LiteralPath $extract
+            try {
+              $tar = Join-Path $env:SystemRoot 'System32/tar.exe'
+              & $tar -xf archive.zip
+              if ($LASTEXITCODE -ne 0) { throw "Windows tar.exe failed ($LASTEXITCODE)" }
+            } finally { Pop-Location }
+            $current = [IO.File]::ReadAllBytes((Join-Path $extract 'current'))
+            if ([Text.Encoding]::UTF8.GetString($current) -cne "$version`r`n" -or
+                ($current.Length -ge 3 -and $current[0] -eq 239 -and $current[1] -eq 187 -and $current[2] -eq 191)) {
+              throw 'current has the wrong version, line ending, or a BOM'
+            }
+            $pairs = @(
+              @{ from = $launcher; to = 'Harness.exe' },
+              @{ from = $icon; to = 'Harness.ico' },
+              @{ from = $exe; to = "app/$version/harness-desktop.exe" },
+              @{ from = $dll; to = "app/$version/harness_pipe_io.dll" },
+              @{ from = $data; to = "app/$version/data/app.so" }
+            )
+            foreach ($pair in $pairs) {
+              $served = Join-Path $extract $pair.to
+              if ((Get-FileHash -LiteralPath $served -Algorithm SHA256).Hash -ne $before[$pair.from] -or
+                  (Get-FileHash -LiteralPath $pair.from -Algorithm SHA256).Hash -ne $before[$pair.from]) {
+                throw "Extracted or source bytes differ: $($pair.to)"
+              }
+            }
+            if ((Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -ne $before[$marker] -or
+                (Test-Path -LiteralPath (Join-Path $extract "app/$version/.started"))) {
+              throw 'Source marker changed or was packaged'
+            }
+            "C4.7 package smoke: ${{ matrix.arch }} $version $declaredHash $declaredSize bytes; tar and file hashes verified"
+          } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-desktop-windows-${{ matrix.arch }}
+          path: desktop/build/windows/${{ matrix.arch }}/runner/Release/
+          if-no-files-found: error
+      - name: Test (the whole suite, against test/windows_known_failures.txt)
+        env:
+          HARNESS_TEST_NODE: ${{ steps.node.outputs.path }}
+          HARNESS_EXPECTED_WINDOWS_ARCH: ${{ matrix.arch }}
+        run: |
+          # flutter_tester.exe lives in the SDK, outside the app bundle.
+          $env:HARNESS_DESKTOP_PIPE_IO_DLL = (Resolve-Path -LiteralPath "build\windows\${{ matrix.arch }}\runner\Release\harness_pipe_io.dll" -ErrorAction Stop).Path
+          $results = Join-Path $env:RUNNER_TEMP 'flutter-test.json'
+          flutter test --no-pub --file-reporter "json:$results"
+          python tool/windows_test_baseline.py check --results $results --baseline test/windows_known_failures.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-desktop-tests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/flutter-test.json
+          if-no-files-found: warn
+      # C2.4: the app's kernel32 pipe client against the daemon's own pipe code
+      # (cli/scripts/windows-pipe-test-server.ts), under a throwaway data folder and port.
+      - name: CLI install, for the pipe test's stand-in daemon
+        working-directory: cli
+        run: npm ci
+      - name: Trusted pipe against a real daemon pipe
+        working-directory: desktop
+        env:
+          # kUnderTest: no pollers, no persistence, no real ~/.harness.
+          FLUTTER_TEST: '1'
+        run: |
+          # Exercise Debug's executable-relative DLL loader, not the unit override.
+          Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
+          flutter test --no-pub -d windows integration_test/windows_pipe_test.dart
+      - name: Single-instance native regressions
+        timeout-minutes: 5
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ("harness-instance-" + [guid]::NewGuid().ToString('N'))
+          $platform = if ('${{ matrix.arch }}' -eq 'arm64') { 'ARM64' } else { 'x64' }
+          try {
+            # Match the Flutter integration runner architecture and Debug instance suffix.
+            cmake -S integration_test/windows_runner_native -B $root -A $platform
+            if ($LASTEXITCODE -ne 0) { throw "Native fixture configure failed ($LASTEXITCODE)" }
+            cmake --build $root --config Debug --parallel 2
+            if ($LASTEXITCODE -ne 0) { throw "Native fixture build failed ($LASTEXITCODE)" }
+            ctest --test-dir $root -C Debug --verbose --timeout 30 --parallel 1
+            if ($LASTEXITCODE -ne 0) { throw "Native instance regression failed ($LASTEXITCODE)" }
+          } finally {
+            if (Test-Path -LiteralPath $root) {
+              Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+            }
+          }
+      - name: Runner channels and single instance (integration)
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DESKTOP_INSTANCE: ci-${{ matrix.arch }}-${{ github.run_id }}
+        run: |
+          # The runner and every child use owned profiles, never installed app state.
+          $runnerTemp = $env:RUNNER_TEMP
+          $originalTemp = $env:TEMP
+          $originalTmp = $env:TMP
+          $root = Join-Path $runnerTemp ("harness-runner-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          try {
+            $env:USERPROFILE = Join-Path $root 'profile'
+            $env:HOME = $env:USERPROFILE
+            $env:APPDATA = Join-Path $env:USERPROFILE 'AppData\Roaming'
+            $env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'AppData\Local'
+            $env:TEMP = Join-Path $root 'temp'
+            $env:TMP = $env:TEMP
+            New-Item -ItemType Directory -Path $env:APPDATA,$env:LOCALAPPDATA,$env:TEMP -Force -ErrorAction Stop | Out-Null
+            Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
+            # A normal entrypoint reaches Dart without Flutter test's host handshake.
+            # Preserve its WHOLE bundle before the parent test overwrites Debug output.
+            flutter build windows --debug --no-pub --target integration_test/windows_runner_child.dart
+            if ($LASTEXITCODE -ne 0) { throw "Runner child build failed ($LASTEXITCODE)" }
+            $debugBundle = (Resolve-Path -LiteralPath "build\windows\${{ matrix.arch }}\runner\Debug" -ErrorAction Stop).Path
+            $childBundle = Join-Path $root 'child-bundle'
+            Copy-Item -LiteralPath $debugBundle -Destination $childBundle -Recurse -Force -ErrorAction Stop
+            foreach ($required in @('harness-desktop.exe', 'harness_pipe_io.dll', 'flutter_windows.dll', 'data\flutter_assets\kernel_blob.bin')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $childBundle $required) -PathType Leaf)) { throw "Child bundle missing $required" }
+            }
+            $env:HARNESS_RUNNER_TEST_CHILD_EXE = (Resolve-Path -LiteralPath (Join-Path $childBundle 'harness-desktop.exe') -ErrorAction Stop).Path
+            $sourceHead = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Could not identify child source revision' }
+            "Child source revision: $sourceHead"
+            Get-FileHash -Algorithm SHA256 -LiteralPath 'integration_test\windows_runner_child.dart','integration_test\windows_runner_test.dart'
+            $bundleManifest = @(Get-ChildItem -LiteralPath $childBundle -File -Recurse -ErrorAction Stop | Sort-Object FullName | ForEach-Object {
+              [ordered]@{ path = $_.FullName.Substring($childBundle.Length + 1); sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName -ErrorAction Stop).Hash }
+            })
+            $manifestPath = Join-Path $root 'child-bundle-sha256.json'
+            $bundleManifest | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifestPath -Encoding utf8 -ErrorAction Stop
+            "Child bundle files: $($bundleManifest.Count); identity SHA256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath -ErrorAction Stop).Hash)"
+            Get-FileHash -Algorithm SHA256 -LiteralPath $env:HARNESS_RUNNER_TEST_CHILD_EXE,(Join-Path $childBundle 'harness_pipe_io.dll')
+            flutter test -d windows --no-pub integration_test/windows_runner_test.dart
+            if ($LASTEXITCODE -ne 0) { throw "Runner integration failed ($LASTEXITCODE)" }
+          } finally {
+            $env:TEMP = $originalTemp
+            $env:TMP = $originalTmp
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
+      - name: Install by one command (install.ps1 -App) and by harness-install.exe
+        working-directory: cli
+        timeout-minutes: 40
+        env:
+          HARNESS_DESKTOP_LAUNCHER_BIN: ${{ github.workspace }}\pty\target\debug\harness-desktop-launcher.exe
+          HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\debug\harness.exe
+          HARNESS_INSTALL_BIN: ${{ github.workspace }}\installer\target\debug\harness-install.exe
+        run: |
+          # C4.7's package smoke built the desktop launcher; B's original installer specs also run the CLI command.
+          if (-not (Test-Path -LiteralPath $env:HARNESS_DESKTOP_LAUNCHER_BIN -PathType Leaf)) { throw 'Desktop launcher is missing' }
+          # The harness-install.exe tests step built it.
+          if (-not (Test-Path -LiteralPath $env:HARNESS_INSTALL_BIN -PathType Leaf)) { throw 'harness-install.exe is missing' }
+          if (-not (Test-Path -LiteralPath $env:HARNESS_EXE_BIN -PathType Leaf)) {
+            cargo build --locked --manifest-path ../pty/Cargo.toml --bin harness
+            if ($LASTEXITCODE -ne 0) { throw "CLI harness.exe build failed ($LASTEXITCODE)" }
+          }
+          npx vitest run src/scripts/installPs1.spec.ts src/scripts/installPs1App.spec.ts --maxWorkers=1 --reporter=verbose
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell installer specs failed ($LASTEXITCODE)" }
+
+  # Release mode builds both staging zips. It is not the build-test suite.
+  release-build:
+    needs: mode
+    if: ${{ needs.mode.outputs.release == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.mode.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        shell: pwsh
+        working-directory: ${{ runner.temp }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          if ($LASTEXITCODE -ne 0) { throw "Flutter clone failed ($LASTEXITCODE)" }
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Check Flutter pin and get packages
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          flutter config --no-analytics
+          $version = flutter --version --machine | ConvertFrom-Json
+          if ($version.frameworkVersion -ne $env:FLUTTER_VERSION) { throw "Flutter is $($version.frameworkVersion), not $env:FLUTTER_VERSION" }
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw "Flutter pub get failed ($LASTEXITCODE)" }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build launcher
+        shell: pwsh
+        working-directory: pty
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }} --bin harness-desktop-launcher
+          if ($LASTEXITCODE -ne 0) { throw "Launcher build failed ($LASTEXITCODE)" }
+      - name: Build staging app
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          flutter build windows --release --build-name ${{ env.VERSION }} --build-number ${{ github.run_number }} --dart-define=HARNESS_STAGING=true
+          if ($LASTEXITCODE -ne 0) { throw "Staging app build failed ($LASTEXITCODE)" }
+      - name: Package
+        shell: pwsh
+        run: |
+          pwsh desktop/scripts/package-windows.ps1 -Version $env:VERSION -Arch ${{ matrix.arch }} -Launcher pty/target/${{ matrix.target }}/release/harness-desktop-launcher.exe
+          if ($LASTEXITCODE -ne 0) { throw "Windows package failed ($LASTEXITCODE)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-desktop-zip-windows-${{ matrix.arch }}
+          path: desktop/build/windows-zip/harness-desktop-${{ env.VERSION }}-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+      # One x64 harness-install.exe for every PC, reading the staging manifest (installer spec §2.4).
+      - name: Build the staging harness-install.exe
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        working-directory: installer
+        env:
+          HARNESS_INSTALL_BASE: https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/
+          HARNESS_INSTALL_VERSION: ${{ env.VERSION }}
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw "harness-install build failed ($LASTEXITCODE)" }
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'x64'
+        with:
+          name: harness-install-staging
+          path: installer/target/${{ matrix.target }}/release/harness-install.exe
+          if-no-files-found: error
+
+  release-staging:
+    needs: [mode, release-build]
+    if: ${{ needs.mode.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.mode.outputs.version }}
+      GCS_BUCKET: s3-autonomous-upgrade-3
+      STAGING_PREFIX: harness/staging
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: harness-desktop-zip-windows-*
+          path: .zips
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-install-staging
+          path: .zips
+      - name: Dry run
+        if: ${{ needs.mode.outputs.dry_run == 'true' }}
+        run: DRY_RUN=1 DRY_RUN_OUT=.dry-run bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip" .zips/harness-install.exe
+      - uses: actions/upload-artifact@v4
+        if: ${{ needs.mode.outputs.dry_run == 'true' }}
+        with:
+          name: harness-desktop-windows-dry-run
+          path: .dry-run/metadata.json
+          if-no-files-found: error
+      - name: Authenticate to GCP
+        if: ${{ needs.mode.outputs.dry_run != 'true' }}
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        if: ${{ needs.mode.outputs.dry_run != 'true' }}
+      - name: Publish to staging
+        if: ${{ needs.mode.outputs.dry_run != 'true' }}
+        run: bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip" .zips/harness-install.exe
+      - name: Verify served staging artifacts
+        if: ${{ needs.mode.outputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+          node --input-type=commonjs - <<'JS'
+            const crypto = require('node:crypto')
+            const { GCS_BUCKET, STAGING_PREFIX, VERSION } = process.env
+            const manifest = `https://storage.googleapis.com/${GCS_BUCKET}/${STAGING_PREFIX}/desktop/metadata.json`
+            const main = async () => {
+              const response = await fetch(manifest, { cache: 'no-store' })
+              if (!response.ok) throw new Error(`GET ${manifest} -> ${response.status}`)
+              const document = await response.json()
+              const files = {
+                'desktop-windows-x64': `harness-desktop-${VERSION}-windows-x64.zip`,
+                'desktop-windows-arm64': `harness-desktop-${VERSION}-windows-arm64.zip`,
+                'desktop-windows-installer': 'harness-install.exe',
+              }
+              for (const [key, file] of Object.entries(files)) {
+                const entry = document[key]
+                const expectedUrl = `https://cdn.autonomous.ai/${STAGING_PREFIX}/desktop/${VERSION}/${file}`
+                if (!entry || entry.version !== VERSION || entry.url !== expectedUrl) throw new Error(`${key}: manifest entry differs`)
+                const served = await fetch(entry.url, { cache: 'no-store' })
+                if (!served.ok) throw new Error(`${key}: GET ${entry.url} -> ${served.status}`)
+                const bytes = Buffer.from(await served.arrayBuffer())
+                if (crypto.createHash('sha256').update(bytes).digest('hex') !== entry.sha256 || bytes.length !== entry.size) {
+                  throw new Error(`${key}: served bytes differ`)
+                }
+              }
+              console.log(`staging desktop ${VERSION}: x64, arm64 and harness-install.exe verified`)
+            }
+            main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
+          JS

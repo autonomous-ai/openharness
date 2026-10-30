@@ -1,0 +1,118 @@
+# s6 hxe2e2 installs too (2026-10-18 08:53:03)
+
+SUCCESS: Specified value was saved.
+
+SUCCESS: Specified value was saved.
+Installing Harness for win32-arm64 into C:\Users\hxe2e2\.harness
+  Downloading Node v22.23.2 (win32-arm64)...
+  OK Node v22.23.2 -> C:\Users\hxe2e2\.harness\runtime\node-v22.23.2-win32-arm64
+  Downloading Harness 0.4.18-dev.win1...
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e2\.harness\cli\0.4.18-dev.win1
+  Downloading the terminal host 0.4.18...
+  OK terminal host 0.4.18 -> C:\Users\hxe2e2\.harness\runtime\pty\0.4.18
+  OK added C:\Users\hxe2e2\.harness\bin to your PATH
+  Harness starts when you sign in to Windows; it is not running now: run 'harness start'.
+
+  OK harness 0.4.18-dev.win1 installed.
+
+  Set this computer up with three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Useful:
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  harness works in this window now. Terminals that were already open see it once they are reopened.
+exit=0
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+   status     ● started · this computer only (not signed in)
+   pid        5260
+   local api  http://127.0.0.1:18476
+## check-install as hxe2e2 (batch logon)
+ok   version 0.4.18-dev.win1
+ok   task Harness harnessd (hxe2e2)
+ok   PATH has c:\users\hxe2e2\.harness\bin
+ok   terminal ede22e86… on harness-pty pid 5028 (2 shell(s) under it)
+exit=0
+## both tasks
+TaskName:      \Harness harnessd (hxe2e)
+TaskName:      \Harness harnessd (hxe2e)
+TaskName:      \Harness harnessd (hxe2e2)
+TaskName:      \Harness harnessd (hxe2e2)
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     5260            5100 node.exe        18:54:36 "C:\Users\hxe2e2\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e2\.harness\cli\0.4.18-dev.
+     3628            5260 node.exe        18:54:37 C:\Users\hxe2e2\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-si
+     7076            3628 harness-pty.exe 18:54:38 C:\Users\hxe2e2\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e2\.harness\pty         
+     7136            7076 OpenConsole.exe 18:54:44 "C:\Users\hxe2e2\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a
+     5720            7076 powershell.exe  18:54:44 powershell.exe -NoLogo                                                                                        
+
+
+
+## (the run above counted hxe2e's host 5028: check-install matched every user's harness-pty.exe by name; fixed to this install's own hosts)
+## check-install as hxe2e2 again, after the fix (08:55:31)
+ok   version 0.4.18-dev.win1
+ok   task Harness harnessd (hxe2e2)
+ok   PATH has c:\users\hxe2e2\.harness\bin
+ok   terminal 2541c62a… on harness-pty pid 7076 (2 shell(s) under it)
+exit=0
+## all harness-pty.exe before hxe2e2's uninstall (08:56:50)
+harness-pty pid 5028 started 18:40:04.889 owner hxe2e C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe
+harness-pty pid 7076 started 18:54:38.625 owner hxe2e2 C:\Users\hxe2e2\.harness\runtime\pty\0.4.18\harness-pty.exe
+## hxe2e2: harness uninstall --yes, over SSH
+✓ stopped 2 harnesses
+✓ removed the Harness daemon from Task Scheduler: it no longer starts at login
+✓ stopped the Harness daemon (pid 5260)
+✓ removed Harness's hooks from ~\.claude\settings.json
+✓ removed Harness's hooks from ~\.codex\hooks.json
+✓ removed Codex's record of Harness's hooks from ~\.codex\config.toml
+✓ removed Harness's hooks from ~\.copilot\hooks\harness.json
+✓ removed Harness's hooks from ~\.commandcode\settings.json
+✓ removed ~\.config\kilo\plugin\launcher-register.js
+✓ removed ~\.pi\agent\extensions\launcher-register.ts
+✓ removed ~\.config\amp\plugins\launcher-register.ts
+✓ removed ~\.config\opencode\plugins\launcher-register\tui.js
+· if you had added a permission rule in ~\.claude\settings.json that is the same as one of Harness's, it went too: add it again if you need it
+· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~\.codex\hooks.json, and taking Harness's out moved them
+✓ removed ~\.harness\bin from your PATH
+✗ Harness is only partly uninstalled:
+  · Windows did not start the step that removes Harness's files once this command has ended. (Access denied) Windows refused to start it, as it does for a standard user signed in over SSH; run harness uninstall at the desktop, or delete C:\Users\hxe2e2\.harness yourself.
+exit=0
+## all harness-pty.exe after
+harness-pty pid 5028 started 18:40:04.889 owner hxe2e C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe
+## hxe2e2 left after the SSH run
+agent-messages
+bin
+cli
+computer-id
+connections
+dsh
+hook-routes
+pty
+runtime
+harness-launch.exe
+harness.exe
+## hxe2e2: harness uninstall --yes again, from a non-SSH logon (one-shot task, batch logon) (08:57:16)
+Γ£ô ~\.harness goes once this command has exited (anything left is listed in C:\Users\hxe2e2\AppData\Local\Temp\harness-uninstall-6140-1792288639688.log)
+Harness is uninstalled.
+uninstall exit=0 in 2.1 s
+exit=0
+## check-uninstall as hxe2e2
+clean: nothing of Harness is left. Checked: C:\Users\hxe2e2\.harness, the task 'Harness harnessd (hxe2e2)', the user PATH, the processes running from C:\Users\hxe2e2\.harness\, the uninstall's temp files, notify.mjs in 4 settings files, the [hooks.state] records in C:\Users\hxe2e2\.codex\config.toml, and 0 hook file(s) named by -HookFiles
+exit=0
+## hxe2e untouched
+   status     ● running · backend connected
+   pid        6100
+Harness harnessd (hxe2e)                 10/17/2026 7:00:00 PM  Ready          
+The operation completed successfully.
+The operation completed successfully.
+
+HKEY_CURRENT_USER\Environment
+    Path    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Microsoft\WindowsApps
+    TEMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+    TMP    REG_EXPAND_SZ    %USERPROFILE%\AppData\Local\Temp
+

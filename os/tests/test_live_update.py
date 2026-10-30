@@ -540,7 +540,7 @@ class FastUpdates(unittest.TestCase):
             self.assertEqual(restart.call_count, 1)
         self.assertFalse((self.state / 'approved.json').exists())
 
-    def terminal_update(self, ready, daemon='1.1.0', system=False, errors=(), restart=None):
+    def terminal_update(self, ready, daemon='1.1.0', system=False, errors=(), restart=None, reboot=False):
         """`harness update` against a checked state; returns (exit, printed, update_all mock)."""
         self.state.mkdir(exist_ok=True)
         update.write(self.state / 'check.json', {'errors': list(errors)})
@@ -556,7 +556,7 @@ class FastUpdates(unittest.TestCase):
              patch.object(update, 'selected', side_effect=lambda: running[0]), \
              patch.object(update, 'update_all', side_effect=apply) as update_all, \
              patch.object(update, 'daemon_version', return_value=daemon), patch('sys.stdout', printed):
-            result = update.main(['update'])
+            result = update.main(['update', *(['--reboot'] if reboot else [])])
         self.assertTrue(check.call_args.kwargs['force_system'])
         return result, printed.getvalue(), update_all
 
@@ -585,6 +585,32 @@ class FastUpdates(unittest.TestCase):
         self.assertEqual(result, 0)
         update_all.assert_called_once()
         self.assertIn('Restart to finish: systemctl reboot', printed)
+
+    def test_a_phones_update_restarts_for_the_system_and_only_for_it(self):
+        with patch.object(update.subprocess, 'run') as run:
+            self.terminal_update(None, system=True, restart='ready', reboot=True)
+        run.assert_called_once_with(['systemctl', 'reboot'], check=True)
+        update.RESTART_REQUIRED.unlink()
+        staged = self.root / 'staged'
+        staged.mkdir()
+        for name in update.FILES:
+            (staged / name).write_bytes(('new ' + name).encode())
+        with patch.object(update.subprocess, 'run') as run:
+            self.terminal_update(staged, reboot=True)
+        run.assert_not_called()
+        # An update applied earlier and waiting for its restart: the phone's Update is that restart.
+        update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        with patch.object(update.subprocess, 'run') as run:
+            self.assertEqual(update.update_from_terminal(reboot=True), 0)
+        run.assert_called_once_with(['systemctl', 'reboot'], check=True)
+        with self.assertRaisesRegex(SystemExit, '2'), patch('sys.stderr', io.StringIO()):
+            update.main(['status', '--reboot'])
+
+    def test_status_names_the_installed_os(self):
+        with patch.object(update, 'run', return_value='harness-os 0.1.7.r1-1'):
+            self.assertEqual(update.os_version(), '0.1.7.r1-1')
+        with patch.object(update, 'run', side_effect=subprocess.CalledProcessError(1, 'pacman')):
+            self.assertIsNone(update.os_version())
 
     def test_terminal_update_refuses_while_a_restart_is_pending_and_when_nothing_could_be_checked(self):
         with self.assertRaisesRegex(ValueError, 'could not be checked'):

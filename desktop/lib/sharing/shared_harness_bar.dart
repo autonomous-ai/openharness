@@ -64,7 +64,7 @@ class SharedHarnessBar extends StatelessWidget {
   final SharedPaneStatus status;
   final bool commentsSelected;
   final VoidCallback onToggleComments;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
 
   /// Null hides the Terminal/Viewer switch: the pane shows one of them only.
   final bool? viewerSelected;
@@ -92,11 +92,13 @@ class SharedHarnessBar extends StatelessWidget {
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final close = AppIconButton(
-            icon: AppIcons.close,
-            tooltip: 'Close shared harness',
-            onPressed: onClose,
-          );
+          final close = onClose == null
+              ? const SizedBox.shrink()
+              : AppIconButton(
+                  icon: AppIcons.close,
+                  tooltip: 'Close shared harness',
+                  onPressed: onClose,
+                );
           final actions = Wrap(
             spacing: 8,
             runSpacing: 8,

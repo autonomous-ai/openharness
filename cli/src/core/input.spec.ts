@@ -10,10 +10,12 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
-import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createInput, createMessageRequest, deviceInputDeps, heldScreen, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
+import { typesWhileBusy } from '../superTabs/inCore/deliveries.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
@@ -63,6 +65,7 @@ function deps(over: Partial<InputDeps> = {}) {
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     commandcode: (sessionId) => sessionId === 'cc-s' ? normalizer as unknown as CommandCodeNormalizer : undefined,
     emit: vi.fn(),
+    typesWhileBusy,
     ...over,
   }
   return { deps: base, calls, device, normalizer, setPane: (next: string | null) => { pane = next } }
@@ -81,6 +84,50 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each(['a1', 'cx'])('types Swarm input into busy %s while retaining the Agent Messages hold', async id => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane(id === 'a1' ? 'Working (esc to interrupt)\n' + READY_PANE : '\n\u001b[1m›\u001b[0m \n\n  esc to interrupt')
+    expect(await wired.beforeTeamWrite!(agents.get(id)!, 'team:service:superTabs:busy')).toBeNull()
+    expect(await wired.injectTeam!(id, 'chat follow-up', 'team:service:superTabs:busy')).toBe(ok)
+    expect(await wired.injectTeam!(id, 'peer message', 'team:peer')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
+  })
+
+  // HARNESS_SWARM=off: no maker's typed delivery is queued while the agent works; each waits for idle, as Agent Messages' do.
+  it('waits for idle with every typed delivery when none is handed a busy queue', async () => {
+    const t = deps({ typesWhileBusy: undefined }), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane('Working (esc to interrupt)\n' + READY_PANE)
+    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:busy')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
+    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [null, 'team_waiting_unavailable'],
+    [CLAUDE_PERMISSION, 'team_waiting_user'],
+    ['Working (esc to interrupt)\n────────────\n❯ draft\n────────────', 'team_waiting_draft'],
+    ['Working (esc to interrupt)\n────────────\n❯\n  human second line\n────────────', 'team_waiting_draft'],
+  ])('keeps unsafe busy Swarm panes untouched (%s)', async (pane, reason) => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane(pane)
+    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:held')).toMatchObject({ dispatch: 'not_started', reason })
+    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+  })
+
+  it('still checks authority and engine support for Swarm input', async () => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.deps.deliveries.canWrite = () => false
+    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:control')).toMatchObject({ reason: 'team_waiting_control' })
+    t.setPane('Working (esc to interrupt)')
+    expect(await wired.injectTeam!('cc', 'chat', 'team:service:superTabs:unsupported')).toMatchObject({ reason: 'team_waiting_idle' })
+  })
+
+  it('requires a capture even when a screen reader returns its last reading', async () => {
+    const t = deps({ readScreen: async () => screenFor('claude').inspect(READY_PANE) })
+    t.setPane(null)
+    const wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:no-capture'))
+      .toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
+  })
+
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
     const wired = sessionInputDeps(given, () => lock([]))
@@ -88,6 +135,26 @@ describe('the session input controller\'s dependencies', () => {
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBeNull()
+  })
+
+  it('holds an automatic write to an agent the short-turn guard holds, without reading its pane, until the hold ends', async () => {
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
+    const { deps: given } = deps({ shortTurns })
+    const wired = sessionInputDeps(given, () => lock([]))
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBe('team_waiting_control')
+    expect(given.terminal.captureTerminal).not.toHaveBeenCalled()
+    expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:superTabs:d2')).toBeNull()
+    at += 30_000
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBeNull()
+  })
+
+  it('hands the controller the move gate when it was given one, and none otherwise', () => {
+    const { deps: given } = deps()
+    expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
+    const moveGate = { held: () => false } as unknown as NonNullable<InputDeps['moveGate']>
+    expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
   })
 
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
@@ -214,6 +281,7 @@ describe('the session input controller\'s dependencies', () => {
           }),
         } as unknown as InputDeps['terminal'],
       })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.useFakeTimers()
       try {
         const written = write('a1', 'hello')
@@ -222,7 +290,19 @@ describe('the session input controller\'s dependencies', () => {
       } finally { vi.useRealTimers() }
       expect(answers).toEqual([screen === null ? 'screen_unreadable' : 'prompt_hidden'])
       expect(reads).toBe(13)
+      // The screen the Enter was held on is in the log, to read back what the reader missed.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Enter held · ${answers[0]} · screen ${heldScreen(screen)}`))
+      warn.mockRestore()
     }
+  })
+
+  it('logs the bottom of a held screen with its escapes visible, its secrets redacted and its rows cut', () => {
+    expect(heldScreen(null)).toBe('unread')
+    const rows = [...Array.from({ length: 20 }, (_, i) => `row ${i}`), '\u001b[2m───\u001b[0m', '>\u00a0token=abcdefgh1234', 'x'.repeat(500), '', '  ']
+    const logged = JSON.parse(heldScreen(rows.join('\n'))) as string[]
+    expect(logged).toHaveLength(15)
+    expect(logged[0]).toBe('row 8')
+    expect(logged.slice(-3)).toEqual(['\u001b[2m───\u001b[0m', '>\u00a0token=<redacted>', 'x'.repeat(400)])
   })
 
   it('presses the Enter of a message typed while its engine started once it binds its first conversation, and under no other change', async () => {
@@ -447,6 +527,19 @@ describe('createInput', () => {
 describe('message', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('carries a bounded opaque context with the actual composed message, without treating it as identity', async () => {
+    const promptTyped = vi.fn(), run = deps({ promptTyped }), inputs = createInput(run.deps)
+    const context = 'conversation-input-context'
+    inputs.messageRequest({ agentId: 'a1', content: 'Scoped composed input', inputContext: context })
+    await vi.waitFor(() => expect(promptTyped).toHaveBeenCalledWith(agents.get('a1'), READY_PANE, expect.any(Object), context))
+    inputs.input.forget('a1')
+    const plain = vi.fn(), request = createMessageRequest(plain)
+    request({ agentId: 'a1', content: 'Unscoped', inputContext: { user: 'untrusted' } })
+    expect(plain).toHaveBeenCalledWith('a1', 'Unscoped')
+    // An observer is optional; a scoped message still uses the original writer.
+    expect(await messageWriter(deps().deps)('a1', 'Without observer', undefined, context)).toEqual(ok)
+  })
+
   it('writes what a person typed into the agent the frame names, and reads no tab an older window still names', () => {
     const typed = vi.fn()
     const inputs = createInput({ ...deps().deps, typed })
@@ -467,6 +560,25 @@ describe('message', () => {
     message({ content: '', agentId: 'a1' })
     message({ content: 'nobody to type into' })
     expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab']])
+  })
+
+  it('hands what became of it to its measurement: a dropped frame is invalid, a kept one carries the receipt down', () => {
+    const submit = vi.fn(), receipt = vi.fn()
+    const message = createMessageRequest(submit)
+    message({ content: '', agentId: 'a1' }, receipt)
+    message({ content: 'nobody to type into' }, receipt)
+    expect(receipt.mock.calls).toEqual([['invalid'], ['invalid']])
+    message({ content: 'hi', agentId: 'a1' }, receipt)
+    message({ content: 'scoped', agentId: 'a1', inputContext: 'conversation-input-context' }, receipt)
+    expect(submit.mock.calls).toEqual([['a1', 'hi', undefined, receipt], ['a1', 'scoped', 'conversation-input-context', receipt]])
+    expect(receipt).toHaveBeenCalledTimes(2)
+
+    const inputs = createInput(deps().deps)
+    const into = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    inputs.messageRequest({ content: 'hello', agentId: 's1' }, receipt)
+    inputs.messageRequest({ content: 'hello', agentId: 's1', inputContext: 'conversation-input-context' }, receipt)
+    expect(into.mock.calls).toEqual([['a1', 'hello', undefined, undefined, receipt], ['a1', 'hello', undefined, 'conversation-input-context', receipt]])
   })
 })
 

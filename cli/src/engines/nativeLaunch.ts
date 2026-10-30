@@ -1,15 +1,20 @@
 /** Eager preparation shared by every way core starts a native engine. */
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
 import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
 import { patientDeadline } from '../lib/patientExec.js'
+import { windowsEngineArgv } from '../lib/windows/launch.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
 import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
+import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
+import { startupOwnedFlag } from './kit/launchStartup.js'
+import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
@@ -29,6 +34,12 @@ export interface NativeLaunch {
   readonly environment: Readonly<Record<string, string>>
   readonly clearEnvironment?: readonly string[]
   readonly proofs: readonly HookPreparationProof[]
+  /**
+   * Windows: what the engine's declared startup puts first in its argv (Codex's `--no-daemon` when its help lists it),
+   * read from this executable's help at inspection, since no launch script probes it there (lib/windows/engineStart.ts).
+   * Absent elsewhere, and for an engine that declares no startup probe.
+   */
+  readonly startupArgs?: readonly string[]
   retain?(proof: HookPreparationProof): boolean
   ready?(): boolean
   current(): boolean
@@ -41,7 +52,7 @@ export type NativeLaunchResult =
       /** No wait ends this by itself: the selected executable ran and failed, or this request's own installer
        *  did. A creation is refused with this code rather than held (core/agents/create.ts); a relaunch,
        *  which nobody is waiting on, still holds. */
-      refusal?: 'ENGINE_CANNOT_RUN' | 'ENGINE_INSTALL_FAILED'
+      refusal?: 'ENGINE_CANNOT_RUN' | 'ENGINE_INSTALL_FAILED' | 'ENGINE_LAUNCH_REFUSED'
       /** Harness is installing the engine for this launch (engines/prepareNativeLaunch.ts). */
       installing?: true }
 const waiting = (detail: string): Extract<NativeLaunchResult, { ok: false }> => ({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail })
@@ -67,10 +78,13 @@ async function read(executable: string, args: readonly string[], environment: Re
     const answer = (output: ProbeOutput | null) => { if (!answered) { answered = true; done(output) } }
     let child: ReturnType<typeof execFile>
     try {
+      // Windows starts an npm shim's script under node, never the shim through cmd.exe, which Node refuses to run
+      // without a shell (lib/windows/launch.ts); elsewhere [executable] as it is.
+      const [program, ...programArgs] = windowsEngineArgv('the engine', [executable, ...args], { environment: nativeProcessEnvironment(environment) })
       // Node's timeout can discard unread output after a core stall, then
       // report exit 0. Keep its pipes and use discovery's patient deadline.
-      child = execFile(executable, [...args], {
-        env: nativeProcessEnvironment(environment), encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+      child = execFile(program!, programArgs, {
+        env: nativeProcessEnvironment(environment), encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
       }, (error, stdout, stderr) => {
         settled = true; probes--; cancelDeadline(); clearTimeout(drain)
         // A numeric code is the child's own exit status. A spawn failure, a signal or the output
@@ -94,6 +108,25 @@ async function read(executable: string, args: readonly string[], environment: Re
   })
 }
 
+/** The location variables every engine's homes derive from. */
+const SHARED_LOCATIONS: ReadonlySet<string> = new Set(['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'])
+/** The variables `nativeHookLocations` derives each engine's own homes from (kit/nativeLocations.ts). */
+const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
+  claude: ['CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR'],
+  codex: ['CODEX_HOME'],
+  opencode: ['OPENCODE_PLUGIN_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'OPENCODE_DATA_DIR', 'OPENCODE_DB'],
+  kilo: ['KILO_PLUGIN_DIR'],
+  pi: ['PI_HOME', 'PI_CODING_AGENT_DIR', 'PI_CODING_AGENT_SESSION_DIR'],
+  hermes: ['HERMES_HOME'],
+  copilot: ['COPILOT_HOME'],
+  commandcode: ['COMMANDCODE_HOME'],
+  cursor: ['CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'CURSOR_HOME'],
+  grok: ['GROK_HOME'],
+  agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
+  devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
+  amp: ['AMP_PLUGIN_DIR'],
+}
+
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
   deps: { confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
@@ -108,6 +141,13 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
   if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
+  // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
+  // Only the variables this engine's homes come from count: another engine's setting is no reason to refuse this one.
+  for (const [key, path] of Object.entries(selected)) {
+    if (path && SHARED_LOCATIONS.has(key) || (path && (ENGINE_LOCATIONS[engine] ?? []).includes(key))) {
+      if (homeIsNetworkOrDevice(path)) return { ...waiting(networkHomeSentence(key, homedir())), refusal: 'ENGINE_LAUNCH_REFUSED' }
+    }
+  }
   // Empty location variables use their native default. Relative locations cannot
   // be prepared independently of a changing pane cwd.
   if (Object.entries(selected).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) {
@@ -126,6 +166,16 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   // Unknown is an observation of this attempt, never a permanent installed-file answer.
   if (engine === 'opencode' && opencodeMajor === null) return waiting('Waiting to confirm the selected OpenCode executable’s version.')
   if (!executable.current()) return waiting('Waiting for the selected engine executable to stop changing.')
+  // Windows: the startup probe a launch script makes before every run elsewhere (engines/kit/launchStartup.ts), made
+  // once here, of the executable this launch holds. No answer holds the launch, as the script ends one.
+  const owned = process.platform === 'win32' ? startupOwnedFlag(launchContract(engine)) : null
+  let startupArgs: readonly string[] | undefined
+  if (owned) {
+    const help = await read(executable.command, ['--help'], environment)
+    if (help && help.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${help.stderr}\n${help.stdout}`, `it exited with status ${help.code}`))
+    if (!help || help.code !== 0 || !`${help.stdout}${help.stderr}`.trim()) return waiting('Waiting to confirm the selected executable’s startup options.')
+    startupArgs = Object.freeze(helpLists(`${help.stdout}\n${help.stderr}`, owned.flag) ? [owned.flag] : [])
+  }
   let proofs: readonly HookPreparationProof[] = [], selectedEnvironment = environment
   const dependencies: HookPreparationProof[] = []
   const dependenciesCurrent = () => dependencies.every(proof => proof.current())
@@ -135,7 +185,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   /** Why the latest help probe's executable failed, when it ran and exited non-zero. */
   let failed: string | null = null
   const launch: NativeLaunch = {
-    token: randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(),
+    token: randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(), ...(startupArgs ? { startupArgs } : {}),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
     retain(proof) {
@@ -196,8 +246,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       // for good, waiting to confirm its permission flags.
       const help = `${probe.stdout}\n${probe.stderr}`
       if (!help.trim()) return 'unknown'
-      const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const answer = new RegExp(`(?:^|[^A-Za-z0-9-])${escaped}(?![A-Za-z0-9-])`).test(help) ? 'supported' : 'unsupported'
+      const answer = helpLists(help, flag) ? 'supported' : 'unsupported'
       permissions.set(flag, answer)
       return answer
     },
@@ -206,6 +255,12 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     return failed ? cannotRun(engine, failed) : waiting('Waiting to confirm the selected executable’s permission flags.')
   }
   return { ok: true, launch }
+}
+
+/** Whether [help] lists [flag] as a whole option, not the start of a longer one (`--auto` is not `--auto-update`). */
+function helpLists(help: string, flag: string): boolean {
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?:^|[^A-Za-z0-9-])${escaped}(?![A-Za-z0-9-])`).test(help)
 }
 
 const installers: Partial<Record<AgentEngine, (port: number, options: NativeHookOptions) => Promise<boolean>>> = {

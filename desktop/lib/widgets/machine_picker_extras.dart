@@ -10,6 +10,7 @@ import '../state/app_state.dart';
 import '../state/machine_devices.dart';
 import '../state/swarm_search.dart';
 import 'desktop_chrome.dart';
+import 'finger_target.dart';
 
 /// What the Machines picker needs from the screen around it for the parts that are not rows: a
 /// dialog has to be shown with the picker stepped aside, and Add Phone belongs to the workspace.
@@ -18,6 +19,7 @@ class MachinePickerHooks {
     required this.confirm,
     required this.onHistory,
     this.onAddPhone,
+    this.onApproveDevice,
   });
 
   /// Asks a yes/no question over the workspace (the picker steps aside while it is up).
@@ -28,6 +30,9 @@ class MachinePickerHooks {
 
   /// Opens Add Phone. Null where a phone cannot be added from here.
   final VoidCallback? onAddPhone;
+
+  /// Approves a device that says its code aloud (a lamp, `harness login --code`). Null hides it.
+  final VoidCallback? onApproveDevice;
 }
 
 /// The top of the Machines picker: which computer's tabs this window shows, and what the account's
@@ -129,21 +134,24 @@ class MachineWindowChoice extends StatelessWidget {
         Text('Show in this window', style: DesktopChrome.metadata()),
         SizedBox(
           width: 240,
-          child: AppSelectField<String?>(
-            key: const Key('machine-window-choice-field'),
-            semanticLabel: 'Show in this window',
-            value: selected,
-            options: options,
-            onChanged: (id) {
-              if (id != null &&
-                  id != selected &&
-                  machines
-                      .where((m) => m.machineId == id)
-                      .any((m) => _unavailable(m) != null)) {
-                return;
-              }
-              app.setMachineProfile(id);
-            },
+          child: fingerTarget(
+            enabled: workspaceIsCompact(context),
+            AppSelectField<String?>(
+              key: const Key('machine-window-choice-field'),
+              semanticLabel: 'Show in this window',
+              value: selected,
+              options: options,
+              onChanged: (id) {
+                if (id != null &&
+                    id != selected &&
+                    machines
+                        .where((m) => m.machineId == id)
+                        .any((m) => _unavailable(m) != null)) {
+                  return;
+                }
+                app.setMachineProfile(id);
+              },
+            ),
           ),
         ),
       ],
@@ -321,6 +329,7 @@ class MachinePickerFooter extends StatelessWidget {
       builder: (context, _) {
         grid.AppTheme.watch(context);
         final history = devices?.devices?.historyAvailable ?? false;
+        final finger = workspaceIsCompact(context);
         return Padding(
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
           child: Wrap(
@@ -328,27 +337,48 @@ class MachinePickerFooter extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              DesktopPill(
-                key: const Key('machine-picker-add-machine'),
-                label: 'Add machine',
-                compact: true,
-                onPressed: onAddMachine,
+              fingerTarget(
+                enabled: finger,
+                DesktopPill(
+                  key: const Key('machine-picker-add-machine'),
+                  label: 'Add machine',
+                  compact: true,
+                  onPressed: onAddMachine,
+                ),
               ),
               if (hooks.onAddPhone case final addPhone?)
-                DesktopPill(
-                  key: const Key('machine-picker-add-phone'),
-                  label: 'Add phone',
-                  compact: true,
-                  onPressed: addPhone,
+                fingerTarget(
+                  enabled: finger,
+                  DesktopPill(
+                    key: const Key('machine-picker-add-phone'),
+                    label: 'Add phone',
+                    compact: true,
+                    onPressed: addPhone,
+                  ),
                 ),
-              DesktopPill(
-                key: const Key('account-devices-history'),
-                label: 'History…',
-                compact: true,
-                tooltip: history || devices?.devices == null
-                    ? null
-                    : 'Update Harness on this computer to see history.',
-                onPressed: history ? hooks.onHistory : null,
+              if (hooks.onApproveDevice case final approve?)
+                fingerTarget(
+                  enabled: finger,
+                  DesktopPill(
+                    key: const Key('machine-picker-approve-device'),
+                    label: 'Approve a device',
+                    compact: true,
+                    tooltip:
+                        'Type the code a device with no screen says aloud.',
+                    onPressed: approve,
+                  ),
+                ),
+              fingerTarget(
+                enabled: finger,
+                DesktopPill(
+                  key: const Key('account-devices-history'),
+                  label: 'History…',
+                  compact: true,
+                  tooltip: history || devices?.devices == null
+                      ? null
+                      : 'Update Harness on this computer to see history.',
+                  onPressed: history ? hooks.onHistory : null,
+                ),
               ),
             ],
           ),

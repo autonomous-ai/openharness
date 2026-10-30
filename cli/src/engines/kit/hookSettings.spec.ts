@@ -219,8 +219,8 @@ it('allows only Harness\'s own MCP tools, not every tool of a server that is als
 
 /** Harness's Codex rules file on this computer, byte for byte. */
 const codexRulesFile = (): string => {
-  const verbs = '["whoami", "ps", "show", "wait", "new", "close", "send"]'
-  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, show, wait, new, close, send)\n"
+  const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell"]'
+  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell)\n"
     + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
     + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
     // Only the launcher's path counts as `harness` by its last part: not a `harness` an agent wrote elsewhere.

@@ -11,8 +11,8 @@ import 'question_pane.dart';
 /// ⚠️ **A local read, not a second source of truth.** The daemon's own watcher
 /// still runs, still drives `blockedAgents`, and still answers from wherever a
 /// person actually answers. This only tells the page it is attached to whether
-/// the pane in front of it is showing a dialog, because the daemon's frame
-/// cannot reach a phone on the relay — see [readQuestionPane].
+/// the pane in front of it is showing a dialog, which a daemon from before
+/// 2026-10-21 never sends a phone on the relay — see [readQuestionPane].
 ///
 /// ⚠️ **Debounced on both edges, and the two are not symmetric.** A redraw
 /// arrives as a burst of writes and a capture taken mid-repaint parses as

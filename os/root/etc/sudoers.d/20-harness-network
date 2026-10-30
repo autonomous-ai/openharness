@@ -4,5 +4,13 @@
 # The daemon switching Wi-Fi for the person's phone (cli services/osDevice.ts): the Wi-Fi comes as JSON
 # on stdin to the fixed, root-owned setup helper, which goes back to the previous Wi-Fi when it fails.
 %wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py join
-# `harness factory-reset`: this computer as just flashed (the reset button's action), from a terminal.
+# `harness factory-reset`: this computer as just installed (the reset button's action), from a terminal.
 %wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py reset, /usr/bin/python3 /usr/lib/harness-os/setup.py reset --keep-wifi
+# For the person's phone, through the daemon (cli services/osDevice.ts): signed out for another account
+# (everything else stays), the computer's password (both, as JSON on stdin; the current one checked
+# first), and SSH on, off or how it is.
+%wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py sign-out, /usr/bin/python3 /usr/lib/harness-os/setup.py password
+%wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py ssh status, /usr/bin/python3 /usr/lib/harness-os/setup.py ssh on, /usr/bin/python3 /usr/lib/harness-os/setup.py ssh off
+# The GitHub CLI put back from the computer's own repositories, for the phone's Sign in to GitHub: that one
+# package, never one the caller names.
+%wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py install-gh

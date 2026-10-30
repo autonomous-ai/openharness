@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.autonomous-ai/harness",
+  "name": "ai.autonomous.harness/harness",
   "title": "Harness",
-  "description": "Start Claude Code and Codex agents the person can watch, wait for them and read their answers.",
+  "description": "Start coding agents (Claude Code, Codex, and more) the person can watch and read.",
   "websiteUrl": "https://harness.autonomous.ai/agents",
   "repository": {
     "url": "https://github.com/autonomous-ai/openharness",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@autonomous-ai/harness-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       }

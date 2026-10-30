@@ -36,8 +36,11 @@ const Set<String> encryptedDownTypes = {
   'viewer_surface',
   'api_connections',
   'connectors',
-  // Sharing a machine across accounts (CLI services/sharedMachines.ts): the addresses it is shared with.
+  // Sharing a machine across accounts (CLI services/sharedMachines.ts): the addresses it is shared with,
+  // and where a guest may start a harness (the owner's folders).
   'shared_machines',
+  'guest_folders',
+  'super_tabs',
   'orchestrator',
   'route_task',
   'route_send',
@@ -62,6 +65,7 @@ const Set<String> encryptedDownTypes = {
   'agent_recent',
   // Writes the conversation record a switched agent reads (cli/src/lib/agentHandoff.ts).
   'agent_handoff_prepare',
+  'agent_handoff_complete',
   'agent_update',
   'agent_files',
   'agent_read_file',
@@ -70,7 +74,7 @@ const Set<String> encryptedDownTypes = {
   'git_project_info',
   // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
   // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
-  'git_pull_request',
+  'git_pull_request', 'git_pull_requests_status',
   // Memories across machines (CLI services/memory.ts).
   'memory_snapshot',
   'memory_about_put',

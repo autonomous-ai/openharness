@@ -7,10 +7,12 @@
  * without this package ever holding a token, a key or a password. Harness owns the pairing and the
  * encryption; we ask it questions in the same words the app does.
  *
- * No credential is read here, and none is ever put in a snapshot. A machine's remote password is
+ * The one credential read here is the daemon's own local one (`localCredentialHeaders`), shown only to
+ * that loopback daemon, and none is ever put in a snapshot. A machine's remote password is
  * typed into `harness link connect` on a terminal, never passed through this module.
  */
 import { randomUUID } from 'node:crypto';
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -37,14 +39,63 @@ export function dataDir(env = process.env) {
   return env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data');
 }
 
+/**
+ * The headers every request to the daemon's loopback API carries: its local credential, or none.
+ *
+ * Since Harness 0.4.21 the loopback port (REST and `/api/local-ws`) answers 401 to a process that does
+ * not show `X-Harness-Local: <credential>`, the 0600 `hook-credential` file in Harness's data folder
+ * (`ADAPTER_DATA_DIR`, default `~/.harness/cli/data`) — so only the OS user Harness runs as gets in.
+ * Read with the CLI's own checks (cli/src/lib/hookAuth.ts `readHookCredential`): a folder that is ours
+ * and nobody else can write, a 0600 regular file of ours, a 43-character base64url value. Anything else
+ * is no credential and no header (the CLI also tightens a 0755 folder; a reader leaves it alone).
+ * The same function, by the same name, is in every Store package that talks to the daemon.
+ */
+export function localCredentialHeaders(env = process.env) {
+  const dir = dataDir(env);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse
+  // the credential the daemon wrote; there its protection is the profile folder's ACL (cli hookAuth.ts).
+  const posixModes = process.platform !== 'win32';
+  const opened = [];
+  try {
+    const folder = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    opened.push(folder);
+    const where = fstatSync(folder);
+    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (posixModes && (where.mode & 0o022) !== 0)) return {};
+    const file = openSync(join(dir, 'hook-credential'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    opened.push(file);
+    const stat = fstatSync(file);
+    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (posixModes && (stat.mode & 0o777) !== 0o600)) return {};
+    const value = readFileSync(file, 'utf8').trim();
+    return /^[A-Za-z0-9_-]{43}$/.test(value) ? { 'X-Harness-Local': value } : {};
+  } catch {
+    return {};
+  } finally {
+    for (const fd of opened) closeSync(fd);
+  }
+}
+
 const DOWN = 'Harness is not running on this computer. Start it (the app, or `harness start`) and ask again.';
+const CREDENTIAL_REFUSED = "Harness refused this process's local credential. Run Machine Monitor as the same OS user as Harness.";
+
+/** Whether the daemon behind a bridge socket that would not open refused the credential: a WebSocket
+ *  cannot report the 401, so the same headers are shown once over plain HTTP, which can. */
+async function credentialRefused(url, headers) {
+  try {
+    const answer = await fetch(url.replace(/^ws:/, 'http:'), { headers, signal: AbortSignal.timeout(2000) });
+    await answer.body?.cancel();
+    return answer.status === 401;
+  } catch {
+    return false;
+  }
+}
 
 async function call(method, path, { body, timeoutMs = 15_000, env = process.env } = {}) {
   let res;
   try {
     res = await fetch(new URL(path, daemonBase(env)), {
       method,
-      headers: { 'x-adapter-local': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      headers: { 'x-adapter-local': '1', ...localCredentialHeaders(env), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -53,6 +104,7 @@ async function call(method, path, { body, timeoutMs = 15_000, env = process.env 
   }
   let payload = {};
   try { payload = await res.json(); } catch { /* an empty or non-JSON body is an error body */ }
+  if (res.status === 401 && payload?.error === 'LOCAL_CREDENTIAL_REQUIRED') return { ok: false, status: 401, error: CREDENTIAL_REFUSED };
   if (res.status === 401 || res.status === 403) return { ok: false, status: res.status, signedOut: true, error: 'Not signed in to Harness on this computer. Run `harness login`.' };
   if (!res.ok || payload?.success === false) {
     return { ok: false, status: res.status, error: payload?.error?.message || `Harness answered ${res.status} for ${method} ${path}.` };
@@ -149,8 +201,8 @@ function sessionsFor(WebSocketImpl) {
  *  closes or errors, whichever comes first; every waiter still on it hears that as a failure. */
 function openSession(machineId, { env, WebSocketImpl, timeoutMs, forceReconnect = false }) {
   const byMachine = sessionsFor(WebSocketImpl);
-  let socket;
-  try { socket = new WebSocketImpl(bridgeUrl(env)); }
+  let socket, url, headers;
+  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers }); }
   catch { return Promise.reject({ ok: false, error: DOWN }); }
   const session = { socket, waiters: new Map(), heartbeat: null };
   const fail = (answer) => {
@@ -167,12 +219,20 @@ function openSession(machineId, { env, WebSocketImpl, timeoutMs, forceReconnect 
     const deadline = setTimeout(() => { settle(reject, { ok: false, error: 'This machine did not answer in time.' }); fail({ ok: false, error: 'This machine did not answer in time.' }); }, timeoutMs);
     // `forceReconnect` tells Harness the session it kept for this machine is dead (the machine's own
     // Harness restarted under it) and must be dialled fresh rather than handed back once more.
-    socket.addEventListener('open', () => socket.send(JSON.stringify({
+    let opened = false, refusal = null; // `refusal`: the credential check under way after a socket that never opened
+    socket.addEventListener('open', () => { opened = true; socket.send(JSON.stringify({
       type: 'machine_select',
       payload: { machineId, localProtocolVersion: 1, relayIsolation: true, ...(forceReconnect ? { forceReconnect: true } : {}) },
-    })));
-    socket.addEventListener('error', () => { settle(reject, { ok: false, error: DOWN }); fail({ ok: false, error: DOWN }); });
+    })); });
+    socket.addEventListener('error', () => {
+      if (opened) { settle(reject, { ok: false, error: DOWN }); fail({ ok: false, error: DOWN }); return; }
+      refusal = credentialRefused(url, headers).then(refused => {
+        const answer = { ok: false, error: refused ? CREDENTIAL_REFUSED : DOWN };
+        settle(reject, answer); fail(answer);
+      });
+    });
     socket.addEventListener('close', event => {
+      if (refusal) return; // the error above answers, once it knows whether the credential was refused
       const answer = event.code === 4404
         ? { ok: false, needsLink: true, error: 'This machine is not linked from this computer yet.' }
         : { ok: false, error: event.code === 4403 ? 'Harness would not connect to this machine.' : 'The connection to this machine closed before it answered.' };

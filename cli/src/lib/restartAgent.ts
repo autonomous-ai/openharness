@@ -36,7 +36,7 @@ export async function bypassPermissionFor(
 
 export type RestartOutcome =
   | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }
-  | { ok: false; detail: string }
+  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED' }
 
 export type RestartAgentReply =
   | { ok: true; session: RegisteredSession; resumed: boolean }
@@ -86,13 +86,13 @@ export class AgentRestartCoordinator {
 export interface RestartAgentDeps {
   /** False after Stop, replacement, or removal. Checked across every await. */
   isCurrent?: () => boolean
-  /** Re-arm `remain-on-exit` before anything is killed — see `tmuxBackend.ts`'s `holdOpen`. Without
-   *  this, tmux tears the pane (and, being its only pane, the whole session) down the instant the old
-   *  process exits. */
+  /** Re-arm `remain-on-exit` before anything is killed — see `tmuxBackend.ts`'s `holdOpen` (the pty host's
+   *  `holdOpen` is the same keep). Without this, tmux tears the pane (and, being its only pane, the whole
+   *  session) down the instant the old process exits. */
   holdOpen: () => Promise<{ ok: boolean; reason?: string }>
   /** Validate + SIGTERM/SIGKILL the saved process. Same contract as `terminateDeletedAgent`. */
   terminate: (checkAfterMs?: number) => Promise<TerminateOutcome>
-  /** `tmux respawn-pane` (or equivalent) with a fully-built argv. */
+  /** `tmux respawn-pane -k` (or the pty host's `respawn`, the same in place) with a fully-built argv. */
   respawn: (argv: string[]) => Promise<{ ok: boolean; reason?: string }>
   /** Why `respawn` would be refused here (a tmux too old for what the relaunch needs), asked before
    *  anything is stopped; null when it would try. Left out, never refused. */
@@ -102,15 +102,27 @@ export interface RestartAgentDeps {
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
    * preserve the conversation, not enter the fresh-session fallback. */
   prepareResume?: () => void | Promise<void>
+  /**
+   * Claude only: stop a `claude --bg` job still holding the session this is about to `--resume`
+   * (`lib/claudeBackgroundJob.ts`). Run once, after history preparation and before the resume
+   * argv is built, so a job that held the jobs store's lock is gone before Claude Code is asked to
+   * reopen it. A failure here must not block the restart it exists to unblock, so it is awaited for
+   * ordering only, never allowed to fail the restart; implementations swallow their own errors.
+   */
+  stopConflictingJob?: () => Promise<void>
   buildArgv: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string[]
+  /** Why the relaunch [buildArgv] would build is refused on this platform (a Windows batch-file engine whose arguments
+   *  cmd.exe would read, lib/windows/launch.ts), asked before anything is stopped; null when it is not. */
+  launchRefusal?: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string | null
   log: (message: string) => void
   /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
   keepAbandoned?: () => void
 }
 
-/** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane. `not-ours` and
- *  `failed` are NOT here on purpose: never respawn over a target the kill sequence could not confirm. */
-const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
+/** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane (or, for a move, to start
+ *  the engine in another one: hostMove/moveAgent.ts). `not-ours` and `failed` are NOT here on purpose: never
+ *  respawn over a target the kill sequence could not confirm. */
+export const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
 
 export async function restartAgent(
   session: { engine: AgentEngine; sessionId: string; resumeOnly?: true },
@@ -123,6 +135,9 @@ export async function restartAgent(
   // Before anything is stopped: refused after the kill, the agent was left with no engine at all.
   const refused = await deps.respawnRefusal?.()
   if (refused) return { ok: false, detail: `${refused} Nothing was stopped.` }
+  // The resume relaunch has every argument the fresh fallback has, and more: refused, neither would start.
+  const launchRefused = deps.launchRefusal?.({ bypassPermission, ...(session.sessionId ? { resumeSessionId: session.sessionId } : {}) })
+  if (launchRefused) return { ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: `${launchRefused} Nothing was stopped.` }
   if (!current()) return changed
   const armed = await deps.holdOpen()
   if (!current()) return changed
@@ -130,7 +145,11 @@ export async function restartAgent(
     return { ok: false, detail: armed.reason ?? 'could not re-arm the pane before restart' }
   }
 
-  const outcome = await deps.terminate()
+  let outcome: TerminateOutcome
+  try { outcome = await deps.terminate() }
+  catch (error) {
+    return { ok: false, detail: `could not stop the running ${session.engine} session: ${error instanceof Error ? error.message : error}` }
+  }
   if (!current()) return changed
   if (!KILL_CONFIRMED.has(outcome)) {
     return { ok: false, detail: `could not confirm the running ${session.engine} process was stopped (${outcome})` }
@@ -142,6 +161,8 @@ export async function restartAgent(
       return { ok: false, detail: `could not prepare ${session.engine} session for resume: ${error instanceof Error ? error.message : error}` }
     }
   }
+  if (!current()) return changed
+  if (resumeSessionId && deps.stopConflictingJob) await deps.stopConflictingJob()
   if (!current()) return changed
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null

@@ -82,7 +82,9 @@ export interface StartupContract {
   /**
    * Before every run, ask the binary's own `--help` whether it takes `sharedServer.ownedFlag`, and pass it
    * first when it does: an older build lacks it. A probe that cannot answer ends the launch, saying
-   * `unverified`. It also gives the engine a POSIX shell to run in where the daemon has no login shell.
+   * `unverified`. It also gives the engine a POSIX shell to run in where the daemon has no login shell. Windows has
+   * none: there the daemon reads the help as it inspects the launch, and the flag goes in the argv
+   * (lib/windows/engineStart.ts).
    */
   ownedFlag?: { unverified: string }
   retry?: StartupRetry
@@ -140,6 +142,32 @@ export type TrustContract = { home: LaunchHome; file: string } & (
   /** A TOML table per folder, `[<table>."<folder>"]`, trusted where its `key` is `value`. Exact folders only. */
   | { format: 'toml'; table: string; key: string; value: string }
 )
+
+/**
+ * The engine's one-time warning for the mode that approves everything, which it stops showing once `key` is true in
+ * `file` in its home: the setting its own "Yes, I accept" writes. Recorded by core, before a spawn, for a Swarm agent
+ * the Swarm starts in that mode (core/agents/create.ts); `false` there is the person's and stays. Applied by
+ * kit/folderTrust.ts `recordAcceptanceIn`.
+ */
+export interface BypassAcceptanceContract { home: LaunchHome; file: string; key: string }
+
+/**
+ * The engine's question about MCP servers a folder inherits: a project file of servers (`file`, `servers` its map) in a
+ * folder ABOVE the one it opens, which it asks to use or not as it starts there. Its own "no", the question's default, is
+ * kept as `rejected` in `settings` in the folder. Harness records that same "no" for a folder it made empty itself,
+ * where it records the folder's trust, so its agent starts at once instead of waiting on the person: a Claude Code
+ * harness in a new project under the home sat at "New MCP server found in this project: argent" with its first message
+ * never typed, while `harness wait` read it as working (2026-10-26). A server the person decided in their user
+ * settings (`user`: `approved`, `rejected`, or `approveAll` on) is theirs and left alone; so is a file in the folder.
+ * Applied by kit/inheritedMcp.ts.
+ */
+export interface InheritedMcpContract {
+  file: string
+  servers: string
+  settings: string
+  rejected: string
+  user: { home: LaunchHome; file: string; approved: string; rejected: string; approveAll: string }
+}
 
 /**
  * Making a stopped conversation's history resumable before the engine is launched on it again. Applied by
@@ -230,12 +258,26 @@ export interface InstructionAttribution {
   args: readonly string[]
 }
 
+/**
+ * The flags that give ONE session its model and effort, so that nothing is written to the person's own engine
+ * settings (Claude Code's `/model` and `/effort` commands are saved there as the new default). `{value}` in an
+ * argument is the model or the effort. `efforts` are the levels the effort flag takes; any other is refused.
+ * Applied by lib/launchModel.ts.
+ */
+export interface ModelArgsContract {
+  model: readonly string[]
+  effort: readonly string[]
+  efforts: readonly string[]
+}
+
 /** Literal argv contracts copied from the existing launch paths. No engine version behavior changes. */
 export interface EngineLaunch {
   permissionModes: Readonly<Record<string, readonly string[]>>
   bypassPermission: string[]
   firstPromptArgs: readonly string[]
   resumeArgs: string[]
+  /** How a new session is launched with a model and effort of its own, for this session only. */
+  modelArgs?: ModelArgsContract
   forkArgs: { lead: string[]; after?: string[] }
   instructionFiles: readonly string[]
   contextArgs?: ContextArgsTemplate
@@ -245,11 +287,16 @@ export interface EngineLaunch {
   startup?: StartupContract
   /** The screen the engine's TUI runs on, where Harness chooses it; applied to every launch (kit/launchScreen.ts). */
   screen?: ScreenContract
+  /** Arguments for a session the Swarm started, never for a person's own (lib/swarmEngineArgs.ts). */
+  swarmArgs?: readonly string[]
   /** The instruction file Harness writes its own notes into (a harness's bootstrap, the saved APIs); else AGENTS.md. */
   instructionFile?: string
   /** The line, in that file, that has the engine read `file` too (Claude Code's `@AGENTS.md` import). */
   instructionImport?: { file: string; line: string }
   trust?: TrustContract
+  /** Recorded with `trust`, for the same folders (kit/inheritedMcp.ts). */
+  inheritedMcp?: InheritedMcpContract
+  bypassAcceptance?: BypassAcceptanceContract
   resumeRepair?: ResumeRepairContract
   attribution?: AttributionContract
   /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */

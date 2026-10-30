@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
 import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
+import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 type Payload = Record<string, unknown>
@@ -90,6 +91,11 @@ export function serviceFaults(env: NodeJS.ProcessEnv, name: string): ServiceFaul
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+/** Another of the owner's machines (Asker.machine), as the core said it; read as none when malformed. */
+const machineOf = (value: unknown): { machineId: string; label: string | null } | null => {
+  const m = value as { machineId?: unknown; label?: unknown } | null
+  return m && typeof m.machineId === 'string' && m.machineId && (typeof m.label === 'string' || m.label === null) ? { machineId: m.machineId, label: m.label } : null
+}
 
 /** A service running in this process. Its stop may take a moment (the viewers stop their servers). */
 export interface ServiceProcess {
@@ -163,6 +169,8 @@ export function hostServices(options: ServiceHostOptions): ServiceHost {
   if (faults.some((fault) => fault.crash)) setTimeout(() => leave(1), 200)
   // The master is gone: so is this process, rather than an orphan holding what it holds.
   channel.once('disconnect', () => leave(0))
+  // Windows: the master's stop is a message, as its SIGTERM is elsewhere (harnessd/services.ts `stopByMessage`).
+  channel.on('message', (message) => { if (isMasterMessage(message) && message.type === 'harnessd:shutdown') leave(0) })
   ;(options.onSignal ?? ((signal, handler) => { process.once(signal, handler) }))('SIGTERM', () => leave(0))
   return { add: (service) => { services.push(service) }, leave }
 }
@@ -228,7 +236,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; connection?: unknown; requestId?: unknown } }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -270,6 +278,10 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     const asker: Asker = {
       local: frame.asker?.local === true,
       owner: frame.asker?.owner === true,
+      ...(typeof frame.asker?.accountOwner === 'boolean' ? { accountOwner: frame.asker.accountOwner } : {}),
+      // A guest's session (core/guestPolicy.ts): whose guest it is, for the few requests a guest may make here.
+      ...(typeof frame.asker?.guest === 'string' ? { guest: frame.asker.guest } : {}),
+      ...(machineOf(frame.asker?.machine) ? { machine: machineOf(frame.asker?.machine)! } : {}),
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
     }

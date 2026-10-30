@@ -4,6 +4,11 @@
 // then the text in at most two rows, the second cut with an ellipsis. Order: the asking agents (model order, their question), then the unread
 // entries newest first (the entry's first sentence). A tap on a row registers POD_A_OPEN_NOTIF with the agent id (the glue resolves it against
 // model->unread); an asking agent has no unread entry: POD_A_FOLLOW, which the glue resolves to an index in model->agents.
+// A Super Tab's question (pod_model_attention; owner's mockup pro-supertab/notify.html A3) is an asking row with three marks: the name line reads
+// "<name> · <Super Tab>" (the Super Tab in purple #6B4FA3), the meta "needs you" (a decision) or "stuck", a 6 px edge inside the bubble's left side
+// (amber #FFB340 / red #FF5C5C: the bubble less a copy of itself 6 px to the right, so it follows the corners; the tail, here a whole turned square,
+// is drawn over it as in the mockup), and on the avatar's bottom right corner a 40 px badge (#3B2E55, radius 12, a 3 px ring of the room's ground)
+// holding a diamond 16 px across in the room's ink (two triangles; the mockup's ◆ inherits that colour).
 #include <stdio.h>
 #include <string.h>
 
@@ -16,6 +21,11 @@
 #define ELL "\xe2\x80\xa6"
 enum { BG = PH_ROOM_BG, TOP = 120, PITCH = 170, SHOWN = 3, ROW_H = 150, AV_X = 60, AV_Y = 8, AV = 110, AV_ART = 92, BUB_X = 190, BUB_W = 470, PAD_X = 26, PAD_TOP = 20,
        PAD_BOT = 22, NAME_H = 30, MSG_PITCH = 39, MAX_ITEMS = 40, TAIL_X = 181, TAIL_Y = 52 };
+// A Super Tab's row: the edge's width, the badge (its size, how far it hangs past the avatar's corner, its radius and ring) and the diamond's half width.
+// TAG_GAP: from the name's measured end to the "·": the measured width runs ~4 px past the ink and the dot has its own bearing, so 2 px reads as
+// the mockup's word space. The diamond is the mockup's glyph colour (the room's ink, inherited there).
+enum { EDGE_W = 6, BADGE = 40, BADGE_OUT = 8, BADGE_R = 12, RING = 3, DIAMOND = 8, TAG_GAP = 2 };
+enum { TAB_INK = 0x6B4FA3, BADGE_FILL = 0x3B2E55, DIAMOND_INK = PH_ROOM_INK, DECIDE_EDGE = 0xFFB340, STUCK_EDGE = 0xFF5C5C };
 // The room's warm ground and the Notices letter's paper (owner, UI review option B): the letter card, this list and the recap are one family.
 enum { BUB_FILL = PH_LETTER, INK = PH_LETTER_INK, META = PH_LETTER_WHO, AV_FILL = PH_RAISED, HEAD_INK = PH_ROOM_INK, HEAD_MUTED = PH_ROOM_MUTED };
 static const ht_pro_font_t *const MSG = &ph_sb_32, *const META_F = &ph_sb_22;
@@ -113,8 +123,9 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
 {
     ht_scene_t *s = f->scene;
     const pod_agent_t *a = it->a;
-    char text[POD_UNREAD_TEXT > 320 ? POD_UNREAD_TEXT : 320], rows[3][POD_ROW_MAX], age[8];
+    char text[POD_UNREAD_TEXT > 320 ? POD_UNREAD_TEXT : 320], rows[3][POD_ROW_MAX], age[12];
     const char *name;
+    const pod_attention_t attn = it->u ? POD_ATTN_NONE : pod_model_attention(m, a);
     if (it->u) {
         ph_first_sentence(text, sizeof text, it->u->text);
         int32_t d = (int32_t)(m->clock_ms - it->u->at_ms);
@@ -123,7 +134,7 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
     } else {
         snprintf(text, sizeof text, "%s", a->question);
         for (char *c = text; *c; c++) if (*c == '\n' || *c == '\r' || *c == '\t') *c = ' ';
-        snprintf(age, sizeof age, "asks");
+        snprintf(age, sizeof age, "%s", attn == POD_ATTN_STUCK ? "stuck" : attn == POD_ATTN_DECISION ? "needs you" : "asks");
         name = a->name[0] ? a->name : "Agent";
     }
     const int tw = BUB_W - 2 * PAD_X, n = two_rows(text, tw, rows);
@@ -131,15 +142,39 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
 
     ht_pro_rect_aa(s, AV_X, y + AV_Y, AV, AV, 28, C(AV_FILL));
     face_art(s, AV_X + AV / 2, y + AV_Y + AV / 2, a ? a->engine : NULL);
-    ht_pro_rect_aa(s, BUB_X, y, BUB_W, h, 30, C(BUB_FILL));
-    {   // the tail: the left half of a 26 px square turned 45 degrees at (181, y + 52), pointing at the avatar
+    if (attn != POD_ATTN_NONE) {   // the Super Tab badge: a ring of the ground, the purple square, the white diamond
+        const int bx = AV_X + AV + BADGE_OUT - BADGE, by = y + AV_Y + AV + BADGE_OUT - BADGE, cx = bx + BADGE / 2, cy = by + BADGE / 2;
+        ht_pro_rect_aa(s, bx, by, BADGE, BADGE, BADGE_R, C(BG));
+        ht_pro_rect_aa(s, bx + RING, by + RING, BADGE - 2 * RING, BADGE - 2 * RING, BADGE_R - RING, C(BADGE_FILL));
+        pod_tri_inner(s, (cx - DIAMOND) * 16, cy * 16, cx * 16, (cy - DIAMOND) * 16, (cx + DIAMOND) * 16, cy * 16, C(DIAMOND_INK), 4u);
+        pod_tri_inner(s, (cx + DIAMOND) * 16, cy * 16, cx * 16, (cy + DIAMOND) * 16, (cx - DIAMOND) * 16, cy * 16, C(DIAMOND_INK), 4u);
+        ht_pro_rect_aa(s, BUB_X, y, BUB_W, h, 30, C(attn == POD_ATTN_STUCK ? STUCK_EDGE : DECIDE_EDGE));
+        ht_pro_rect_aa(s, BUB_X + EDGE_W, y, BUB_W - EDGE_W, h, 30, C(BUB_FILL));
+    } else {
+        ht_pro_rect_aa(s, BUB_X, y, BUB_W, h, 30, C(BUB_FILL));
+    }
+    {   // the tail: the left half of a 26 px square turned 45 degrees at (181, y + 52), pointing at the avatar (a Super Tab row: the whole square, over the edge)
         const int cy = y + TAIL_Y + 13, x0 = TAIL_X - 5;
         pod_tri(s, (BUB_X + 1) * 16, (cy - 18) * 16, (BUB_X + 1) * 16, (cy + 18) * 16, x0 * 16, cy * 16, C(BUB_FILL));
+        if (attn != POD_ATTN_NONE)
+            pod_tri_inner(s, (BUB_X + 1) * 16, (cy - 18) * 16, (BUB_X + 22) * 16, cy * 16, (BUB_X + 1) * 16, (cy + 18) * 16, C(BUB_FILL), 4u);
     }
     int aw = ht_pro_width(META_F, age), nw = ht_pro_width(META_F, name), room = tw - aw - 16;
+    char tag[SUPER_TAB_MAX + 4] = "";
+    int gw = 0;
+    if (attn != POD_ATTN_NONE) {   // "name · Super Tab": the name keeps at least half the room, the Super Tab the rest (cut with dots)
+        snprintf(tag, sizeof tag, "\xc2\xb7 %s", a->super_tab);
+        const int want = ht_pro_width(META_F, tag);
+        int keep = room - TAG_GAP - want;   // what the name may take beside the whole tag
+        if (keep < room / 2) keep = room / 2;
+        if (nw > keep) nw = keep;
+        gw = room - nw - TAG_GAP;
+        if (gw > want + 2) gw = want + 2;
+    }
     if (nw > room) nw = room > 0 ? room : 0;
     const int ly = y + PAD_TOP;
     if (nw > 0) ht_pro_text(s, BUB_X + PAD_X, ly, nw, META_F, C(META), name);
+    if (gw > 0) ht_pro_text(s, BUB_X + PAD_X + nw + TAG_GAP, ly, gw, META_F, C(TAB_INK), tag);
     ht_pro_text(s, BUB_X + BUB_W - PAD_X - aw, ly, aw + 2, META_F, C(META), age);
     for (int i = 0; i < n; i++) ht_pro_text(s, BUB_X + PAD_X, ly + NAME_H + 4 + i * MSG_PITCH, tw, MSG, C(INK), rows[i]);
 

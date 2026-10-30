@@ -34,6 +34,14 @@ const Set<String> encryptedDownTypes = {
   'agent_resume',
   // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
   'agent_fork',
+  // Change agent (`AppNotifier.changeAgent`): the machine writes the conversation's record into the
+  // project, then the old agent is saved and stopped. Both `MACHINE_REQUESTS` types in the CLI, which
+  // refuses them unsealed (E2EE_REQUIRED) — without them the switch could never start.
+  'agent_handoff_prepare',
+  'agent_close',
+  // Delete Harness (`AppNotifier.purgeAgent`): reviewed, then deleted under that review. A
+  // `MACHINE_REQUESTS` type in the CLI, refused unsealed (E2EE_REQUIRED).
+  'agent_purge',
   'agent_recent',
   'agent_update',
   'agent_files',
@@ -71,6 +79,9 @@ const Set<String> encryptedDownTypes = {
   // A Harness OS computer managed from here (`AppNotifier.osDevice`, CLI services/osDevice.ts): its
   // update, and its Wi-Fi with the password. A `MACHINE_REQUESTS` type in the CLI.
   'os_device',
+  // Swarm (`AppNotifier.swarmRequest`, CLI superTabs/service.ts): the machine forwards the call to the
+  // backend, and the answer is the Swarm's conversations and decisions. A `MACHINE_REQUESTS` type in the CLI.
+  'super_tabs',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing

@@ -887,7 +887,11 @@ def main(argv=None):
     parser.add_argument('action', choices=['check', 'screen', 'request', 'apply', 'rollback', 'status', 'update'], nargs='?', default='screen')
     parser.add_argument('--feeds', type=Path, help='Explicit developer feed map; never used by the installed timer')
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--reboot', action='store_true',
+                        help='With update: restart at once when the system needs it (asked from a phone)')
     args = parser.parse_args(argv)
+    if args.reboot and args.action != 'update':
+        parser.error('--reboot is only valid for update')
     if args.worker and args.action != 'apply':
         parser.error('--worker is only valid for apply')
     if os.geteuid() == 0 or Path('/etc/harness-live').exists():
@@ -910,7 +914,7 @@ def main(argv=None):
         check(read(args.feeds) if args.feeds else None)
         finish_approved_update()
     elif args.action == 'update':
-        return update_from_terminal(read(args.feeds) if args.feeds else None)
+        return update_from_terminal(read(args.feeds) if args.feeds else None, reboot=args.reboot)
     elif args.action == 'screen':
         with screen_registration():
             run_screen()
@@ -923,8 +927,11 @@ def main(argv=None):
             print(WORKER_BUSY, flush=True)
             return BUSY_EXIT
     else:
-        print(json.dumps({'runtime': str(selected()), 'versions': versions(selected()),
-                          'ready': str(prepared()) if prepared() else None,
+        ready = prepared()
+        print(json.dumps({'runtime': str(selected()), 'versions': versions(selected()), 'os': os_version(),
+                          'ready': str(ready) if ready else None,
+                          # What the prepared runtime carries, for a phone to name before it updates.
+                          'ready_versions': versions(ready) if ready and ready != selected() else None,
                           'restart_required': RESTART_REQUIRED.exists(),
                           'system': system_channel(), 'check': read(STATE / 'check.json')}, indent=2))
 
@@ -939,13 +946,33 @@ def daemon_version():
     return version if isinstance(version, str) and version else None
 
 
-def update_from_terminal(feeds=None):
+def os_version():
+    """The Harness OS package installed, as pacman names it; None where there is none."""
+    try:
+        name, version = run('pacman', '-Q', 'harness-os', timeout=10).split()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return version if name == 'harness-os' else None
+
+
+def restart_computer():
+    print('Restarting to finish the update…', flush=True)
+    subprocess.run(['systemctl', 'reboot'], check=True)
+
+
+def update_from_terminal(feeds=None, reboot=False):
     """`harness update`: everything Super+u updates, from a terminal, and what runs afterwards.
 
     The same check and the same single decision as the Updates screen (update_all): the OS package
     first when one is out, then hn and the CLI, the daemon restarted on the new CLI.
+
+    [reboot] (`--reboot`, a phone's Update): the person agreed to the restart on the phone, often with
+    nobody at the computer, so a system update restarts it at once instead of waiting for someone.
     """
     if RESTART_REQUIRED.exists():
+        if reboot and read(RESTART_REQUIRED, {}).get('status') == 'ready':
+            restart_computer()
+            return 0
         raise ValueError('Restart to finish the system update first: systemctl reboot')
     print('Checking for updates…', flush=True)
     check(feeds, progress=lambda line: print('  ' + line, flush=True) if line else None, force_system=True)
@@ -962,6 +989,9 @@ def update_from_terminal(feeds=None):
     print('Updating Harness… Your agents keep running.', flush=True)
     update_all()
     if read(RESTART_REQUIRED, {}).get('status') == 'ready':
+        if reboot:
+            restart_computer()
+            return 0
         print('The system is updated. Restart to finish: systemctl reboot '
               '(hn and the CLI follow after the restart).')
         return 0

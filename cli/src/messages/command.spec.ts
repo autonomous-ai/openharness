@@ -2,7 +2,7 @@ import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { formatSent, paneOwner, parseSendArgs, readMessageFile, SEND_USAGE, sendCommand } from './command.js'
+import { formatSent, paneOwner, parseSendArgs, readMessageFile, SEND_USAGE, sendCommand, sendPane } from './command.js'
 import { MessageError } from './model.js'
 import type { Rpc } from './rpc.js'
 
@@ -133,6 +133,18 @@ describe('what harness send prints', () => {
     const failing: Rpc = async () => { throw new Error('plain') }
     expect(await sendCommand(['api', 'x', '--json'], { ...io, rpc: failing })).toBe(1)
     expect(JSON.parse(out.at(-1)!)).toEqual({ error: 'FAILED', detail: 'plain' })
+  })
+
+  // On Windows a Harness terminal is a pty host pane: it names itself HARNESS_PANE=<instance>:%N and has no TMUX_PANE.
+  it('sends from a pty host pane, whose daemon is this install\'s', () => {
+    expect(sendPane({ HARNESS_PANE: 'p1:%3' })).toBe('p1:%3')
+    expect(sendPane({ TMUX_PANE: '%4', HARNESS_PANE: 'p1:%3' })).toBe('%4')
+    expect(sendPane({ HARNESS_PANE: 'p1:%3; calc' })).toBeUndefined()
+    expect(sendPane({ HARNESS_PANE: 'p2-0.4.21-dev.win1:%7' })).toBe('p2-0.4.21-dev.win1:%7')
+    expect(sendPane({ HARNESS_PANE: 'p2-h0123456789ab:%7' })).toBe('p2-h0123456789ab:%7')
+    expect(sendPane({ HARNESS_PANE: 'p2-0.4.21 calc:%7' })).toBeUndefined()
+    expect(sendPane({})).toBeUndefined()
+    expect(paneOwner('p1:%3', () => { throw new Error('tmux was asked about a pty host pane') })).toBeNull()
   })
 
   it('refuses outside a pane, and bad arguments', async () => {

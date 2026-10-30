@@ -66,10 +66,48 @@ enum ProductHealthMeasure {
   weekWorked1day('week_worked_1day'),
   weekWorked2to3days('week_worked_2to3days'),
   weekWorked4to5days('week_worked_4to5days'),
-  weekWorked6to7days('week_worked_6to7days');
+  weekWorked6to7days('week_worked_6to7days'),
+  // A sampled frame of 50 ms or more by its longest phase, and the first
+  // sampled frame over 250 ms of each collector day (product_runtime_health).
+  frameSlowWait('frame_slow_wait'),
+  frameSlowBuild('frame_slow_build'),
+  frameSlowRaster('frame_slow_raster'),
+  frameLongCollector('frame_long_collector'),
+  firstRunStarted('first_run_started'),
+  firstRunReady('first_run_ready'),
+  firstRunWork('first_run_work'),
+  firstRunResponse('first_run_response'),
+  firstRunResponseUnder1m('first_run_response_under_1m'),
+  firstRunResponse1mTo5m('first_run_response_1m_to_5m'),
+  firstRunResponseOver5m('first_run_response_over_5m'),
+  sharedInvitesSent('shared_invites_sent'),
+  sharedInvitesRefused('shared_invites_refused');
 
   const ProductHealthMeasure(this.wire);
   final String wire;
+
+  /// The revision of the local CLI's report proxy that knows this name
+  /// (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts).
+  /// A signed-in report goes through that proxy, and one older than a name
+  /// refused the whole report, which this app then drops for good (a 400 is
+  /// permanent). So a newer name is counted only once the proxy has said it
+  /// knows it (`ProductMeasurement.proxyVocabulary`).
+  int get vocabulary => switch (this) {
+    frameSlowWait ||
+    frameSlowBuild ||
+    frameSlowRaster ||
+    frameLongCollector => 2,
+    firstRunStarted ||
+    firstRunReady ||
+    firstRunWork ||
+    firstRunResponse ||
+    firstRunResponseUnder1m ||
+    firstRunResponse1mTo5m ||
+    firstRunResponseOver5m ||
+    sharedInvitesSent ||
+    sharedInvitesRefused => 5,
+    _ => 1,
+  };
 }
 
 class ProductUsageContext {

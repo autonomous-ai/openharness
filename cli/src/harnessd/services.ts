@@ -12,8 +12,9 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
-import type { CoreHandle } from './supervisor.js'
+import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
+import { describeExit, type CoreHandle } from './supervisor.js'
+import { SWARM_ENV, swarmOn } from './swarmSwitch.js'
 
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
@@ -42,8 +43,11 @@ export interface ServiceSupervisorDeps {
   setTimer(run: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
   log(line: string): void
-  /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
-  staged?(version: string): void
+  /** The updater staged a CLI build, a terminal host or both on disk (`harnessd:staged`): the core is to hand over. */
+  staged?(staged: StagedUpdate): void
+  /** Stop a service with `harnessd:shutdown` rather than SIGTERM: Windows, where Node's `kill` is TerminateProcess
+   *  and the service's own stop never runs (./supervisor.ts `SupervisorDeps.stopByMessage`). */
+  stopByMessage?: boolean
 }
 
 export interface ServiceSupervisorOptions {
@@ -93,8 +97,6 @@ export interface ServiceStatus {
 }
 
 const MIB = 1024 * 1024
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
 
 /** One service's process, restarted for as long as the master runs. */
 class Service {
@@ -189,9 +191,12 @@ class Service {
   private onMessage(child: CoreHandle, message: unknown): void {
     if (isUpdaterMessage(message)) {
       // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
-      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${message.version}, which only the updater may — ignored`); this.refusedStaged = true; return }
-      this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
-      this.deps.staged?.(message.version)
+      const staged: StagedUpdate = {
+        ...(message.version ? { version: message.version } : {}), ...(message.ptyVersion ? { ptyVersion: message.ptyVersion } : {}),
+      }
+      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${describeStaged(staged)}, which only the updater may — ignored`); this.refusedStaged = true; return }
+      this.deps.log(`[harnessd] service ${this.spec.name} staged ${describeStaged(staged)}`)
+      this.deps.staged?.(staged)
       return
     }
     if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
@@ -262,7 +267,9 @@ class Service {
     const child = this.child!
     this.ending = true
     this.clearTimer('heartbeatTimer')
-    child.kill(signal)
+    // Called with SIGTERM only: a stop, or a restart for memory.
+    if (this.deps.stopByMessage) child.send({ type: 'harnessd:shutdown' })
+    else child.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] service ${this.spec.name} outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       child.kill('SIGKILL')
@@ -404,6 +411,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
   // flight, each one bounded Jev answer.
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  superTabs: { services: ['superTabs'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
   cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
@@ -429,7 +437,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
-  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
@@ -517,6 +525,15 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
 }
 
+/** The Swarm switch (harnessd/swarmSwitch.ts): off, the Swarm's service is left out of every process the master starts. */
+export { SWARM_ENV, swarmOn }
+const SWARM_SERVICES: ReadonlySet<string> = new Set(['superTabs'])
+
+/** The services of `known` that run on this computer, wherever they run: all of them, but the Swarm's while it is off. */
+export function servicesOn(env: NodeJS.ProcessEnv, known: readonly string[]): string[] {
+  return swarmOn(env) ? [...known] : known.filter((name) => !SWARM_SERVICES.has(name))
+}
+
 /**
  * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
  * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
@@ -532,8 +549,9 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const named = env.HARNESSD_SERVICES === undefined ? null
     : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
+  const on = new Set(servicesOn(env, Object.values(hosts).flatMap((host) => host.services)))
   return Object.entries(hosts).flatMap(([name, host]) => {
-    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
+    const services = host.services.filter((service) => on.has(service) && (!named || named.has(service) || named.has(name)))
     // A process on demand named outright runs from the start, as every service named does (a test, support).
     const onDemand = host.onDemand && !named ? { onDemand: true } : {}
     const { onDemand: _given, ...rest } = host

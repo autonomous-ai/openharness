@@ -43,6 +43,31 @@ export function builtinSqlite(): DatabaseConstructor | null {
   return builtin
 }
 
+/**
+ * Run a write script statement by statement through `node:sqlite`, the way `sqlite3 -batch -bail` runs
+ * it: each `SELECT` row's first column becomes one output line, and the first failure stops the script
+ * and rolls back its open transaction. Windows ships no `sqlite3` CLI; the installers' Node has this.
+ */
+export function runSqliteScript(Database: DatabaseConstructor, path: string, statements: readonly string[]): string[] {
+  const db = new Database(path, { readOnly: false })
+  const out: string[] = []
+  try {
+    for (const statement of statements) {
+      if (/^\s*SELECT\b/i.test(statement)) {
+        for (const row of db.prepare(statement).all()) out.push(String(Object.values(row)[0]))
+      } else {
+        db.exec(statement)
+      }
+    }
+  } catch (err) {
+    try { db.exec('ROLLBACK') } catch { /* no transaction was open */ }
+    throw err
+  } finally {
+    db.close()
+  }
+  return out
+}
+
 interface Handle { db: DatabaseLike; dev: number; ino: number; immutable: boolean; stamp: string; busyTimeoutMs: number }
 
 /** One open handle per store: the readers poll every second, and opening is the expensive part. */

@@ -5,7 +5,7 @@ import { expect, it } from 'vitest'
 it('keeps process identities and deleted-image entries without retaining an entire old process table', () => {
   // Found by QA on a quiet machine: 25 agents retained 26 complete ps snapshots (13.8 MiB)
   // through their startMarker/executable substrings. Measure real V8 backing strings, not RSS noise.
-  const module = new URL('./tmux.ts', import.meta.url).href
+  const module = new URL('./processTable.ts', import.meta.url).href
   const script = `
     import { getHeapSnapshot } from 'node:v8';
     import { setImmediate } from 'node:timers/promises';

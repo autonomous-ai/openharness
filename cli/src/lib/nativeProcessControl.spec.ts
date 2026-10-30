@@ -8,7 +8,9 @@ import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } from './nativeProcessControl.js'
 import { env } from '../config/env.js'
 
-const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void) }))
+const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void),
+  // A filesystem lists a directory in its own order (a tmpfs, ext4's hash): CI listed task 99 before 42.
+  listDescending: false }))
 vi.mock('node:os', async original => ({ ...await original<object>(), platform: () => process.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(), execFile: host.exec }))
 vi.mock('./nativeProcessImages.js', async original => ({ ...await original<object>(), bundledProcessImageHelper: host.helper }))
@@ -22,6 +24,16 @@ vi.mock('node:fs', async original => {
       return Reflect.apply(fs[method], fs, [mapped(path), ...args])
     }) as never
   }
+  const opendir = result.opendirSync
+  result.opendirSync = ((path: unknown, ...args: unknown[]) => {
+    const directory = Reflect.apply(opendir, fs, [path, ...args]) as import('node:fs').Dir
+    if (!host.listDescending) return directory
+    const listed: import('node:fs').Dirent[] = []
+    for (let next = directory.readSync(); next; next = directory.readSync()) listed.push(next)
+    directory.closeSync()
+    listed.sort((a, b) => Number(b.name) - Number(a.name))
+    return { readSync: () => listed.shift() ?? null, closeSync: () => {} }
+  }) as never
   return result
 })
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -97,6 +109,20 @@ describe('strict Darwin control protocol', () => {
         Buffer.from(output()), Buffer.from(failure === 'stderr' ? 'partial' : '')))
       await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('probe did not complete')
     }
+  })
+  it('names a live process whose program was replaced on disk, and only that, when the probe fails', async () => {
+    const live = process.pid, gone = 2_000_000_000
+    const paths = (pid: number) => `${JSON.stringify({ schema: 1, mode: 'paths' })}\n${JSON.stringify({ pid, unavailable: true })}\n`
+    for (const [pid, expected] of [[live, 'replaced on disk'], [gone, 'probe did not complete']] as const) {
+      host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
+        ? callback(null, paths(pid), '')
+        : callback(Object.assign(Error('exit 75'), { code: 75 }), Buffer.alloc(0), Buffer.alloc(0)))
+      await expect(nativeProcessControl([pid], 0, budget())).rejects.toThrow(expected)
+      expect(host.exec.mock.calls.at(-1)?.[1]).toEqual(['--paths', String(pid)])
+    }
+    host.exec.mockClear().mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output({ ...record(), imageHex: 'zz' })), Buffer.alloc(0)))
+    await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow()
+    expect(host.exec.mock.calls.map(call => call[1][0])).toEqual(['--control']) // A parse failure is not a failed probe.
   })
   it('uses the remaining deadline and stops a missing, late or failed helper without accepting an empty pool', async () => {
     await expect(nativeProcessControl([42], 0, budget())).resolves.toMatchObject({ parent: 0 })
@@ -174,6 +200,15 @@ describe('joined Linux control proof', () => {
     file(join(host.root, 'proc/42/task/99/children'), '44 45 ')
     file(join(host.root, 'proc/45/stat'), `45 (exited) Z 42 ${Array(17).fill(0).join(' ')} 100\n`)
     expect((await nativeProcessControl([42, 43, 44], 42, budget())).children).toEqual([43, 44])
+  })
+  it('gives the children in thread order, however the directory lists its threads', async () => {
+    processRow(43, 42); processRow(44, 42)
+    file(join(host.root, 'proc/42/task/42/children'), '43 ')
+    file(join(host.root, 'proc/42/task/99/children'), '44 ')
+    host.listDescending = true
+    try {
+      expect((await nativeProcessControl([42, 43, 44], 42, budget())).children).toEqual([43, 44])
+    } finally { host.listDescending = false }
   })
   it.each(['descriptor', 'generation', 'image', 'child', 'task'])('holds a changing %s in the joined observation', async mode => {
     let calls = 0

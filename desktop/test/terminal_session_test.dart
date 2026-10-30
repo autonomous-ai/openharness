@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/foundation.dart';
+import 'package:xterm/xterm.dart' show Terminal, TerminalTargetPlatform;
 
 void main() {
   const streamId = '00112233-4455-6677-8899-aabbccddeeff';
@@ -91,6 +92,64 @@ void main() {
     expect(identical(session.terminal, before), isTrue);
   });
 
+  test('changing input context withholds typing until the new stream is ready and preserves its terminal', () async {
+    await ready();
+    await session.handleBinary(
+      output(
+        0,
+        'retained screen'.codeUnits,
+        keyframe: true,
+        cols: 100,
+        rows: 30,
+      ),
+    );
+    final terminal = session.terminal;
+    expect(session.acceptsInput, isTrue);
+    session.stageInputContext('context_alpha_123456');
+    expect(session.acceptsInput, isFalse);
+    await session.setInputContext('context_alpha_123456');
+    final opening = sent
+        .lastWhere((frame) => frame.type == 'terminal_open')
+        .payload;
+    expect(opening['inputContext'], 'context_alpha_123456');
+    expect(identical(session.terminal, terminal), isTrue);
+    await session.handleFrame('terminal_ready', {
+      'requestId': opening['requestId'],
+      'protocolVersion': 3,
+      'streamId': streamId,
+      'agentId': 'agent-1',
+    });
+    await session.handleBinary(
+      output(
+        0,
+        'retained screen'.codeUnits,
+        keyframe: true,
+        cols: 100,
+        rows: 30,
+      ),
+    );
+    expect(session.acceptsInput, isTrue);
+    final latestTerminal = session.terminal;
+    expect(await session.sendComposerText('Scoped composed input'), isTrue);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'message')
+          .payload['inputContext'],
+      'context_alpha_123456',
+    );
+    session.stageInputContext(null);
+    expect(session.acceptsInput, isFalse);
+    await session.setInputContext(null);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'terminal_open')
+          .payload
+          .containsKey('inputContext'),
+      isFalse,
+    );
+    expect(identical(session.terminal, latestTerminal), isTrue);
+  });
+
   test(
     'a renderer that keeps failing still gives up rather than looping',
     () async {
@@ -108,6 +167,25 @@ void main() {
       expect(resyncs, lessThanOrEqualTo(3));
     },
   );
+
+  test('a watch-only scope cannot take control or submit text', () async {
+    await ready();
+    await session.handleBinary(
+      output(0, 'screen'.codeUnits, keyframe: true, cols: 100, rows: 30),
+    );
+    session.stageInputContext(null, watchOnly: true);
+    expect(session.readOnly, isTrue);
+    expect(session.acceptsInput, isFalse);
+    expect(await session.sendComposerText('Do not send'), isFalse);
+    await session.setInputContext(null, watchOnly: true);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'terminal_open')
+          .payload['watchOnly'],
+      isTrue,
+    );
+    expect(sent.where((frame) => frame.type == 'message'), isEmpty);
+  });
 
   test('a tmux passthrough sequence is swallowed, not painted', () async {
     await ready();
@@ -281,6 +359,47 @@ void main() {
       expect(ack.payload['lastSeq'], 2);
     },
   );
+
+  test('standalone terminal keeps query replies on its output callback', () {
+    final emitted = <String>[];
+    final terminal = Terminal(onOutput: emitted.add)..resize(80, 24);
+    terminal.write('\x1b[6n\x1b[5n\x1b[c\x1b[>c\x1b[=c\x1b[18t');
+    expect(emitted, hasLength(6));
+    expect(emitted.first, '\x1b[0;0R');
+  });
+
+  test(
+    'remote cursor queries do not inject replies before the first key',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
+      );
+      // The host emulator has already answered these. A second cursor reply
+      // makes Windows PowerShell/PSReadLine swallow the first printable key.
+      await session.handleBinary(output(1, utf8.encode('\x1b[6n')));
+      await Future<void>.delayed(const Duration(milliseconds: 12));
+      expect(binarySent, isEmpty);
+
+      session.terminal.textInput('a');
+      await Future<void>.delayed(const Duration(milliseconds: 12));
+      expect(binarySent, hasLength(1));
+      expect(utf8.decode(binarySent.single.bytes), 'a');
+      expect(binarySent.single.seq, 0);
+    },
+  );
+
+  test('remote terminals preserve other query responses', () async {
+    await ready();
+    await session.handleBinary(
+      output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
+    );
+    // DA3 is not answered by every host emulator; keep its existing behavior.
+    await session.handleBinary(output(1, utf8.encode('\x1b[=c')));
+    await Future<void>.delayed(const Duration(milliseconds: 12));
+    expect(binarySent, hasLength(1));
+    expect(utf8.decode(binarySent.single.bytes), '\x1bP!|00000000\x1b\\');
+  });
 
   test(
     'terminal input batches, preserves Enter boundary and is never retried',
@@ -1454,22 +1573,28 @@ void main() {
     await reopening;
   });
 
-  test('a stream the daemon no longer has is reopened in place at once', () async {
-    await ready();
-    await session.handleBinary(
-      output(0, utf8.encode('screen'), keyframe: true, cols: 100, rows: 30),
-    );
-    await session.handleFrame('terminal_error', {
-      'streamId': streamId,
-      'code': 'TERMINAL_STREAM_NOT_FOUND',
-      'message': 'no live terminal stream',
-    });
-    await pumpEventQueue();
+  test(
+    'a stream the daemon no longer has is reopened in place at once',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode('screen'), keyframe: true, cols: 100, rows: 30),
+      );
+      await session.handleFrame('terminal_error', {
+        'streamId': streamId,
+        'code': 'TERMINAL_STREAM_NOT_FOUND',
+        'message': 'no live terminal stream',
+      });
+      await pumpEventQueue();
 
-    expect(sent.where((frame) => frame.type == 'terminal_open'), hasLength(2));
-    expect(session.status, TerminalSessionStatus.opening);
-    expect(session.errorCode, isNot('TERMINAL_STREAM_NOT_FOUND'));
-  });
+      expect(
+        sent.where((frame) => frame.type == 'terminal_open'),
+        hasLength(2),
+      );
+      expect(session.status, TerminalSessionStatus.opening);
+      expect(session.errorCode, isNot('TERMINAL_STREAM_NOT_FOUND'));
+    },
+  );
 
   test('a missing-stream report about another stream is ignored', () async {
     await ready();
@@ -1503,6 +1628,80 @@ void main() {
         'code=TERMINAL_SNAPSHOT_FAILED message=tmux snapshot failed',
       ),
     );
+  });
+
+  group('slow input log', () {
+    late _RecordingLog log;
+
+    Future<void> typing() async {
+      log = _RecordingLog();
+      final previous = appLog;
+      appLog = log;
+      addTearDown(() => appLog = previous);
+      controlledNow = DateTime(2026, 10, 19, 10);
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode(r'$ '), keyframe: true, cols: 100, rows: 30),
+      );
+      session.terminal.onOutput?.call('a');
+      await pumpEventQueue();
+      expect(binarySent, hasLength(1));
+    }
+
+    List<String> slow() =>
+        log.lines.where((line) => line.contains('input ')).toList();
+
+    test('an echo that comes back late is logged with the wait', () async {
+      await typing();
+      controlledNow = controlledNow!.add(const Duration(seconds: 9));
+      await session.handleBinary(output(1, utf8.encode('a')));
+      await pumpEventQueue();
+
+      expect(slow(), [
+        'terminal input answered late machine=machine-1 agent=agent-1 stream=$streamId '
+            'link=null waitedMs=9000 by=output',
+      ]);
+    });
+
+    test('a prompt echo is not logged', () async {
+      await typing();
+      controlledNow = controlledNow!.add(const Duration(milliseconds: 300));
+      await session.handleBinary(output(1, utf8.encode('a')));
+      await pumpEventQueue();
+
+      expect(slow(), isEmpty);
+    });
+
+    test(
+      'an idle sync after unechoed input is not logged inside its cadence',
+      () async {
+        await typing();
+        controlledNow = controlledNow!.add(const Duration(seconds: 8));
+        await session.handleBinary(
+          TerminalBinaryFrame(
+            kind: TerminalBinaryKind.sync,
+            streamId: streamId,
+            seq: 1,
+            bytes: Uint8List(0),
+            compressed: false,
+          ),
+        );
+        await pumpEventQueue();
+
+        expect(slow(), isEmpty);
+      },
+    );
+
+    test('a stream timeout with typing still waiting is logged', () async {
+      await typing();
+      controlledNow = controlledNow!.add(const Duration(seconds: 16));
+      session.transportLost();
+
+      expect(slow(), [
+        'terminal input unanswered machine=machine-1 agent=agent-1 stream=$streamId '
+            'link=null waitedMs=16000 until=transport_lost',
+      ]);
+    });
   });
 
   group('composer', () {
@@ -2005,6 +2204,26 @@ void main() {
         expect(sent, isEmpty);
       },
     );
+  });
+  test('xterm learns the desktop it runs on', () {
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    for (final (platform, expected) in [
+      (TargetPlatform.macOS, TerminalTargetPlatform.macos),
+      (TargetPlatform.linux, TerminalTargetPlatform.linux),
+      (TargetPlatform.windows, TerminalTargetPlatform.windows),
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      final local = TerminalSession(
+        machineId: 'm',
+        agentId: 'a',
+        agentName: 'a',
+        engineId: 'codex',
+        send: (type, payload) async => true,
+        sendBinary: (frame) async => true,
+      );
+      expect(local.terminal.platform, expected, reason: '$platform');
+      local.dispose();
+    }
   });
 }
 

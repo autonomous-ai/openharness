@@ -23,6 +23,14 @@ export function isHarnessdVariable(name: string): boolean {
 }
 
 /**
+ * [env] with no `HARNESSD_*`, a copy: the environment of an ordinary `harness start`'s master (cli.ts, through
+ * harness-launch.exe on Windows). Only a master handing over gives its replacement one (harnessd/reexec.ts).
+ */
+export function withoutHarnessdEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !isHarnessdVariable(name)))
+}
+
+/**
  * Take every `HARNESSD_*` out of [env], this process's own by default, and keep it for `harnessdEnv()`.
  * Called before the process starts anything: a child started before it has them for good, and a tmux
  * server started before it hands them to every pane until it is told otherwise (TmuxBackend

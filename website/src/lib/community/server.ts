@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { starterHarnesses, starterConversation, starterSlug } from './starters';
-import { feedPath, type FeedPage, type FeedView } from './feed';
+import { feedPath, type FeedPage, type FeedQuery } from './feed';
 import { namesPublication } from './slug';
 import type { Creator, OpenHarness } from './types';
 
@@ -61,7 +61,7 @@ async function readHub<T>(path: string, timeoutMs: number): Promise<T | null> {
 }
 
 /** A feed's first page as a visitor reads it: the reader's sign-in is only in their browser, which reads the page again with it. */
-export const getFeedPage = (view: FeedView, timeoutMs: number) => readHub<FeedPage>(feedPath(view), timeoutMs);
+export const getFeedPage = (view: FeedQuery, timeoutMs: number, after?: string) => readHub<FeedPage>(feedPath(view, after), timeoutMs);
 
 /** A creator's page head as a visitor reads it. */
 export const getCreator = async (id: string, timeoutMs: number) => (await readHub<{ creator: Creator }>(`creators/${id}`, timeoutMs))?.creator ?? null;

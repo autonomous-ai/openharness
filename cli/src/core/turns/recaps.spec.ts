@@ -20,6 +20,7 @@ function setup(over: Partial<RecapDeps> = {}) {
     clients: { hasActiveCommander: vi.fn(() => false) },
     deviceIsWatching: vi.fn(() => true),
     cableWatchingLocal: vi.fn(() => false),
+    remoteApp: vi.fn(() => false),
     bySession: (sessionId) => sessions.get(sessionId),
     resolve: (id) => id === 'a1' ? live : undefined,
     stopped: (agentId) => agentId === 'gone' ? ({ agentId: 'gone', sessionId: 'old-s' } as RegisteredSession) : null,
@@ -32,7 +33,7 @@ function setup(over: Partial<RecapDeps> = {}) {
   return { deps, recaps, port, held, live, off: () => { on = null } }
 }
 
-const watching = { device: true, active: false }
+const watching = { device: true, active: false, remote: false }
 const started = { type: 'turn_started', payload: { userMessage: 'hi' } } as LiveEvent
 const ended = { type: 'turn_ended', payload: {} } as LiveEvent
 
@@ -66,11 +67,11 @@ describe('recaps, as the core keeps them', () => {
     recaps.mirror.ingest([ended], 's1', { replay: true })
     recaps.mirror.ingest([started], 's2')
     recaps.mirror.ingest([started], 'unbound')
-    const session = { sessionId: 's1', agentId: 'a1', name: projectDisplayName(live), transcriptPath: '/t/s1.jsonl' }
+    const session = { sessionId: 's1', agentId: 'a1', name: projectDisplayName(live), engine: 'claude', transcriptPath: '/t/s1.jsonl' }
     expect(port.lifecycle.mock.calls).toEqual([
       [{ kind: 'events', session, events: [started], replay: false }, watching],
       [{ kind: 'events', session: { ...session, subagent: true }, events: [ended], replay: true }, watching],
-      [{ kind: 'events', session: { sessionId: 's2', agentId: 'a2', name: projectDisplayName({ agentId: 'a2', sessionId: 's2', engine: 'claude', cwd: '/work/other' } as RegisteredSession) }, events: [started], replay: false }, watching],
+      [{ kind: 'events', session: { sessionId: 's2', agentId: 'a2', name: projectDisplayName({ agentId: 'a2', sessionId: 's2', engine: 'claude', cwd: '/work/other' } as RegisteredSession), engine: 'claude' }, events: [started], replay: false }, watching],
       // A session the core no longer has is addressed by its own id, as the cards always were.
       [{ kind: 'events', session: { sessionId: 'unbound', agentId: 'unbound' }, events: [started], replay: false }, watching],
     ])
@@ -86,7 +87,19 @@ describe('recaps, as the core keeps them', () => {
     vi.mocked(deps.clients.hasActiveCommander).mockReturnValueOnce(true)
     recaps.mirror.noteEngineStopped('s1')
     expect(port.lifecycle.mock.calls.map(([, seen]) => seen)).toEqual([
-      { device: false, active: false }, { device: false, active: true }, { device: false, active: true },
+      { device: false, active: false, remote: false }, { device: false, active: true, remote: false },
+      { device: false, active: true, remote: false },
+    ])
+  })
+
+  it('says whether an app away from this desk holds a session, which is who hears a turn\'s tier with no device', () => {
+    const { deps, recaps, port } = setup()
+    vi.mocked(deps.deviceIsWatching).mockReturnValue(false)
+    vi.mocked(deps.remoteApp).mockReturnValueOnce(true)
+    recaps.mirror.noteEngineStopped('s1')
+    recaps.mirror.noteEngineStopped('s1')
+    expect(port.lifecycle.mock.calls.map(([, seen]) => seen)).toEqual([
+      { device: false, active: false, remote: true }, { device: false, active: false, remote: false },
     ])
   })
 

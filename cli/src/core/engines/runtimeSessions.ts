@@ -142,7 +142,11 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
 
   const stage = (s: RegisteredSession, hydrate: boolean, silent: boolean): RuntimeStage => {
-    const view = viewFor(s), revision = view.revision, version = s.cliVersion
+    const view = viewFor(s), revision = view.revision
+    // viewFor has just matched the live row's identity, so its version is the one to guard. A copy taken
+    // before an accepted read learned the version (2026-10-19: 7 of 42 new Claude agents) is only older.
+    s = { ...s, cliVersion: deps.resolve(s.agentId)!.cliVersion }
+    const version = s.cliVersion
     const context = contextFor(s, view)
     if (hydrate) context.state = { ...blankRuntimeState(), model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion }
     let answer: RuntimeAnswer | null = null
@@ -195,7 +199,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     read,
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {
-      const view = viewFor(s), revision = view.revision, version = s.cliVersion
+      const view = viewFor(s), revision = view.revision, version = deps.resolve(s.agentId)!.cliVersion
       const current = () => valid(view) && view.revision === revision && deps.resolve(view.agentId)?.cliVersion === version
       const text = await capture(s.agentId, historyLines)
       if (!text || !current()) return null
@@ -244,7 +248,9 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       const view = byId(id)
       if (!view?.sessionId || !RUNTIME_EFFORTS.has(effort)) return
       // Confirmation comes from core's checked control driver, never an arbitrary transcript field.
-      view.state = { ...view.state, effort, observedAt: Date.now() }
+      // A confirmed effort is the session's, never the settings' (#1966 delta review).
+      const { settingsEffort: _, ...state } = view.state
+      view.state = { ...state, effort, observedAt: Date.now() }
       const selection = parseRuntimeProfile(view.selected)
       const s = deps.resolve(view.agentId)!
       if (selection) view.selected = encodeRuntimeProfile({ sessionId: s.agentId, engine: s.engine, model: selection.model, effort })
@@ -254,7 +260,8 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     confirmControlProfile(target: RuntimeProfile): void {
       const view = byId(target.sessionId)
       if (!view) return
-      view.state = { ...view.state, model: target.model, effort: target.effort, observedAt: Date.now() }
+      const { settingsEffort: _, ...state } = view.state
+      view.state = { ...state, model: target.model, effort: target.effort, observedAt: Date.now() }
       view.selected = encodeRuntimeProfile({ ...target, sessionId: view.agentId })
       if (view.control?.target.id === target.id) { view.control.modelConfirmed = true; view.control.effortConfirmed = true }
       view.revision++; wake(view.sessionId)

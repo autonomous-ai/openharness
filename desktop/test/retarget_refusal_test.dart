@@ -67,6 +67,43 @@ void main() {
     },
   );
 
+  test('the new refusals read as exact sentences', () {
+    expect(
+      retargetRefusalMessage('PTY_HOST_UNAVAILABLE', engineLabel: 'Codex'),
+      "This machine's terminals did not answer. Run harness start there, then try again.",
+    );
+    expect(
+      retargetRefusalMessage(
+        'ENGINE_LAUNCH_REFUSED',
+        engineLabel: 'Codex',
+        detail: 'Use another engine.',
+      ),
+      'Use another engine.',
+    );
+    for (final empty in [null, '']) {
+      expect(
+        retargetRefusalMessage(
+          'ENGINE_LAUNCH_REFUSED',
+          engineLabel: 'Codex',
+          detail: empty,
+        ),
+        'Codex cannot start on this machine with the new model.',
+      );
+    }
+  });
+
+  test('a model change shows the machine\'s reason for an engine it refuses', () async {
+    final app = createApp(
+      connectionForTest: (_) => _Refusing('ENGINE_LAUNCH_REFUSED'),
+    );
+    addTearDown(app.dispose);
+    await app.clearAgentGrid('m', 'a1');
+    expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
+    app.machineStates['m']!.agents = const [];
+    await app.retargetAgentToGridModel('m', 'a1', 'qwen');
+    expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
+  });
+
   test('moving home is reported the same way', () async {
     final app = createApp(connectionForTest: (_) => _Refusing('AGENT_BUSY'));
     addTearDown(app.dispose);
@@ -106,6 +143,8 @@ void main() {
         'TMUX_TOO_OLD_FOR_GRID',
         'TMUX_UNAVAILABLE',
         'TMUX_FAILED',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'AGENT_BUSY',
         'AGENT_NOT_FOUND',
         'NO_ACTIVE_PROCESS',

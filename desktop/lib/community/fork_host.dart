@@ -5,12 +5,22 @@ import 'package:flutter/material.dart';
 import '../core/harness_file_store.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
+import '../notify/system_notifications.dart';
 import '../state/app_state.dart';
+import '../super_tabs/join_link.dart';
+import '../super_tabs/message_link.dart';
 import 'fork_controller.dart';
 import 'fork_inbox.dart';
 import 'fork_project.dart';
 
-final communityForkInbox = ForkInbox(HarnessFileStore.shared);
+final communityForkInbox = ForkInbox(
+  HarnessFileStore.shared,
+  claimLink: systemNotifications.openLink,
+  onUnhandledLink: (url) async {
+    await swarmJoinInbox.accept(url);
+    await swarmMessageLinkInbox.accept(url);
+  },
+);
 Future<void>? _inboxReady;
 
 /// Mounted around every native screen, so links survive setup and sign-in.

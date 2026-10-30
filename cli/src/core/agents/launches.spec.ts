@@ -6,15 +6,18 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
+import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
+import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
+import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 /**
  * The requests that start an agent's process, answered by the core: every refusal before a pane exists,
@@ -48,6 +51,8 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   supportsFirstPrompt: vi.fn(() => true), supportsNamedAgent: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--flag']), permissionModeApproves: vi.fn(() => false),
+  // The engine's own --help is never run by a spec.
+  unsupportedLaunchModelFlag: vi.fn(async () => null),
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -87,6 +92,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
+    swarmLaunch: SWARM_LAUNCH,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -96,7 +102,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   return {
     deps, create, fork, resume, restart, replies, requests,
     ask: async (payload: Record<string, unknown>, local = true) => { await requests.create(payload, { local }, reply); return replies.at(-1) },
-    status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, reply); return replies.at(-1) },
+    status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, { local: true }, reply); return replies.at(-1) },
     relaunch: async (type: string, payload: Record<string, unknown>) => { await requests.relaunch(type, payload, reply); return replies.at(-1) },
     forkAsk: async (payload: Record<string, unknown>) => { await requests.fork(payload, reply); return replies.at(-1) },
   }
@@ -258,6 +264,59 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
+    const { ask, create } = setup()
+    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review']) {
+      await ask({ engine, cwd: '/w', swarmRole })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, swarmRole })
+    }
+    for (const swarmRole of [7, '', 'builder', 'reviewer']) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(await ask({ engine: 'terminal', cwd: '/w', swarmRole: 'dev' })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
+  })
+
+  it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
+    const { ask, create } = setup()
+    for (const swarmSkillMode of ['default', 'orchestration']) {
+      await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmSkillMode })
+    }
+    // From a start before modes: the session launches as it did then.
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const swarmSkillMode of ['light', 7, null]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
+  it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
+    const { ask, create } = setup({ swarmLaunch: undefined })
+    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    }
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: null })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmRole')
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })
@@ -349,6 +408,46 @@ describe('agent_create, launched', () => {
     expect(Object.keys(byPerson!)).not.toContain('startedBy')
   })
 
+  it('hands a Claude launch its model and effort, and nothing for default, so older receipts\' fingerprints stay as they were', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+    await ask({ engine: 'claude', cwd: '/w', model: 'default', effort: 'default' })
+    await ask({ engine: 'claude', cwd: '/w' })
+    const [routed, byDefault, plain] = vi.mocked(create!).mock.calls.map(([input]) => input)
+    expect(routed).toMatchObject({ engine: 'claude', launchModel: { model: 'opus', effort: 'high' } })
+    expect(Object.keys(byDefault!)).not.toContain('launchModel')
+    expect(Object.keys(plain!)).not.toContain('launchModel')
+  })
+
+  it('refuses a launch model before any receipt when the installed engine lacks a flag, and proceeds when it has them', async () => {
+    const { ask, create, deps } = setup()
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce('--effort')
+    expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
+      .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
+    expect(unsupportedLaunchModelFlag).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.receipts.has(CREATION, 'any')).toBe(false)
+    expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
+    // The same creation id is then free to start the agent without them.
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce(null)
+    await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' })
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+  })
+
+  it('refuses a launch model its engine cannot take, a malformed one, and one beside a grid or a resumed conversation', async () => {
+    const { ask, create } = setup()
+    expect(await ask({ engine: 'codex', cwd: '/w', model: 'gpt-5', effort: 'high' })).toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('codex') })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus; ls' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', effort: 'enormous' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkName: 'g' } } as never)
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL', detail: expect.stringContaining('grid') })
+    vi.mocked(parseNewAgentModel).mockReturnValueOnce({ state: 'ok', selection: { model: 'm', grid: 'g' } })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'abc12345', model: 'opus' })).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('hands on which harness here started it, and leaves out one this machine does not know', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'claude', cwd: '/w', startedBy: 'agent', parentAgentId: 'a1' })
@@ -426,7 +525,7 @@ describe('agent_create with a receipt', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ cwd, prompt: 'Keep this task', grid: target }))
     expect(preTrustClaudeProject).not.toHaveBeenCalled()
     const answer = vi.fn()
-    await recovered.createStatus({ creationId: CREATION }, answer)
+    await recovered.createStatus({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenCalledWith({ creationId: CREATION, state: 'created', agent: { id: 'new-agent' } })
     await recovered.recover()
     expect(create).toHaveBeenCalledOnce()
@@ -439,7 +538,7 @@ describe('agent_create with a receipt', () => {
     await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     const answer = vi.fn()
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ creationId: CREATION, state: 'cancelled' })
     resolveNewAgentModel.mockResolvedValue({ networkId: 'fixture-grid' } as never)
     requests.open(); await requests.recover()
@@ -519,6 +618,20 @@ describe('agent_create with a receipt', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
+  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+    const { ask, replies } = setup()
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
+      swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
+      fromDefaultBranch: true, offline: true }, expect.anything())
+    // A Swarm start that is the machine owner's own fetches as before.
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
+      swarmRole: 'dev', creationId: `${CREATION}-own` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
+  })
+
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
     const { ask, create, replies } = setup()
     vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'Could not clone it.')).mockRejectedValueOnce(new Error('disk full'))
@@ -528,6 +641,17 @@ describe('agent_create with a receipt', () => {
     expect(replies.map((r) => r.failure)).toEqual([
       { code: 'CLONE_FAILED', detail: 'Could not clone it.' }, { code: 'PROJECT_PREPARATION_FAILED', detail: 'Could not prepare the project folder.' },
     ])
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('records the folder a typed name found already there, so the apps can offer to start in it', async () => {
+    const { ask, status, create, replies } = setup()
+    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“payments” already exists.', '/projects/payments'))
+    await ask({ engine: 'claude', projectSource: 'new', projectName: 'payments', creationId: CREATION })
+    const refused = { creationId: CREATION, state: 'failed', failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists.', existingFolder: '/projects/payments' } }
+    await vi.waitFor(() => expect(replies).toStrictEqual([refused]))
+    // Kept with the receipt: asked again, the answer is the same.
+    expect(await status({ creationId: CREATION })).toStrictEqual(refused)
     expect(create).not.toHaveBeenCalled()
   })
 
@@ -619,6 +743,44 @@ describe('agent_create with a receipt', () => {
     await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending', held: { service: 'install', detail: 'Installing Codex. The harness starts once it is installed.' } }))
   })
 
+  it('holds a create while Desktop Harness downloads its engine, and creates it once by itself when the download ends', async () => {
+    // A brand-new Mac (2026-10-16): the Desktop sends agent_create as soon as its own download of Codex is under way.
+    // The launch is held as an install, tried again every two seconds with nobody asking, and dispatched once.
+    let downloading = true, clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const missing: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
+      install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['codex'] } }, environment: { HOME: '/fixture/home' } }
+    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: {} as never })
+    const ensure = vi.fn()
+    // Read as it is asked: an attempt keeps the answer it was given, whatever the test says after.
+    const downloadingNow = vi.fn(async () => downloading)
+    const prepareEngine = createNativeLaunchPreparer({ installations: { ensure, status: vi.fn(async () => null) }, inspect, downloading: downloadingNow })
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
+    const { ask, replies, requests, deps } = setup({ prepareCreate, prepareEngine })
+    await ask({ engine: 'codex', projectSource: 'new', projectName: 'scratch1', creationId: CREATION })
+    await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending',
+      held: { service: 'install', detail: 'Downloading Codex. The harness starts once it is downloaded.' } }))
+    requests.open()
+    // Still downloading: asked again and held again, nothing installed beside it, no folder, nothing created.
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(downloadingNow).toHaveBeenCalledTimes(2))
+    expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'install' } })
+    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    // The download ends: the next pass creates it.
+    downloading = false
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    // Once: later passes find nothing to do.
+    for (let pass = 0; pass < 3; pass++) { clock += 3_000; await requests.recover() }
+    await settle()
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(prepareProjectFolder).toHaveBeenCalledOnce()
+    expect(ensure).not.toHaveBeenCalled()
+  })
+
   it('trusts only a folder it just made empty, or a worktree of a repository the engine already trusts', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { ask, replies } = setup()
@@ -640,6 +802,29 @@ describe('agent_create with a receipt', () => {
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · config locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · busy')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
+  })
+
+  // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
+  // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
+  it('trusts a Swarm agent\'s checkout of its remote project in the Swarm\'s full mode, and no other existing folder', async () => {
+    const { ask, replies } = setup()
+    const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
+    const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 1)
+    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
+    // The guard: the same checkout outside a Swarm or outside full mode, and a Swarm agent in a folder it was handed.
+    await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
+    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    // Claude Code only: a Codex Lead's checkout is not trusted for it.
+    await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
+    // A worktree made from that checkout then inherits its answer.
+    vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
   })
 
   // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was
@@ -698,9 +883,9 @@ describe('agent_create with a receipt', () => {
   })
 
   it('says why a receipt could not be kept, and answers INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
@@ -777,19 +962,28 @@ describe('durable model request validation', () => {
   it('rejects invalid cancellation IDs and reports storage uncertainty without acknowledging cancellation', async () => {
     const { deps, requests } = setup()
     const answer = vi.fn()
-    await requests.cancelCreate({ creationId: '../invalid' }, answer)
+    await requests.cancelCreate({ creationId: '../invalid' }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'INVALID_CREATION_ID' })
     const cancel = vi.spyOn(deps.receipts, 'cancelIntent')
     cancel.mockImplementationOnce(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') })
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'CREATION_STORAGE_FAILED' })
     cancel.mockImplementationOnce(() => { throw new Error('unknown') })
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'INTERNAL' })
   })
 })
 
 describe('agent_create_status', () => {
+  it('reports the model and effort flags saved by a completed native launch', async () => {
+    const { status, deps } = setup()
+    const request = { kind: 'native-create-v1', input: { launchModel: { model: 'opus', effort: 'high' } } }
+    await deps.receipts.runIntent(CREATION, creationFingerprint(request), request,
+      { service: 'launch', detail: 'Preparing.' }, async () => async () => ({ state: 'created', agentId: 'new-agent' }))
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'new-agent' },
+      launchModel: { model: 'opus', effort: 'high' } })
+  })
+
   it('names a launch by a valid creation id, and says what became of it', async () => {
     const { status, deps } = setup()
     expect(await status({ creationId: 'short' })).toStrictEqual({ error: 'INVALID_CREATION_ID' })
@@ -800,7 +994,7 @@ describe('agent_create_status', () => {
     expect(created).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'forked' }, level: 'handoff', resumed: true })
     expect(Object.keys(created!)).toEqual(['creationId', 'state', 'agent', 'level', 'resumed'])
     outcome({ state: 'created', agentId: 'deleted-since' })
-    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable' })
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable', createdAgentId: 'deleted-since' })
     outcome({ state: 'failed', error: 'ENGINE_MISSING', detail: 'claude is not installed', preparedFolder: '/projects/prepared' })
     expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'failed', preparedFolder: '/projects/prepared', failure: { code: 'ENGINE_MISSING', detail: 'claude is not installed' } })
     outcome({ state: 'unconfirmed' })
@@ -808,9 +1002,9 @@ describe('agent_create_status', () => {
   })
 
   it('says why a receipt could not be read', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
 })
@@ -843,6 +1037,17 @@ describe('agent_resume and agent_restart', () => {
     expect(await bare.relaunch('agent_restart', { agentId: 'a1' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
   })
 
+  // Which check refused a resume's history (lib/resumeAgentService.ts) reaches the reply, so its counter can name it.
+  it('pass a refusal\'s reason on, directly and through a receipt', async () => {
+    const refused = { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' }
+    const direct = setup({}, { resume: vi.fn(async () => refused) })
+    expect(await direct.relaunch('agent_resume', { agentId: 'a1' })).toStrictEqual({ error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' })
+    const kept = setup({}, { resume: vi.fn(async () => refused) })
+    await kept.relaunch('agent_resume', { agentId: 'a1', creationId: CREATION })
+    await vi.waitFor(() => expect(kept.replies).toStrictEqual([{ creationId: CREATION, state: 'failed',
+      failure: { code: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' } }]))
+  })
+
   it('keep a receipt: one relaunch per creation id, an unobserved one unconfirmed, a refusal failed and cut short', async () => {
     const { relaunch, replies, resume } = setup()
     await relaunch('agent_resume', { agentId: 'a1', creationId: CREATION, permissionMode: 'auto' })
@@ -865,9 +1070,9 @@ describe('agent_resume and agent_restart', () => {
   })
 
   it('say why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
@@ -923,13 +1128,200 @@ describe('agent_fork', () => {
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
     expect(await storage.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_CONFLICT' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })
     await settle()
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
+  })
+})
+
+describe('agent_create, from a guest', () => {
+  // A guest's New Harness never reaches the owner's launch: it is built as the guest's own OS user
+  // (core/agents/guestCreate.ts, docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  const guestAsk = async (run: ReturnType<typeof setup>, payload: Record<string, unknown>, guest = 'kim@acme.io') => {
+    await run.requests.create(payload, { local: false, guest }, (result) => { run.replies.push(result) })
+    return run.replies.at(-1)
+  }
+
+  it('is the guest\'s own launch, never the owner\'s, answered as the owner\'s are', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate })
+    expect(await guestAsk(run, { engine: 'claude', cwd: '/Users/owner' })).toEqual({ agent: { id: 'guest-agent' } })
+    expect(guestCreate).toHaveBeenCalledWith({ engine: 'claude', cwd: '/Users/owner' }, 'kim@acme.io')
+    expect(run.create).not.toHaveBeenCalled()
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' })
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'TMUX_UNAVAILABLE' })
+  })
+
+  it('keeps a receipt under its creationId, so a retry finds the same harness and a status check what became of it', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate, byAgent: (id) => id === 'guest-agent' ? session('guest-agent') : undefined })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } }))
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(2))
+    expect(guestCreate).toHaveBeenCalledTimes(1)
+    // The same id for another launch is a conflict, not a second harness.
+    await guestAsk(run, { creationId: CREATION, engine: 'codex' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ error: 'CREATION_CONFLICT' }))
+  })
+
+  it('records a refusal as the outcome, with its words', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: false as const, error: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' }))
+    const run = setup({ guestCreate: () => guestCreate })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'failed', failure: { code: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' } }))
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    await guestAsk(run, { creationId: 'creation-fedcba9876543210', engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: 'creation-fedcba9876543210', state: 'failed', failure: { code: 'TMUX_UNAVAILABLE' } }))
+  })
+
+  it('starts nothing on a machine that cannot start a guest\'s harness, or for an id that is not one', async () => {
+    expect(await guestAsk(setup(), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    expect(await guestAsk(setup({ guestCreate: () => null }), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    const guestCreate = vi.fn()
+    expect(await guestAsk(setup({ guestCreate: () => guestCreate }), { creationId: 'short', engine: 'claude' })).toEqual({ error: 'INVALID_CREATION_ID' })
+    expect(guestCreate).not.toHaveBeenCalled()
+  })
+
+  it('answers INTERNAL when its receipt cannot be kept or its answer cannot be built', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent') }))
+    const broken = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(broken.deps.receipts, 'run').mockImplementation(() => { throw new Error('disk full') })
+    expect(await guestAsk(broken, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'INTERNAL' })
+    const conflict = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(conflict.deps.receipts, 'run').mockImplementation(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') })
+    expect(await guestAsk(conflict, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'CREATION_CONFLICT' })
+    const unbuilt = setup({ guestCreate: () => guestCreate, toProject: async () => { throw new Error('gone') }, byAgent: () => session('guest-agent') })
+    vi.spyOn(unbuilt.deps.receipts, 'run').mockResolvedValue({ state: 'created', agentId: 'guest-agent' })
+    await guestAsk(unbuilt, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(unbuilt.replies.at(-1)).toEqual({ error: 'INTERNAL' }))
+  })
+})
+
+describe('agent_create_status and agent_create_cancel, by who created the launch', () => {
+  // A guest sees and cancels only its own creations; for anyone else's id it hears what an unknown id gets.
+  const KIM = 'kim@acme.io', LEE = 'lee@acme.io'
+  const OTHER = 'creation-fedcba9876543210'
+  const guestCreate = () => vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: KIM }) }))
+  const as = (run: ReturnType<typeof setup>, guest?: string) => ({
+    status: async (creationId: string) => { const answer = vi.fn(); await run.requests.createStatus({ creationId }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0] },
+    cancel: async (creationId: string) => { const answer = vi.fn(); await run.requests.cancelCreate({ creationId }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0] },
+  })
+  const ownerHeld = async (run: ReturnType<typeof setup>, id = CREATION) => {
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockResolvedValue(null)
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: id })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'pending' }))
+  }
+  const guestMade = async (run: ReturnType<typeof setup>, guest = KIM, id = CREATION) => {
+    await run.requests.create({ creationId: id, engine: 'claude' }, { local: false, guest }, (result) => { run.replies.push(result) })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ creationId: id, state: 'created' }))
+  }
+  const withGuests = () => setup({ guestCreate: guestCreate, byAgent: (id) => id === 'guest-agent' || id === 'new-agent' ? session(id) : undefined })
+
+  it('answers a guest for the owner\'s pending creation exactly as for an unknown id, and cancels nothing', async () => {
+    const run = withGuests()
+    await ownerHeld(run)
+    const unknown = await as(run, KIM).status(OTHER)
+    expect(unknown).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ ...unknown, creationId: CREATION })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'pending' })
+    // The guest's cancel of an unknown id wrote nothing: no cancelled mark, no receipt file.
+    expect(await as(run).status(OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(existsSync(join(dir, `receipts-${stores}`, `${OTHER}.json`))).toBe(false)
+  })
+
+  it('answers a guest for the owner\'s finished creation as for an unknown id, and a cancel leaves it', async () => {
+    const run = withGuests()
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'created', agent: { id: 'new-agent' } })
+  })
+
+  it('keeps one guest\'s creation from another, and shows a guest its own', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    expect(await as(run, LEE).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, LEE).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } })
+    expect(await as(run, KIM).cancel(CREATION)).toMatchObject({ creationId: CREATION, state: 'created' })
+  })
+
+  it('lets the owner read and cancel its own creations and a guest\'s', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'created', agent: { id: 'guest-agent' } })
+    await ownerHeld(run, OTHER)
+    expect(await as(run).status(OTHER)).toMatchObject({ state: 'pending' })
+    expect(await as(run).cancel(OTHER)).toEqual({ creationId: OTHER, state: 'cancelled' })
+    expect(await as(run).cancel(CREATION)).toMatchObject({ state: 'created' })
+  })
+
+  it('treats a receipt written before creators were recorded as the owner\'s, and keeps a guest\'s across a restart', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    const reloaded = createLaunchRequests({ ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    stopRequests.push(reloaded.stop)
+    const reread = async (guest: string | undefined, id: string) => {
+      const answer = vi.fn(); await reloaded.createStatus({ creationId: id }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0]
+    }
+    expect(await reread(KIM, CREATION)).toMatchObject({ state: 'created' })
+    expect(await reread(LEE, CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    writeFileSync(join(dir, `receipts-${stores}`, `${OTHER}.json`),
+      JSON.stringify({ version: 1, fingerprint: creationFingerprint({ old: true }), outcome: { state: 'created', agentId: 'new-agent' } }), { mode: 0o600 })
+    expect(await reread(KIM, OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await reread(undefined, OTHER)).toMatchObject({ state: 'created' })
+  })
+
+  it('refuses a guest that reuses the owner\'s creation id, without telling what became of it', async () => {
+    const run = withGuests()
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'created' }))
+    run.replies.length = 0
+    await run.requests.create({ creationId: CREATION, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    expect(run.replies).toEqual([{ error: 'CREATION_CONFLICT' }])
+    await ownerHeld(run, OTHER)
+    run.replies.length = 0
+    await run.requests.create({ creationId: OTHER, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    expect(run.replies).toEqual([{ error: 'CREATION_CONFLICT' }])
+  })
+
+  it('lets a guest repeat its own create and still get its receipt', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    run.replies.length = 0
+    await run.requests.create({ creationId: CREATION, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    await vi.waitFor(() => expect(run.replies).toEqual([{ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } }]))
+  })
+
+  it('refuses an invalid id to a guest as to anyone, and hides damaged evidence from a guest but not from the owner', async () => {
+    const run = withGuests()
+    expect(await as(run, KIM).status('short')).toEqual({ error: 'INVALID_CREATION_ID' })
+    expect(await as(run, KIM).cancel('short')).toEqual({ error: 'INVALID_CREATION_ID' })
+    const damaged = () => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }
+    vi.spyOn(run.deps.receipts, 'creator').mockImplementation(damaged)
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    vi.spyOn(run.deps.receipts, 'status').mockImplementation(damaged)
+    vi.spyOn(run.deps.receipts, 'cancelIntent').mockImplementation(damaged)
+    expect(await as(run).status(CREATION)).toEqual({ error: 'CREATION_STORAGE_FAILED' })
+    expect(await as(run).cancel(CREATION)).toEqual({ error: 'CREATION_STORAGE_FAILED' })
+  })
+
+  it('answers INTERNAL, not missing, when a guest\'s creator lookup fails for another reason', async () => {
+    const run = withGuests()
+    vi.spyOn(run.deps.receipts, 'creator').mockImplementation(() => { throw new Error('bug') })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ error: 'INTERNAL' })
   })
 })

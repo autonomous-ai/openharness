@@ -12,6 +12,7 @@
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
+#include "habitat/supertab.h"   // ht_supertab_t — one Swarm and its Leads, as cable_client parsed it
 
 struct cJSON;
 
@@ -251,6 +252,26 @@ void ui_machines_refresh(void);
 // Replace the whole list from one `swarms` frame. `selected` names the one the window has on screen; it
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);
+
+// --- The Swarms (Super Tabs; cable_client.h). Each is safe from the reader task. ---
+// The `supertabs` list: the Swarms shown, in order. A Swarm gone from it leaves the list and the inbox.
+void ui_supertabs_ids(const char ids[][ID_MAX], int n);
+// One Swarm's card. True when the caller should beep: a Lead started needing a person, off the face.
+bool ui_supertab(const ht_supertab_t *in);
+// `chat_id`: the chat the text is the last message of, "" from a daemon without swarmChat. Dropped for another chat.
+void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
+void ui_supertab_focus(const char *tab, const char *lead);
+// The Lead's new message in its Lead conversation or Chat with PM (`supertab.notice`): that Lead's one inbox entry, read at
+// once when its chat is on the face. True when the caller should beep.
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at);
+// The desktop opened that chat (`supertab.notice.read`): the entry goes.
+void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
+// A Super Tab wait from harness `agent_id` (some Lead's `local`). It only sets that Lead's inbox text and face;
+// it never opens the question screen. True when the caller should beep.
+bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text);
+void ui_supertab_wait_close(const char *agent_id, const char *request);
+// Link lost: forget every Swarm and its inbox entries.
+void ui_supertabs_clear(void);
 /* The grid of the tab named by `swarm_id`, as the window laid it out.
  *
  * THE ID IS NOT DECORATION. These rectangles describe the APP's active tab, and this device can be
@@ -390,7 +411,13 @@ void ui_voice_quota_exceeded(void);
 // A turn finished for this agent → record it in the drawer, badge, and wake the screen if it was off.
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
-void ui_notify_task_done(const char *project_id, const char *name, const char *machine, const char *recap);
+// A live `summary`. TIER is the wire's "alert" | "list" | "silent"; NULL or unknown falls back to the old
+// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert, and not
+// for the pane already on the face. A list entry is a drawer row only; silent files nothing.
+bool ui_notify_summary(const char *project_id, const char *name, const char *machine, const char *recap,
+                       const char *tier, bool quiet, bool silent);
+// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep.
+bool ui_turn_error(const char *project_id, const char *message);
 // The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
 //
 // The two screens take a notification away on different gestures — a tap here, a tab coming to the
@@ -441,7 +468,8 @@ void ui_project_set_agents(const char *project_id, const struct cJSON *agents);
 // Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
 // ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
 // showing a question asks the window to bring it forward, so that gate could never open.
-void ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
+// True when the caller should beep: not for the pane already on the face.
+bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.
 void ui_question_close(const char *project_id, const char *request_id);

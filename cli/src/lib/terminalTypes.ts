@@ -1,6 +1,6 @@
 import type { AgentEngine } from '../engines/types.js'
 
-export type TerminalBackendName = 'tmux'
+export type TerminalBackendName = 'tmux' | 'ptyhost'
 
 /** PID reuse-safe identity for the process that owns a Harness agent. */
 export interface ProcessIdentity {
@@ -22,10 +22,17 @@ export interface TmuxRuntimeRef {
   paneId: string
 }
 
-export type TerminalRuntimeRef = TmuxRuntimeRef
+export interface PtyRuntimeRef {
+  backend: 'ptyhost'
+  paneId: string
+  /** host instance, e.g. "p3" (protocol 3) */
+  instance: string
+}
+
+export type TerminalRuntimeRef = TmuxRuntimeRef | PtyRuntimeRef
 
 /** Untrusted route hints from hooks. */
-export type HookTerminalHint = { backend: 'tmux'; paneId: string }
+export type HookTerminalHint = { backend: 'tmux'; paneId: string } | { backend: 'ptyhost'; paneId: string; instance: string }
 
 export interface TerminalRootObservation {
   runtime: TerminalRuntimeRef
@@ -33,6 +40,9 @@ export interface TerminalRootObservation {
   cwd: string
   /** Route aliases reported by the backend; never treated as process identity. */
   aliases?: readonly string[]
+  /** The label the pane was created with, where the backend keeps one (the pty host): a move's new pane is told by
+   *  it (hostMove/moveAgent.ts `removeOrphanMovePanes`). */
+  label?: string
 }
 
 export type TerminalInventoryResult =
@@ -46,6 +56,28 @@ export type RuntimeValidation =
    *  retargeted or resumed in place reads this way until its new identity is recorded. */
   | { state: 'gone'; reason: string; replaced?: true }
   | { state: 'unknown'; reason: string }
+
+/** What a backend knows about a pane right now. */
+export interface TerminalPaneState {
+  dead: boolean
+  /** Exit status once the process is gone; null while it is still running. */
+  exitStatus: number | null
+  /** Foreground command name, as tmux #{pane_current_command}. */
+  command: string
+  /** Engine exit status recorded by the launch wrapper; null before. */
+  engineExit: number | null
+}
+
+/** A pane's state, `'gone'` when the backend says it has no such pane, `'unknown'` when it could not be asked. */
+export type TerminalPaneRead = TerminalPaneState | 'gone' | 'unknown'
+
+/** What a pane is running and where (terminal clients' #{pane_current_*}). */
+export interface TerminalPaneInfo { command: string; path: string; pid: number | null; tty: string }
+
+export interface TerminalBackendCapabilities {
+  /** Per-session environment for new panes (tmux >= TMUX_SESSION_ENV_MIN; always on ptyhost). */
+  sessionEnv: boolean
+}
 
 /**
  * Result of a PTY side effect. Only `not_started` and a server-confirmed `rejected` result may be
@@ -64,6 +96,17 @@ export interface TerminalDispatchControl {
   expectedHeldToken?: string
 }
 
+/**
+ * What a pane runs once its command exits by itself, in the same pane, with that exit recorded as the pane's
+ * `engineExit`: the hand-off a Unix launch script makes itself (lib/engineLaunch.ts `harness_after`), given to the
+ * pty host for a Windows engine, which has no script (lib/windows/engineStart.ts). tmux never gets one.
+ */
+export interface TerminalAfterExit {
+  command: string[]
+  /** Its own variables, beside the pane's; the host adds `HARNESS_ENGINE_EXIT`, the status. */
+  env?: Record<string, string>
+}
+
 export interface TerminalCreateRequest extends TerminalDispatchControl {
   cwd?: string
   label?: string
@@ -76,6 +119,15 @@ export interface TerminalCreateRequest extends TerminalDispatchControl {
    * `gridLaunch.ts`), and argv is world-readable through `ps` for as long as the process lives.
    */
   env?: Record<string, string>
+  /** What the pane runs when `command` exits by itself (`TerminalAfterExit`); the pty host's alone. */
+  afterExit?: TerminalAfterExit
+  /** Scrollback the new pane starts with (hostMove/seed.ts); the pty host's alone, and only one that lists the `seed`
+   *  feature: the tmux backend ignores it. */
+  seed?: string
+  /** Names this process, and its `afterExit` shell, do not get from the backend's own environment (a grid launch's
+   *  provider keys, on Windows: lib/windows/engineStart.ts); the pty host's alone, whose panes inherit the host's
+   *  environment. Per launch: the next respawn sends its own. */
+  clearInherited?: readonly string[]
 }
 
 /**
@@ -88,7 +140,17 @@ export interface TerminalCreateRequest extends TerminalDispatchControl {
 export interface TerminalRespawnRequest extends TerminalDispatchControl {
   cwd?: string
   command: string[]
+  /** This child's own variables, on top of what the pane was created with (tmux's session environment, the pty
+   *  host's stored create env), which a respawn inherits. */
   env?: Record<string, string>
+  /** Names taken out of what the pane was created with, for this child and every later one. The pty host does it
+   *  in the respawn; a backend with `clearEnv()` (tmux) is cleared through that instead, before the respawn. */
+  clearEnv?: readonly string[]
+  /** `TerminalCreateRequest.clearInherited`, for the new process alone, in place of the last launch's: never the same
+   *  list as `clearEnv`, which takes names out of what the pane was created with. */
+  clearInherited?: readonly string[]
+  /** The new process's hand-off (`TerminalAfterExit`), replacing any the pane had; the pty host's alone. */
+  afterExit?: TerminalAfterExit
 }
 
 export type TerminalCreateResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
@@ -197,8 +259,10 @@ export interface TerminalStreamHandle<Ref extends TerminalRuntimeRef = TerminalR
   endSnapshot(): void
   writeRaw(bytes: Uint8Array): Promise<TerminalActionResult>
   /** A clipboard paste, delivered as one atomic unit rather than chunked like `writeRaw` — see
-   *  `pasteRawIntoTmux` for why a paste needs its own path instead of reusing the keystroke one. */
-  pasteRaw(text: string): Promise<TerminalActionResult>
+   *  `pasteRawIntoTmux` for why a paste needs its own path instead of reusing the keystroke one.
+   *  `allowed` is asked again just before the paste lands: a paste takes two tmux processes, and the
+   *  stream it was sent on may be closed or taken over meanwhile. */
+  pasteRaw(text: string, allowed?: () => boolean): Promise<TerminalActionResult>
   resize(size: TerminalStreamSize): Promise<TerminalActionResult>
   /** Scroll a full-screen TUI that owns mouse-tracking but mishandles SGR wheel
    *  reports (confirmed live for Grok: it echoes the raw escape bytes into its

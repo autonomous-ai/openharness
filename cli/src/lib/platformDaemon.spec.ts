@@ -1,17 +1,19 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import {
-  OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, type PlatformName, type PlatformState,
+  OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, TASK_STOPPED_FILE, bootTimeMs, defaultPlatformDeps, logonTaskName, platformFor, taskName,
+  type CommandResult, type PlatformName, type PlatformState, type ServiceDefinition,
 } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { HARNESSD_STATUS_FILE } from './daemonState.js'
 import {
-  CARRIED_ENV, describeState, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition, startUnderPlatform, stopUnderPlatform,
-  supervisingPlatform, waitForMaster, waitGone, type PlatformDaemonDeps,
+  CARRIED_ENV, TASK_RUN_WAIT_MS, clearTaskStopped, launchMaster, describeState, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition,
+  startThroughTask, startUnderPlatform, stopUnderPlatform, supervisingPlatform, taskStoppedThisBoot, waitForMaster, waitGone, type PlatformDaemonDeps,
 } from './platformDaemon.js'
+import { currentCli, harnessLaunchPath } from './windows/installLayout.js'
 
 /** A fake clock and a pid file the fake platform writes, over fake launchctl or systemctl. */
 function world(platform: PlatformName) {
@@ -41,7 +43,8 @@ describe('the platform that supervises harnessd', () => {
   it('is this operating system\'s, unless the end-to-end suite names another', () => {
     expect(supervisingPlatform('darwin', {})).toBe('launchd')
     expect(supervisingPlatform('linux', {})).toBe('systemd')
-    expect(supervisingPlatform('win32', {})).toBeNull()
+    expect(supervisingPlatform('win32', {})).toBe('taskscheduler')
+    expect(supervisingPlatform('freebsd', {})).toBeNull()
     expect(supervisingPlatform('darwin', { HARNESSD_TEST_PLATFORM: 'systemd' })).toBe('systemd')
     expect(supervisingPlatform('win32', { HARNESSD_TEST_PLATFORM: 'launchd' })).toBe('launchd')
     expect(supervisingPlatform('linux', { HARNESSD_TEST_PLATFORM: 'upstart' })).toBe('systemd')
@@ -90,7 +93,7 @@ describe.each(['launchd', 'systemd'] as const)('under %s', (platform) => {
   })
 
   it('says why when the platform will not start it, or it does not come up', async () => {
-    await expect(startUnderPlatform(w.definition, { ...w.deps, service: null })).resolves.toEqual({ ok: false, detail: 'neither launchd nor systemd runs harnessd on this computer' })
+    await expect(startUnderPlatform(w.definition, { ...w.deps, service: null })).resolves.toEqual({ ok: false, detail: 'this computer has no launchd, systemd or Task Scheduler to run harnessd' })
     w.fake.set({ fail: { [platform === 'launchd' ? 'launchctl bootstrap' : 'systemctl start']: { status: 5, stderr: 'refused' } } })
     await expect(startUnderPlatform(w.definition, w.deps, 1_000)).resolves.toEqual({ ok: false, detail: expect.stringContaining('refused') })
     w.fake.set({ fail: {}, pidFile: null })
@@ -206,7 +209,7 @@ describe('describing what the platform says', () => {
 describe('this computer\'s dependencies', () => {
   it('read which platform runs the master from the status file it wrote', async () => {
     const deps = platformDaemonDeps()
-    expect(deps.service?.platform).toBe(process.platform === 'darwin' ? 'launchd' : process.platform === 'linux' ? 'systemd' : undefined)
+    expect(deps.service?.platform).toBe(platformFor(process.platform) ?? undefined)
     expect(deps.logFile).toBe(join(process.env.ADAPTER_DATA_DIR!, 'harness.log'))
     writeFileSync(HARNESSD_STATUS_FILE, JSON.stringify({ state: 'running', masterPid: 77, platform: 'systemd' }))
     try {
@@ -221,5 +224,113 @@ describe('this computer\'s dependencies', () => {
     await deps.sleep(5)
     expect(deps.now()).toBeGreaterThanOrEqual(before)
     expect(platformDaemonDeps({ logFile: '/x.log' }).logFile).toBe('/x.log')
+  })
+})
+
+describe('Windows', () => {
+  it('runs the scheduled task\'s launcher on the build cli\\current names', () => {
+    const made = serviceDefinition({ logFile: 'C:\\h\\cli\\data\\harness.log', platform: 'win32', source: {}, nodePath: 'C:\\h\\runtime\\node\\node.exe', home: 'C:\\Users\\d', scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', launcherPath: 'C:\\h\\bin\\harness-launch.exe' })
+    expect(made).toEqual({ nodePath: 'C:\\h\\runtime\\node\\node.exe', scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', logFile: 'C:\\h\\cli\\data\\harness.log', home: 'C:\\Users\\d', env: {}, launcherPath: 'C:\\h\\bin\\harness-launch.exe' })
+    expect(serviceDefinition({ logFile: '/l', platform: 'darwin', source: {}, nodePath: '/n', scriptPath: '/s', home: '/h' })).not.toHaveProperty('launcherPath')
+  })
+
+  it('finds the launcher and the build in the install root when not told them, so the task can be written at all', () => {
+    // B3.12's review: without a launcher, `harness service install` on Windows threw "the launcher path for the task must be absolute".
+    const root = dirname(env.ADAPTER_CLI_DIR)
+    const made = serviceDefinition({ logFile: '/l', platform: 'win32', source: {}, nodePath: '/n', home: '/h' })
+    expect(made.launcherPath).toBe(harnessLaunchPath(root))
+    expect(made.scriptPath).toBe(currentCli(root)?.cliJs ?? join(env.ADAPTER_CLI_DIR, 'cli.js'))
+    expect(serviceDefinition({ logFile: '/l', platform: 'linux', source: {}, nodePath: '/n', home: '/h' }).scriptPath).toBe(join(env.ADAPTER_CLI_DIR, 'cli.js'))
+  })
+
+  const WHOAMI: CommandResult = { status: 0, stdout: '"D\\u","S-1-5-21-1-2-3-1001"\r\n', stderr: '' }
+  function taskDeps(over: { pids?: Array<number | null>; lockHeld?: boolean; run?: CommandResult; whoami?: CommandResult } = {}) {
+    const pids = [...(over.pids ?? [])]
+    const clock = { now: 0 }
+    const calls: string[] = []
+    const files: Record<string, string> = {}
+    const service = new PlatformService('taskscheduler', {
+      // whoami gives the SID the task's logon trigger names (harnessd/platform.ts); the calls that matter here are schtasks's.
+      run: (command, args) => {
+        if (command === 'whoami') return over.whoami ?? WHOAMI
+        calls.push([command, ...args].join(' '))
+        return over.run ?? { status: 0, stdout: '', stderr: '' }
+      },
+      readFile: (path) => files[path] ?? null, writeFile: (path, content) => { files[path] = content }, removeFile: (path) => { delete files[path] },
+      uid: 0, home: '/h', user: 'D\\u', dataDir: '/h/data',
+    })
+    return {
+      calls,
+      clock,
+      deps: {
+        service, logFile: 'C:\\h\\cli\\data\\harness.log', readPid: () => (pids.length > 1 ? pids.shift()! : pids[0] ?? null), isAlive: () => true,
+        masterPlatform: () => null, now: () => clock.now, sleep: async (ms: number) => { clock.now += ms }, lockHeld: () => over.lockHeld ?? false,
+      },
+    }
+  }
+  const definition = (): ServiceDefinition => ({ nodePath: 'C:\\n.exe', scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', logFile: 'C:\\h\\cli\\data\\harness.log', home: 'C:\\Users\\d', env: {}, launcherPath: 'C:\\h\\bin\\harness-launch.exe' })
+
+  it('starts the master through harness-launch.exe with none of harnessd\'s variables, and the rest of this shell\'s', async () => {
+    const launches: unknown[][] = []
+    const shell = { PATH: 'C:\\Windows', ADAPTER_DATA_DIR: 'C:\\h\\cli\\data', HARNESSD_SERVICE_TOKEN: 'from-an-agent-pane', HARNESSD_RESUME: '{"handover":{}}' }
+    const outcome = await launchMaster(join('/h', 'cli'), shell, async (...args) => { launches.push(args); return { ok: true } })
+    expect(outcome).toEqual({ ok: true })
+    expect(launches).toEqual([[harnessLaunchPath('/h'), '/h', ['__harnessd'], { PATH: 'C:\\Windows', ADAPTER_DATA_DIR: 'C:\\h\\cli\\data' }]])
+    // A copy: this shell keeps its own.
+    expect(shell.HARNESSD_SERVICE_TOKEN).toBe('from-an-agent-pane')
+    // By default, this CLI's folder and this process's environment.
+    const own: unknown[][] = []
+    await launchMaster(undefined, undefined, async (...args) => { own.push(args); return { ok: false, detail: 'x' } })
+    expect(own[0]!.slice(0, 2)).toEqual([harnessLaunchPath(dirname(env.ADAPTER_CLI_DIR)), dirname(env.ADAPTER_CLI_DIR)])
+    expect(own[0]![3]).toEqual(Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('HARNESSD_'))))
+  })
+
+  it('starts through the task and waits for the master it starts', async () => {
+    const { deps, calls } = taskDeps({ pids: [null, null, 700] })
+    await expect(startThroughTask(definition(), deps)).resolves.toEqual({ ok: true, pid: 700 })
+    expect(calls).toEqual([
+      `schtasks /Create /TN ${taskName('D\\u')} /XML /h/data/harnessd-task.xml /F`,
+      `schtasks /Create /TN ${logonTaskName('D\\u')} /XML /h/data/harnessd-logon-task.xml /F`,
+      `schtasks /Run /TN ${taskName('D\\u')}`,
+    ])
+  })
+
+  it('says to start it directly when the task did not run (no signed-in session) or could not be run', async () => {
+    const quiet = taskDeps({ pids: [null] })
+    await expect(startThroughTask(definition(), quiet.deps)).resolves.toMatchObject({ ok: false, direct: true })
+    expect(quiet.clock.now).toBe(TASK_RUN_WAIT_MS)
+    await expect(startThroughTask(definition(), taskDeps({ run: { status: 1, stdout: '', stderr: 'ERROR: denied' } }).deps)).resolves.toMatchObject({ ok: false, direct: true })
+  })
+
+  it('starts it directly when the task cannot even be written, and runs nothing', async () => {
+    const lost = taskDeps({ whoami: { status: 1, stdout: '', stderr: 'ERROR: no' } })
+    await expect(startThroughTask(definition(), lost.deps)).resolves.toEqual({ ok: false, direct: true, detail: expect.stringMatching(/^Harness could not tell which Windows user this is/) })
+    expect(lost.calls).toEqual([])
+  })
+
+  it('keeps waiting while the task\'s own start holds the spawn lock, and reports one that never came up', async () => {
+    await expect(startThroughTask(definition(), taskDeps({ pids: [null], lockHeld: true }).deps, 1_000)).resolves.toMatchObject({ ok: false, direct: false, detail: 'harnessd did not come up within 11s' })
+    const slow = taskDeps({ pids: [...Array(60).fill(null), 701], lockHeld: true })
+    await expect(startThroughTask(definition(), slow.deps)).resolves.toEqual({ ok: true, pid: 701 })
+  })
+
+  it('remembers a stop for as long as this computer runs, and any other start forgets it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'task-stopped-'))
+    try {
+      expect(taskStoppedThisBoot(dir)).toBe(false)
+      writeFileSync(join(dir, TASK_STOPPED_FILE), `${JSON.stringify({ boot: bootTimeMs() })}\n`)
+      expect(taskStoppedThisBoot(dir)).toBe(true)
+      clearTaskStopped(dir)
+      expect(existsSync(join(dir, TASK_STOPPED_FILE))).toBe(false)
+      expect(taskStoppedThisBoot(dir)).toBe(false)
+      clearTaskStopped(dir)
+      // The default is this data folder's.
+      expect(taskStoppedThisBoot()).toBe(false)
+      clearTaskStopped()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('names the platform as a person would', () => {
+    expect(describeState({ platform: 'taskscheduler', file: 'f', target: taskName('D\\u'), installed: true, registered: false, pid: null, state: null, failed: false, lastExit: null, linger: null, unreachable: null })).toBe('not registered')
   })
 })

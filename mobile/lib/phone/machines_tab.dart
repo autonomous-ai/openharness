@@ -10,6 +10,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'add_device/add_device_page.dart';
 import 'welcome/connect_computer.dart';
 import 'welcome/set_up_computer.dart' show ComputerSteps;
 import 'welcome/your_computer.dart';
@@ -294,9 +295,8 @@ class _Body extends StatelessWidget {
   /// sends the download, and the account watched for the computer that opens it. A second computer
   /// is set up the way the first was (`welcome/your_computer.dart`).
   void _setUpComputer(BuildContext context) => unawaited(
-    Navigator.of(context).push(
-      phoneRoute((_) => YourComputerPage(notifier: notifier)),
-    ),
+    Navigator.of(context)
+        .push(phoneRoute((_) => YourComputerPage(notifier: notifier))),
   );
 
   /// [ownLine] false: its run's [_GroupLine] says what the second line would have, so it has none.
@@ -335,8 +335,13 @@ class _Body extends StatelessWidget {
       (word, color) = ('trying…', tty.faint);
     } else if (notifier.isNewMachine(machineId) &&
         status == PhoneMachineStatus.ready) {
-      // Just set up from this phone (Set up a device): which one it is, among the rest.
-      word = 'new';
+      // Just set up from this phone (Set up Intern 3): which one it is, among the rest. Not green:
+      // beside the green Start it read as a second button. Gone once Start is pressed: its spinner
+      // says enough.
+      (word, color) = (
+        notifier.machineStarting(machineId) ? '' : 'new',
+        tty.text,
+      );
     }
     // Whether it runs Harness OS and has an update, for its sheet's Update and Change Wi-Fi; asked
     // at most every few minutes, the answer redrawing the list.
@@ -531,6 +536,20 @@ class _ConnectBarState extends State<_ConnectBar> {
                     label: 'Add computer',
                     onPressed: widget.onSetUp,
                   ),
+                  // A Harness with no screen, or one locked as it starts: Settings' Set up Intern 3,
+                  // here too, where the computers are.
+                  const SizedBox(height: 4),
+                  Center(
+                    child: TtyTextButton(
+                      key: const ValueKey('machines-set-up-device'),
+                      label: 'Set up Intern 3',
+                      onPressed: () => Navigator.of(context).push(
+                        phoneRoute(
+                          (_) => AddDevicePage(notifier: widget.notifier),
+                        ),
+                      ),
+                    ),
+                  ),
                   // A desktop from before shows its Add Phone QR code rather than an address: the
                   // camera pairs with it. "QR code", not "Add Phone code" — a desktop menu's name
                   // read as a noun stack under a button named for the other side.
@@ -665,7 +684,6 @@ class _RefreshButtonState extends State<_RefreshButton>
   }
 }
 
-
 /// Start, on a computer just set up from this phone: its harness — OpenCode first — or, with none
 /// there yet, a new OpenCode in a fresh project of its own, opened as soon as it is up.
 class _StartButton extends StatefulWidget {
@@ -682,23 +700,27 @@ class _StartButton extends StatefulWidget {
 }
 
 class _StartButtonState extends State<_StartButton> {
-  bool _busy = false;
+  bool get _busy => _app.machineStarting(widget.machineId);
 
   AppNotifier get _app => widget.notifier;
 
   Agent? _harness() {
     final agents = _app.machineStates[widget.machineId]?.agents ?? const [];
-    bool opencode(Agent agent) => '${agent.name} ${agent.title ?? ''}'
-        .toLowerCase()
-        .contains('opencode');
+    bool opencode(Agent agent) =>
+        '${agent.name} ${agent.title ?? ''}'.toLowerCase().contains('opencode');
     return agents.where(opencode).firstOrNull ?? agents.firstOrNull;
   }
 
   Future<void> _start() async {
     final messenger = ScaffoldMessenger.maybeOf(context);
     var harness = _harness();
+    _app.setMachineStarting(widget.machineId, true);
+    // As the desktop's first run: the harness in a tab of its own, "code", on the account's desk —
+    // the tab this computer's screen opens on when someone signs in there, rather than a second
+    // OpenCode of its own. Read first, so the tab has a desk to be written to.
+    await _app.readDesk();
     if (harness == null) {
-      setState(() => _busy = true);
+      _app.openNextAgentInNewDeskTab(name: 'code');
       final failed = await _app.createAgent(
         widget.machineId,
         engine: 'opencode',
@@ -706,7 +728,8 @@ class _StartButtonState extends State<_StartButton> {
         projectFolder: const ProjectFolderRequest.newProject(),
       );
       if (failed != null) {
-        if (mounted) setState(() => _busy = false);
+        _app.forgetNewDeskTabIntent();
+        _app.setMachineStarting(widget.machineId, false);
         messenger?.showSnackBar(SnackBar(content: Text(failed)));
         return;
       }
@@ -716,27 +739,64 @@ class _StartButtonState extends State<_StartButton> {
           DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(seconds: 1));
       }
+      _app.setMachineStarting(widget.machineId, false);
       if (!mounted) return;
-      setState(() => _busy = false);
       if (harness == null) {
         messenger?.showSnackBar(
           const SnackBar(
-            content: Text('OpenCode is still starting there. Try again in a moment.'),
+            content: Text(
+              'OpenCode is still starting there. Try again in a moment.',
+            ),
           ),
         );
         return;
+      }
+    } else {
+      _app.setMachineStarting(widget.machineId, false);
+      // There already, in a tab (the screen's own) or in none: one of none gets its "code" tab.
+      final ref = (machineId: widget.machineId, agentId: harness.id);
+      final tab = _app.deskTabs
+          .where(
+            (t) => t.panes.any(
+              (p) => p.machineId == ref.machineId && p.agentId == ref.agentId,
+            ),
+          )
+          .firstOrNull;
+      if (tab != null) {
+        _app.selectDeskTab(tab.id);
+      } else {
+        _app.createDeskTabFor(ref, name: 'code');
       }
     }
     _app.sawMachine(widget.machineId);
     if (mounted) openAgent(context, _app, widget.machineId, harness.id);
   }
 
+  /// While it starts, a spinner where "Start" was: the word "Starting…" is wider than [room] and
+  /// ran over the row's "new". The hidden "Start" keeps the place, so nothing beside it moves.
   @override
-  Widget build(BuildContext context) => TtyTextButton(
-    key: ValueKey('machines-start-${widget.machineId}'),
-    label: _busy ? 'Starting…' : 'Start',
-    color: Tty.of(context).green,
-    weight: FontWeight.w600,
-    onPressed: _busy ? null : () => unawaited(_start()),
-  );
+  Widget build(BuildContext context) {
+    final green = Tty.of(context).green;
+    final button = TtyTextButton(
+      key: ValueKey('machines-start-${widget.machineId}'),
+      label: 'Start',
+      color: green,
+      weight: FontWeight.w600,
+      onPressed: _busy ? null : () => unawaited(_start()),
+    );
+    if (!_busy) return button;
+    return Semantics(
+      label: 'Starting',
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          ExcludeSemantics(child: Opacity(opacity: 0, child: button)),
+          SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(strokeWidth: 1.8, color: green),
+          ),
+        ],
+      ),
+    );
+  }
 }

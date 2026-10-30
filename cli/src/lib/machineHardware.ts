@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readFile, statfs } from 'node:fs/promises'
-import { freemem, homedir, totalmem } from 'node:os'
+import { cpus, freemem, homedir, totalmem } from 'node:os'
 import { parse } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -31,6 +31,26 @@ async function command(file: string, args: string[]): Promise<string> {
   })
   return stdout
 }
+
+export function parseDarwinDevice(raw: string): { deviceType: string | null; chip: string | null } {
+  const data = JSON.parse(raw) as { SPHardwareDataType?: Array<Record<string, unknown>> }
+  const row = data.SPHardwareDataType?.[0]
+  const label = (value: unknown) => typeof value === 'string' && value.length <= 120 ? value : null
+  // Never retain serial numbers, device UUIDs or the unfiltered profiler output.
+  return { deviceType: label(row?.machine_name), chip: label(row?.chip_type ?? row?.cpu_type) }
+}
+let device: Promise<{ deviceType: string | null; chip: string | null; os: string }> | undefined
+export function readMachineDevice() {
+  return device ??= (async () => {
+    const base = { deviceType: null as string | null, chip: cpus()[0]?.model?.slice(0, 120) ?? null,
+      os: process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux' }
+    try {
+      if (process.platform === 'darwin') return { ...base, ...parseDarwinDevice(await command('/usr/sbin/system_profiler', ['SPHardwareDataType', '-json'])) }
+      if (process.platform === 'linux') return { ...base, deviceType: (await readFile('/sys/class/dmi/id/product_name', 'utf8')).trim().slice(0, 120) || null }
+    } catch { /* Device type is optional; utilization sampling still works. */ }
+    return base
+  })()
+}
 function number(value: string | undefined): number | null {
   if (value == null || !/^\d+(?:\.\d+)?$/.test(value.trim())) return null
   const n = Number(value)
@@ -46,16 +66,23 @@ export function parseDarwinMemory(vm: string, total: number, sysctl: string): Me
   if (!pageSize || !Number.isFinite(total) || total <= 0) return null
   const counts = new Map<string, number>()
   for (const match of vm.matchAll(/^([^:\n]+):\s+(\d+)\.?\s*$/gm)) counts.set(match[1].trim(), Number(match[2]))
-  const keys = ['Pages active', 'Pages inactive', 'Pages speculative', 'Pages wired down',
-    'Pages occupied by compressor', 'Pages purgeable', 'File-backed pages']
+  const keys = ['Pages free', 'Pages inactive', 'Pages speculative', 'Pages wired down', 'Pages occupied by compressor', 'Pages purgeable', 'File-backed pages']
   if (keys.some(key => !counts.has(key))) return null
-  const used = (keys.slice(0, 5).reduce((sum, key) => sum + counts.get(key)!, 0)
-    - counts.get('Pages purgeable')! - counts.get('File-backed pages')!) * pageSize
-  if (!Number.isFinite(used) || used < 0 || used > total) return null
+  const page = (key: string) => counts.get(key)!
+  // Free pages, plus what the kernel can drop or recycle. Two overlapping views of that: the inactive and
+  // speculative queues, and the file-backed and purgeable pages, which sit across the active, inactive and
+  // speculative queues. Adding them would count some pages twice, so take the larger. Inactive anonymous pages are
+  // only freed by compressing or swapping them, so this is an upper estimate, bounded by the memory that is
+  // neither wired nor held by the compressor (counting compressed pages as used read 5 GiB on a 32 GiB Mac
+  // with 7 GiB free or reclaimable, 2026-10-22).
+  const reclaimable = (page('Pages free') + Math.max(page('Pages inactive') + page('Pages speculative'),
+    page('File-backed pages') + page('Pages purgeable'))) * pageSize
+  const available = Math.min(reclaimable, total - (page('Pages wired down') + page('Pages occupied by compressor')) * pageSize)
+  if (!Number.isFinite(available) || available < 0) return null
   const pressureLevel = /^\s*([124])\s*$/m.exec(sysctl)?.[1]
   const swap = /used\s*=\s*([\d.]+)([KMG])\b/.exec(sysctl)
   const swapValue = number(swap?.[1])
-  return { total, available: total - used,
+  return { total, available,
     pressure: pressureLevel === '1' ? 'normal' : pressureLevel === '2' ? 'warning' : pressureLevel === '4' ? 'critical' : null,
     swapUsedBytes: swap && swapValue != null ? swapValue * ({ K: KiB, M: MiB, G: KiB ** 3 }[swap[2]]!) : null,
   }

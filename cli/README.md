@@ -221,11 +221,16 @@ claude under a terminal backend ──writes──▶ ~/.claude/projects/**.json
 
 ### Terminal backend behavior
 
-- **tmux is the only supported backend.** The retired Herdr backend has been removed.
-  `TERMINAL_BACKENDS=herdr` is not an error — it is dropped with a warning and the daemon runs on tmux,
-  because the CLI self-updates and a retired setting must not stop an unattended machine from starting.
-  `HERDR_SESSIONS` and `HERDR_BIN` are no longer read.
-- **Unset means auto**, which resolves to tmux alone. `TERMINAL_BACKENDS` survives only as a pin.
+- **Two backends: `tmux` and `ptyhost`.** tmux is the backend on macOS and Linux. `ptyhost` is the
+  Harness PTY host (`pty/`, `harness-pty`), a long-lived process of its own with a ConPTY per pane: the
+  backend on Windows, and buildable on Unix for its tests. Its home is `HARNESS_PTY_DIR`
+  (`~/.harness/pty`), with its discovery file in `run/` and its log in `logs/pty-host-<instance>.log` (one per host build);
+  `HARNESS_PTY_BIN` overrides the host binary. The retired Herdr backend has been removed.
+  `TERMINAL_BACKENDS=herdr` is not an error — it is dropped with a warning and the daemon runs on the
+  platform's default, because the CLI self-updates and a retired setting must not stop an unattended
+  machine from starting. `HERDR_SESSIONS` and `HERDR_BIN` are no longer read.
+- **Unset means auto**, which resolves to `ptyhost` on Windows and `tmux` everywhere else.
+  `TERMINAL_BACKENDS` pins the set (`tmux`, `ptyhost`, or both).
 - Harness never auto-starts a session.
 - `harness status` answers "is my pane being watched?" — `terminalSelection` says `auto` or `configured`,
   and `terminalTargets` lists what is live right now, not what was configured at boot.
@@ -283,7 +288,9 @@ report all fields.
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | where Claude writes session JSONL |
 | `ADAPTER_DATA_DIR` | `~/.harness/cli/data` | registry and daemon-local state (SSO session is always `~/.harness/auth/session.json`) |
 | `DISABLE_HOOK_INSTALL` | `false` | skip auto-installing the claude hooks |
-| `TERMINAL_BACKENDS` | *(auto)* | pin the set. `tmux` is the only supported value; a retired `herdr` is dropped with a warning |
+| `TERMINAL_BACKENDS` | *(auto)* | pin the set: `tmux`, `ptyhost`, or both (auto: `ptyhost` on Windows, `tmux` elsewhere); a retired `herdr` is dropped with a warning |
+| `HARNESS_PTY_DIR` | `~/.harness/pty` | the PTY host's home (`run/`, `logs/`) |
+| `HARNESS_PTY_BIN` | *(bundled)* | the `harness-pty` binary to run, used as it is |
 | `TERMINAL_RECONCILE_INTERVAL_MS` | `5000` | backend-neutral discovery interval; minimum 5000 ms |
 | `TMUX_REAP_INTERVAL_MS` | `5000` | process discovery interval (removal requires two confirmed misses) |
 | `ADAPTER_UPDATE_URL` | `…/adapter/metadata.json` | GCS release manifest the daemon polls for a newer build |

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fsyncSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { creationFingerprint } from '../lib/agentCreationReceipt.js'
-import { readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
 
 export class DshPreparationUnavailable extends Error {}
 export type PrepareDsh = <T>(workspace: string, input: unknown, run: () => Promise<T>, replay?: boolean) => Promise<T>
@@ -25,8 +25,7 @@ export function dshPreparations(directory: string): PrepareDsh {
       opened = true
       try { writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd) } finally { closeSync(fd) }
       if (!exclusive) renameSync(temp, file)
-      const dir = openSync(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(dir) } finally { closeSync(dir) }
+      syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {
       if (!exclusive && opened) rmSync(temp, { force: true })
     }
@@ -53,8 +52,7 @@ export function dshPreparations(directory: string): PrepareDsh {
     catch { throw uncertain() }
     const release = () => {
       rmSync(reservation)
-      const dir = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(dir) } finally { closeSync(dir) }
+      syncStateDirectory(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     }
     // Only workspace initialization reuses an outcome. Runtime preparation revalidates its current files
     // and account on every launch, even if the package/runtime key did not change.

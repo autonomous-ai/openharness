@@ -3,6 +3,7 @@ import { deviceErrorText } from '../cardText.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
+import { createShortTurnGuard } from './shortTurnGuard.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -40,6 +41,48 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('tells of an agent working on each live turn start and progress, never on its end or a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const working = vi.fn()
+    const { funnel } = setup('claude', { working })
+    funnel('s1', [started(), text()])
+    expect(working.mock.calls).toEqual([['a1'], ['a1']])
+    working.mockClear()
+    funnel('s1', [ended()])
+    funnel('s1', [started(), text(), ended()], { replay: true })
+    funnel('s1', [started(), text(), ended()], { resumed: true })
+    expect(working).not.toHaveBeenCalled()
+  })
+
+  it('tells the short-turn guard of each live turn start and end, never of a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    const { funnel } = setup('claude', { shortTurns })
+    for (let i = 0; i < 10; i++) { funnel('s1', [started(), ended()], { replay: true }); funnel('s1', [started(), ended()], { resumed: true }); at += 1_000 }
+    expect(shortTurns.holding('s1')).toBe(0)
+    for (let i = 0; i < 10; i++) { funnel('s1', [started()]); at += 1_000; funnel('s1', [ended()]) }
+    expect(shortTurns.holding('s1')).toBe(30_000)
+  })
+
+  it('offers native observation after client dispatch without letting an observer break the turn', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ingest = vi.fn()
+    const { funnel, calls } = setup('claude', { nativeTurns: { ingest } })
+    const events = [started(), text(), ended()]
+    funnel('s1', events)
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, false)
+    funnel('s1', events, { replay: true })
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
+    funnel('s1', events, { resumed: true })
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
+    calls.length = 0
+    ingest.mockImplementationOnce(() => { expect(calls).toContain('send turn_ended'); throw new Error('Observer failed') })
+    funnel('s1', events)
+    expect(calls.slice(-2)).toEqual(['mirror', 'device stream'])
+  })
 
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []

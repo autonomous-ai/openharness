@@ -12,6 +12,7 @@ import { readdir, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
+import type { Asker, SwarmLaunch } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { folderTrust } from '../../engines/launchPrep.js'
@@ -23,9 +24,10 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
-  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
+  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
+import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -33,6 +35,7 @@ import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import { createPendingLaunches } from './pendingLaunches.js'
+import type { GuestCreate } from './guestCreate.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
 export type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
@@ -44,7 +47,7 @@ export type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
  *  actually resumed the prior conversation or had to fall back to a fresh one (core/agents/restart.ts). */
 export type RestartAgent = (agentId: string) => Promise<
   { ok: true; session: RegisteredSession; resumed: boolean }
-  | { ok: false; error: string; detail?: string }
+  | { ok: false; error: string; detail?: string; reason?: string }
 >
 /** Resumes stopped work directly, or attaches if it is already running. Never replaces a live process
  *  and never falls back to a fresh conversation (core/agents/lifecycle.ts). */
@@ -52,7 +55,7 @@ export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnTy
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
@@ -69,12 +72,16 @@ export interface LaunchRequestDeps {
    *  machine (core/api.ts `ModelsPort.launchTarget`). Null or a rejection holds a durable model request;
    *  resolving the semantic choice may renew service-owned credentials, but never dispatches a launch. */
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
+  /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
+  guestCreate?: () => GuestCreate | null
+  /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -107,15 +114,28 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
-          detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
+          detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
+          // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
       }
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
+      //
+      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // to (cloned now, or one already there that holds that very repository). The person chose this repository
+      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
+      // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
+      // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
+      // main repository), which made the source look trusted before the worktree started.
+      // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
+      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
+        && input.permissionMode === 'full'
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)
-        if (engineTrust && (projectFolder.source === 'new'
+        if (engineTrust && (projectFolder.source === 'new' || swarmCheckout
           || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
@@ -234,29 +254,71 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const session = byAgent(status.agentId)
       return session
         ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
-        : { state: 'unavailable' }
+        : { state: 'unavailable', createdAgentId: status.agentId }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
     // so clients can distinguish "safe to correct the choices" from "outcome still unknown".
     if (status.state === 'failed') {
-      return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error, ...(status.detail ? { detail: status.detail } : {}) } }
+      return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error,
+        ...(status.reason ? { reason: status.reason } : {}), ...(status.detail ? { detail: status.detail } : {}),
+        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
     }
     return status
   }
 
+  /** A guest sees only its own creations. For anyone else's id it hears what an unknown id gets, so the
+   *  answer does not tell whether the id exists. The owner administers the machine and sees them all. */
+  const hiddenFrom = (asker: Pick<Asker, 'local' | 'guest'>, creationId: string): boolean => {
+    if (asker.guest === undefined) return false
+    // Damaged evidence for this id is hidden the same way; the guest's own retry still meets it in `run`.
+    try { return receipts.creator(creationId) !== asker.guest }
+    catch (error) { if (error instanceof AgentCreationReceiptError) return true; throw error }
+  }
+
   /** Answers `agent_create_status`: what became of the launch a `creationId` names. */
-  const createStatus = async (payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+  const createStatus = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     const creationId = payload.creationId
     if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
     try {
-      reply({ creationId, ...await creationStatusPayload(receipts.status(creationId)) })
+      if (hiddenFrom(asker, creationId)) { reply({ creationId, state: 'missing' }); return }
+      const status = receipts.status(creationId)
+      const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
+      reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
       reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
     }
   }
 
-  /** Answers `agent_create`. `asker.local` says the frame came from this machine. */
-  const create = async (payload: Record<string, unknown>, asker: { local: boolean }, reply: Reply): Promise<void> => {
+  /** A guest's `agent_create`: its own launch, never the owner's (core/agents/guestCreate.ts). A `creationId` keeps a
+   *  receipt as the owner's launches do, so a status check or a retry finds the same harness. */
+  const createForGuest = async (payload: Record<string, unknown>, guest: string, reply: Reply): Promise<void> => {
+    const launch = guestCreate?.()
+    if (!launch) { reply({ error: 'GUEST_NOT_ALLOWED' }); return }
+    const creationId = payload.creationId
+    if (creationId !== undefined && !validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
+    if (creationId === undefined) {
+      const result = await launch(payload, guest)
+      reply(result.ok ? { agent: await toProject(result.session) } : { error: result.error, ...(result.detail ? { detail: result.detail } : {}) })
+      return
+    }
+    try {
+      const fingerprint = creationFingerprint({ guest, engine: payload.engine, name: payload.name })
+      void receipts.run(creationId, fingerprint, async () => {
+        const result = await launch(payload, guest)
+        return result.ok ? { state: 'created', agentId: result.session.agentId }
+          : { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
+      }, guest).then(async (status) => {
+        reply({ creationId, ...await creationStatusPayload(status) })
+      }).catch(() => reply({ error: 'INTERNAL' }))
+    } catch (error) {
+      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+    }
+  }
+
+  /** Answers `agent_create`. `asker.local` says the frame came from this machine; `asker.guest`, that a guest
+   *  of a machine shared with them asks (core/guestPolicy.ts). */
+  const create = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
+    if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
     const engine = payload.engine as AgentEngine | undefined
     const cwd = payload.cwd
     if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
@@ -289,6 +351,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const grid = parseGridLaunchOverride(payload.grid)
     if (grid.state === 'invalid') { reply({ error: 'INVALID_GRID', detail: grid.reason }); return }
     if (terminal && grid.state === 'ok') { reply({ error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
+    // A model and effort for this session alone, as flags (lib/launchModel.ts). Refused, never ignored: a daemon that
+    // dropped them would start the agent on the engine's own model and look like it worked, so a caller that gets
+    // LAUNCH_MODEL_UNSUPPORTED switches the model after the start instead. A grid picks its own model.
+    const launchModel = parseLaunchModel(engine, payload)
+    if (launchModel.state === 'invalid') { reply({ error: 'INVALID_LAUNCH_MODEL', detail: launchModel.detail }); return }
+    if (launchModel.state === 'unsupported') { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: launchModel.detail }); return }
+    if (launchModel.state === 'ok' && (grid.state === 'ok' || model.state === 'ok')) {
+      reply({ error: 'INVALID_LAUNCH_MODEL', detail: 'a grid chooses its own model' }); return
+    }
+    // A Claude Code too old for the flags would print its help in the new pane. Refused here, before any receipt, so the
+    // caller creates the agent without them and switches the model afterwards, as it did before the flags.
+    if (launchModel.state === 'ok') {
+      const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
+      if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
+    }
     // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
     // repeated here because a client's own check is not a guarantee about what actually
     // arrives on the wire.
@@ -330,6 +407,29 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       }
       prompt = trimmed || null
     }
+    const swarmRole = payload.swarmRole
+    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
+    }
+    const isSwarmRole = (value: unknown): value is NonNullable<CreateInput['swarmRole']> => !!swarmLaunch?.role(value)
+    if (swarmRole !== undefined && swarmRole !== null &&
+      (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
+    }
+    // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
+    const swarmSkillMode = payload.swarmSkillMode
+    if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
+    }
+    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
+    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
+    const swarmGitHub = payload.swarmGitHub
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
+    }
+    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
+    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
+    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -362,7 +462,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
-      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
+      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
       resumeSessionId = payload.resumeSessionId
@@ -388,7 +488,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!parentAgentId) { reply({ error: 'INVALID_STARTED_BY', detail: 'parentAgentId is the agent id of the harness that started it, with startedBy agent' }); return }
       if (!byAgent(parentAgentId)) parentAgentId = null
     }
-    const input = {
+    const input: Parameters<CreateAgent>[0] = {
       engine,
       cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
       // On unless a client says otherwise: a harness works without stopping to ask for each command.
@@ -398,12 +498,14 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
+      ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
     }
     const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
@@ -479,7 +581,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           // RESTART_FAILED can follow an unobserved relaunch. Never silently
           // replace that process again when a caller checks this intent.
           if (result.error === 'RESTART_FAILED' || result.error === 'RESUME_UNCONFIRMED') return { state: 'unconfirmed' }
-          return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
+          return { state: 'failed', error: result.error, ...(result.reason ? { reason: result.reason } : {}),
+            ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
         }).then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))
@@ -490,7 +593,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     const result = await invoke()
     if (!result.ok) {
-      reply(result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
+      reply({ error: result.error, ...(result.reason ? { reason: result.reason } : {}), ...(result.detail ? { detail: result.detail } : {}) })
       return
     }
     reply({ agent: await toProject(result.session), resumed: result.resumed })
@@ -536,9 +639,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     reply({ agent: await toProject(result.session), level: result.level })
   }
 
-  const cancelCreate = async (payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+  const cancelCreate = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     if (!validCreationId(payload.creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
-    try { reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) }) }
+    try {
+      // A guest cancels nothing of another's, and leaves no cancelled mark for an id that is not its own.
+      if (hiddenFrom(asker, payload.creationId)) { reply({ creationId: payload.creationId, state: 'missing' }); return }
+      reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) })
+    }
     catch (error) { reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }) }
   }
 

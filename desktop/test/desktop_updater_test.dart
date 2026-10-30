@@ -1,15 +1,79 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show min;
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/update/desktop_updater.dart';
+import 'package:path/path.dart' as p;
 
 Future<String> _sha256Hex(List<int> bytes) async {
   final hash = await Sha256().hash(bytes);
   return hash.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+String _sha256HexSync(List<int> bytes) => const DartSha256()
+    .hashSync(bytes)
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join();
+
+/// Serves [bytes] for any GET, in 64 KiB pieces as a socket would, without a
+/// server on this isolate whose own copying would muddy [_EventLoopGaps].
+class _MemoryAdapter implements HttpClientAdapter {
+  _MemoryAdapter(this.bytes);
+  final Uint8List bytes;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    const piece = 64 << 10;
+    return ResponseBody(
+      Stream.fromIterable([
+        for (var at = 0; at < bytes.length; at += piece)
+          Uint8List.sublistView(bytes, at, min(at + piece, bytes.length)),
+      ]),
+      200,
+      headers: {
+        Headers.contentLengthHeader: ['${bytes.length}'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// The longest stretch the event loop went without running a 1 ms timer.
+class _EventLoopGaps {
+  final _clock = Stopwatch();
+  Timer? _timer;
+  var _last = Duration.zero, _longest = Duration.zero;
+
+  void start() {
+    _clock.start();
+    _timer = Timer.periodic(const Duration(milliseconds: 1), (_) => _tick());
+  }
+
+  void _tick() {
+    final now = _clock.elapsed;
+    if (now - _last > _longest) _longest = now - _last;
+    _last = now;
+  }
+
+  Duration stop() {
+    _tick();
+    _timer?.cancel();
+    return _longest;
+  }
 }
 
 /// Why the macOS half of this file is host-gated.
@@ -80,6 +144,19 @@ Future<(List<int>, String)> _fakeAppImageBytes(String version) async {
   return (bytes, await _sha256Hex(bytes));
 }
 
+Uint8List _windowsZip(String version) {
+  final archive = Archive();
+  for (final entry in <String, String>{
+    'Harness.exe': 'launcher $version',
+    'Harness.ico': 'icon $version',
+    'current': '$version\r\n',
+    'app/$version/harness-desktop.exe': 'app $version',
+  }.entries) {
+    archive.addFile(ArchiveFile.bytes(entry.key, utf8.encode(entry.value)));
+  }
+  return ZipEncoder().encodeBytes(archive);
+}
+
 void main() {
   late Directory scratch;
   HttpServer? server;
@@ -101,6 +178,141 @@ void main() {
     server = null;
     if (await scratch.exists()) await scratch.delete(recursive: true);
   });
+
+  test(
+    'Windows uses its own channel, native preference, and manifest precedence',
+    () async {
+      expect(
+        DesktopUpdater(isWindows: true, releaseMode: true).canCheck,
+        isTrue,
+      );
+      expect(
+        desktopUpdateMetadataUrl(staging: true, override: ''),
+        contains('/harness/staging/'),
+      );
+      expect(
+        desktopUpdateMetadataUrl(
+          staging: true,
+          override: 'https://test.invalid/',
+        ),
+        'https://test.invalid/',
+      );
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final url = 'http://127.0.0.1:${server!.port}/metadata.json';
+      server!.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'desktop-windows-x64': {
+              'version': '1.3.0',
+              'url': '$url/x64',
+              'sha256': 'a' * 64,
+              'size': 5,
+            },
+            'desktop-windows-arm64': {
+              'version': '1.3.0',
+              'url': '$url/arm',
+              'sha256': 'b' * 64,
+              'size': 5,
+            },
+          }),
+        );
+        await request.response.close();
+      });
+      final x64 = DesktopUpdater(
+        isWindows: true,
+        releaseMode: true,
+        architecture: 'x64',
+        metadataUrl: url,
+      );
+      final arm = DesktopUpdater(
+        isWindows: true,
+        releaseMode: true,
+        architecture: 'arm64',
+        metadataUrl: url,
+      );
+      expect((await x64.checkOnce(currentVersion: '1.2.0'))?.sha256, 'a' * 64);
+      expect((await arm.checkOnce(currentVersion: '1.2.0'))?.sha256, 'b' * 64);
+    },
+  );
+
+  test('Windows stage carries its owned swap through apply and starts the launcher', () async {
+    final root = p.join(scratch.path, 'Harness');
+    Directory(p.join(root, 'app', '1.2.0')).createSync(recursive: true);
+    File(p.join(root, 'app', '1.2.0', 'harness-desktop.exe'))
+        .writeAsStringSync('old app');
+    File(p.join(root, 'Harness.exe')).writeAsStringSync('old launcher');
+    File(p.join(root, 'Harness.ico')).writeAsStringSync('old icon');
+    File(p.join(root, 'current')).writeAsStringSync('1.2.0\r\n');
+    final bytes = _windowsZip('1.3.0');
+    final dio = Dio()..httpClientAdapter = _MemoryAdapter(bytes);
+    final starts = <(String, List<String>)>[];
+    final updater = DesktopUpdater(
+      isWindows: true,
+      releaseMode: true,
+      architecture: 'x64',
+      windowsInstallRoot: root,
+      startDetached: (exe, args) async => starts.add((exe, args)),
+      dio: dio,
+    );
+    final staged = await updater.downloadAndStage(
+      UpdateInfo(
+        version: '1.3.0',
+        url: 'https://fixture.invalid/update.zip',
+        sha256: await _sha256Hex(bytes),
+        size: bytes.length,
+      ),
+    );
+    expect(staged, isNotNull);
+    expect(File(p.join(root, 'current')).readAsStringSync(), '1.2.0\r\n');
+    expect(await updater.applyStaged(staged!, selfPid: 777), isTrue);
+    expect(File(p.join(root, 'current')).readAsStringSync(), '1.3.0\r\n');
+    expect(starts.single.$1, p.join(root, 'Harness.exe'));
+    expect(starts.single.$2, ['--wait-pid', '777']);
+    expect(
+      currentBundlePath(
+        isWindows: true,
+        executablePath: p.join(root, 'app', '1.3.0', 'harness-desktop.exe'),
+      ),
+      root,
+    );
+  });
+
+  test(
+    'Windows reports partial publication when launcher start fails',
+    () async {
+      final root = p.join(scratch.path, 'Harness');
+      Directory(p.join(root, 'app', '1.2.0')).createSync(recursive: true);
+      File(p.join(root, 'app', '1.2.0', 'harness-desktop.exe'))
+          .writeAsStringSync('old app');
+      File(p.join(root, 'Harness.exe')).writeAsStringSync('old launcher');
+      File(p.join(root, 'Harness.ico')).writeAsStringSync('old icon');
+      File(p.join(root, 'current')).writeAsStringSync('1.2.0\r\n');
+      final bytes = _windowsZip('1.3.0');
+      final updater = DesktopUpdater(
+        isWindows: true,
+        releaseMode: true,
+        windowsInstallRoot: root,
+        startDetached: (_, _) async =>
+            throw const ProcessException('Harness.exe', [], 'blocked'),
+        dio: Dio()..httpClientAdapter = _MemoryAdapter(bytes),
+      );
+      final staged = await updater.downloadAndStage(
+        UpdateInfo(
+          version: '1.3.0',
+          url: 'https://fixture.invalid/update.zip',
+          sha256: await _sha256Hex(bytes),
+          size: bytes.length,
+        ),
+      );
+      expect(staged, isNotNull);
+      await expectLater(
+        updater.applyStaged(staged!, selfPid: 777),
+        throwsA(isA<WindowsPartialUpdateException>()),
+      );
+      expect(File(p.join(root, 'current')).readAsStringSync(), '1.3.0\r\n');
+    },
+  );
 
   /// Serves `/metadata.json` (the `desktop-macos` entry) and `/Harness-macos.zip` from a loopback
   /// server, and returns the manifest URL a [DesktopUpdater] should be pointed at.
@@ -154,6 +366,7 @@ void main() {
     () async {
       final url = await serveMetadataAndZip(manifestVersion: newVersion);
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         dio: Dio(),
         isLinux: false,
@@ -172,6 +385,7 @@ void main() {
     final url = await serveMetadataAndZip(manifestVersion: newVersion);
     // No releaseMode override — defaults to kReleaseMode, which is false under `flutter test`.
     final updater = DesktopUpdater(
+      isWindows: false,
       enabled: true,
       dio: Dio(),
       isLinux: false,
@@ -180,6 +394,7 @@ void main() {
     expect(await updater.checkOnce(currentVersion: '1.0.0'), isNull);
 
     final explicitlyOff = DesktopUpdater(
+      isWindows: false,
       enabled: true,
       dio: Dio(),
       isLinux: false,
@@ -190,7 +405,11 @@ void main() {
   });
 
   test('a disabled updater skips checks, downloads and applying even in release mode', () async {
-    final updater = DesktopUpdater(enabled: false, releaseMode: true);
+    final updater = DesktopUpdater(
+      isWindows: false,
+      enabled: false,
+      releaseMode: true,
+    );
     const info = UpdateInfo(
       version: '9.9.9',
       url: 'https://fixture.invalid/update.zip',
@@ -212,9 +431,22 @@ void main() {
     );
   });
 
+  test('a caller that names the host with isLinux describes macOS or Linux, not Windows', () {
+    expect(
+      DesktopUpdater(
+        isWindows: false,
+        enabled: true,
+        releaseMode: true,
+        isLinux: false,
+      ).canCheck,
+      isTrue,
+    );
+  });
+
   test('checkOnce returns null when the running version is already current or newer', () async {
     final url = await serveMetadataAndZip(manifestVersion: '1.0.0');
     final updater = DesktopUpdater(
+      isWindows: false,
       enabled: true,
       dio: Dio(),
       isLinux: false,
@@ -229,6 +461,7 @@ void main() {
     'checkOnce returns null (not an error) when the manifest is unreachable',
     () async {
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         dio: Dio(),
         isLinux: false,
@@ -241,6 +474,7 @@ void main() {
 
   test('checkOnce also treats unavailable package metadata as no update', () async {
     final updater = DesktopUpdater(
+      isWindows: false,
       enabled: true,
       dio: Dio(),
       isLinux: false,
@@ -268,6 +502,7 @@ void main() {
       final noUpdates = <UpdateInfo>[];
       final t1 =
           DesktopUpdater(
+            isWindows: false,
             enabled: true,
             dio: Dio(),
             isLinux: false,
@@ -288,6 +523,7 @@ void main() {
       final found = <UpdateInfo>[];
       final t2 =
           DesktopUpdater(
+            isWindows: false,
             enabled: true,
             dio: Dio(),
             isLinux: false,
@@ -309,7 +545,12 @@ void main() {
   // fraction is right even from a server that sends no Content-Length.
   test('downloadAndStage reports the bytes as they arrive', () async {
     await serveMetadataAndZip(manifestVersion: newVersion, chunked: true);
-    final updater = DesktopUpdater(enabled: true, dio: Dio(), isLinux: false);
+    final updater = DesktopUpdater(
+      isWindows: false,
+      enabled: true,
+      dio: Dio(),
+      isLinux: false,
+    );
     final info = UpdateInfo(
       version: newVersion,
       url: 'http://127.0.0.1:${server!.port}/Harness-macos.zip',
@@ -335,7 +576,12 @@ void main() {
     'downloadAndStage verifies sha256 before trusting the download',
     () async {
       await serveMetadataAndZip(manifestVersion: newVersion);
-      final updater = DesktopUpdater(enabled: true, dio: Dio(), isLinux: false);
+      final updater = DesktopUpdater(
+        isWindows: false,
+        enabled: true,
+        dio: Dio(),
+        isLinux: false,
+      );
       final badInfo = UpdateInfo(
         version: newVersion,
         url: 'http://127.0.0.1:${server!.port}/Harness-macos.zip',
@@ -349,7 +595,12 @@ void main() {
 
   test('downloadAndStage unpacks and confirms the staged bundle really carries the advertised version', () async {
     await serveMetadataAndZip(manifestVersion: newVersion);
-    final updater = DesktopUpdater(enabled: true, dio: Dio(), isLinux: false);
+    final updater = DesktopUpdater(
+      isWindows: false,
+      enabled: true,
+      dio: Dio(),
+      isLinux: false,
+    );
     final info = UpdateInfo(
       version: newVersion,
       url: 'http://127.0.0.1:${server!.port}/Harness-macos.zip',
@@ -365,7 +616,12 @@ void main() {
 
   test('downloadAndStage rejects a bundle whose Info.plist does not match the advertised version', () async {
     await serveMetadataAndZip(manifestVersion: newVersion);
-    final updater = DesktopUpdater(enabled: true, dio: Dio(), isLinux: false);
+    final updater = DesktopUpdater(
+      isWindows: false,
+      enabled: true,
+      dio: Dio(),
+      isLinux: false,
+    );
     // Real zip on disk is stamped $newVersion — advertise a different one.
     final mismatched = UpdateInfo(
       version: '1.2.3',
@@ -380,6 +636,7 @@ void main() {
   test('applyStaged spawns a detached command and never launches a real process', () async {
     final calls = <String>[];
     final updater = DesktopUpdater(
+      isWindows: false,
       enabled: true,
       // The macOS relaunch, asked for by name rather than inherited from the
       // host — the Linux one is the group at the bottom of this file, and both
@@ -411,6 +668,7 @@ void main() {
     () async {
       var called = false;
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         // Same as above: the macOS "not inside a .app" branch. On Linux every
         // executable has a parent directory, so the host's own answer would
@@ -424,7 +682,7 @@ void main() {
         stagingDirPath: '${scratch.path}/staged',
       );
       // The test runner's own executable is not inside a `.app` bundle, and no override is given, so
-      // currentBundlePath() resolves to null — the same "cannot resolve" branch a real, non-.app-hosted
+      // currentBundlePath(isWindows: false, ) resolves to null — the same "cannot resolve" branch a real, non-.app-hosted
       // process (e.g. running via `flutter test`) would hit.
       final ok = await updater.applyStaged(staged, selfPid: 1);
       expect(ok, isFalse);
@@ -435,6 +693,7 @@ void main() {
   test('currentBundlePath walks up to the enclosing .app', () {
     expect(
       currentBundlePath(
+        isWindows: false,
         executablePath: '/Applications/Harness.app/Contents/MacOS/Harness',
         isLinux: false, // the .app walk, on whatever host runs the suite
       ),
@@ -442,6 +701,7 @@ void main() {
     );
     expect(
       currentBundlePath(
+        isWindows: false,
         executablePath: '/usr/local/bin/some-tool',
         isLinux: false,
       ),
@@ -454,6 +714,7 @@ void main() {
     () {
       expect(
         currentBundlePath(
+          isWindows: false,
           isLinux: true,
           appImagePath: '/home/user/.local/opt/Harness.AppImage',
         ),
@@ -465,7 +726,7 @@ void main() {
   test('currentBundlePath on Linux is null with no override and no APPIMAGE env var', () {
     // Production falls through to Platform.environment['APPIMAGE'], which is unset for the test
     // runner's own process — the same "cannot resolve" state a non-packaged dev run would hit.
-    expect(currentBundlePath(isLinux: true), isNull);
+    expect(currentBundlePath(isWindows: false, isLinux: true), isNull);
   });
 
   group('macOS picks its build by CPU', () {
@@ -501,6 +762,7 @@ void main() {
       Map<String, String> versions,
     ) async {
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         dio: Dio(),
         metadataUrl: await serveMacManifest(versions),
@@ -602,6 +864,7 @@ void main() {
         manifestVersion: newVersion,
       );
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         dio: Dio(),
         metadataUrl: url,
@@ -621,6 +884,7 @@ void main() {
         architecture: 'arm64',
       );
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         dio: Dio(),
         metadataUrl: url,
@@ -639,6 +903,7 @@ void main() {
       () async {
         await serveLinuxMetadataAndAppImage(manifestVersion: newVersion);
         final updater = DesktopUpdater(
+          isWindows: false,
           enabled: true,
           dio: Dio(),
           isLinux: true,
@@ -666,6 +931,7 @@ void main() {
       () async {
         await serveLinuxMetadataAndAppImage(manifestVersion: newVersion);
         final updater = DesktopUpdater(
+          isWindows: false,
           enabled: true,
           dio: Dio(),
           isLinux: true,
@@ -682,9 +948,69 @@ void main() {
       },
     );
 
+    // A release is ~45 MB. Its hash ran synchronously on the UI isolate
+    // (535 ms for 45 MiB in an AOT build), so nothing else — no frame, no
+    // timer — ran until it finished. The same hash timed here, twice so the
+    // second is warm, is the yardstick: the longest the event loop goes
+    // unserved while the download is verified must be well under it (the old
+    // code measured 0.96 of it; this one ~0.13; 0.75 leaves room for a busy CI
+    // runner slowing both alike).
+    test('downloadAndStage verifies a large download off the UI isolate', () async {
+      final bytes = Uint8List(24 << 20);
+      for (var i = 0; i < bytes.length; i += 4093) {
+        bytes[i] = i & 0xff;
+      }
+      var onThisIsolate = const Duration(days: 1);
+      late String expected;
+      for (var round = 0; round < 2; round++) {
+        final timing = Stopwatch()..start();
+        expected = _sha256HexSync(bytes);
+        if (timing.elapsed < onThisIsolate) onThisIsolate = timing.elapsed;
+      }
+      final dio = Dio()..httpClientAdapter = _MemoryAdapter(bytes);
+      final updater = DesktopUpdater(
+        isWindows: false,
+        enabled: true,
+        dio: dio,
+        isLinux: true,
+        architecture: 'x64',
+      );
+      final gaps = _EventLoopGaps()..start();
+      final staged = await updater.downloadAndStage(
+        UpdateInfo(
+          version: newVersion,
+          url: 'https://fixture.invalid/Harness-linux-x64.AppImage',
+          sha256: expected,
+          size: bytes.length,
+        ),
+      );
+      final longest = gaps.stop();
+      expect(staged, isNotNull, reason: 'the digest must still match');
+      addTearDown(
+        () => Directory(staged!.stagingDirPath).delete(recursive: true),
+      );
+      expect(File(staged!.bundlePath).lengthSync(), bytes.length);
+      expect(
+        longest,
+        lessThan(onThisIsolate * 0.75),
+        reason:
+            'the UI isolate went ${longest.inMilliseconds} ms without an event; '
+            'hashing these bytes here takes ${onThisIsolate.inMilliseconds} ms',
+      );
+    });
+
+    test('the background digest is the sha256 the manifest carries', () async {
+      expect(
+        await sha256HexOffUiIsolate(utf8.encode('abc')),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+      expect(await sha256HexOffUiIsolate(appImageBytes), appImageSha);
+    });
+
     test('applyStaged on Linux execs the swapped AppImage file directly instead of `open -n`', () async {
       final calls = <String>[];
       final updater = DesktopUpdater(
+        isWindows: false,
         enabled: true,
         isLinux: true,
         architecture: 'x64',

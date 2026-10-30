@@ -37,7 +37,9 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
   @override
   Widget build(BuildContext context) {
     final preferences = widget.store ?? _fallbackStore;
-    final features = ExperimentalFeature.values.where((f) => f.available);
+    final features = ExperimentalFeature.values.where(
+      (f) => f.available && f.visibleInSettings,
+    );
     return SectionScaffold(
       title: 'Experimental',
       subtitle: 'Try features that are still taking shape. Account experiments sync across your devices.',
@@ -48,8 +50,6 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             spacing: 10,
             children: [
-              if (!kIsWeb && widget.notifier != null)
-                ProductUsageSetting(notifier: widget.notifier!, compact: true),
               if (!preferences.loaded ||
                   (preferences.error != null &&
                       preferences.errorFeature == null))
@@ -69,7 +69,7 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                       ),
                   ],
                 ),
-              for (final feature in features)
+              for (final feature in features) ...[
                 SettingRow(
                   title: feature.label,
                   detail: feature.description,
@@ -85,7 +85,12 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                                 !preferences.saving &&
                                 (preferences.isAvailable(feature) ||
                                     preferences.enabled(feature))
-                            ? (on) => unawaited(preferences.set(feature, on != feature.inverted))
+                            ? (on) => unawaited(
+                                preferences.set(
+                                  feature,
+                                  on != feature.inverted,
+                                ),
+                              )
                             : null,
                       ),
                     ),
@@ -112,6 +117,9 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                         )
                       : null,
                 ),
+              ],
+              if (!kIsWeb && widget.notifier != null)
+                ProductUsageSetting(notifier: widget.notifier!, compact: true),
             ],
           ),
         ),

@@ -1,0 +1,53 @@
+# offer N+3 0.4.22-e2e.1, whose core exits at start (08:48:27)
+    "version": "0.4.22-e2e.1",
+rollback seen in the log 32 s after the offer
+0.4.20-e2e.1
+
+  machine · remote machine
+   status     ● running · this computer only (not signed in)
+   version    v0.4.20-e2e.1
+   agents     2 available
+   pid        6704
+   local api  http://127.0.0.1:18474
+  running in background · stop with: harness stop
+
+0.4.20-e2e.1
+["0.4.22-e2e.1"]
+0.4.19-e2e.1
+0.4.20-e2e.1
+current
+data
+notify.mjs
+update-rejected.json
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+AFTER_42
+PS C:\Users\hxe2e\proj> Write-Output ('ROLLBACK_' + (40+2))
+ROLLBACK_42
+PS C:\Users\hxe2e\proj>
+2026-10-17 18:44:20.769 [harnessd] the update stayed up — keeping it
+2026-10-17 18:48:45.034 [update] newer build available: 0.4.20-e2e.1 → 0.4.22-e2e.1
+2026-10-17 18:48:47.991 [update] staged 0.4.22-e2e.1 — restarting now
+2026-10-17 18:48:47.992 [harnessd] service updater staged 0.4.22-e2e.1
+2026-10-17 18:48:48.003 [harnessd] the updater staged 0.4.22-e2e.1 — asking the core to hand over
+2026-10-17 18:48:48.019 [update] applying 0.4.20-e2e.1 → 0.4.22-e2e.1 — restarting daemon
+2026-10-17 18:48:49.055 [update] handing 0.4.22-e2e.1 to harnessd
+2026-10-17 18:48:49.859 [update] self-update on · v0.4.22-e2e.1 · every 60s
+2026-10-17 18:48:51.562 [harnessd] took over from the master before it (pid 2952)
+2026-10-17 18:48:52.526 [harnessd] the updated core failed (code 1) — rolled back to the previous bundle; restarting
+2026-10-17 18:48:52.530 [update] self-update on · v0.4.22-e2e.1 · every 60s
+2026-10-17 18:48:54.203 [harnessd] took over from the master before it (pid 5780)
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     4900            5028 OpenConsole.exe 18:43:05 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a0
+      744            5028 powershell.exe  18:43:05 powershell.exe -NoLogo                                                                                        
+     3824            5028 OpenConsole.exe 18:43:06 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1fc
+     5768            5028 claude.exe      18:43:06 C:\Users\hxe2e\.local\bin\claude.exe                                                                          
+     6704            6176 node.exe        18:48:53 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.20-e2e.1\
+     3612            6704 node.exe        18:48:54 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     6072            6704 node.exe        18:48:54 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+
+
+

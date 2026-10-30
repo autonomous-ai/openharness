@@ -1,0 +1,19 @@
+# offer N+1 (08:43:30)
+fb7c5d617772fc0037c9123d9e9a20a71e991f798e9456fef6960968fa8d25d0  $SCR/updates/0.4.20-e2e.1/cli.js
+a177f39fba13310105094b80a2149fcc3df4e63a27cb36b0fd88cdd3f4a8430c  $SCR/updates/0.4.20-e2e.1/notify.mjs
+{
+  "cli": {
+    "version": "0.4.20-e2e.1",
+    "cli": {
+      "url": "http://192.168.65.1:8799/0.4.20-e2e.1/cli.js",
+      "sha256": "fb7c5d617772fc0037c9123d9e9a20a71e991f798e9456fef6960968fa8d25d0",
+      "size": 9696279
+    },
+    "notify": {
+      "url": "http://192.168.65.1:8799/0.4.20-e2e.1/notify.mjs",
+      "sha256": "a177f39fba13310105094b80a2149fcc3df4e63a27cb36b0fd88cdd3f4a8430c",
+      "size": 95339
+    }
+  }
+}
+version 0.4.20-e2e.1 after 23 s

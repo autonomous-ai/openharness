@@ -1,0 +1,2 @@
+no Harness job is loaded: the launchd half runs (2026-10-18 09:13:42)
+run 2: the launchd half is skipped (run 1 showed a launchd-started daemon uses the real home); uninstall runs with no service

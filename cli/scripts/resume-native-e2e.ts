@@ -54,7 +54,10 @@ const { agentFrame } = await import('../src/lib/agentFrame.js')
 const { buildEngineLaunchArgv } = await import('../src/lib/engineLaunch.js')
 const { createResumeAgentService } = await import('../src/lib/resumeAgentService.js')
 const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
-const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess, tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
+const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess } = await import('../src/lib/paneEngineProcess.js')
+const { tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
+const { primaryRuntime } = await import('../src/lib/terminalRuntime.js')
+type TmuxRuntime = import('../src/lib/terminalTypes.js').TmuxRuntimeRef
 const { probeTerminalAgents } = await import('../src/lib/terminalAgentDiscovery.js')
 const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
 const { processSessionOf } = await import('../src/lib/sessionRepair.js')
@@ -75,9 +78,10 @@ const server = await startHookServer(0, {
   onRegistered: row => { stoppedAgents.save(row); hooks.push({ engine: row.engine, sessionId: row.sessionId }); if (row.resumeOnly) stoppedAgents.finishResume(row.agentId) },
   resolveHookAgent: async input => {
     if (!input.tmuxPane) return null
-    const identity = await resolvePaneEngineProcess(input.tmuxPane, input.engine)
+    const pane = { backend: 'tmux' as const, paneId: input.tmuxPane }
+    const identity = await resolvePaneEngineProcess(backend, pane, input.engine)
     if (!identity) { console.error('[fixture] no process for', input,
-      await lookupPaneEngineProcess(input.tmuxPane, input.engine), await tmuxPaneProcessTree(input.tmuxPane)); return null }
+      await lookupPaneEngineProcess(backend, pane, input.engine), await tmuxPaneProcessTree(input.tmuxPane)); return null }
     const row = registry.byPaneEngine(input.tmuxPane, input.engine)
     if (!row || row.engine !== input.engine) { console.error('[fixture] no registry route', input, identity, registry.list().map(r => ({ id: r.agentId, pane: r.tmuxPane }))); return null }
     return registry.openProcessAgent({ engine: input.engine, processIdentity: identity, runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd })?.entry ?? null
@@ -163,7 +167,7 @@ try {
     const jobs = new AgentRestartCoordinator()
     const stopJobs = new Map<string, Promise<void>>()
     const stopAgent = createStopAgentService({
-      registry, stoppedAgents, restartJobs: jobs, stopJobs, tmuxBackend: backend,
+      registry, stoppedAgents, restartJobs: jobs, stopJobs, backendFor: () => backend,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
       forgetSession: id => { registry.removeAgent(id); socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } }) }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: inlineNativeControls().stop,
@@ -192,7 +196,7 @@ try {
       stop: stopAgent, changed: row => { void agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }).then(agent => socketBackend.send({ type: 'agent_synced', payload: { agent } })) },
     })
     const resumeAgent = createResumeAgentService({
-      registry, stoppedAgents, tmuxBackend: backend, restartJobs: jobs, stopJobs, pinnedControls: new Set(),
+      registry, stoppedAgents, createBackend: backend, backendFor: () => backend, restartJobs: jobs, stopJobs, pinnedControls: new Set(),
       announceSession: () => {}, relaunchOverrides: async () => ({ ok: true, overrides: { env: launchEnv, extraArgs: [], clearEnv: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CLAUDECODE'] } }),
       prepareSessionResume: () => {}, refreshGridWebSearch: () => {}, clearDeleted: () => {}, attachDsh: () => {},
       // This fixture checks the native TUI's history directly; it has no daemon transcript watcher.
@@ -272,7 +276,7 @@ try {
     const pid = live.processIdentity!.pid; const route = live.tmuxPane
     const neighbour = (await tmux('split-window', '-d', '-P', '-F', '#{pane_id}', '-t', route, '/bin/sh')).trim()
     const neighbourPid = (await tmux('display-message', '-p', '-t', neighbour, '#{pane_pid}')).trim()
-    assert.equal((await checkSessionRuntime(live)).state, 'alive')
+    assert.equal((await checkSessionRuntime(backend, live, primaryRuntime(live) as TmuxRuntime)).state, 'alive')
     const reattached = await rpc('agent_resume', { agentId: old.agentId, creationId: randomUUID() })
     assert.equal(reattached.resumed, true, JSON.stringify(reattached))
     assert.equal(registry.byAgent(old.agentId)!.processIdentity!.pid, pid); assert.equal(registry.byAgent(old.agentId)!.tmuxPane, route)
@@ -304,7 +308,7 @@ try {
     // A native engine exit is different from Stop: preserve the surviving shell
     // and prove that resuming the conversation never replaces that shell's work.
     const exited = { ...registry.byAgent(old.agentId)! }
-    assert.equal((await checkSessionRuntime(exited)).state, 'alive')
+    assert.equal((await checkSessionRuntime(backend, exited, primaryRuntime(exited) as TmuxRuntime)).state, 'alive')
     assert(exited.cwd?.startsWith(root), 'only a fixture-owned process may be signaled')
     process.kill(exited.processIdentity!.pid, 'SIGTERM')
     const exitDeadline = Date.now() + 10000

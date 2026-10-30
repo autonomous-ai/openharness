@@ -29,5 +29,6 @@ def artifact_upload_script(script_name, variable):
     """Exercise the actual helper AND upload invocation, without building an app."""
     source = (ROOT / "desktop/scripts" / script_name).read_text()
     function = "gcs_cp() {" + source.split("gcs_cp() {", 1)[1].split("\n}", 1)[0] + "\n}\n"
-    invocation = next(line for line in source.splitlines() if line.startswith(f'gcs_cp "${variable}" '))
+    # Windows uploads its three files in a loop, so its call is indented; the line runs the same alone.
+    invocation = next(line.strip() for line in source.splitlines() if line.strip().startswith(f'gcs_cp "${variable}" '))
     return function + invocation + "\n"

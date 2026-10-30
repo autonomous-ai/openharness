@@ -31,7 +31,8 @@ describe('Devices host ownership', () => {
     await dispatchDown(socket, sealed, 'remote')
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
-    expect(routed).toEqual([{ local: false, owner: false, connection: 'remote', requestId: 'one' }, { local: false, owner: true, connection: 'remote', requestId: 'one' }])
+    expect(routed).toEqual([{ local: false, owner: false, accountOwner: false, connection: 'remote', requestId: 'one' },
+      { local: false, owner: true, accountOwner: false, connection: 'remote', requestId: 'one' }])
     expect(reply).toHaveBeenLastCalledWith('remote', `${type}_result`, 'one', { ok: true, owner: true })
     const local: unknown[] = []
     socket.registerLocalClient('local:tool', { sendFrame: frame => { local.push(frame); return true }, sendBinary: () => true }, { tool: true })

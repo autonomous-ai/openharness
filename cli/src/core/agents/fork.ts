@@ -18,11 +18,13 @@ import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
-import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
+import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
+import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
@@ -32,6 +34,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
@@ -39,7 +42,11 @@ export interface ForkAgentDeps {
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   prepareNative?: LaunchOverridesDeps['prepareNative']
   authority?: (agentId: string) => () => boolean
-  tmuxBackend: TmuxBackend | null
+  /** The backend new panes are made on, tmux or the pty host; null when none could be readied. */
+  createBackend: TerminalBackend | null
+  /** What a launch answers when [createBackend] is null: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
   registry: typeof registry
   mirror: Pick<TurnRecaps, 'isBusy' | 'recentAsks' | 'recent' | 'lastFullText'>
   /** Forks whose session has not reported in yet, to the source session whose recap they inherit (bind.ts). */
@@ -57,16 +64,17 @@ export interface ForkAgentDeps {
 
 export function createAgentForker({
   native: inspectNative, prepareNative, authority: captureAuthority,
-  tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
+  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
   const prepare = async ({ agentId, name, prompt }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
     const ownsSource = captureAuthority?.(agentId) ?? (() => true)
     const owner = () => authority.current() && ownsSource()
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The original fork source changed or stopped during preparation.' } as const
     if (!owner()) return changed
-    if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    if (!createBackend) return { ok: false, error: noBackendCode }
     const observed = registry.byAgent(agentId)
     if (!observed) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    if (observed.guest) return GUEST_HARNESS_REFUSAL
     const source = structuredClone(observed)
     const sourceName = projectDisplayName(source)
     if (!source.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: `${sourceName} has no working folder on record.` }
@@ -160,21 +168,28 @@ export function createAgentForker({
     await prepareInstructionWrites(source.cwd)
     if (!dispatchCurrent()) return changed
     prepareApiTools(source.cwd, engine)
-    const command = buildEngineCommandArgv(engine, launchOptions)
-    const argv = buildEngineLaunchArgv(engine, launchOptions)
+    // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
+    let command: string[], argv: string[]
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      argv = buildEngineLaunchArgv(engine, launchOptions)
+    } catch (error) { return windowsLaunchRefusal(error) }
     return { ok: true, dispatch: async () => {
     if (!dispatchCurrent()) return changed
     const result = await createAndRegisterPane({
       current: dispatchCurrent, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
-      tmuxBackend,
+      tmuxBackend: createBackend,
       registry,
       engine,
       cwd: source.cwd,
       sessionLabel: label,
       argv,
+      // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // The SCM's environment last, after the harness context's, as at create and relaunch.
-      env: mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
-        mergedLaunchEnv(scmLaunchEnv(source.scmLaunch), built.overrides.native?.environment)),
+      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+      env: mergedLaunchEnv(mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
+        mergedLaunchEnv(scmLaunchEnv(source.scmLaunch), built.overrides.native?.environment)), engineLaunchEnv(engine, built.overrides.native)),
       grid: null,
       gridLaunchRecord: null,
       // Same folder as the source, so the same workspace binding.

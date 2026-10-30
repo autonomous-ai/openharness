@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
@@ -34,12 +35,21 @@ class DeskTabFilterChoice {
 /// ⚠️ **A chip with nothing behind it is dimmed, never hidden.** A tab whose
 /// machine is asleep holds nothing this phone can open, and a chip that vanished
 /// with it would read as a tab that was closed.
+///
+/// A `+` after the last tab ([onNewTab]) is the desktop's `+` after its tabs:
+/// a New Tab, which becomes a tab on every computer once its first harness is
+/// in it.
+///
+/// Holding a tab's chip ([onLongPress]) is the desktop's right-click on a tab:
+/// Rename Tab and Close Tab. All is no tab, and holding it does nothing.
 class DeskTabFilterBar extends StatefulWidget {
   const DeskTabFilterBar({
     super.key,
     required this.choices,
     required this.selected,
     required this.onSelected,
+    this.onNewTab,
+    this.onLongPress,
   });
 
   final List<DeskTabFilterChoice> choices;
@@ -48,6 +58,13 @@ class DeskTabFilterBar extends StatefulWidget {
   final String? selected;
 
   final ValueChanged<String?> onSelected;
+
+  /// The `+` after the last chip. Null leaves it out.
+  final VoidCallback? onNewTab;
+
+  /// A tab's chip held, with its [DeskTabFilterChoice.id]. Never for All. Null
+  /// leaves a held chip a slow tap.
+  final ValueChanged<String>? onLongPress;
 
   /// Drawn height: a chip, with a gap over it that parts it from the field
   /// and one under it that parts it from the first row.
@@ -116,6 +133,14 @@ class _DeskTabFilterBarState extends State<DeskTabFilterBar> {
         alignmentPolicy: policy,
       );
     }
+  }
+
+  /// What holding the chip for [id] does: nothing for All, nor without a
+  /// [DeskTabFilterBar.onLongPress].
+  VoidCallback? _held(String? id) {
+    final held = widget.onLongPress;
+    if (id == null || held == null) return null;
+    return () => held(id);
   }
 
   void _readEdges([ScrollMetrics? metrics]) {
@@ -188,7 +213,12 @@ class _DeskTabFilterBarState extends State<DeskTabFilterBar> {
                       choice: choices[i],
                       selected: choices[i].id == widget.selected,
                       onTap: () => widget.onSelected(choices[i].id),
+                      onLongPress: _held(choices[i].id),
                     ),
+                  ],
+                  if (widget.onNewTab case final onNewTab?) ...[
+                    const SizedBox(width: 6),
+                    _NewTabChip(onTap: onNewTab),
                   ],
                 ],
               ),
@@ -206,11 +236,13 @@ class _FilterChip extends StatefulWidget {
     required this.choice,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
   });
 
   final DeskTabFilterChoice choice;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   State<_FilterChip> createState() => _FilterChipState();
@@ -243,10 +275,15 @@ class _FilterChipState extends State<_FilterChip> {
         : empty
         ? tty.dim
         : tty.faint;
+    final held = widget.onLongPress;
     return Semantics(
       button: true,
       selected: selected,
       label: '${choice.name}, ${choice.count}',
+      // The chip's own semantics are excluded below, its gesture's with them: a screen reader's
+      // hold reaches the menu through this.
+      onLongPress: held,
+      onLongPressHint: held == null ? null : 'Rename or close',
       excludeSemantics: true,
       child: TouchTarget(
         child: GestureDetector(
@@ -258,6 +295,15 @@ class _FilterChipState extends State<_FilterChip> {
             HapticFeedback.selectionClick();
             widget.onTap();
           },
+          // Released here as well as in `onTapCancel`: the chip must not stay sunk under the sheet
+          // this opens, which outlives the gesture that opened it.
+          onLongPress: held == null
+              ? null
+              : () {
+                  _press(false);
+                  HapticFeedback.mediumImpact();
+                  held();
+                },
           child: AnimatedContainer(
             duration: AppMotion.press,
             curve: AppMotion.curve,
@@ -297,6 +343,61 @@ class _FilterChipState extends State<_FilterChip> {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The `+` after the last tab: a chip's own outline around a plus, as wide as
+/// it is tall, so it reads as one more place on the rail rather than a tab.
+class _NewTabChip extends StatefulWidget {
+  const _NewTabChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  State<_NewTabChip> createState() => _NewTabChipState();
+}
+
+class _NewTabChipState extends State<_NewTabChip> {
+  bool _pressed = false;
+
+  void _press(bool pressed) {
+    if (_pressed == pressed) return;
+    setState(() => _pressed = pressed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'New Tab',
+      excludeSemantics: true,
+      child: TouchTarget(
+        child: GestureDetector(
+          key: const ValueKey('find-new-tab'),
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _press(true),
+          onTapUp: (_) => _press(false),
+          onTapCancel: () => _press(false),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            widget.onTap();
+          },
+          child: AnimatedContainer(
+            duration: AppMotion.press,
+            curve: AppMotion.curve,
+            width: DeskTabFilterBar._chipHeight,
+            height: DeskTabFilterBar._chipHeight,
+            decoration: BoxDecoration(
+              color: _pressed ? ttyRaised(tty) : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: tty.text.withValues(alpha: 0.16)),
+            ),
+            child: Icon(LucideIcons.plus300, size: 16, color: tty.faint),
           ),
         ),
       ),

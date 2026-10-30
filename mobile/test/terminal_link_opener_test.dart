@@ -11,37 +11,66 @@ void main() {
         return true;
       },
     );
-    expect(await opener.open('https://example.invalid/report?q=one'), isNull);
+    expect(
+      await opener.open(
+        'https://example.invalid/report?q=one',
+        downloadRemote: (_) async => fail('web link downloaded'),
+        showLocal: (_) => fail('web link shown in the app'),
+      ),
+      isNull,
+    );
     expect(launched.single, Uri.parse('https://example.invalid/report?q=one'));
   });
 
   test(
-    'a terminal file is downloaded from its computer before opening',
+    'a terminal file is downloaded from its computer, then shown in the app',
     () async {
       final launched = <Uri>[];
       final requested = <String>[];
+      final shown = <String>[];
       final opener = TerminalLinkOpener(
         launch: (uri) async {
           launched.add(uri);
           return true;
         },
         fileExists: (_) async => true,
-        windows: false,
       );
-      expect(
-        await opener.open(
-          '~/project/preview.png',
-          downloadRemote: (target) async {
-            requested.add(target);
-            return '/sample-cache/preview.png';
-          },
-        ),
-        isNull,
-      );
-      expect(requested, ['~/project/preview.png']);
-      expect(launched.single, Uri.file('/sample-cache/preview.png'));
+      for (final (target, local) in [
+        ('~/project/preview.png', '/sample-cache/preview.png'),
+        ('file:///project/clip.mov', '/sample-cache/clip.mov'),
+      ]) {
+        expect(
+          await opener.open(
+            target,
+            downloadRemote: (target) async {
+              requested.add(target);
+              return local;
+            },
+            showLocal: shown.add,
+          ),
+          isNull,
+        );
+      }
+      expect(requested, ['~/project/preview.png', 'file:///project/clip.mov']);
+      expect(shown, ['/sample-cache/preview.png', '/sample-cache/clip.mov']);
+      // `url_launcher` opens `file:` URLs on desktop platforms only: on a phone
+      // handing the copy to it always failed.
+      expect(launched, isEmpty);
     },
   );
+
+  test('a file with nowhere to be shown is not downloaded', () async {
+    final opener = TerminalLinkOpener(
+      launch: (_) async => fail('local file launched'),
+    );
+    expect(
+      await opener.open(
+        '/project/image.png',
+        downloadRemote: (_) async => fail('file downloaded for nothing'),
+      ),
+      'Could not open this preview.',
+    );
+  });
 
   test('unsupported targets never launch or request a download', () async {
     final opener = TerminalLinkOpener(
@@ -58,6 +87,7 @@ void main() {
         await opener.open(
           target,
           downloadRemote: (_) async => fail('unsupported file downloaded'),
+          showLocal: (_) => fail('unsupported file shown'),
         ),
         isNotNull,
       );
@@ -79,16 +109,18 @@ void main() {
         await opener.open(
           '/project/image.png',
           downloadRemote: (_) async => '/sample-cache/gone.png',
+          showLocal: (_) => fail('missing file shown'),
         ),
         contains('no longer available'),
       );
     },
   );
 
-  test('a cancelled download stays silent and never launches', () async {
+  test('a cancelled download stays silent and is never shown', () async {
     var cancelled = false;
     final opener = TerminalLinkOpener(
       launch: (_) async => fail('cancelled preview launched'),
+      fileExists: (_) async => true,
     );
     expect(
       await opener.open(
@@ -98,6 +130,7 @@ void main() {
           cancelled = true;
           return '/sample-cache/image.png';
         },
+        showLocal: (_) => fail('cancelled preview shown'),
       ),
       isNull,
     );
@@ -105,10 +138,36 @@ void main() {
       await opener.open(
         '/project/image.png',
         downloadRemote: (_) async => throw const RemoteMediaCancelled(),
+        showLocal: (_) => fail('cancelled preview shown'),
       ),
       isNull,
     );
   });
+
+  test(
+    'a pane that moves on while the copy is checked does not show it',
+    () async {
+      // Cancelled between the download finishing and the copy being found on
+      // disk: the pane went to another agent, or the bar's Cancel was pressed.
+      var cancelled = false;
+      final opener = TerminalLinkOpener(
+        launch: (_) async => fail('cancelled preview launched'),
+        fileExists: (_) async {
+          cancelled = true;
+          return true;
+        },
+      );
+      expect(
+        await opener.open(
+          '/project/image.png',
+          isCancelled: () => cancelled,
+          downloadRemote: (_) async => '/sample-cache/image.png',
+          showLocal: (_) => fail('cancelled preview shown'),
+        ),
+        isNull,
+      );
+    },
+  );
 
   test('download and launcher failures become readable messages', () async {
     final opener = TerminalLinkOpener(launch: (_) async => false);
@@ -121,6 +180,7 @@ void main() {
         '/project/image.png',
         downloadRemote: (_) async =>
             throw const RemoteMediaException('Preview too large.'),
+        showLocal: (_) => fail('failed download shown'),
       ),
       'Preview too large.',
     );

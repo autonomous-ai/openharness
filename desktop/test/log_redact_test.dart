@@ -35,6 +35,8 @@ void main() {
       'sessionToken',
       'password',
       'secret',
+      'email',
+      'emailAddress',
     ]) {
       final line = redactValue({
         'a': {

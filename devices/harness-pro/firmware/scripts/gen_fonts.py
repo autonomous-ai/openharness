@@ -5,7 +5,7 @@
 
 Emits ht_pro_24, ht_pro_32, ht_pro_42 and ht_pro_56 (ht_pro_font_t, see main/display/pro_font_type.h).
 The default font is the system sans on macOS when present, else the bundled Liberation Sans.
-Also emits the Pets faces (ph_sb_*, ph_md_*, ph_rg_*, ph_mono_*) from the committed Inter / JetBrains Mono TTFs in
+Also emits the Pets faces (ph_sb_*, ph_rg_*, ph_mono_*, ph_num_*, ph_bd_*) from the committed Inter / JetBrains Mono TTFs in
 fonts/, whatever --font says: full coverage, plus the CONSOLE_EXTRA marks appended after the Vietnamese entries.
 The output is a build artifact; it is generated at build time and never committed.
 """
@@ -19,9 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_FONT = Path('/System/Library/Fonts/Helvetica.ttc')
 BUNDLED_FONT = ROOT / 'fonts' / 'LiberationSans-Regular.ttf'
 SIZES = (24, 32, 42, 56)
-# Pod draws only these characters at the two big sizes (test_only_sparse_chars_drawn guards it), so only they
+# Pod draws only these characters at the big sizes (test_only_sparse_chars_drawn guards it), so only they
 # get masks. Every other glyph keeps its metrics and points at a shared run of zeros (draws nothing).
-SPARSE = {42: "#>_?", 56: "#>_?"}
+# 32 is only ever the ">_" of the default engine mark (pod_mark_default_big).
+SPARSE = {32: ">_", 42: "#>_?", 56: "#>_?"}
 # The 90 Vietnamese precomposed letters, then the 12 letters outside that block.
 # Keep in sync with ht_pro_vietnamese_index().
 VIETNAMESE = list(range(0x1ea0, 0x1efa)) + [0x102, 0x103, 0x110, 0x111, 0x128, 0x129,

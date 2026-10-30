@@ -80,8 +80,11 @@ describe('pairRequest: one request, settled once', () => {
     })
     const reply = await pairRequest(base(d.connect), { verb: 'status' })
     expect(reply).toEqual({ ok: true, n: 1 })
-    expect(d.connect).toHaveBeenCalledWith('ws://127.0.0.1:4242/api/local-ws')
+    expect(d.connect).toHaveBeenCalledWith('ws://127.0.0.1:4242/api/local-ws', {})
     expect(d.sockets[0].closes).toBe(1)
+    // Given the daemon's local credential, the loopback socket shows it: TCP upgrades without it are refused.
+    await pairRequest(base(d.connect, { localCredential: 'c'.repeat(43) }), { verb: 'status' })
+    expect(d.connect).toHaveBeenLastCalledWith('ws://127.0.0.1:4242/api/local-ws', { 'X-Harness-Local': 'c'.repeat(43) })
   })
 
   it('an error rejects with it; a close after it changes nothing and closes once', async () => {

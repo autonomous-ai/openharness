@@ -17,8 +17,10 @@ import 'log_append.dart';
 /// files let anything past [retentionDays] be pruned automatically. This caps
 /// retained age, not a busy day's byte count.
 ///
-/// Immediate writes are synchronous and flushed. Routine diagnostics may opt
-/// into bounded batches; an immediate write also commits the pending context.
+/// Immediate writes are synchronous: the kernel has them when [append]
+/// returns. Only a [durable] write or flush also fsyncs (see [appendLog] for
+/// why routine records do not). Routine diagnostics may opt into bounded
+/// batches; an immediate write also commits the pending context.
 /// Every IO error is swallowed — diagnostics must never break the flow they
 /// only observe.
 class DailyLogFile {
@@ -30,6 +32,7 @@ class DailyLogFile {
     this.maxBufferedCharacters = 64 * 1024,
     this.maxBufferedEntries = 256,
     this.appendFile = appendDurableLog,
+    this.appendFileUnsynced = appendLog,
     DateTime Function() clock = DateTime.now,
     // The field is private, so an initialising formal would name the
     // PARAMETER `_clock` — which no caller outside this library could pass.
@@ -66,8 +69,16 @@ class DailyLogFile {
   final int maxBufferedCharacters;
   final int maxBufferedEntries;
 
-  /// Durable append implementation, injectable for measurements using real IO.
+  /// Durable append implementation (write and fsync), injectable for
+  /// measurements using real IO. Called with empty contents to commit what
+  /// earlier unsynced writes left in the kernel.
   final void Function(File file, String contents) appendFile;
+
+  /// The append for everything not durable: the same write, no fsync.
+  final void Function(File file, String contents) appendFileUnsynced;
+
+  /// The last file written without an fsync since a durable write to it.
+  File? _unsynced;
 
   final List<String> _pending = [];
   int _pendingCharacters = 0;
@@ -89,8 +100,9 @@ class DailyLogFile {
 
   /// Append [block] followed by a newline to today's file. Creates the directory
   /// on demand and prunes stale days on the first write after midnight; any
-  /// failure is swallowed.
-  void append(String block, {bool buffered = false}) {
+  /// failure is swallowed. [durable] also fsyncs, with any pending batch and
+  /// whatever unsynced writes this file holds.
+  void append(String block, {bool buffered = false, bool durable = false}) {
     try {
       final now = _clock();
       if (_pendingAt case final at? when _ymd(at) != _ymd(now)) {
@@ -98,13 +110,13 @@ class DailyLogFile {
         // today's file. The same rule handles a wall-clock correction.
         flush();
       }
-      if (!buffered || block.length + 1 >= maxBufferedCharacters) {
+      if (durable || !buffered || block.length + 1 >= maxBufferedCharacters) {
         if (_pending.isEmpty) {
-          _appendNow(block, now);
+          _appendNow(block, now, durable: durable);
         } else {
-          // The diagnostic and the lines leading to it share one durable write.
+          // The diagnostic and the lines leading to it share one write.
           _pending.add(block);
-          flush();
+          flush(durable: durable);
         }
         return;
       }
@@ -125,12 +137,25 @@ class DailyLogFile {
     }
   }
 
-  /// Commit any pending batch and cancel its timer. Empty flushes do no IO.
-  /// Called on errors, export, backgrounding, normal quit and updater handoff.
-  void flush() {
+  /// Commit any pending batch and cancel its timer. Called on errors, export,
+  /// backgrounding, normal quit and updater handoff; [durable] (errors, quit,
+  /// handoff) also fsyncs, even with nothing pending when earlier writes were
+  /// not. Otherwise an empty flush does no IO.
+  void flush({bool durable = false}) {
     _bufferTimer?.cancel();
     _bufferTimer = null;
-    if (_pending.isEmpty) return;
+    if (_pending.isEmpty) {
+      final unsynced = _unsynced;
+      if (durable && unsynced != null) {
+        _unsynced = null;
+        try {
+          appendFile(unsynced, '');
+        } catch (e) {
+          _debugLog('DailyLogFile.flush failed: $e');
+        }
+      }
+      return;
+    }
     final block = _pending.join('\n');
     final at = _pendingAt!;
     // Release the batch even on disk failure, matching append's best-effort
@@ -138,10 +163,10 @@ class DailyLogFile {
     _pending.clear();
     _pendingCharacters = 0;
     _pendingAt = null;
-    _appendNow(block, at);
+    _appendNow(block, at, durable: durable);
   }
 
-  void _appendNow(String block, DateTime now) {
+  void _appendNow(String block, DateTime now, {bool durable = false}) {
     try {
       final day = _ymd(now);
       final file = _fileFor(now);
@@ -150,7 +175,13 @@ class DailyLogFile {
         _activeDay = day;
         _pruneOlderThan(now);
       }
-      appendFile(file, '$block\n');
+      if (durable) {
+        appendFile(file, '$block\n');
+        if (_unsynced?.path == file.path) _unsynced = null;
+      } else {
+        appendFileUnsynced(file, '$block\n');
+        _unsynced = file;
+      }
     } catch (e) {
       // Best-effort: never surface an IO failure into the caller's flow.
       _debugLog('DailyLogFile.append failed: $e');

@@ -68,6 +68,8 @@ describe('signInMethodFlag', () => {
     expect(signInMethodFlag(['--force', '--google'])).toBe('google')
     expect(signInMethodFlag(['--apple', '--json'])).toBe('apple')
     expect(signInMethodFlag(['--qr'])).toBe('qr')
+    // A device with no screen says a short code aloud (#1410); never offered by the picker.
+    expect(signInMethodFlag(['--code', '--json'])).toBe('code')
   })
 
   it('names nothing without one — `--sso` included, which is no longer a method', () => {

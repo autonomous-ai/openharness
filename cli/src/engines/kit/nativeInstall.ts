@@ -122,7 +122,7 @@ function publish(value){
   current();fs.linkSync(temporary,result);
   if(id(fs.lstatSync(result,{bigint:true}))!==id(fs.fstatSync(fd,{bigint:true}))||read(result)!==bytes)throw Error('Changed published result');
   if(id(fs.lstatSync(temporary,{bigint:true}))!==id(fs.fstatSync(fd,{bigint:true})))throw Error('Changed result staging file');
-  fs.unlinkSync(temporary);fs.fsyncSync(directoryFd);
+  fs.unlinkSync(temporary);if(process.platform!=='win32')fs.fsyncSync(directoryFd);
   if(id(fs.lstatSync(result,{bigint:true}))!==id(fs.fstatSync(fd,{bigint:true}))||read(result)!==bytes)throw Error('Changed confirmed result');
  }finally{fs.closeSync(fd)}
 }
@@ -141,13 +141,18 @@ child.on('close',(code,signal)=>{if(finished)return;finished=true;clearTimeout(d
 deadline=setTimeout(()=>{if(leaderGone||child.exitCode!==null||child.signalCode!==null)return;try{process.kill(-child.pid,'SIGKILL')}catch{}},Math.max(20,Math.min(1200000,Number(testDeadline)||1200000)));
 `
 
-export function createNativeInstallations({ directory, node = managedNodePath, dispatch = defaultDispatch }: {
-  directory: string; node?: () => string; dispatch?: (node: string, file: string, digest: string) => void
+export function createNativeInstallations({ directory, node = managedNodePath, dispatch = defaultDispatch, platform = process.platform }: {
+  directory: string; node?: () => string; dispatch?: (node: string, file: string, digest: string) => void; platform?: NodeJS.Platform
 }) {
   // Outside the claim directory: recreating or emptying that directory cannot erase its active owner.
   const authorityFile = `${directory}.authority`
   const examine = async (engine: AgentEngine, inputRecipe: EngineInstallRecipe, inputEnvironment: Record<string, string>, request: string,
     current: () => boolean, query = false): Promise<NativeInstallation | null> => {
+    // Windows: the evidence below walks POSIX paths only (NativePaths), so every read threw there and every create, a
+    // terminal's too, held at "Waiting to confirm durable engine installation ownership" (the Windows VM E2E,
+    // 2026-10-15). Installing an engine first is not carried on Windows yet (sub-project B), so no history is ever
+    // written there: a query has nothing to report, and a launch that needs an install waits with that reason.
+    if (platform === 'win32') return query ? null : hold(`${engine} is not installed. Installing engines is not supported on Windows yet: install it, then try again.`)
     try {
       if (!current()) return hold('The saved launch request changed before installation.')
       // Snapshot caller-owned objects before any yield. The fingerprint and executed bytes agree.
@@ -339,7 +344,12 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
       if (!dispatchCurrent()) return hold('Waiting to confirm the installer claim.')
       dispatch(runtime, file, hash)
       return running('Installing the required engine. The saved launch continues after installation is confirmed.')
-    } catch { return hold('Waiting to confirm durable engine installation ownership.') }
+    } catch (error) {
+      // Any failed check lands here, and the person sees only this line. Without the reason in the log, a hold
+      // that never cleared could only be traced by hand over many round trips with the user (2026-10-19).
+      console.warn(`[native-install] ${engine} held:`, error instanceof Error ? error.message : error)
+      return hold('Waiting to confirm durable engine installation ownership.')
+    }
   }
   const ensure = async (engine: AgentEngine, recipe: EngineInstallRecipe, environment: Record<string, string>, request: string, current: () => boolean): Promise<NativeInstallation> =>
     (await examine(engine, recipe, environment, request, current))!

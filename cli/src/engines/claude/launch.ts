@@ -9,11 +9,19 @@ const permissionModes = {
   acceptEdits: ['--permission-mode', 'acceptEdits'],
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
+  // A Buddy's (superTabs/start.ts): what its folder's guard does not allow is refused, never asked (lib/buddyGuard.ts).
+  // It reads only its folder's settings and starts no MCP server: a hook or server a teammate commits to the project ran
+  // in a Buddy's folder with its person's credentials, guard or not (Claude Code 2.1.312, tried; Lead, 10-29).
+  // Harness's own hooks are copied into those settings (lib/swarmSkills.ts).
+  buddy: ['--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'],
   full: ['--dangerously-skip-permissions'],
 }
 export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
   firstPromptArgs: [], resumeArgs: ['--resume'], forkArgs: { lead: ['--resume'], after: ['--fork-session'] },
+  // `claude --help` (2.1.303): `--model` and `--effort` are "for the current session". `/model` and `/effort` typed into the
+  // pane are saved as the person's default instead, which a routed start must not do.
+  modelArgs: { model: ['--model', '{value}'], effort: ['--effort', '{value}'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
   instructionFiles: ['CLAUDE.md'],
   contextArgs: { args: ['--append-system-prompt', 'Read the harness context at {file} before working.'], quote: 'json' },
   // Claude Code reads CLAUDE.md, and AGENTS.md only through an import line in it.
@@ -23,10 +31,36 @@ export const launch: EngineLaunch = {
    * Claude Code asks "do you trust this folder?" the first time it opens a project, and keeps the answer as
    * `projects[<path>].hasTrustDialogAccepted` in `.claude.json`: in CLAUDE_CONFIG_DIR, else the home folder
    * itself (its own rule, 2.1.290). A yes covers the folders below. Copied from the former lib/claudeTrust.ts.
+   *
+   * A Git worktree (2.1.310, tried with the binary in a throwaway CLAUDE_CONFIG_DIR, 2026-10-26): it starts without
+   * asking when its own path, a folder above it within the worktree, or its MAIN repository says yes (`.git` →
+   * gitdir → commondir, backlink checked). Its own Yes is recorded under the main repository's key, never the
+   * worktree's. So the worktree's own path, which Harness records, is read; the main repository's key is not
+   * written, as it would answer for every worktree of that repository.
    */
   trust: {
     home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json',
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
+  },
+  /**
+   * "WARNING: Claude Code running in Bypass Permissions mode … Yes, I accept", the first time `--dangerously-skip-permissions`
+   * runs: a Swarm Lead on the Mac Studio sat there before its first turn (2026-10-26). Accepting writes
+   * `skipDangerousModePermissionPrompt: true` to the user settings, "Whether the user has accepted the bypass permissions
+   * mode dialog" in its settings schema, and the key its own message tells people to add (2.1.310; with it set the
+   * dialog is not shown, tried with the binary).
+   */
+  bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
+  /**
+   * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
+   * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
+   * `.claude/settings.local.json` (localSettings); a name there is `rejected` and never asked again, whatever else
+   * approves it. A user settings `enabledMcpjsonServers`, `disabledMcpjsonServers` or `enableAllProjectMcpServers`
+   * decides it without asking (2.1.310 `Yft`, `EFn`).
+   */
+  inheritedMcp: {
+    file: '.mcp.json', servers: 'mcpServers', settings: '.claude/settings.local.json', rejected: 'disabledMcpjsonServers',
+    user: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
+      approved: 'enabledMcpjsonServers', rejected: 'disabledMcpjsonServers', approveAll: 'enableAllProjectMcpServers' },
   },
   /**
    * Claude Code's `attribution.pr`: the text it adds to a pull request it opens. Set, it replaces Claude Code's own

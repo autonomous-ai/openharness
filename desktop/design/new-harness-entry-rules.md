@@ -142,7 +142,7 @@ Machine identifies where the agent, project and tools run. The model can be
 served from a different machine. Changing Machine or Agent preserves an explicit
 model, refreshes availability, and blocks Start with an explanation if the new
 combination is unavailable. It never substitutes a subscription. Refresh models
-updates the choices; Manage Models opens the existing Models panel for lifecycle
+updates the choices; Your models opens the existing Models panel for lifecycle
 management and preserves the launch draft. Choosing Terminal clears model routing;
 its Model row is omitted.
 
@@ -274,6 +274,14 @@ silently reused on another. Generated folders use exclusive reservation and
 advance to seconds/a suffix only on a confirmed collision. Explicit names are
 never silently renamed, and existing files are never overwritten.
 
+An explicit name whose folder already exists is refused (`PROJECT_EXISTS`).
+When what is there is a folder, the refusal names it and the form offers
+**Use the existing folder**, which switches Project to that folder on the same
+machine and starts there only when pressed; a file of that name, or another
+name or machine, offers nothing. A clone whose destination is already a
+checkout of the same repository (its `origin`, however git spells it) starts in
+that checkout instead of cloning; anything else there is still refused.
+
 ## Regression coverage
 
 `tool/check_new_harness_coverage.mjs` requires 100% executable-line coverage of
@@ -318,6 +326,10 @@ not a guarantee about every possible external machine or agent failure.
 - `test/generated_project_launch_test.dart` and
   `test/new_harness_project_context_test.dart`: generated versus edited names,
   collisions, delayed replies, and machine-specific project choices.
+- `test/project_exists_test.dart` and `test/repository_clone_test.dart`: an
+  explicit name's existing folder offered and used only when chosen, on this
+  computer and another machine, and a clone reusing a checkout of the same
+  repository. `cli/src/lib/projectFolder.spec.ts` covers the daemon's side.
 - `integration_test/native_workspace_e2e_test.dart`: native onboarding,
   Cmd-T/Cmd-Shift-P creation, edited defaults, Store product switching for Open/Try,
   the Models menu, and terminal input immediately after starting without a

@@ -31,6 +31,10 @@ export interface ClientConn {
   // so the node/adapter streams full turn cards only to an actively-viewed machine, while still running the
   // (cheaper) recap for every attached commander. Always false/undefined for web + background machines.
   active?: boolean
+  // A web client using a machine shared with its account as a GUEST (lib/machineAccess.ts): it is never
+  // sent the machine's broadcasts — the owner's events — only the frames addressed to its own connection,
+  // which the machine seals for it (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  guest?: boolean
 }
 
 export interface QueuedCommanderFrame {

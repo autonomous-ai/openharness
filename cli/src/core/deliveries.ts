@@ -23,6 +23,11 @@ export const HELD_DELIVERIES = 1_000
  *  makes a few a minute. */
 export const KEPT_DELIVERERS = 10_000
 
+/** A service must keep checking authority while a turn waits for an idle terminal. */
+export const DELIVERY_LEASE_MS = 3_000
+const guarded = (id: string) => id.startsWith('team:service:')
+const owned = (service: string, id: string) => id.startsWith(`team:service:${service}:`) && id.length <= 240
+
 export interface DeliveriesDeps {
   /** Write the text into the agent under the delivery id (core/input.ts `submitAgent`). */
   submit(agentId: string, text: string, deliveryId: string): void
@@ -33,6 +38,7 @@ export interface DeliveriesDeps {
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
   log?: (line: string) => void
+  now?: () => number
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -40,6 +46,16 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 export function createDeliveries(deps: DeliveriesDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
   const listeners = new Set<(event: TurnDelivery) => void>()
+  const now = deps.now ?? Date.now
+  const leases = new Map<string, Map<string, number>>()
+  const lease = (service: string, input: unknown): boolean => {
+    if (!deps.deliverers.has(service) || !input || typeof input !== 'object' || Array.isArray(input)) return false
+    const entries = Object.entries(input)
+    if (entries.length > HELD_DELIVERIES || entries.some(([id, until]) => !owned(service, id) || typeof until !== 'number' || !Number.isFinite(until))) return false
+    const ceiling = now() + DELIVERY_LEASE_MS
+    leases.set(service, new Map(entries.map(([id, until]) => [id, Math.min(until as number, ceiling)])))
+    return true
+  }
   /** Which process made each delivery, oldest first. */
   const makers = new Map<string, string>()
   /**
@@ -74,18 +90,27 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (maker) deps.tell(maker, event)
   }
 
-  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
+  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
     deliver: (agentId, content, deliveryId) => submit(agentId, content, deliveryId),
     cancelDelivery: (deliveryId) => cancel(deliveryId),
     onDelivery: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
+    leaseDeliveries: async (service, input) => lease(service, input),
   }
 
   return {
     /** The delivery members of the core's own `CoreApi`, for the services in its process. */
     turns,
+
+    /** Null leaves older delivery namespaces to their existing policy. An unknown
+     * guarded ID is denied, including after a core restart forgets all leases. */
+    canWrite(deliveryId: string): boolean | null {
+      if (!guarded(deliveryId)) return null
+      const service = deliveryId.split(':')[2]
+      return (leases.get(service)?.get(deliveryId) ?? 0) > now()
+    },
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
@@ -102,10 +127,12 @@ export function createDeliveries(deps: DeliveriesDeps) {
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
      *  query is not one of these. Refused for a service that is not a deliverer. */
     answer(service: string, query: string, payload: Payload): Payload | null {
-      if (query !== 'deliver' && query !== 'cancel_delivery') return null
+      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries') return null
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
+      if (query === 'lease_deliveries') return { leased: lease(service, payload.leases) }
       const deliveryId = text(payload.deliveryId)
       if (!deliveryId) return { error: 'INVALID_DELIVERY' }
+      if (guarded(deliveryId) && !owned(service, deliveryId)) return { error: 'INVALID_DELIVERY' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }

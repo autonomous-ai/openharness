@@ -6,3 +6,8 @@
 *.pdf binary
 *.xlsx binary
 *.zip binary
+
+# Windows scripts. install.ps1 is published byte for byte and its spec reads it as LF; cmd needs CRLF to parse a
+# batch file's labels reliably. Without these, core.autocrlf (GitHub's Windows images set it) decides.
+*.ps1 text eol=lf
+*.cmd text eol=crlf

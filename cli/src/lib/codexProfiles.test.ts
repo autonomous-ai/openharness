@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
-import { homedir, tmpdir } from 'os'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
 
@@ -20,9 +20,9 @@ describe('codexProfiles', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'codex-profiles-data-'))
     // By its real path: resolveCodexProfilePath realpath-resolves everything it returns, and macOS's
     // tmpdir sits behind a /var → /private/var symlink that would otherwise make the resolved path
-    // disagree with the literal folder these tests just created. In the suite's own home folder
-    // (vitest.setup.ts): this once made and removed folders in the developer's.
-    home = realpathSync(mkdtempSync(join(homedir(), '.codex-profiles-test-')))
+    // disagree with the literal folder these tests just created. In the temporary folder: made in the home
+    // folder, this once made and removed folders in the developer's profile (Windows reads USERPROFILE, not HOME).
+    home = realpathSync(mkdtempSync(join(tmpdir(), '.codex-profiles-test-')))
   })
 
   afterEach(() => {

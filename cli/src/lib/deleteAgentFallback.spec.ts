@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { terminateDeletedAgent, checkPidRuntime, type TerminateDeps } from './deleteAgentFallback.js'
 import type { RegisteredSession } from './registry.js'
-import type { ProcessRow, RuntimeCheck } from './tmux.js'
+import type { RuntimeCheck } from './paneEngineProcess.js'
+import type { ProcessRow } from './processTable.js'
 
 const processRows = vi.hoisted(() => vi.fn())
-vi.mock('./tmux.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./tmux.js')>(),
+vi.mock('./processTable.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./processTable.js')>(),
   processRows,
 }))
 

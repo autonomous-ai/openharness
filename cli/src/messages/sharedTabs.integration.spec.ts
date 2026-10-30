@@ -458,7 +458,7 @@ describe('Agent Messages between two accounts, each daemon\'s whole service over
     const typed: Array<[string, string, string]> = []
     const heard = new Set<(event: TurnDelivery) => void>()
     const sessions = agents.map((a, i) => ({ agentId: a.agentId, sessionId: `s-${a.agentId}`, engine: a.engine, cwd: `/work/${a.agentId}`,
-      tmuxPane: `%${i + 1}`, active: true, title: a.agentId })) as unknown as RegisteredSession[]
+      tmuxPane: `%${i + 1}`, runtimes: [{ backend: 'tmux', paneId: `%${i + 1}` }], active: true, title: a.agentId })) as unknown as RegisteredSession[]
     const core = fakeCore({
       dataDir,
       daemon: { machineId: () => id, port: 1 },

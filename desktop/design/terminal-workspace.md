@@ -24,6 +24,26 @@ the session, using the existing confirmation when it is working. A tab close
 applies this rule separately to each session. Recheck remaining views after
 any wait for inspection or confirmation, before requesting a stop.
 
+Super Tab terminals are views of shared work. Their close control says **Hide
+terminal**; it dismisses the local view without inspecting, prompting to stop,
+or stopping the agent. The close shortcut and closing the Super Tab follow the
+same rule. The agent remains in its conversation and its terminal can be reopened.
+The coordinating agent is labeled **Lead** throughout the Super Tab, including
+its terminal header; its first message is not its name.
+Super Tab membership protects an agent from automatic idle and parent cleanup,
+including while the host is offline and while the Super Tab is paused. Membership
+only in archived conversations does not, and protection lapses after a week without a
+confirmed roster (for example after sign-out). If the agent is already stopped,
+opening its Swarm pane shows retained terminal output or its saved conversation
+when that machine permits history access. Only the pane's explicit **Resume**
+action restarts it; navigation and restoration never undo a stop. Swarm membership
+does not grant access to machine-wide history.
+
+A Lead routes each delegation with `harness super-tab route`. The decision appears in the
+conversation as one row (who, how — Jev's confidence or the policy order — and why); owners and
+collaborators can **Change** it with a reason, which tells the Lead to hand the task over.
+Settings ▸ Routing holds the account's policy; a Super Tab's **Routing** overrides single fields.
+
 ## Keep the workspace structure
 
 Tabs remain compact and content-sized, adding one at a time until the row fills.

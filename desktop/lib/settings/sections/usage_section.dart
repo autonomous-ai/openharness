@@ -35,9 +35,11 @@ import '../../usage/ledger/ledger_types.dart';
 import '../../usage/ledger/usage_ledger_controller.dart';
 import '../../usage/ledger/usage_overview.dart';
 import '../../usage/ledger/usage_report.dart';
+import '../../usage/models_menu_controller.dart';
 import 'usage_panels.dart';
 import 'usage_header.dart';
 import 'usage_provider_pane.dart';
+import 'usage_subscriptions.dart';
 
 /// What the overview opens on — the last 30 days, which is what Orca's default
 /// range shows and therefore what a figure here can be compared against.
@@ -71,7 +73,12 @@ const _kGridDayCount = 42;
 typedef _Lens = LedgerProvider?;
 
 class UsageSection extends StatefulWidget {
-  const UsageSection({super.key, this.controller, this.stats});
+  const UsageSection({
+    super.key,
+    this.controller,
+    this.stats,
+    this.subscriptions,
+  });
 
   /// The ledger to draw. Defaults to one of its own; a test passes its own,
   /// which is also what keeps `flutter test` from reading a real `~/.claude`.
@@ -79,6 +86,10 @@ class UsageSection extends StatefulWidget {
 
   /// The app's own counters. Defaults to the singleton.
   final HarnessStats? stats;
+
+  /// The account's subscriptions, as the footer reads them: what a browser
+  /// shows, since it has no agent CLI of its own to read.
+  final ModelsMenuController? subscriptions;
 
   @override
   State<UsageSection> createState() => _UsageSectionState();
@@ -120,13 +131,15 @@ class _UsageSectionState extends State<UsageSection> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     if (kIsWeb) {
+      final subscriptions = widget.subscriptions;
       return SectionScaffold(
         title: 'Usage',
-        subtitle: 'Activity in this browser. Local transcript usage is available in the desktop app.',
-        child: ListenableBuilder(
-          listenable: _stats,
-          builder: (context, _) => StatsSummaryCards(summary: _stats.summary),
-        ),
+        subtitle:
+            'Your subscriptions, as your computers read them. Token usage is '
+            'in the desktop app.',
+        child: subscriptions == null
+            ? const SizedBox.shrink()
+            : UsageSubscriptions(subscriptions: subscriptions),
       );
     }
     return SectionScaffold(

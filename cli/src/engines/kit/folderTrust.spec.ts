@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { recordTrustIn, trustsIn } from './folderTrust.js'
+import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -175,6 +175,51 @@ describe('whether a source repo is already trusted (a worktree inherits only tha
     expect(claudeTrusts('/work/repo', home)).toBe(false)
   })
 
+  // Claude Code 2.1.309 walks up from the folder only as far as its Git repository's root (`E_` stops at the root `$_`
+  // finds), so a repository cloned under an accepted folder asks again. A worktree pre-trusted from a folder above its
+  // repository would skip the question Claude Code itself asks (review of #1647).
+  it('inherits Claude trust only within the same Git repository', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-')), root = mkdtempSync(join(tmpdir(), 'trust-tree-'))
+    const parent = join(root, 'parent'), clone = join(parent, 'clone'), plain = join(parent, 'plain')
+    mkdirSync(join(clone, '.git'), { recursive: true })
+    mkdirSync(join(clone, 'sub'))
+    mkdirSync(plain)
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [parent]: { hasTrustDialogAccepted: true } } }))
+    expect(claudeTrusts(plain, home)).toBe(true)
+    expect(claudeTrusts(clone, home)).toBe(false)
+    expect(claudeTrusts(join(clone, 'sub'), home)).toBe(false)
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [clone]: { hasTrustDialogAccepted: true } } }))
+    expect(claudeTrusts(clone, home)).toBe(true)
+    expect(claudeTrusts(join(clone, 'sub'), home)).toBe(true)
+  })
+
+  it('matches a stored folder on Mac and Linux by its text, as before', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { '/work/allow/..': { hasTrustDialogAccepted: true } } }))
+    expect(claudeTrusts('/work/other', home)).toBe(false)
+    expect(claudeTrusts('/work', home)).toBe(false)
+    expect(claudeTrusts('/work/allow/../sub', home)).toBe(true)
+  })
+
+  // DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source arrived as `C:\\…\\<tab>/<project>` (the Lead joins with "/")
+  // while its trust was recorded as `C:\\…\\<tab>\\<project>`. Compared as text with "/" only, it never matched, so
+  // every Swarm start on Windows stopped at Claude Code's trust prompt.
+  it('compares Windows folders the way Windows does: any separator, any case, a folder above it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { 'C:\\Users\\DELL\\swarm-projects\\tab\\project': { hasTrustDialogAccepted: true } } }))
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'), '[projects.\'C:\\Users\\DELL\\swarm-projects\\tab\\project\']\ntrust_level = "trusted"\n')
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(claudeTrusts('C:\\Users\\DELL\\swarm-projects\\tab/project', home)).toBe(true)
+      expect(claudeTrusts('c:\\users\\dell\\swarm-projects\\tab\\project\\sub', home)).toBe(true)
+      expect(claudeTrusts('C:\\Users\\DELL\\swarm-projects\\tab\\project-evil', home)).toBe(false)
+      expect(codexTrusts('C:\\Users\\DELL\\swarm-projects\\tab/project', join(home, '.codex'))).toBe(true)
+      expect(codexTrusts('C:\\Users\\DELL\\swarm-projects\\tab', join(home, '.codex'))).toBe(false)
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
   it('reads Codex trust from exactly that folder\'s table', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     expect(codexTrusts('/work/repo', join(home, '.codex'))).toBe(false)
@@ -212,6 +257,7 @@ describe('the config each engine actually reads', () => {
     writeFileSync(join(home, '.codex', 'config.toml'), '')
     writeFileSync(join(moved, 'config.toml'), '')
     vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
     vi.stubEnv('CODEX_HOME', moved)
     expect(preTrustCodexProject('/w')).toBe('trusted')
     expect(codexTrusts('/w')).toBe(true)
@@ -225,6 +271,7 @@ describe('the config each engine actually reads', () => {
     writeFileSync(join(home, '.claude.json'), '{}')
     writeFileSync(join(moved, '.claude.json'), '{}')
     vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
     vi.stubEnv('CLAUDE_CONFIG_DIR', moved)
     expect(preTrustClaudeProject('/w')).toBe('trusted')
     expect(claudeTrusts('/w')).toBe(true)
@@ -234,5 +281,34 @@ describe('the config each engine actually reads', () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', '')
     expect(preTrustClaudeProject('/v')).toBe('trusted')
     expect(claudeTrusts('/v')).toBe(true)
+  })
+})
+
+// Claude Code's "Yes, I accept" for full mode writes this key to its user settings (2.1.310); a Swarm Lead on the Mac
+// Studio waited there before its first turn (2026-10-26).
+describe('full mode\'s warning accepted as the engine records it', () => {
+  const key = claude.bypassAcceptance!.key
+  it('adds the key to the settings, keeping everything else, once', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'settings.json')
+    writeFileSync(file, JSON.stringify({ theme: 'dark', hooks: { Stop: [] } }))
+    expect(recordAcceptanceIn(file, key)).toBe('accepted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', hooks: { Stop: [] }, skipDangerousModePermissionPrompt: true })
+    expect(recordAcceptanceIn(file, key)).toBe('already')
+  })
+
+  it('creates missing settings, its folder too, holding the key alone', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude', 'settings.json')
+    expect(recordAcceptanceIn(file, key)).toBe('accepted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ skipDangerousModePermissionPrompt: true })
+    expect(recordAcceptanceIn(file, key)).toBe('already')
+  })
+
+  it('leaves an unreadable or other-shaped file, and a value the person set, as it was', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'accept-')), file = join(folder, 'settings.json')
+    for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
+      writeFileSync(file, text)
+      expect(recordAcceptanceIn(file, key)).toBe('skipped')
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    }
   })
 })

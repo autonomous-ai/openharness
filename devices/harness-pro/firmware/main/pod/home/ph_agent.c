@@ -23,20 +23,14 @@ enum { PET_SIDE = 260,   // the 1x square: at 2x it is 520, wide enough for ever
 // The pet, 2x, its feet on `foot`, centred on cx. An engine with no pet: its 72 px logo or the ">_" outline. Returns the top of what is drawn.
 int ph_room_pet(ht_scene_t *s, const pod_model_t *m, const pod_agent_t *a, pod_scene_t scene, int cx, int foot, uint32_t now_ms, uint32_t started_ms)
 {
-    return ph_room_pet_z(s, m, a, scene, cx, foot, now_ms, started_ms, 16);
-}
-// The same at zoom8 (16 = 2x; 9..15 only for a pet drawn smooth, pod_cell_smooth).
-int ph_room_pet_z(ht_scene_t *s, const pod_model_t *m, const pod_agent_t *a, pod_scene_t scene, int cx, int foot, uint32_t now_ms, uint32_t started_ms,
-                  unsigned zoom8)
-{
     const int side = scene == POD_SCENE_WORK_ALT ? ALT_SIDE : PET_SIDE;
-    int h = pod_pet_ink_h(a->engine, scene, side, zoom8);
+    int h = pod_pet_ink_h(a->engine, scene, side, 16);
     if (!h) {
         ph_card_art(s, cx, foot - 40, 72, m, a, PH_ROOM_BG, now_ms);
         return foot - 80;
     }
     int cy = foot - h / 2;
-    pod_pet_draw(s, cx - side / 2, cy - side / 2, side, a->engine, scene, now_ms, started_ms, zoom8);
+    pod_pet_draw(s, cx - side / 2, cy - side / 2, side, a->engine, scene, now_ms, started_ms, 16);
     return foot - h;
 }
 
@@ -84,8 +78,7 @@ void ph_room(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t 
     if (st == POD_WORKING) {
         const int cx = 380, foot = 566;
         ph_room_floor(s, cx - 40, foot, 400);
-        // Codex's robot at work fills more of the room than the other pets at 2x: 13/8, a fifth smaller (owner, 2026-10-15), as on the voice screens.
-        int top = ph_room_pet_z(s, m, a, scene, cx, foot, now_ms, 0, !strcmp(a->engine, "codex") ? 13u : 16u);
+        int top = ph_room_pet(s, m, a, scene, cx, foot, now_ms, 0);
         char verb[POD_VERB_BYTES + 4], line[POD_VERB_BYTES + 24], t[12];
         capitalise(verb, sizeof verb, a->verb[0] ? a->verb : "Working");
         pod_fmt_elapsed(t, sizeof t, pod_agent_secs(a, now_ms));

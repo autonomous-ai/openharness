@@ -76,10 +76,10 @@ void main() {
           expect(input, isEmpty);
         }
 
-        await checkHints('Open Harness · ⌘P', 'Explore Harness Store · ⌘S');
+        await checkHints('Open Harness · ⌘P', 'Explore Harness Store · ⌃⌘S');
         map.apply('''{"bindings":[
           {"keys":"cmd+p","command":null},
-          {"keys":"cmd+s","command":null},
+          {"keys":"cmd+ctrl+s","command":null},
           {"keys":"cmd+k","command":"harnesses.list"},
           {"keys":"cmd+shift+s","command":"app.store"}
         ]}''');
@@ -87,7 +87,7 @@ void main() {
         await checkHints('Open Harness · ⌘K', 'Explore Harness Store · ⇧⌘S');
         map.apply('''{"bindings":[
           {"keys":"cmd+p","command":null},
-          {"keys":"cmd+s","command":null}
+          {"keys":"cmd+ctrl+s","command":null}
         ]}''');
         await tester.pump();
         await checkHints('Open Harness', 'Explore Harness Store');

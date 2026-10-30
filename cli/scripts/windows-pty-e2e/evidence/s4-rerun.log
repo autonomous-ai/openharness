@@ -1,0 +1,77 @@
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    13012            1192 node.exe        05:27:22 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+    10536            4108 node.exe        05:28:22 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    11984           11616 OpenConsole.exe 05:28:17 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x324 -
+     2796           11616 claude.exe      05:28:17 C:\Users\admin\.local\bin\claude.exe                                                      
+     7384           11616 OpenConsole.exe 05:28:19 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x214 -
+     1040           11616 node.exe        05:28:19 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+     5368           11616 OpenConsole.exe 05:28:17 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x254 -
+    10436           11616 powershell.exe  05:28:17 powershell.exe -NoLogo                                                                    
+    11628           11964 powershell.exe  05:29:05 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+    11616           12612 harness-pty.exe 05:23:27 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+     1984           13012 node.exe        05:27:25 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+
+
+
+host pid 11616
+12:29:16
+SUCCESS: The process with PID 11616 has been terminated.
+--- 3 s after
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    13012            1192 node.exe        05:27:22 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+     2936            1984 harness-pty.exe 05:29:12 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8684           12788 powershell.exe  05:29:14 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+     1984           13012 node.exe        05:27:25 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+
+
+
+12:29:30.092 PASS terminal f8c886da shows stopped after the host was killed — status=stopped pane=null
+12:29:30.097 PASS claude 20d8966b shows stopped after the host was killed — status=stopped pane=null
+12:29:30.101 PASS codex cd88c448 shows stopped after the host was killed — status=stopped pane=null
+12:29:30.168 PASS terminal f8c886da resume — resumed=true pane=%2001  (67 ms)
+12:29:30.317 PASS claude 20d8966b resume — resumed=false pane=%2002  (149 ms)
+12:29:30.947 PASS codex cd88c448 resume — resumed=false pane=%2003  (629 ms)
+12:29:48.516 PASS terminal f8c886da relaunched and stays terminal 15 s later — pane %2001: PS C:\work\e2e\proj>
+12:29:51.066 PASS claude 20d8966b relaunched and stays claude 15 s later — pane %2002:   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+12:29:53.622 PASS codex cd88c448 relaunched and stays codex 15 s later — pane %2003:   GPT-6.1-Sol default · C:\work\e2e\proj
+12:29:53.622 SUMMARY 9/9 passed
+--- after resume
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    13012            1192 node.exe        05:27:22 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+     2936            1984 harness-pty.exe 05:29:12 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+     5416            2288 powershell.exe  05:29:54 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+     9456            2936 claude.exe      05:29:30 C:\Users\admin\.local\bin\claude.exe                                                      
+    13020            2936 OpenConsole.exe 05:29:30 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x2bc -
+    13104            2936 powershell.exe  05:29:30 powershell.exe -NoLogo                                                                    
+     5792            2936 OpenConsole.exe 05:29:30 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x260 -
+    12608            2936 OpenConsole.exe 05:29:30 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x210 -
+    11376            2936 node.exe        05:29:30 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+     3372            6208 node.exe        05:29:34 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1984           13012 node.exe        05:27:25 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+
+
+

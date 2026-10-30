@@ -1,0 +1,1 @@
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ? { $_.CommandLine -notmatch 'EncodedCommand|psl\.ps1' } | Select ProcessId,ParentProcessId,@{n='Start';e={$_.CreationDate.ToString('HH:mm:ss')}},CommandLine | ft -AutoSize | Out-String -Width 200

@@ -3082,7 +3082,8 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     match &pane.phase {
         // Opening: nothing to show yet. Lost (the machine's link down), the last screen is kept, as
         // ssh and mosh keep it — below.
-        Phase::Connecting(note) if pane.last_seq.is_none() => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
+        // A frozen pane taking its terminal back still has its last frame: kept, under the notice.
+        Phase::Connecting(note) if pane.last_seq.is_none() && !pane.frozen => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
         Phase::Card { title, detail, keys } => {
             let mut lines = vec![(title.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
             for row in detail.lines() { lines.push((row.to_string(), Style::default())) }
@@ -3167,6 +3168,17 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
             .remove_modifier(Modifier::DIM | Modifier::REVERSED).add_modifier(Modifier::BOLD);
         buf.set_style(row, notice);
         buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" ! {note}"), w = area.width as usize), area.width as usize, notice);
+        return None;
+    }
+    // Taken by another client (a phone): its last frame here, at this screen's size, and one row
+    // saying who has it and how to have it back — the desktop app's band.
+    if let (true, Phase::Watching(who)) = (pane.frozen, &pane.phase) {
+        let who = if who.is_empty() { "Another window" } else { who.as_str() };
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        let notice = Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset))
+            .remove_modifier(Modifier::DIM | Modifier::REVERSED).add_modifier(Modifier::BOLD);
+        buf.set_style(row, notice);
+        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" ! {who} is using this terminal — type to take it back"), w = area.width as usize), area.width as usize, notice);
         return None;
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.

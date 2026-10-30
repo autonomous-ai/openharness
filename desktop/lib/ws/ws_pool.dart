@@ -52,11 +52,13 @@ class WsPool {
     String? localApiKey,
     int localProtocolVersion = 1,
     Duration? fixedReconnectDelay,
+    bool trustedLocal = false,
   }) {
     // The reconnect policy is part of the key: a row that turns out to be this computer's after its
-    // socket was made gets a new socket with the flat delay, not the old backoff.
+    // socket was made gets a new socket with the flat delay, not the old backoff. So is whether it
+    // is the trusted window connection (WsConn.trustedLocal), which on Windows dials the pipe.
     final desiredKey = transportKind == WsTransportKind.localPlaintext
-        ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}'
+        ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}${trustedLocal ? ':trusted' : ''}'
         : 'cloud:$wsBaseUrl:$autonomousEnv';
     final current = _conns[machineId];
     if (current != null &&
@@ -101,6 +103,8 @@ class WsPool {
       localApiKey: localApiKey,
       localProtocolVersion: localProtocolVersion,
       fixedReconnectDelay: fixedReconnectDelay,
+      trustedLocal:
+          transportKind == WsTransportKind.localPlaintext && trustedLocal,
     );
     _conns[machineId] = conn;
     unawaited(conn.connect());

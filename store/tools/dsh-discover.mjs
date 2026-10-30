@@ -2,8 +2,10 @@
 import ws_ from '../../cli/node_modules/ws/index.js'
 const { WebSocket } = ws_
 import { randomBytes } from 'node:crypto'
+import { CREDENTIAL_REFUSED, localCredentialHeaders } from './local-credential.mjs'
 const [machineId, workspace, action] = process.argv.slice(2)
-const ws = new WebSocket('ws://127.0.0.1:18473/api/local-ws')
+const ws = new WebSocket('ws://127.0.0.1:18473/api/local-ws', { headers: localCredentialHeaders() })
+ws.on('unexpected-response', (_req, res) => { console.error(res.statusCode === 401 ? CREDENTIAL_REFUSED : `Unexpected server response: ${res.statusCode}`); process.exit(1) })
 const pending = new Map()
 const send = (type, payload) => ws.send(JSON.stringify({ type, payload }))
 const request = (type, payload = {}) => new Promise((resolve, reject) => {

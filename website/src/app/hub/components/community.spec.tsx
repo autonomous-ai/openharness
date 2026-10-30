@@ -144,6 +144,50 @@ describe('community navigation', () => {
       window.history.replaceState(null, '', '/');
     }
   });
+  it('reads as loading, not failed, until the reader is known, and offers no action that would need them', async () => {
+    request.mockReturnValueOnce(new Promise(() => {}));
+    render(<Detail id={sample.id} initial={sample} initialComments />);
+    expect(screen.getByLabelText('Loading comments')).toBeInTheDocument();
+    expect(screen.queryByText(/Comments are unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sign in to Harness/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Like harness' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument();
+  });
+  it('sends a phone’s Fork to the fork page, which has no app to open', async () => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
+    render(<Detail id={sample.id} initial={sample} />);
+    expect(screen.getByRole('link', { name: 'Fork' })).toHaveAttribute('href', '/hub/starter-orbit/fork');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: undefined });
+  });
+  it('moves through the Share menu by keyboard and returns to its button on Escape', async () => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    render(<Detail id={sample.id} initial={sample} />);
+    const share = screen.getByRole('button', { name: 'Share' });
+    fireEvent.keyDown(share, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Copy link' })).toHaveFocus());
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Share on X' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'End' });
+    expect(screen.getByRole('menuitem', { name: 'Share on LinkedIn' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(share).toHaveFocus();
+  });
+  it('likes from a card before the first page answers when this browser holds a sign-in, and asks a visitor at the bottom of the screen', async () => {
+    const page = { harnesses: [{ ...sample, id: 'first', title: 'Server card' }], nextCursor: null, following: [], stats: {} };
+    request.mockReturnValueOnce(new Promise(() => {}));
+    const { unmount } = render(<Feed initialPage={page} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Like Server card' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Sign in to Harness to like harnesses and follow creators');
+    unmount();
+    localStorage.setItem('harness.web.v1.auth_access_token', 'token');
+    request.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce({ liked: true, likes: 1 });
+    render(<Feed initialPage={page} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Like Server card' }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('harnesses/first/like', expect.objectContaining({ method: 'PUT' })));
+    localStorage.clear();
+  });
   it('says so when a drawn page cannot load its likes and actions, and retries', async () => {
     const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
     request.mockRejectedValueOnce(new CommunityError('Service unavailable', 503));
@@ -159,7 +203,7 @@ describe('community navigation', () => {
     request.mockResolvedValueOnce({ harness: { ...sample, id: sample.id }, social: { ...emptySocial, signedIn: false } });
     render(<Detail id={sample.id} initial={null} />);
     expect(await screen.findByText(/Your sign-in has expired/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/web');
+    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/');
     localStorage.clear();
   });
   it('reads a publication once, then refreshes only its social state', async () => {
@@ -409,6 +453,20 @@ describe('community navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     expect(await screen.findByText(/Restored/)).toBeInTheDocument();
     expect(request).toHaveBeenCalledWith('reports/review', { method: 'POST', body: { targetType: 'harness', targetId: 'h1', decision: 'restore' } });
+  });
+  it('signs a visitor in at the web app and brings them back to the Hub page they were on', async () => {
+    window.history.replaceState(null, '', '/hub/following');
+    try {
+      render(<Header />);
+      const signIn = await screen.findByRole('link', { name: 'Sign in' });
+      expect(signIn).toHaveAttribute('href', '/');
+      signIn.addEventListener('click', event => event.preventDefault());
+      fireEvent.click(signIn);
+      expect(sessionStorage.getItem('harness.hub.returnTo')).toBe('/hub/following');
+    } finally {
+      sessionStorage.clear();
+      window.history.replaceState(null, '', '/');
+    }
   });
   it('rings the bell with the unread count only for someone signed in', async () => {
     const { unmount } = render(<Header />);

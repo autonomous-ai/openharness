@@ -406,3 +406,60 @@ describe('recoverable undispatched creation intents', () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 })
+
+describe('who created a launch', () => {
+  const guest = 'kim@acme.io'
+  const created = { state: 'created' as const, agentId: 'fixture-agent' }
+  const done = async () => created
+
+  it('records a guest on its receipt, pending and finished, and keeps it across a restart', async () => {
+    const { directory, receipts } = fixture()
+    let finish!: (outcome: AgentCreationOutcome) => void
+    const run = receipts.run(id, fingerprint, () => new Promise<AgentCreationOutcome>((resolve) => { finish = resolve }), guest)
+    expect(receipts.creator(id)).toBe(guest)
+    expect(new AgentCreationReceipts(directory).creator(id)).toBe(guest)
+    await Promise.resolve(); finish(created); await run
+    expect(receipts.creator(id)).toBe(guest)
+    expect(new AgentCreationReceipts(directory).creator(id)).toBe(guest)
+    expect(new AgentCreationReceipts(directory).status(id)).toEqual(created)
+  })
+
+  it('reads a receipt that records no creator, an owner\'s launch or an unknown id, as the owner\'s', async () => {
+    const { directory, receipts } = fixture()
+    expect(receipts.creator(id)).toBeNull()
+    await receipts.run(id, fingerprint, done)
+    expect(receipts.creator(id)).toBeNull()
+    writeFileSync(join(directory, `${id}-old.json`), JSON.stringify({ version: 1, fingerprint, outcome: created }))
+    expect(receipts.creator(`${id}-old`)).toBeNull()
+  })
+
+  it('leaves an owner\'s receipt bytes as they were before the field existed', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.run(id, fingerprint, done)
+    expect(JSON.parse(readFileSync(join(directory, `${id}.json`), 'utf8'))).toEqual({ version: 1, fingerprint, outcome: created })
+  })
+
+  it('reads a creator that is not a name as damaged evidence', () => {
+    const { directory, receipts } = fixture()
+    mkdirSync(directory, { mode: 0o700 })
+    writeFileSync(join(directory, `${id}.json`), JSON.stringify({ version: 1, fingerprint, guest: 7, outcome: created }), { mode: 0o600 })
+    expect(() => receipts.creator(id)).toThrow('CREATION_STORAGE_FAILED')
+  })
+
+  it('refuses a guest an owner\'s intent or cancelled id, whatever the fingerprint, and reveals nothing of it', async () => {
+    const { receipts } = fixture()
+    const held = { service: 'models', detail: 'Waiting.' }
+    await receipts.runIntent(id, fingerprint, { kind: 'x' }, held, async () => null)
+    expect(() => receipts.run(id, fingerprint, vi.fn(), guest)).toThrow('CREATION_CONFLICT')
+    receipts.cancelIntent(`${id}-gone`)
+    expect(() => receipts.run(`${id}-gone`, fingerprint, vi.fn(), guest)).toThrow('CREATION_CONFLICT')
+  })
+
+  it('refuses a guest a tombstone written between its read and its reservation', () => {
+    const { directory, receipts } = fixture()
+    mkdirSync(directory, { mode: 0o700 })
+    vi.spyOn(receipts as unknown as { read: () => unknown }, 'read').mockReturnValueOnce(null)
+    writeFileSync(join(directory, `${id}.json`), JSON.stringify({ version: 2, cancelled: true }), { mode: 0o600 })
+    expect(() => receipts.run(id, fingerprint, vi.fn(), guest)).toThrow('CREATION_CONFLICT')
+  })
+})

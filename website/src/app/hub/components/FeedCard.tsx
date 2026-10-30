@@ -4,6 +4,7 @@ import { GitFork, Heart, MessageCircle } from 'lucide-react';
 import type { Stats } from '@/lib/community/feed';
 import type { HarnessSummary } from '@/lib/community/types';
 import { harnessPath } from '@/lib/community/slug';
+import { countHub } from '@/lib/community/hubMeasure';
 import { HarnessTags } from './HarnessTags';
 import styles from '../community.module.css';
 
@@ -13,7 +14,7 @@ type Props = { item: HarnessSummary; stats?: Stats; liking: boolean; onLike: () 
 export function FeedCard({ item, stats, liking, onLike }: Props) {
   const path = harnessPath(item);
   return <article className={styles.card}>
-    <Link href={path} aria-label={`Open ${item.title}`}>
+    <Link href={path} aria-label={`Open ${item.title}`} onClick={() => countHub('hub_card_open')}>
       {item.cover ? <img className={styles.cover} src={item.cover} alt="" width={900} height={600} loading="lazy" /> : <div className={styles.blankCover}>{item.title}</div>}
       <h2>{item.title}</h2><p>{item.description}</p>
     </Link>

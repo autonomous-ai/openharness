@@ -5,10 +5,13 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
 import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/core/first_engine.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/attached_task_delivery.dart';
+import 'package:harness_mobile/state/harness_attachments.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 import 'package:harness_mobile/core/git_project.dart';
 import 'package:harness_mobile/core/project_folder.dart';
@@ -16,8 +19,10 @@ import 'package:harness_mobile/widgets/remote_folder_picker.dart';
 
 import '../demo/sample_mode.dart' show SampleMode;
 import 'agent_index.dart';
+import 'first_task_suggestion.dart';
 import 'branch_picker_sheet.dart';
 import 'phone_navigation.dart';
+import 'new_agent_attachments.dart';
 import 'new_agent_draft.dart';
 import 'new_agent_model_sheet.dart';
 import 'phone_status.dart';
@@ -44,6 +49,7 @@ class NewAgentPage extends StatefulWidget {
     required this.machineId,
     this.folder,
     this.deskTabId,
+    this.newDeskTab = false,
     this.voice,
   });
 
@@ -61,6 +67,10 @@ class NewAgentPage extends StatefulWidget {
   /// The desk tab the new harness joins — the tab Find was narrowed to when New Harness was tapped.
   /// Null joins the tab the phone is in. See `PhoneDesk.adopt`.
   final String? deskTabId;
+
+  /// The new harness opens a desk tab of its own — the `+` at the end of Find's tab chips, the
+  /// desktop's New Tab. Wins over [deskTabId]. See `PhoneDesk.adopt`.
+  final bool newDeskTab;
 
   @override
   State<NewAgentPage> createState() => _NewAgentPageState();
@@ -90,8 +100,21 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// "New project", or the repository's name.
   String? _projectLabel;
 
-  /// Claude until somebody picks another — the engine most agents are started with.
-  String? _engine = 'claude';
+  /// What the form opens on until somebody picks another: [_defaultEngine], read again whenever
+  /// this computer's engines arrive or the computer changes ([_adoptDefaultEngine]). OpenCode is the
+  /// answer before the computer has said anything.
+  String? _engine = 'opencode';
+
+  /// A plain shell is chosen rather than an agent — the desktop's `isTerminal`.
+  ///
+  /// ⚠️ **A terminal takes none of an agent's choices, so the form asks for none.** The machine opens
+  /// it in a folder that exists, or at home with none (`cli/src/core/agents/launches.ts`): a project
+  /// is optional, New Folder and Clone are refused (`INVALID_PROJECT_SOURCE`, it does not prepare
+  /// one), and a shell has no model, approvals, Codex profile, branch, worktree or first task. Each
+  /// of those is left out of the request rather than sent and refused, and its row is not drawn.
+  /// The choices themselves are kept, as the desktop keeps them, so picking an agent again finds
+  /// the form as it was.
+  bool get _terminal => isTerminalEngine(_engine);
   String? _error;
   bool _creating = false;
   bool _optionsOpen = false;
@@ -165,6 +188,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void initState() {
     super.initState();
     _restoreDraft();
+    if (!_engineChosen) _engine = _defaultEngine();
+    // The last agent started from this phone, the desktop's `agentPreference`: read from disk once,
+    // and [_engine] follows it if it lands before anybody has picked.
+    unawaited(
+      widget.notifier.agentPreference.load().then((_) => _adoptDefaultEngine()),
+    );
     // After the first frame, not during it: `probeEngines` can notify synchronously, and a notify
     // while this page is still being mounted marks the listeners above it dirty mid-build — the
     // "setState() called during build" assertion.
@@ -178,29 +207,72 @@ class _NewAgentPageState extends State<NewAgentPage> {
         if (mounted) setState(() {});
       }),
     );
-    // The last agent started from this phone, the desktop's `agentPreference`. A draft being
-    // restored keeps its own.
-    if (newAgentDraft == null) {
-      final preference = widget.notifier.agentPreference;
-      unawaited(
-        preference.load().then((_) {
-          final remembered = preference.value;
-          if (!mounted || remembered == null || _engineChosen) return;
-          setState(() => _engine = remembered);
-        }),
-      );
-    }
   }
 
-  /// Whether the engine was picked on this page — a remembered one arriving late must not undo it.
+  /// Whether the engine was picked on this page. A pick is never undone: not by a remembered agent
+  /// arriving late, nor by the computer's engines, nor by moving to another computer.
   bool _engineChosen = false;
+
+  /// What the desktop's New Harness opens on: the agent last started from this phone while this
+  /// computer can still run it, otherwise [firstEngine] — Claude Code or Codex when installed and
+  /// signed in there, else OpenCode.
+  String _defaultEngine() {
+    final remembered = widget.notifier.agentPreference.value;
+    if (remembered != null && _rememberedUsable(remembered)) return remembered;
+    return firstEngine(_machine?.engines);
+  }
+
+  /// Whether this computer can run [id]: installed, and signed in where it reports that. A computer
+  /// that has not answered yet, or an older one that reports no sign-in at all (null), has not said
+  /// "no" — it is not treated as signed out.
+  bool _rememberedUsable(String id) {
+    if (isTerminalEngine(id)) return true;
+    final engines = _machine?.engines;
+    if (engines == null || !engines.loaded) return true;
+    final engine = engines[id];
+    return engine != null && engine.installed && engine.signedIn != false;
+  }
+
+  /// Opens on [_defaultEngine] while nothing was picked. Run when the computer's engines or the
+  /// remembered agent arrive and when the computer changes — never from [build].
+  void _adoptDefaultEngine() {
+    if (!mounted || _engineChosen) return;
+    final next = _defaultEngine();
+    if (next == _engine) return;
+    setState(() {
+      _permissionMode = kDefaultPermissionMode;
+      _engine = next;
+    });
+  }
 
   @override
   void dispose() {
+    _holdCheck?.cancel();
     _keepDraft();
     _task.dispose();
+    _attachments.dispose();
     _ownVoice?.dispose();
     super.dispose();
+  }
+
+  /// The files the harness will be handed — the desktop's `HarnessAttachments` behind its 📎. Only
+  /// for this open form: the draft a closed form leaves keeps the words, not the bytes.
+  final _attachments = HarnessAttachments();
+
+  /// Files can go to this machine's harnesses, and this agent takes the task they lead: the 📎 is
+  /// drawn only then, never as a button that is refused at Start.
+  bool get _canAttach {
+    final engine = _engine;
+    return engine != null &&
+        takesFirstTask(engine) &&
+        canAttachFiles(widget.notifier, _machineId);
+  }
+
+  /// The 📎: the system's picker, then the files under the task.
+  Future<void> _attach() async {
+    final problem = await addPickedAttachments(_attachments);
+    if (!mounted) return;
+    setState(() => _error = problem);
   }
 
   /// The first task — `prompt` on `agent_create`. Optional: empty starts the harness idle.
@@ -281,6 +353,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     }
     _machineId = draft.machineId;
     _engine = draft.engine;
+    _engineChosen = draft.engineChosen;
     _permissionMode = draft.permissionMode;
     _folder = draft.folder;
     _exactFolder = draft.exactFolder;
@@ -313,6 +386,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     newAgentDraft = NewAgentDraft(
       machineId: _machineId,
       engine: _engine,
+      engineChosen: _engineChosen,
       permissionMode: _permissionMode,
       folder: _folder,
       exactFolder: _exactFolder,
@@ -337,7 +411,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // Which engines this machine actually has. Best effort: an unanswered probe
     // leaves the list to the engines its own agents are already running, and a
     // machine with neither still gets the browse-and-create path.
-    unawaited(widget.notifier.probeEngines(_machineId));
+    unawaited(
+      widget.notifier.probeEngines(_machineId).then((_) => _adoptDefaultEngine()),
+    );
     unawaited(_loadCodexProfiles());
   }
 
@@ -374,6 +450,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _model = null;
       _error = null;
     });
+    _adoptDefaultEngine();
     _askMachine();
   }
 
@@ -424,6 +501,17 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // machine names the main checkout, and new work starts from the branch that is on. One the
     // person browsed to stays itself, mainFolder and all ([_inWorktree]).
     if (info.mainFolder case final main? when !exact) {
+      // The main checkout itself, which is where its branch is checked out: [main] when the
+      // worktree was opened at its top, the checkout above it when opened on a subfolder. That
+      // whole checkout moves if Start switches its branch, so a harness anywhere in it must count
+      // — see [_branchSwitchRefusal]. [main] when the checkout is on no branch to find it by.
+      final mainBranch = info.mainBranch;
+      final checkout =
+          info.branches
+              .where((branch) => !branch.remote && branch.name == mainBranch)
+              .firstOrNull
+              ?.worktree ??
+          main;
       _folder = main;
       _gitFolder = main;
       info = GitProjectInfo(
@@ -431,7 +519,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
         branch: info.mainBranch,
         branches: info.branches,
         defaultRef: info.defaultRef,
-        root: main,
+        root: checkout,
       );
     }
     setState(() {
@@ -478,6 +566,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// and "Claude" alone reads there as a model.
   String _engineName(String id) => id == 'claude'
       ? 'Claude Code'
+      : isTerminalEngine(id)
+      ? terminalIdentity.label
       : allEngines.where((identity) => identity.id == id).firstOrNull?.label ??
             id;
 
@@ -709,9 +799,58 @@ class _NewAgentPageState extends State<NewAgentPage> {
     return true;
   }
 
+  /// Why Start may not move [folder] onto another branch, or null when nothing stops it. [info] is
+  /// [folder]'s repository, as the machine answered for it.
+  ///
+  /// ⚠️ **With Worktree off the machine switches the folder's own branch, and nothing there asks
+  /// what else is working in it.** `cli/src/lib/gitProject.ts` runs `git switch` in a folder with
+  /// nothing uncommitted, or makes a typed new branch there — and a harness already at work in that
+  /// checkout had its files change branch under it, then went on editing and committing on a branch
+  /// nobody chose for it. The easy way in was the branch row's default: Worktree starts on with the
+  /// default branch picked, turning it off kept that pick, and Start moved a folder on another
+  /// branch to `main`. The desktop refuses before sending (`state/new_harness.dart`, `create`); this
+  /// is its check, in its words. Like the Git-read refusal in [_gitSettled], it leaves the button
+  /// saying Start: nothing was sent, so there is nothing to try again.
+  ///
+  /// What counts, and why:
+  /// - Only a choice that moves the folder ([switchesFolderBranch]). The branch it is already on, a
+  ///   branch with a worktree of its own (opened there instead) and Worktree on all start as before.
+  /// - Only harnesses on THIS machine. The same path on another computer is another folder.
+  /// - Every harness the machine lists, a stopped one included, as the desktop counts them:
+  ///   resumed, it would carry on in a checkout that changed branch while it was away.
+  /// - A harness anywhere in the checkout ([GitProjectInfo.root]), a subfolder as much as the root,
+  ///   because the switch moves every file in it. A machine that names no root leaves the folder
+  ///   itself, as the desktop does.
+  /// - Where a harness works is read as the desktop reads it: where its machine last saw it working
+  ///   ([Agent.displayProject]), which is where it was started until it is seen anywhere else.
+  ///
+  /// "Stay on" names the branch the folder is on now, since that is what keeping it there means; a
+  /// folder on no branch is called what the desktop's branch row calls it, Detached HEAD.
+  String? _branchSwitchRefusal(String folder, GitProjectInfo info) {
+    if (!switchesFolderBranch(
+      info,
+      worktree: _worktree,
+      branchRef: _branchRef,
+      branchName: _branchName,
+    )) {
+      return null;
+    }
+    final root = info.root ?? folder;
+    final busy = (_machine?.agents ?? const <Agent>[]).any((agent) {
+      final cwd = agent.displayProject?.cwd;
+      return cwd != null && withinCheckout(root, cwd);
+    });
+    if (!busy) return null;
+    return 'A harness is working in this folder, so its branch can’t be '
+        'switched. Turn Worktree on, or stay on '
+        '${info.branch ?? 'Detached HEAD'}.';
+  }
+
   Future<void> _create() async {
     final engine = _engine;
-    if ((_folder == null && _project == null) || engine == null || _creating) {
+    if ((_folder == null && _project == null && !_terminal) ||
+        engine == null ||
+        _creating) {
       return;
     }
     // A request still waiting on its answer is asked about, never made again — see [_creation].
@@ -729,10 +868,41 @@ class _NewAgentPageState extends State<NewAgentPage> {
       );
       return;
     }
+    if (isTerminalEngine(engine)) {
+      // No Git wait and no branch guard: a terminal is sent its folder alone, never a branch or a
+      // worktree, so there is nothing to read first and nothing it could switch. No task either —
+      // the shell is typed into once it opens. See [_terminal].
+      final creation = _creation = AgentCreationAttempt();
+      final error = await widget.notifier.createAgent(
+        _machineId,
+        engine: engine,
+        // The folder chosen, or none for home — never [_project], which a terminal cannot make.
+        folder: _folder,
+        deskTabId: widget.deskTabId,
+        newDeskTab: widget.newDeskTab,
+        attempt: creation,
+      );
+      _answered(creation, engine, error);
+      return;
+    }
     if (!await _gitSettled()) return;
     // Taken after the wait, not before it: the answer can move the form to the folder's own
     // repository (a worktree's main checkout), and Start goes where the form says now.
     final folder = _folder, project = _project;
+    // Read after the wait for the same reason, and before the first task is looked at — the
+    // desktop's order. Only a folder sent with its repository can be switched; `New project` and
+    // `Git…` make a folder nothing is working in yet.
+    final switchRefusal =
+        project == null && folder != null && _repository != null
+        ? _branchSwitchRefusal(folder, _repository!)
+        : null;
+    if (switchRefusal != null) {
+      setState(() {
+        _creating = false;
+        _error = switchRefusal;
+      });
+      return;
+    }
     // The first task as it is sent, read after the wait too: the field stays open through it. An
     // engine that cannot take one is sent none.
     final task = takesFirstTask(engine) ? _task.text.trim() : '';
@@ -745,10 +915,33 @@ class _NewAgentPageState extends State<NewAgentPage> {
       });
       return;
     }
+    // Files ride into the live terminal after creation, and the task follows them there (see
+    // [deliverAttachedTask]), so neither is a launch argument then — the desktop's order.
+    final files = _attachments.files;
+    // Files picked before the agent or the machine changed under them: said, never dropped.
+    final cannotTake = files.isEmpty
+        ? null
+        : !takesFirstTask(engine)
+        ? 'This agent cannot be handed files. Remove them to start it.'
+        : !canAttachFiles(widget.notifier, _machineId)
+        ? 'Update Harness CLI on '
+              '${_machine?.machine.displayName ?? 'this computer'} to attach '
+              'files, or remove them.'
+        : null;
+    if (cannotTake != null) {
+      setState(() {
+        _creating = false;
+        _error = cannotTake;
+      });
+      return;
+    }
     // Held so the id of what it starts comes back here — see
     // [AgentCreationAttempt.agentId] — and kept as [_creation] for as long as
     // its answer is outstanding.
     final creation = _creation = AgentCreationAttempt();
+    _delivery = files.isEmpty
+        ? null
+        : (creation: creation, files: files, task: task);
     // A folder in a repository is not sent as a bare `cwd`: the branch and the
     // worktree travel with it, and [gitFolderRequest] is the desktop's own rule
     // for turning the rows above into what the machine is asked to do. A folder
@@ -789,8 +982,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
       model: _model,
       deskTabId: widget.deskTabId,
+      newDeskTab: widget.newDeskTab,
       attempt: creation,
-      prompt: task.isEmpty ? null : task,
+      prompt: task.isEmpty || files.isNotEmpty ? null : task,
       // Whenever a first task is sent, the harness is called by its words until the engine titles
       // the session — in any project, the desktop's rule. Named only for a New folder, a second
       // harness in an existing one read "Untitled Pane" until then. Nothing to say leaves the name
@@ -798,6 +992,28 @@ class _NewAgentPageState extends State<NewAgentPage> {
       name: task.isEmpty ? null : taskProjectTitle(task),
     );
     _answered(creation, engine, error);
+  }
+
+  /// Cancel request: the held request called off. Confirmed, the form is free for a new one and
+  /// says so; otherwise the reason stands under the task and the request stays to be checked.
+  Future<void> _cancelPending() async {
+    final creation = _creation;
+    if (creation == null || _creating || creation.cancelling) return;
+    // Called off: no more asking by itself; whatever comes of the cancel, the person checks.
+    _holdCheck?.cancel();
+    setState(() {});
+    final problem = await widget.notifier.cancelAgentCreation(creation);
+    if (!mounted) return;
+    if (problem == null) {
+      if (identical(_creation, creation)) _creation = null;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(const SnackBar(content: Text('Creation cancelled.')));
+    }
+    setState(() {
+      _held = null;
+      _error = problem;
+      _failure = null;
+    });
   }
 
   /// What the machine said to [creation], on the form: inside the new harness when one started,
@@ -808,18 +1024,82 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // own, made from the rows as they read then.
     if (!creation.awaitingConfirmation) _creation = null;
     if (error == null) {
+      _held = null;
+      _holdCheck?.cancel();
       // The harness exists: the draft that described it would be a second one waiting to be made
       // by accident. See [NewAgentDraft].
       newAgentDraft = null;
       unawaited(widget.notifier.agentPreference.select(engine));
+      _deliverFiles(creation);
       _open(creation.agentId);
+      return;
+    }
+    // Held before anything started — an engine the machine is installing, a model waking: not a
+    // failure. Said as a wait, not in red, and asked again by itself until the harness starts, is
+    // refused, or is called off; Cancel request stays.
+    if (creation.canCancelPending) {
+      setState(() {
+        _creating = false;
+        _error = null;
+        _failure = null;
+        _held = error;
+      });
+      _holdCheck?.cancel();
+      _holdCheck = Timer(const Duration(seconds: 4), () {
+        if (mounted &&
+            identical(_creation, creation) &&
+            !_creating &&
+            !creation.cancelling &&
+            _held != null) {
+          unawaited(_start());
+        }
+      });
       return;
     }
     setState(() {
       _creating = false;
+      _held = null;
       _error = error;
       _failure = error;
     });
+  }
+
+  /// What the machine holds the request on, while it does (an engine installing): shown as a wait.
+  String? _held;
+  Timer? _holdCheck;
+
+  /// The files [creation] is to be handed once it exists, and the task that follows them — kept
+  /// beside [_creation] so a Check status that finds it started still hands them over.
+  ({AgentCreationAttempt creation, List<HarnessAttachment> files, String task})?
+  _delivery;
+
+  /// Hands a started harness its files and then its task, detached from this form, which is
+  /// replaced by the harness's page at once — the desktop's `_deliverFiles`. A problem is said on
+  /// the app's own messenger, which outlives the form.
+  void _deliverFiles(AgentCreationAttempt creation) {
+    final delivery = _delivery;
+    if (delivery == null || !identical(delivery.creation, creation)) return;
+    _delivery = null;
+    _attachments.clear();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    void report(String message) =>
+        messenger?.showSnackBar(SnackBar(content: Text(message)));
+    final agentId = creation.agentId;
+    if (agentId == null) {
+      report('The harness started without its files. Attach them in its pane.');
+      return;
+    }
+    unawaited(
+      deliverAttachedTask(
+        widget.notifier,
+        machineId: _machineId,
+        agentId: agentId,
+        files: delivery.files,
+        task: delivery.task,
+      ).then((problem) {
+        if (problem != null) report(problem);
+      }),
+    );
   }
 
   /// The last request this form made, kept while the machine has not said whether it started —
@@ -885,7 +1165,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _applyDefaultProject();
       final info = _repository;
       final mode = _permissionModeChoice;
-      final ready = _engine != null && (_folder != null || _project != null);
+      // A terminal needs no project: with none it opens at home.
+      final ready =
+          _engine != null && (_terminal || _folder != null || _project != null);
+      // Only an agent's form is missing its project; a terminal's says where it opens.
+      final needsProject = !_terminal && _folder == null && _project == null;
       final nothingRunning = _machines.every((m) => m.agents.isEmpty);
       final count = _task.text.trim().length;
       // Typing the task, the keyboard leaves room for one line of the choices, not four cut ones.
@@ -1024,31 +1308,33 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                 ),
                                 TtyFormRow(
                                   label: 'project',
-                                  value: _folder == null && _project == null
+                                  value: needsProject
                                       ? 'Choose a project'
                                       : _projectName,
-                                  valueColor:
-                                      _folder == null && _project == null
-                                      ? tty.green
-                                      : null,
+                                  valueColor: needsProject ? tty.green : null,
                                   detail: null,
                                   onTap: _locked
                                       ? null
                                       : () => unawaited(_chooseProject()),
                                 ),
                                 // The owner's default flow matches desktop: choose agent and project.
-                                // Worktree, approvals and profile stay behind Options.
-                                TtyFormRow(
-                                  label: 'options',
-                                  value: _optionsOpen ? '[-]' : '[+]',
-                                  chevron: false,
-                                  onTap: _locked
-                                      ? null
-                                      : () => setState(
-                                          () => _optionsOpen = !_optionsOpen,
-                                        ),
-                                ),
-                                if (_optionsOpen && _engine != null)
+                                // Worktree, approvals and profile stay behind Options. A terminal has
+                                // none of them ([_terminal]), so it has no Options either: a row that
+                                // opened onto nothing, or onto rows that would be ignored, is noise.
+                                if (!_terminal)
+                                  TtyFormRow(
+                                    label: 'options',
+                                    value: _optionsOpen ? '[-]' : '[+]',
+                                    chevron: false,
+                                    onTap: _locked
+                                        ? null
+                                        : () => setState(
+                                            () => _optionsOpen = !_optionsOpen,
+                                          ),
+                                  ),
+                                if (_optionsOpen &&
+                                    _engine != null &&
+                                    !_terminal)
                                   TtyFormRow(
                                     label: 'model',
                                     value:
@@ -1079,7 +1365,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ? null
                                         : () => unawaited(_chooseProfile()),
                                   ),
-                                if (_optionsOpen) ...[
+                                if (_optionsOpen && !_terminal) ...[
                                   TtyFormRow(
                                     label: 'branch',
                                     valueColor: info == null ? tty.faint : null,
@@ -1147,6 +1433,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                   // running, somebody knows what to ask, and the
                                   // chips were filler over the form.
                                   if (nothingRunning &&
+                                      !_terminal &&
                                       _task.text.trim().isEmpty &&
                                       !_creating)
                                     Padding(
@@ -1155,12 +1442,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         spacing: 8,
                                         runSpacing: 8,
                                         children: [
-                                          for (final idea in const [
-                                            'Explain this project to me',
-                                            'Find a bug and fix it',
-                                            'Run the tests',
-                                          ])
-                                            _Suggestion(
+                                          for (final idea in firstTaskIdeas)
+                                            FirstTaskSuggestion(
                                               text: idea,
                                               onTap: () => setState(() {
                                                 _task.value = TextEditingValue(
@@ -1175,54 +1458,114 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ],
                                       ),
                                     ),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TtyText(
-                                          'task (optional)',
-                                          color: tty.faint,
-                                          size: TtySize.meta,
+                                  // A shell has no first task: in place of a field whose words would
+                                  // never be sent, the desktop's line for it. What was typed stays in
+                                  // [_task], so picking an agent again finds it — the desktop's rule.
+                                  if (_terminal)
+                                    TtyText(
+                                      'A terminal opens straight on your shell; '
+                                      'type there.',
+                                      color: tty.faint,
+                                      size: TtySize.meta,
+                                    )
+                                  else ...[
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: TtyText(
+                                            'task (optional)',
+                                            color: tty.faint,
+                                            size: TtySize.meta,
+                                          ),
+                                        ),
+                                        if (count > 1800)
+                                          TtyText(
+                                            '$count/$kFirstTaskMaxLength',
+                                            color: count > kFirstTaskMaxLength
+                                                ? tty.red
+                                                : tty.faint,
+                                            size: TtySize.meta,
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    TtyField(
+                                      controller: _task,
+                                      hint: 'What should it do?',
+                                      lines: 6,
+                                      action: TextInputAction.newline,
+                                      onChanged: _taskEdited,
+                                      trailing: [
+                                        if (_canAttach)
+                                          Align(
+                                            alignment: Alignment.bottomRight,
+                                            child: AttachmentButton(
+                                              onTap: _creating
+                                                  ? null
+                                                  : () => unawaited(_attach()),
+                                            ),
+                                          ),
+                                        Align(
+                                          alignment: Alignment.bottomRight,
+                                          child: ListenableBuilder(
+                                            listenable:
+                                                _voiceIfAny ?? const _Silent(),
+                                            builder: (context, _) {
+                                              final status =
+                                                  _voiceIfAny?.status;
+                                              return TtyFieldMic(
+                                                live:
+                                                    status ==
+                                                        VoiceInputStatus
+                                                            .listening ||
+                                                    status ==
+                                                        VoiceInputStatus
+                                                            .starting,
+                                                onTap: _creating ? null : _talk,
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    // Shown while there are files even where none can go now — the
+                                    // machine or the agent changed under them — so they can be taken
+                                    // back off.
+                                    if (_canAttach || !_attachments.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: AttachmentList(
+                                          attachments: _attachments,
+                                          enabled: !_creating,
                                         ),
                                       ),
-                                      if (count > 1800)
-                                        TtyText(
-                                          '$count/$kFirstTaskMaxLength',
-                                          color: count > kFirstTaskMaxLength
-                                              ? tty.red
-                                              : tty.faint,
-                                          size: TtySize.meta,
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  TtyField(
-                                    controller: _task,
-                                    hint: 'What should it do?',
-                                    lines: 6,
-                                    action: TextInputAction.newline,
-                                    onChanged: _taskEdited,
-                                    trailing: [
-                                      Align(
-                                        alignment: Alignment.bottomRight,
-                                        child: ListenableBuilder(
-                                          listenable:
-                                              _voiceIfAny ?? const _Silent(),
-                                          builder: (context, _) {
-                                            final status = _voiceIfAny?.status;
-                                            return TtyFieldMic(
-                                              live:
-                                                  status ==
-                                                      VoiceInputStatus
-                                                          .listening ||
-                                                  status ==
-                                                      VoiceInputStatus.starting,
-                                              onTap: _creating ? null : _talk,
-                                            );
-                                          },
-                                        ),
+                                  ],
+                                  if (_held != null && _error == null)
+                                    Padding(
+                                      key: const ValueKey('new-agent-held'),
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Row(
+                                        children: [
+                                          SizedBox.square(
+                                            dimension: 12,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 1.6,
+                                              color: tty.dim,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              _held!,
+                                              style: tty.style(
+                                                color: tty.dim,
+                                                size: TtySize.meta,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
                                   if (_error != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),
@@ -1254,6 +1597,22 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                     // Never a dead button: with a choice missing, Start opens its chooser.
                                     onPressed: () => unawaited(_start()),
                                   ),
+                                  // A request the machine holds before starting anything (an engine it is
+                                  // installing) can still be called off — the desktop's Cancel request.
+                                  if (_creation?.canCancelPending == true &&
+                                      !_creating)
+                                    Center(
+                                      child: TtyTextButton(
+                                        key: const ValueKey(
+                                          'cancel-pending-creation',
+                                        ),
+                                        label: 'Cancel request',
+                                        size: TtySize.meta,
+                                        onPressed: _creation!.cancelling
+                                            ? null
+                                            : () => unawaited(_cancelPending()),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -1350,6 +1709,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// path is in the chooser.
   String get _projectName {
     if (_folder case final folder?) return _basename(folder);
+    // Where a terminal with no folder opens, as the desktop's project pill writes it. Before
+    // [_project]: a terminal never makes one, so naming it would say where the shell will not be.
+    if (_terminal) return '~';
     if (_project?.repository case final repository?) return repository.name;
     if (_project != null) return 'New folder';
     return 'Choose project';
@@ -1386,7 +1748,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       await _chooseAgent();
       return;
     }
-    if (_folder == null && _project == null) {
+    if (_folder == null && _project == null && !_terminal) {
       setState(() => _error = 'Choose a project.');
       await _chooseProject();
       return;
@@ -1399,12 +1761,22 @@ class _NewAgentPageState extends State<NewAgentPage> {
     if (!mounted) return;
     final machine = _machine;
     final recent = widget.notifier.agentPreference.recent;
-    final ids = {for (final identity in _engines) identity.id, ?_engine};
+    final ids = {
+      for (final identity in _engines) identity.id,
+      ?_engine,
+      kTerminalEngine,
+    };
     final ordered = [
+      ?_engine,
       for (final id in recent)
-        if (ids.contains(id)) id,
-      ...(ids.where((id) => !recent.contains(id)).toList()
-        ..sort((a, b) => _engineName(a).compareTo(_engineName(b)))),
+        if (ids.contains(id) && id != _engine) id,
+      ...ids.where(
+        (id) => id != _engine && !recent.contains(id) && !isTerminalEngine(id),
+      ),
+      // After every agent, as the desktop lists it: a plain shell, for when none of them is wanted.
+      // Among the recents instead once it has been started here, as any agent is.
+      if (_engine != kTerminalEngine && !recent.contains(kTerminalEngine))
+        kTerminalEngine,
     ];
     final picked = await showNewAgentChooser<String>(
       context,
@@ -1415,7 +1787,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ChooserItem(
             value: id,
             title: _engineName(id),
-            subtitle: _engineNote(id),
+            // The desktop's line for it: every machine has a shell, so there is never a note to give.
+            subtitle: isTerminalEngine(id)
+                ? 'Your shell on ${machine?.machine.displayName ?? 'the computer'}'
+                : _engineNote(id),
             leading: EngineMark(engine: id, size: 18),
             selected: id == _engine,
             enabled:
@@ -1515,7 +1890,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
       }
     }
     final here = _machine?.machine.displayName ?? 'this machine';
-    final canMake = _canMakeProject;
+    // A terminal opens in a folder that is there; the machine refuses to make one for it
+    // (INVALID_PROJECT_SOURCE), so Clone and New Folder are not offered to one — the chooser leaves
+    // an action that cannot be taken out rather than drawing it dead.
+    final canMake = _canMakeProject && !_terminal;
     final picked = await showNewAgentChooser<_ProjectChoice>(
       context,
       title: 'Project',
@@ -1853,35 +2231,4 @@ class _Silent implements Listenable {
 
   @override
   void removeListener(VoidCallback listener) {}
-}
-
-/// A first task to tap — fills the task field.
-class _Suggestion extends StatelessWidget {
-  const _Suggestion({required this.text, required this.onTap});
-
-  final String text;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Semantics(
-      button: true,
-      label: text,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 36),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: tty.dim),
-          ),
-          child: TtyText(text, size: TtySize.meta, color: tty.text),
-        ),
-      ),
-    );
-  }
 }

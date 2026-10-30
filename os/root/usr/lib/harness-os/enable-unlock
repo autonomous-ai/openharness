@@ -1,0 +1,15 @@
+#!/bin/sh
+# An encrypted computer installed before the startup's hotspot (#1446, 0.1.7) updates to a package
+# that carries the harness-unlock hook, but its /etc/mkinitcpio.conf was written by the installer of
+# its day and never names it: it waits for its password at the screen only, and a phone finds no
+# Harness-XXXX. Placed before sd-encrypt, as installer.py writes it now, and the startup rebuilt.
+# From 45-harness-unlock.hook, after every install or upgrade of the hook; nothing to do once it is
+# there, on an unencrypted computer, or on the live USB.
+set -eu
+conf=${HARNESS_MKINITCPIO_CONF:-/etc/mkinitcpio.conf}
+[ -e /etc/harness-live ] && exit 0
+grep -Eq '^HOOKS=\(.*[ (]sd-encrypt[ )]' "$conf" || exit 0
+grep -Eq '^HOOKS=\(.*[ (]harness-unlock[ )]' "$conf" && exit 0
+sed -i -E 's/^(HOOKS=\(.*[ (])sd-encrypt([ )])/\1harness-unlock sd-encrypt\2/' "$conf"
+echo 'harness-unlock: the setup hotspot now comes up while the disk waits for its password'
+[ -n "${HARNESS_MKINITCPIO_CONF:-}" ] || mkinitcpio -P

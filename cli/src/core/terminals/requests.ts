@@ -6,12 +6,14 @@
  */
 import { parseHostTheme, type HostTheme } from '../../lib/hostTheme.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { TmuxPaneInfo } from '../../lib/tmux.js'
+import { primaryRuntime } from '../../lib/terminalRuntime.js'
+import type { TerminalPaneInfo, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 
 export interface TerminalRequestDeps {
   resolve: (id: string) => RegisteredSession | undefined
-  /** tmux's own word on a pane (lib/tmux.ts `tmuxPaneInfo`). */
-  paneInfo: (pane: string) => Promise<TmuxPaneInfo | null>
+  /** The pane's own backend's word on it (`TerminalBackend.paneInfo`), asked with the row's runtime: never the
+   *  bare `tmuxPane`, which is a ptyhost pane's id on a ptyhost row. */
+  paneInfo: (runtime: TerminalRuntimeRef) => Promise<TerminalPaneInfo | null>
   /** Makes a pair of colours this machine's tmux `window-style` (cli.ts). */
   applyTheme: (theme: HostTheme) => void
 }
@@ -25,8 +27,8 @@ export function createTerminalRequests({ resolve, paneInfo, applyTheme }: Termin
     // client; over the relay a peer is not asked, and the client keeps its fallback.
     const id = payload.agentId
     const agent = typeof id === 'string' ? resolve(id) : undefined
-    if (!agent?.tmuxPane) { reply({ error: 'AGENT_NOT_FOUND' }); return }
-    void paneInfo(agent.tmuxPane).then(info => reply(info ? { ...info } : { error: 'PANE_NOT_FOUND' }))
+    if (!agent?.runtimes.length) { reply({ error: 'AGENT_NOT_FOUND' }); return }
+    void paneInfo(primaryRuntime(agent)).then(info => reply(info ? { ...info } : { error: 'PANE_NOT_FOUND' }))
   }
 
   /**

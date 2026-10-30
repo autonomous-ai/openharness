@@ -11,9 +11,11 @@
  *   is (lib/machineAccess.ts), so these change no one's access.
  */
 import type { FastifyInstance } from 'fastify'
+import { nextMachineShareGrants } from '../lib/machineSharePolicy.js'
 import type { MachineShare } from '@prisma/client'
 import { z } from 'zod'
 import { prisma, machineAlive } from '../lib/prisma.js'
+import { upsertRacing } from '../lib/upsertRace.js'
 import { publishDeviceMachineListChanged, publishMachineShareChanged } from '../lib/bus.js'
 import { machinesSharedWith, shareMembers, sharedVia } from '../lib/machineAccess.js'
 import { emailDomain, isPublicEmailDomain } from '../lib/publicEmailDomains.js'
@@ -51,10 +53,42 @@ async function policyView(share: MachineShare | null, user: AuthUser) {
   }
 }
 
+/** A concurrent share edit must reread the current grant versions. Reusing a
+ * stale policy after a revocation could otherwise revive an old contribution. */
+async function writePolicy(machineId: string, user: AuthUser, emails: string[], domain: string | null) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(async tx => {
+        const before = await tx.machineShare.findUnique({ where: { machineId } })
+        let after: MachineShare | null = null
+        if (!emails.length && !domain) {
+          await tx.machineShare.deleteMany({ where: { machineId } })
+          await tx.machineShareAdd.deleteMany({ where: { machineId } })
+        } else {
+          const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain,
+            grantVersions: nextMachineShareGrants(before, emails, domain) }
+          after = await tx.machineShare.upsert({ where: { machineId }, create: { machineId, ...data }, update: data })
+        }
+        return { before, after }
+      })
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+      if (attempt >= 4 || (code !== 'P2034' && code !== 'P2002')) throw error
+    }
+  }
+}
+
+/** Whether two policies share the machine with the same people: the same addresses, in any order, and the same domain. */
+function samePolicy(a: MachineShare | null, b: MachineShare | null): boolean {
+  const emails = (s: MachineShare | null) => [...new Set(s?.emails ?? [])].sort().join('\n')
+  return emails(a) === emails(b) && (a?.domain ?? null) === (b?.domain ?? null)
+}
+
 /**
  * Everyone a change of the policy may add the machine to or take it from, their apps and daemons told to
  * read their Machines again: the addresses before and after, everyone at the domain before and after, and
- * whoever had added it. Best effort, like Share's `tellRecipient`: the policy is written already.
+ * whoever had added it. Best effort, like Share's `tellRecipient`: the policy is written already. Called only for a
+ * policy that changed, so one side of it names someone.
  */
 async function tellAffected(machineId: string, ownerId: string, before: MachineShare | null, after: MachineShare | null): Promise<void> {
   try {
@@ -62,12 +96,13 @@ async function tellAffected(machineId: string, ownerId: string, before: MachineS
     const domains = [...new Set([before?.domain, after?.domain].filter((d): d is string => !!d))]
     const where = [...emails.length ? [{ email: { in: emails } }] : [], ...domains.map(d => ({ email: { endsWith: `@${d}` } }))]
     const [users, adds] = await Promise.all([
-      where.length ? prisma.user.findMany({ where: { OR: where }, select: { id: true }, take: TELL_MAX }) : [],
+      prisma.user.findMany({ where: { OR: where }, select: { id: true }, take: TELL_MAX }),
       prisma.machineShareAdd.findMany({ where: { machineId }, select: { userId: true }, take: TELL_MAX }),
     ])
     const ids = new Set([...users.map(u => u.id), ...adds.map(a => a.userId)])
     ids.delete(ownerId)
     await Promise.all([...ids].map(id => publishDeviceMachineListChanged(id, { reason: 'updated' })))
+    logger.info('machine share: told everyone it changed', { machineId, ownerId, told: ids.size })
   } catch (err) {
     logger.warn('machine share: could not tell everyone it changed', { machineId, error: String(err) })
   }
@@ -98,18 +133,14 @@ export async function machineShareRoutes(app: FastifyInstance): Promise<void> {
           return sendError(reply, `Everyone at @${domain ?? 'your domain'} is not offered: it is a public email domain.`, 'PUBLIC_DOMAIN', 400)
         }
       }
-      const before = await prisma.machineShare.findUnique({ where: { machineId } })
-      let after: MachineShare | null = null
-      if (!emails.length && !domain) {
-        // Shared with no one: the row goes, and with it every colleague's add.
-        await prisma.machineShare.deleteMany({ where: { machineId } })
-        await prisma.machineShareAdd.deleteMany({ where: { machineId } })
-      } else {
-        const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain }
-        after = await prisma.machineShare.upsert({ where: { machineId }, create: { machineId, ...data }, update: data })
+      const { before, after } = await writePolicy(machineId, user, emails, domain)
+      // Told only when who it is shared with changed. The owner's daemon writes its policy again every two minutes
+      // while it reads back something else (an address the backend drops above), and each write told every member's
+      // every app to re-read its machines and shares: Diego's app re-read them every 1 to 3 minutes (2026-10-28).
+      if (!samePolicy(before, after)) {
+        await publishMachineShareChanged(machineId).catch(() => 0)
+        await tellAffected(machineId, user.sub, before, after)
       }
-      await publishMachineShareChanged(machineId).catch(() => 0)
-      await tellAffected(machineId, user.sub, before, after)
       sendSuccess(reply, await policyView(after, user))
     })
 
@@ -128,8 +159,8 @@ export async function machineShareRoutes(app: FastifyInstance): Promise<void> {
       const via = share && machine ? sharedVia(share, user.email) : null
       if (!share || !via) return sendError(reply, 'This machine is not shared with you.', 'NOT_SHARED', 404)
       if (via === 'domain') {
-        await prisma.machineShareAdd.upsert({ where: { machineId_userId: { machineId, userId: user.sub } },
-          create: { machineId, userId: user.sub }, update: {} })
+        await upsertRacing(() => prisma.machineShareAdd.upsert({ where: { machineId_userId: { machineId, userId: user.sub } },
+          create: { machineId, userId: user.sub }, update: {} }))
       }
       // The owner's daemon reads who uses the machine again and trusts this account's machines.
       await Promise.all([share.ownerId, user.sub].map(id => publishDeviceMachineListChanged(id, { reason: 'updated' }))).catch(() => [])

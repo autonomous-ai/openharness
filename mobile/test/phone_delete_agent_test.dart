@@ -30,8 +30,20 @@ class _Conn extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     calls.add((type, payload));
+    // Delete Harness: a review, then the delete under it.
+    if (type == 'agent_purge') {
+      return payload['mode'] == 'inspect'
+          ? {'reviewId': 'review-1'}
+          : {'deleted': true};
+    }
     return {};
   }
+
+  List<(String, String)> get purged => [
+    for (final (type, payload) in calls)
+      if (type == 'agent_purge')
+        (payload['agentId'] as String, payload['mode'] as String),
+  ];
 
   List<String> get deleted => [
     for (final (type, payload) in calls)
@@ -43,7 +55,9 @@ class _Conn extends WsConn {
 ///
 /// The second is the case the row's hold exists for — it cannot be opened, so a menu hung off the
 /// tap would never reach it.
-AppNotifier _app(_Conn conn) {
+///
+/// [withTerminal] adds a third, a terminal — the one harness Delete is not offered for.
+AppNotifier _app(_Conn conn, {bool withTerminal = false}) {
   final app = AppNotifier(
     config: AppConfig.dev,
     authSession: AuthSession(),
@@ -63,19 +77,28 @@ AppNotifier _app(_Conn conn) {
     ..nodeOnline = true
     ..connectionStatus = ConnectionStatus.connected
     ..agentLoadStatus = AgentLoadStatus.loaded
-    ..agents = const [
+    ..agents = [
       Agent(
         id: 'a0',
         name: 'Live one',
         engine: 'codex',
+        sessionId: 's0',
         terminalAvailable: true,
+        createdAt: DateTime.utc(2026, 10, 16, 1),
       ),
-      Agent(
+      const Agent(
         id: 'a1',
         name: 'Gone one',
         engine: 'codex',
         terminalAvailable: false,
       ),
+      if (withTerminal)
+        const Agent(
+          id: 't0',
+          name: 'Shell',
+          engine: 'terminal',
+          terminalAvailable: true,
+        ),
     ];
   return app;
 }
@@ -155,5 +178,60 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(conn.deleted, ['a1']);
+  });
+
+  testWidgets('holding an agent offers Delete Harness too, and confirming '
+      'reviews then deletes it, conversation and all', (tester) async {
+    final conn = _Conn();
+    final app = _app(conn);
+    addTearDown(app.dispose);
+    await _pump(tester, app);
+
+    await tester.longPress(find.byType(AgentTile).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete Harness…'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete Live one?'), findsOneWidget);
+    expect(
+      find.textContaining('it cannot be opened again'),
+      findsOneWidget,
+      reason: 'says what Stop does not',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(conn.purged, [('a0', 'inspect'), ('a0', 'delete')]);
+    expect(conn.deleted, isEmpty, reason: 'not a Stop');
+    expect(app.machineStates['m']!.agents.map((agent) => agent.id), ['a1']);
+  });
+
+  testWidgets('Delete Harness backed out of asks nothing', (tester) async {
+    final conn = _Conn();
+    final app = _app(conn);
+    addTearDown(app.dispose);
+    await _pump(tester, app);
+
+    await tester.longPress(find.byType(AgentTile).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete Harness…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(conn.purged, isEmpty);
+    expect(app.machineStates['m']!.agents, hasLength(2));
+  });
+
+  testWidgets('a terminal offers Stop only — it keeps no conversation to '
+      'delete', (tester) async {
+    final conn = _Conn();
+    final app = _app(conn, withTerminal: true);
+    addTearDown(app.dispose);
+    await _pump(tester, app);
+
+    await tester.longPress(find.widgetWithText(AgentTile, 'Shell'));
+    await tester.pumpAndSettle();
+    expect(find.text('Stop Harness…'), findsOneWidget);
+    expect(find.text('Delete Harness…'), findsNothing);
   });
 }

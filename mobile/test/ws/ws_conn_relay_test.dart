@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/core/client_build.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/e2ee/bytes.dart';
 import 'package:harness_mobile/e2ee/keys.dart';
@@ -52,6 +53,7 @@ void main() {
     AccessTokenProvider? tokens,
     RelayCodecFactory? relayCodecs,
     bool noCodecs = false,
+    Future<ClientBuild> Function()? clientBuild,
   }) {
     statuses = [];
     signOuts = [];
@@ -68,6 +70,7 @@ void main() {
       onEvent: events.add,
       onStatus: statuses.add,
       relayCodecs: noCodecs ? null : (relayCodecs ?? codecs()),
+      clientBuild: clientBuild,
     );
     addTearDown(conn.close);
     return conn;
@@ -119,6 +122,67 @@ void main() {
         });
       },
     );
+
+    group('which build dials', () {
+      Future<Map<String, String>> dialled(
+        Future<ClientBuild> Function()? clientBuild,
+      ) async {
+        final conn = newConn(clientBuild: clientBuild);
+        final session = relay.nextSession();
+        unawaited(conn.connect());
+        await session.timeout(const Duration(seconds: 5));
+        return relay.dialledUris.single.queryParameters;
+      }
+
+      test('a release build carries its release', () async {
+        expect(await dialled(() async => const ClientBuild(release: '1.0.9')), {
+          'autonomousEnv': 'test',
+          'client': 'mobile',
+          'release': '1.0.9',
+        });
+      });
+
+      test('a debug or simulator build carries the flag as well', () async {
+        expect(
+          await dialled(
+            () async => const ClientBuild(release: '1.0.9', debug: true),
+          ),
+          {
+            'autonomousEnv': 'test',
+            'client': 'mobile',
+            'release': '1.0.9',
+            'debug': '1',
+          },
+        );
+      });
+
+      test(
+        'a build with no release says only that it is a debug one',
+        () async {
+          expect(await dialled(() async => const ClientBuild(debug: true)), {
+            'autonomousEnv': 'test',
+            'client': 'mobile',
+            'debug': '1',
+          });
+        },
+      );
+
+      test(
+        'a build that cannot say, or is slow to, still dials without it',
+        () async {
+          final unchanged = {'autonomousEnv': 'test', 'client': 'mobile'};
+          expect(
+            await dialled(() async => throw StateError('no version')),
+            unchanged,
+          );
+          relay.dialledUris.clear();
+          expect(
+            await dialled(() => Completer<ClientBuild>().future),
+            unchanged,
+          );
+        },
+      );
+    });
 
     test(
       'what was asked before it was ready goes once it is, sealed',
@@ -395,12 +459,14 @@ void main() {
         conn.request(type, payload: payload).then((_) {}, onError: (_) {}),
       );
       ask('agent_create', {'engine': 'claude'});
+      ask('agent_close', {'agentId': 'a', 'mode': 'now'});
       ask('agents_list', {'scope': 'all'});
       conn.sendRaw('message', {'content': 'hi', 'agentId': 'a'});
       conn.sendRaw('app_presence', {'focused': true});
       await eventually(
         () => [
           'agent_create',
+          'agent_close',
           'agents_list',
           'message',
           'app_presence',
@@ -412,6 +478,7 @@ void main() {
         '__e2e',
       ], reason: 'the relay sees no more than before');
       expect(link.opened('agent_create').single['usageSurface'], 'phone');
+      expect(link.opened('agent_close').single['usageSurface'], 'phone');
       expect(link.opened('message').single['usageSurface'], 'phone');
       expect(
         link.opened('agents_list').single.containsKey('usageSurface'),

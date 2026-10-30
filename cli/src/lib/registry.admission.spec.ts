@@ -463,7 +463,7 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
     settlePane: () => new Promise((_resolve, reject) => { fail = reject }),
     restartJobs: { cancel: vi.fn() } as unknown as import('./restartAgent.js').AgentRestartCoordinator,
     stoppedAgents: { save: never } as unknown as import('./stoppedAgents.js').StoppedAgentStore,
-    tmuxBackend: { kill: never }, agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, trigger: never },
+    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, trigger: never },
     forgetSession: never, markDeleted: never, clearDeleted: never, stopNative: never,
   })
   const f = await httpFixture(id => stopJobs.has(id))

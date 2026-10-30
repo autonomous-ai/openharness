@@ -19,8 +19,10 @@ describe("/download", () => {
     render(<Page />);
 
     expect(screen.getByRole("heading", { name: "Download Harness" })).toBeInTheDocument();
-    // Downloads stay public; entering the separate Flutter workspace is an ordinary link.
-    expect(screen.getByRole("link", { name: "[ Open web app ]" })).toHaveAttribute("href", "/web");
+    // Downloads stay public; entering the separate Flutter workspace, the site's front door, is an
+    // ordinary link.
+    expect(screen.getByRole("link", { name: "[ Open web app ]" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Harness" })).toHaveAttribute("href", "/");
     expect(screen.queryByRole("link", { name: /sign in/i })).not.toBeInTheDocument();
   });
 
@@ -37,6 +39,7 @@ describe("/download", () => {
       "href",
       "/desktop/download/linux-arm64",
     );
+    expect(screen.getByRole("link", { name: /Windows/ })).toHaveAttribute("href", "/desktop/download/windows");
     // No install script for the desktop app any more — direct links only. (The CLI section below
     // still has its own `cli/install.sh` script, which is intentional and covered separately.)
     expect(document.body).not.toHaveTextContent("desktop/install.sh");

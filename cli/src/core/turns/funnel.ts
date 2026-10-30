@@ -17,6 +17,7 @@ import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
+import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
 import { preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -24,7 +25,7 @@ import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { promptLine } from '../../lib/activitySummary.js'
-import type { TurnActivity } from '../../lib/turnActivity.js'
+import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
 type EmitOptions = { resumed?: boolean; replay?: boolean }
@@ -58,8 +59,16 @@ export interface FunnelDeps {
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
+  /** On-demand, bounded native prompt/answer observers. No consumer is awaited. */
+  nativeTurns?: { ingest(agentId: string, events: readonly Events[number][], replay: boolean): void }
   /** How a consumer outside the core is called ([outsideConsumers]). */
   outside?: OutsideConsumers
+  /** The agent's engine is working now: a live turn start or its progress, never a re-read (the mover's quiet clock,
+   *  lib/hostMove/quiet.ts). */
+  working?: (agentId: string) => void
+  /** Each live turn's start and end, never a re-read: the short-turn guard holds automatic input to an agent that
+   *  loops (shortTurnGuard.ts). */
+  shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -100,7 +109,7 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(), working, shortTurns,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -110,6 +119,9 @@ export function funnelFor({
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
+      if (!replay && isProgressEvent(event.type)) working?.(agentId)
+      if (!replay && event.type === 'turn_started') shortTurns?.started(sessionId, agentId)
+      else if (!replay && event.type === 'turn_ended') shortTurns?.ended(sessionId)
       const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`
@@ -173,6 +185,7 @@ export function funnelFor({
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
       }
     }
+    if (nativeTurns) outside('native-turns', () => nativeTurns.ingest(agentIdFor(sessionId), events, !!(opts?.resumed || opts?.replay)))
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))

@@ -1,0 +1,271 @@
+===== C:\Users\hxe2e\.claude\settings.json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe",
+            "args": [
+              "C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs",
+              "--port",
+              "18474",
+              "--data-dir",
+              "C:\\Users\\hxe2e\\.harness\\cli\\data",
+              "--claude-projects-dir",
+              "C:\\Users\\hxe2e\\.claude\\projects",
+              "--codex-home",
+              "C:\\Users\\hxe2e\\.codex",
+              "--grok-home",
+              "C:\\Users\\hxe2e\\.grok",
+              "--cursor-home",
+              "C:\\Users\\hxe2e\\.cursor",
+              "--hermes-home",
+              "C:\\Users\\hxe2e\\.hermes",
+              "--commandcode-home",
+              "C:\\Users\\hxe2e\\.commandcode",
+              "--devin-home",
+              "C:\\Users\\hxe2e\\.local\\share\\devin\\cli",
+              "--agy-home",
+              "C:\\Users\\hxe2e\\.gemini\\antigravity-cli",
+              "--copilot-home",
+              "C:\\Users\\hxe2e\\.copilot"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe",
+            "args": [
+              "C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs",
+              "--port",
+              "18474",
+              "--data-dir",
+              "C:\\Users\\hxe2e\\.harness\\cli\\data",
+              "--claude-projects-dir",
+              "C:\\Users\\hxe2e\\.claude\\projects",
+              "--codex-home",
+              "C:\\Users\\hxe2e\\.codex",
+              "--grok-home",
+              "C:\\Users\\hxe2e\\.grok",
+              "--cursor-home",
+              "C:\\Users\\hxe2e\\.cursor",
+              "--hermes-home",
+              "C:\\Users\\hxe2e\\.hermes",
+              "--commandcode-home",
+              "C:\\Users\\hxe2e\\.commandcode",
+              "--devin-home",
+              "C:\\Users\\hxe2e\\.local\\share\\devin\\cli",
+              "--agy-home",
+              "C:\\Users\\hxe2e\\.gemini\\antigravity-cli",
+              "--copilot-home",
+              "C:\\Users\\hxe2e\\.copilot"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe",
+            "args": [
+              "C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs",
+              "--port",
+              "18474",
+              "--data-dir",
+              "C:\\Users\\hxe2e\\.harness\\cli\\data",
+              "--claude-projects-dir",
+              "C:\\Users\\hxe2e\\.claude\\projects",
+              "--codex-home",
+              "C:\\Users\\hxe2e\\.codex",
+              "--grok-home",
+              "C:\\Users\\hxe2e\\.grok",
+              "--cursor-home",
+              "C:\\Users\\hxe2e\\.cursor",
+              "--hermes-home",
+              "C:\\Users\\hxe2e\\.hermes",
+              "--commandcode-home",
+              "C:\\Users\\hxe2e\\.commandcode",
+              "--devin-home",
+              "C:\\Users\\hxe2e\\.local\\share\\devin\\cli",
+              "--agy-home",
+              "C:\\Users\\hxe2e\\.gemini\\antigravity-cli",
+              "--copilot-home",
+              "C:\\Users\\hxe2e\\.copilot"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe",
+            "args": [
+              "C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs",
+              "--port",
+              "18474",
+              "--data-dir",
+              "C:\\Users\\hxe2e\\.harness\\cli\\data",
+              "--claude-projects-dir",
+              "C:\\Users\\hxe2e\\.claude\\projects",
+              "--codex-home",
+              "C:\\Users\\hxe2e\\.codex",
+              "--grok-home",
+              "C:\\Users\\hxe2e\\.grok",
+              "--cursor-home",
+              "C:\\Users\\hxe2e\\.cursor",
+              "--hermes-home",
+              "C:\\Users\\hxe2e\\.hermes",
+              "--commandcode-home",
+              "C:\\Users\\hxe2e\\.commandcode",
+              "--devin-home",
+              "C:\\Users\\hxe2e\\.local\\share\\devin\\cli",
+              "--agy-home",
+              "C:\\Users\\hxe2e\\.gemini\\antigravity-cli",
+              "--copilot-home",
+              "C:\\Users\\hxe2e\\.copilot"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe",
+            "args": [
+              "C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs",
+              "--port",
+              "18474",
+              "--data-dir",
+              "C:\\Users\\hxe2e\\.harness\\cli\\data",
+              "--claude-projects-dir",
+              "C:\\Users\\hxe2e\\.claude\\projects",
+              "--codex-home",
+              "C:\\Users\\hxe2e\\.codex",
+              "--grok-home",
+              "C:\\Users\\hxe2e\\.grok",
+              "--cursor-home",
+              "C:\\Users\\hxe2e\\.cursor",
+              "--hermes-home",
+              "C:\\Users\\hxe2e\\.hermes",
+              "--commandcode-home",
+              "C:\\Users\\hxe2e\\.commandcode",
+              "--devin-home",
+              "C:\\Users\\hxe2e\\.local\\share\\devin\\cli",
+              "--agy-home",
+              "C:\\Users\\hxe2e\\.gemini\\antigravity-cli",
+              "--copilot-home",
+              "C:\\Users\\hxe2e\\.copilot"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "autoUpdatesChannel": "latest"
+}
+
+===== C:\Users\hxe2e\.codex\hooks.json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& 'C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe' 'C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs' --port 18474 --data-dir 'C:\\Users\\hxe2e\\.harness\\cli\\data' --claude-projects-dir 'C:\\Users\\hxe2e\\.claude\\projects' --codex-home 'C:\\Users\\hxe2e\\.codex' --grok-home 'C:\\Users\\hxe2e\\.grok' --cursor-home 'C:\\Users\\hxe2e\\.cursor' --hermes-home 'C:\\Users\\hxe2e\\.hermes' --commandcode-home 'C:\\Users\\hxe2e\\.commandcode' --devin-home 'C:\\Users\\hxe2e\\.local\\share\\devin\\cli' --agy-home 'C:\\Users\\hxe2e\\.gemini\\antigravity-cli' --copilot-home 'C:\\Users\\hxe2e\\.copilot' --engine codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& 'C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe' 'C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs' --port 18474 --data-dir 'C:\\Users\\hxe2e\\.harness\\cli\\data' --claude-projects-dir 'C:\\Users\\hxe2e\\.claude\\projects' --codex-home 'C:\\Users\\hxe2e\\.codex' --grok-home 'C:\\Users\\hxe2e\\.grok' --cursor-home 'C:\\Users\\hxe2e\\.cursor' --hermes-home 'C:\\Users\\hxe2e\\.hermes' --commandcode-home 'C:\\Users\\hxe2e\\.commandcode' --devin-home 'C:\\Users\\hxe2e\\.local\\share\\devin\\cli' --agy-home 'C:\\Users\\hxe2e\\.gemini\\antigravity-cli' --copilot-home 'C:\\Users\\hxe2e\\.copilot' --engine codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+
+===== C:\Users\hxe2e\.codex\config.toml
+[hooks.state."C:\\Users\\hxe2e\\.codex\\hooks.json:session_start:0:0"]
+trusted_hash = "sha256:b225acf685dfb2f40d0fbb524d04510578fa8bff333a6b04785807c8f0233b96"
+
+[hooks.state."C:\\Users\\hxe2e\\.codex\\hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:f4fdc88da2599d4830bac4c19ab3becb1f446c5cde394aafc303d66fdfe92897"
+
+===== C:\Users\hxe2e\.codex\rules\harness.rules
+(absent)
+===== C:\Users\hxe2e\.commandcode\settings.json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe\" \"C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs\" --port 18474 --data-dir \"C:\\Users\\hxe2e\\.harness\\cli\\data\" --claude-projects-dir \"C:\\Users\\hxe2e\\.claude\\projects\" --codex-home \"C:\\Users\\hxe2e\\.codex\" --grok-home \"C:\\Users\\hxe2e\\.grok\" --cursor-home \"C:\\Users\\hxe2e\\.cursor\" --hermes-home \"C:\\Users\\hxe2e\\.hermes\" --commandcode-home \"C:\\Users\\hxe2e\\.commandcode\" --devin-home \"C:\\Users\\hxe2e\\.local\\share\\devin\\cli\" --agy-home \"C:\\Users\\hxe2e\\.gemini\\antigravity-cli\" --copilot-home \"C:\\Users\\hxe2e\\.copilot\" --engine commandcode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe\" \"C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs\" --port 18474 --data-dir \"C:\\Users\\hxe2e\\.harness\\cli\\data\" --claude-projects-dir \"C:\\Users\\hxe2e\\.claude\\projects\" --codex-home \"C:\\Users\\hxe2e\\.codex\" --grok-home \"C:\\Users\\hxe2e\\.grok\" --cursor-home \"C:\\Users\\hxe2e\\.cursor\" --hermes-home \"C:\\Users\\hxe2e\\.hermes\" --commandcode-home \"C:\\Users\\hxe2e\\.commandcode\" --devin-home \"C:\\Users\\hxe2e\\.local\\share\\devin\\cli\" --agy-home \"C:\\Users\\hxe2e\\.gemini\\antigravity-cli\" --copilot-home \"C:\\Users\\hxe2e\\.copilot\" --engine commandcode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Users\\hxe2e\\.harness\\runtime\\node-v22.23.2-win32-arm64\\node.exe\" \"C:\\Users\\hxe2e\\.harness\\cli\\notify.mjs\" --port 18474 --data-dir \"C:\\Users\\hxe2e\\.harness\\cli\\data\" --claude-projects-dir \"C:\\Users\\hxe2e\\.claude\\projects\" --codex-home \"C:\\Users\\hxe2e\\.codex\" --grok-home \"C:\\Users\\hxe2e\\.grok\" --cursor-home \"C:\\Users\\hxe2e\\.cursor\" --hermes-home \"C:\\Users\\hxe2e\\.hermes\" --commandcode-home \"C:\\Users\\hxe2e\\.commandcode\" --devin-home \"C:\\Users\\hxe2e\\.local\\share\\devin\\cli\" --agy-home \"C:\\Users\\hxe2e\\.gemini\\antigravity-cli\" --copilot-home \"C:\\Users\\hxe2e\\.copilot\" --engine commandcode",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+
+===== plugin and hook files Harness wrote outside ~\.harness
+C:\Users\hxe2e\.config\amp\plugins\launcher-register.ts  10042 bytes
+C:\Users\hxe2e\.config\kilo\plugin\launcher-register.js  2052 bytes
+C:\Users\hxe2e\.config\opencode\plugin\launcher-register.js  2060 bytes
+C:\Users\hxe2e\.config\opencode\plugins\launcher-register\tui.js  2384 bytes
+C:\Users\hxe2e\.pi\agent\extensions\launcher-register.ts  2646 bytes
+C:\Users\hxe2e\.copilot\hooks\harness.json  3076 bytes

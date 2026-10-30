@@ -1,0 +1,22 @@
+# s6 trust probe, run as hxe2e2 against hxe2e's daemon (08:55:57)
+read C:\Users\hxe2e\.harness\cli\data\daemon-18474.json: refused EPERM
+read C:\Users\hxe2e\.harness\cli\data\daemon-token: refused EPERM
+read C:\Users\hxe2e\.harness\cli\data\hook-credential: refused EPERM
+harness pipes this user can list: harness-pty-bddfac6e0a719aeb-58a45a4fd40f7927-p2 harness-claim-6ae5b7737689b2dc68c057a2b035b0c5 harness-41b22efa2e2a73709e28e2f681e3b0f0 harness-claim-3a199a245e43a857fcdd0d1d3a32a3ff harness-pty-7e6ffe4769980510-b095a9d3424689e9-p2 harness-456c1ee9308935df5bb6cedc009165df
+harness-pty-bddfac6e0a719aeb-58a45a4fd40f7927-p2 POST /api/auth/handoff, no proof: error EPERM
+harness-pty-bddfac6e0a719aeb-58a45a4fd40f7927-p2 POST /api/auth/handoff, forged proof: error EPERM
+harness-claim-6ae5b7737689b2dc68c057a2b035b0c5 POST /api/auth/handoff, no proof: error EPERM
+harness-claim-6ae5b7737689b2dc68c057a2b035b0c5 POST /api/auth/handoff, forged proof: error EPERM
+harness-41b22efa2e2a73709e28e2f681e3b0f0 POST /api/auth/handoff, no proof: error EPERM
+harness-41b22efa2e2a73709e28e2f681e3b0f0 POST /api/auth/handoff, forged proof: error EPERM
+harness-claim-3a199a245e43a857fcdd0d1d3a32a3ff POST /api/auth/handoff, no proof: error ECONNRESET
+harness-claim-3a199a245e43a857fcdd0d1d3a32a3ff POST /api/auth/handoff, forged proof: error EPIPE
+harness-pty-7e6ffe4769980510-b095a9d3424689e9-p2 POST /api/auth/handoff, no proof: error HPE_INVALID_CONSTANT
+harness-pty-7e6ffe4769980510-b095a9d3424689e9-p2 POST /api/auth/handoff, forged proof: error HPE_INVALID_CONSTANT
+harness-456c1ee9308935df5bb6cedc009165df POST /api/auth/handoff, no proof: 401 {"error":"PIPE_AUTH_REQUIRED"}
+harness-456c1ee9308935df5bb6cedc009165df POST /api/auth/handoff, forged proof: 401 {"error":"PIPE_AUTH_REQUIRED"}
+loopback POST /api/auth/handoff: 403 {"error":"FORBIDDEN"}
+## hxe2e's own status, through its pipe
+   status     ● running · backend connected
+   agents     4 available
+   pid        6100

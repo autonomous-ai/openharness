@@ -23,6 +23,7 @@ import 'package:xterm/src/ui/terminal_text_style.dart';
 import 'package:xterm/src/ui/terminal_theme.dart';
 import 'package:xterm/src/ui/themes.dart';
 import 'dart:async';
+import 'dart:math' show max, min;
 
 import 'package:xterm/src/utils/input_trace.dart';
 import 'package:xterm/src/utils/unicode_v11.dart';
@@ -286,8 +287,23 @@ class TerminalViewState extends State<TerminalView> {
 
   // ── AUTONOMOUS PATCH: local echo — see [TerminalView.predictsEcho] ──────────
 
-  /// What is drawn ahead of the echo: typed, sent, not yet echoed.
+  /// What is drawn ahead of the echo: [_pending], once the cursor rests at the
+  /// input point; nothing otherwise.
   String _predicted = '';
+
+  /// Every key typed and sent since the last one seen echoed, drawn or not. One
+  /// typed while the input point was not known (just after Enter or a delete)
+  /// waits here, and is drawn the moment the first echo shows where it lands —
+  /// keys typed faster than the echo came back used to be lost to prediction
+  /// one after another (16 of 52 misses, iPhone 14, 2026-10-19).
+  String _pending = '';
+
+  /// Deletes sent and not yet echoed: while set, [_echoFrom] waits for the
+  /// cursor to step back along its line, which is the input point again.
+  int _pendingDeletes = 0;
+
+  /// The wait for a key's echo was extended once already — see [_echoNeverCame].
+  bool _waitedLonger = false;
 
   /// Where the cursor was, and its line's [BufferLine.paintVersion], when the
   /// oldest key not yet echoed went out. Null while nothing is awaited.
@@ -307,6 +323,10 @@ class TerminalViewState extends State<TerminalView> {
 
   /// How long a key's echo may take before it is taken not to be coming.
   static const _echoWait = Duration(milliseconds: 400);
+
+  /// How much longer an echo is waited for when nothing was drawn ahead of it —
+  /// see [_echoNeverCame].
+  static const _lateEchoWait = Duration(milliseconds: 1600);
 
   late TerminalController _controller;
 
@@ -479,7 +499,7 @@ class TerminalViewState extends State<TerminalView> {
         onInsert: _onInsert,
         onDelete: (count) {
           inputTrace(() => 'view delete ×$count');
-          _restartPrediction();
+          _probeDelete(count);
           _scrollToBottom();
           for (var index = 0; index < count; index++) {
             widget.terminal.keyInput(TerminalKey.backspace);
@@ -701,45 +721,104 @@ class TerminalViewState extends State<TerminalView> {
       _dropPrediction();
       return;
     }
+    if (_pendingDeletes > 0) {
+      // A word retyped right after its deletes (Telex turns `duoc` into
+      // `được` that way): where its echo lands depends on the deletes', which
+      // have not come back. Nothing of it is drawn, and it is no probe either.
+      _restartPrediction();
+      inputTrace(() => 'echo not predicted (a word rewritten)');
+      return;
+    }
     final now = _cursorMark();
     _echoFrom ??= now;
-    final at = _inputPoint;
-    if (_echoes &&
-        at != null &&
-        at.x == now.x &&
-        at.y == now.y &&
-        now.x + _cells(_predicted + text) <= widget.terminal.viewWidth) {
-      _setPredicted(_predicted + text);
-      inputTrace(() => 'echo predicted "${traceText(_predicted)}"');
-    } else {
+    _pending += text;
+    _drawPending(now);
+    if (_predicted.isEmpty) {
+      final at = _inputPoint;
       inputTrace(
         () => 'echo not predicted (seen echoing=$_echoes,'
             ' at input point=${at != null && at.x == now.x && at.y == now.y})',
       );
     }
-    _echoTimeout?.cancel();
-    _echoTimeout = Timer(_echoWait, _echoNeverCame);
+    // ⚠️ From the oldest key not yet echoed, not restarted by each new one: restarted, a prompt
+    // that never echoes was never found out while somebody kept typing into it, and prediction
+    // stayed on over the whole password (review, 2026-10-19). An echo arriving restarts it.
+    _echoTimeout ??= Timer(_echoWait, _echoNeverCame);
+  }
+
+  /// Draws all of [_pending] at the cursor — only with the cursor resting at the
+  /// input point, a terminal seen echoing, and room left on the line.
+  void _drawPending(({int x, int y, int version}) now) {
+    final at = _inputPoint;
+    if (_pending.isNotEmpty &&
+        _echoes &&
+        at != null &&
+        at.x == now.x &&
+        at.y == now.y &&
+        now.x + _cells(_pending) <= widget.terminal.viewWidth) {
+      _setPredicted(_pending);
+      inputTrace(() => 'echo predicted "${traceText(_predicted)}"');
+    } else if (_predicted.isNotEmpty) {
+      _setPredicted('');
+    }
   }
 
   /// The terminal changed: an echo arriving takes the keys it drew off the
-  /// prediction; anything else at the cursor takes the prediction down.
+  /// prediction, and shows where the rest lands; deletes echoed show where the
+  /// input point now is; anything else at the cursor takes the prediction down.
   void _followEcho() {
     final from = _echoFrom;
     if (from == null) return;
     final now = _cursorMark();
     // Nothing at the cursor yet — a blink, a redraw elsewhere on the screen.
     if (now == from) return;
+    if (_pendingDeletes > 0) {
+      if (now.y == from.y && now.x < from.x) {
+        // The deletes are echoed: where the cursor stepped back to is the input
+        // point, and the next key is drawn at once rather than waiting for its
+        // own echo (12 of 52 misses came right after a delete, 2026-10-19).
+        // Counted in cells, as [_probeDelete] measured them.
+        _pendingDeletes = max(0, _pendingDeletes - (from.x - now.x));
+        _inputPoint = (x: now.x, y: now.y);
+        inputTrace(() => 'echo after a delete: input point back at ${now.x}');
+        if (_pendingDeletes > 0) {
+          _echoFrom = now;
+        } else {
+          _dropPrediction();
+        }
+        return;
+      }
+      _dropPrediction();
+      return;
+    }
     if (now.y == from.y && now.x > from.x) {
+      // ⚠️ **An echo is what was typed, drawn back.** The cursor moving on is not
+      // enough: a prompt that masks what is typed (`*` for each key: sudo with
+      // pwfeedback, `gh auth login`'s token) moves it just the same, and taking
+      // that for an echo drew the rest of the password ahead of it (review,
+      // 2026-10-19). Anything else at the cursor turns prediction off until a key
+      // IS seen echoed. A password starting with the very character its prompt
+      // masks with is the one case this cannot tell apart.
+      if (!_shows(from, now.x, _pending)) {
+        inputTrace(() => 'echo not what was typed — off');
+        _echoes = false;
+        _restartPrediction();
+        return;
+      }
       _echoes = true;
       _inputPoint = (x: now.x, y: now.y);
-      final rest = _afterCells(_predicted, now.x - from.x);
-      _setPredicted(rest);
-      if (rest.isEmpty) {
-        _echoFrom = null;
-        _echoTimeout?.cancel();
-        _echoTimeout = null;
+      _pending = _afterCells(_pending, now.x - from.x);
+      if (_pending.isEmpty) {
+        _dropPrediction();
       } else {
         _echoFrom = now;
+        _drawPending(now);
+        // The next key's echo gets a wait of its own, from now: what is drawn
+        // must not outstay an echo that does not come by the longer wait a slow
+        // first echo was given.
+        _waitedLonger = false;
+        _echoTimeout?.cancel();
+        _echoTimeout = Timer(_echoWait, _echoNeverCame);
       }
       return;
     }
@@ -748,14 +827,80 @@ class TerminalViewState extends State<TerminalView> {
     _dropPrediction();
   }
 
-  /// A key's echo did not come: not a terminal that echoes what is typed into
-  /// it right now — a password prompt, or a program not reading.
+  /// A key's echo did not come in [_echoWait].
+  ///
+  /// A guess drawn on screen whose echo never came is a terminal not echoing
+  /// what is typed right now — a password prompt — and turns prediction off
+  /// until a key is seen echoed again. That is what this wait is for, so it
+  /// stays short. With nothing drawn ahead of it the echo costs no safety, and a
+  /// program can be slow to echo the first key after Enter (Claude Code
+  /// starting a turn: 9 of 19 such misses came right after Enter, 2026-10-19):
+  /// it is waited for [_lateEchoWait] longer, prediction staying on, so that the
+  /// echo, when it comes, still shows where the next keys land. Deletes whose
+  /// echo never came — nothing to delete — just stop being waited for.
   void _echoNeverCame() {
-    inputTrace(
-        () => 'echo never came within ${_echoWait.inMilliseconds}ms — off');
     _echoTimeout = null;
+    if (_pendingDeletes > 0) {
+      _dropPrediction();
+      return;
+    }
+    if (_predicted.isEmpty && _echoes && !_waitedLonger && _echoFrom != null) {
+      _waitedLonger = true;
+      inputTrace(() =>
+          'echo slow, nothing drawn — waiting ${_lateEchoWait.inMilliseconds}ms more');
+      _echoTimeout = Timer(_lateEchoWait, _echoNeverCame);
+      return;
+    }
+    inputTrace(() => 'echo never came — off');
     _echoes = false;
     _dropPrediction();
+  }
+
+  /// AUTONOMOUS PATCH: [count] deletes just went out. What was drawn goes, and
+  /// so does the input point — but the deletes are a probe of their own: once
+  /// their echo steps the cursor back along its line, the input point is where
+  /// it rests ([_followEcho]).
+  void _probeDelete(int count) {
+    // Deletes sent before the earlier ones were echoed (a held backspace) step
+    // on from where those leave the cursor; started over, the probe ended at
+    // the first echo, with the cursor still to step back.
+    final awaited = _pendingDeletes;
+    final from = _echoFrom;
+    _restartPrediction();
+    if (!widget.predictsEcho || !_echoes || count <= 0) return;
+    if (awaited > 0 && from != null) {
+      _pendingDeletes = awaited + _cellsBefore(from.x - awaited, count);
+      _echoFrom = from;
+    } else {
+      _echoFrom = _cursorMark();
+      _pendingDeletes = _cellsBefore(_echoFrom!.x, count);
+    }
+    _echoTimeout = Timer(_echoWait, _echoNeverCame);
+  }
+
+  /// How far back [count] deletes step the cursor from column [fromX]: the
+  /// cells of the last [count] characters before it on the cursor's line, two
+  /// for a wide one. Counted as one each, a wide character's delete ended the
+  /// probe a delete early, and the next key was drawn a cell off (review,
+  /// 2026-10-19).
+  int _cellsBefore(int fromX, int count) {
+    final buffer = widget.terminal.buffer;
+    final y = buffer.absoluteCursorY;
+    if (y < 0 || y >= buffer.lines.length) return count;
+    final line = buffer.lines[y];
+    var x = min(max(fromX, 0), line.length);
+    var cells = 0;
+    var deletes = 0;
+    for (; deletes < count && x > 0; deletes++) {
+      final wide =
+          x >= 2 && line.getCodePoint(x - 1) == 0 && line.getWidth(x - 2) == 2;
+      final step = wide ? 2 : 1;
+      x -= step;
+      cells += step;
+    }
+    // Deletes past the start of the line step nothing back on it; they are
+    // still waited for, so that nothing is drawn before their echo has settled.
+    return cells + (count - deletes);
   }
 
   /// A key that moves the cursor or the line rather than adding to it — a
@@ -773,6 +918,9 @@ class TerminalViewState extends State<TerminalView> {
     _echoTimeout?.cancel();
     _echoTimeout = null;
     _echoFrom = null;
+    _pending = '';
+    _pendingDeletes = 0;
+    _waitedLonger = false;
     if (_predicted.isNotEmpty) _setPredicted('');
   }
 
@@ -802,6 +950,25 @@ class TerminalViewState extends State<TerminalView> {
     return true;
   }
 
+  /// Whether the cells from [from] up to [toX] on its line show [typed] — as
+  /// much of it as fills them, and nothing else. A cell never written stands for
+  /// a typed space: a TUI may move the cursor past a blank instead of printing it.
+  bool _shows(({int x, int y, int version}) from, int toX, String typed) {
+    final lines = widget.terminal.buffer.lines;
+    if (from.y < 0 || from.y >= lines.length) return false;
+    final line = lines[from.y];
+    var x = from.x;
+    for (final rune in typed.runes) {
+      if (x >= toX) break;
+      if (x >= line.length) return false;
+      final cell = line.getCodePoint(x);
+      if (cell != rune && !(rune == 0x20 && cell == 0)) return false;
+      final width = unicodeV11.wcwidth(rune);
+      x += width > 0 ? width : 1;
+    }
+    return x == toX;
+  }
+
   static int _cells(String text) {
     var cells = 0;
     for (final rune in text.runes) {
@@ -826,6 +993,10 @@ class TerminalViewState extends State<TerminalView> {
 
   @visibleForTesting
   String? get debugComposingText => _composingText;
+
+  /// AUTONOMOUS PATCH: what is drawn at the cursor ahead of its echo.
+  @visibleForTesting
+  String get debugPredictedText => _predicted;
 
   /// Live input-client composition, independent of its visual preview (which
   /// may already match echoed terminal cells). Workspace shortcuts must let

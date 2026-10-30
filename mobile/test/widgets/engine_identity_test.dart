@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/theme/app_theme.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
@@ -41,6 +42,25 @@ void main() {
       expect(nothing.id, 'unknown');
       expect(nothing.label, 'Agent');
       expect(engineIdentity('').label, 'Agent');
+    });
+
+    test('a terminal is the shell: named and marked, yet never probed or '
+        'counted as a coding engine', () {
+      final terminal = engineIdentity('terminal');
+      expect(terminal.id, kTerminalEngine);
+      expect(terminal.label, 'Terminal');
+      expect(terminal.color, const Color(0xffa8b0b8));
+      expect(identical(terminal, terminalIdentity), isTrue);
+      expect(isTerminalEngine('terminal'), isTrue);
+      expect(isTerminalEngine('claude'), isFalse);
+      expect(isTerminalEngine(null), isFalse);
+      // `allEngines` is what a machine is asked about (`engines_probe`): every machine has a
+      // shell, so asking whether this one is installed would only ever be a wasted question.
+      expect(
+        allEngines.map((engine) => engine.id),
+        isNot(contains('terminal')),
+      );
+      expect(isCodeEngine('terminal'), isFalse);
     });
 
     test('the New agent picker offers every engine, each with a mark', () {
@@ -121,6 +141,29 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('engine-fallback-amp')), findsOneWidget);
       expect(find.text('A'), findsOneWidget);
+    });
+
+    testWidgets('a terminal is the prompt glyph: its steel on a dark palette, '
+        'the secondary ink on a light one', (tester) async {
+      final before = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = before);
+
+      grid.AppTheme.brightness.value = Brightness.dark;
+      await pump(tester, const EngineMark(engine: 'terminal', size: 18));
+      var icon = tester.widget<Icon>(
+        find.byKey(const ValueKey('engine-icon-terminal')),
+      );
+      expect(icon.size, 18);
+      expect(icon.color, const Color(0xffa8b0b8));
+      // Not the initial an engine this app does not know is drawn as.
+      expect(find.text('T'), findsNothing);
+
+      grid.AppTheme.brightness.value = Brightness.light;
+      await pump(tester, const EngineMark(engine: 'terminal', size: 18));
+      icon = tester.widget<Icon>(
+        find.byKey(const ValueKey('engine-icon-terminal')),
+      );
+      expect(icon.color, AppColors.mutedStrong);
     });
 
     testWidgets('a disabled mark is dimmed', (tester) async {

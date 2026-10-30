@@ -4,7 +4,7 @@ import { createServer as createNetServer } from 'net'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
@@ -53,6 +53,8 @@ interface RunHookOpts {
   nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
     | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
   engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok'
+  /** Run as on Windows: the process table comes from `harness-pty ps --json` (a fake), and `ps` fails. */
+  windowsProcessTable?: boolean
   env?: Record<string, string>
   dataDir?: string
   claudeProjectsDir?: string
@@ -73,6 +75,7 @@ interface RunHookOpts {
 function runHook(opts: RunHookOpts): Promise<string> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env }
+    delete env.HARNESS_PANE
     // The hook abandons its optional work (including the offline registry fallback) when its 4.5s
     // wall-clock budget runs out. Under a full parallel run that budget is spent on host load, not on
     // the hook, and the assertion below then reads a registry nobody wrote — measured as roughly one
@@ -107,10 +110,24 @@ function runHook(opts: RunHookOpts): Promise<string> {
       const executable = opts.processExecutable ?? (opts.processEngine === 'cursor' ? 'agent' : opts.processEngine)
       const processArgs = opts.processArgs ?? executable
       const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
-      writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+      if (opts.windowsProcessTable) {
+        // The same three processes as the `ps` below, as the host lists them, with one it could not open.
+        const table = { rows: [
+          { pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] },
+          { pid: 7000, parentPid: 1, executable: 'pwsh.exe', startMarker: 'w:133000000000000000', args: 'pwsh.exe', nativeArgv: ['pwsh.exe'] },
+          { pid: 7001, parentPid: 7000, executable, startMarker: 'w:133000000000000001', args: processArgs, nativeArgv: processArgs.split(' ') },
+          { pid: process.pid, parentPid: 7001, executable: 'node.exe', startMarker: 'w:133000000000000002', args: 'hook-parent', nativeArgv: ['hook-parent'] },
+        ] }
+        writeFileSync(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`, { mode: 0o755 })
+        env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+        writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+      } else {
+        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+      }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
 ${opts.nativeProcess ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : ''}
+${opts.windowsProcessTable ? "Object.defineProperty(process, 'platform', { value: 'win32' });" : ''}
 const original = fs.readFileSync, open = fs.openSync, close = fs.closeSync, sync = fs.fsyncSync;
 const opened = new Map(), fault = ${JSON.stringify(opts.nativeProcess ?? '')}; let reads = 0, replaced = false;
 fs.openSync = (path, ...args) => { const fd = open(path, ...args); opened.set(fd, String(path)); return fd; };
@@ -649,6 +666,54 @@ describe('hook notify terminal scope', () => {
     expect(statSync(dataDir).mode & 0o777).toBe(0o700)
     expect(statSync(join(dataDir, 'registry.json')).mode & 0o777).toBe(0o600)
     expect(statSync(join(dataDir, 'registry-boot')).mode & 0o777).toBe(0o600)
+  })
+
+  it('reads the process table from harness-pty on Windows, and registers offline with its identity', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-windows-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-w.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-w', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{
+      sessionId: 'session-w',
+      engine: 'claude',
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'w:133000000000000001' },
+    }])
+  })
+
+  it('knows Claude Code\'s native exe on Windows by its name without the extension', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-windows-exe-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-x.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+
+    // The row harness-pty lists for Claude Code's native install (Windows 11, 2026-10-15).
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir,
+      processExecutable: 'claude.exe', processArgs: 'C:\\Users\\admin\\.local\\bin\\claude.exe',
+      input: { hook_event_name: 'SessionStart', session_id: 'session-x', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{
+      sessionId: 'session-x',
+      engine: 'claude',
+      processIdentity: { pid: 7001, executable: 'claude.exe', startMarker: 'w:133000000000000001' },
+    }])
   })
 
   it('leaves a corrupt offline registry byte-identical instead of replacing it', async () => {
@@ -1832,5 +1897,74 @@ describe('a hook reaches the daemon that made its pane', () => {
   it('looks where the daemons record by default', () => {
     // lib/hookRoutes.ts writes under env.HARNESS_HOOK_ROUTES_DIR, whose default is the product root's.
     expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
+  })
+})
+
+describe('hook notify in a Harness pty host pane (Windows)', () => {
+  const sessionStart = () => {
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
+  }
+
+  it('names its pane by HARNESS_PANE when there is no TMUX_PANE', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'ptyhost', instance: 'p3', paneId: '%1007' }])
+    expect(requests[0].body.tmuxPane).toBeUndefined()
+  })
+
+  it.each(['p2-0.4.21-dev.win1', 'p2-h0123456789ab'])('names a versioned pty host\'s pane by HARNESS_PANE: %s', async (instance) => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { HARNESS_PANE: `${instance}:%7` }, input: sessionStart() })
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'ptyhost', instance, paneId: '%7' }])
+  })
+
+  it('keeps naming a tmux pane by TMUX_PANE, and ignores a HARNESS_PANE that is not one', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%42', env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'tmux', paneId: '%42' }])
+    const bad = await collect()
+    await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
+    expect(bad.requests).toEqual([])
+    const odd = await collect()
+    await runHook({ port: odd.port, env: { HARNESS_PANE: 'p2-0.4.21 x:%7' }, input: sessionStart() })
+    expect(odd.requests).toEqual([])
+    const empty = await collect()
+    await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
+    expect(empty.requests).toEqual([])
+  })
+
+  it('reads its credential on Windows, where NTFS reports no owner and no private mode', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    writeFileSync(join(dataDir, 'hook-credential'), `${'b'.repeat(43)}\n`, { mode: 0o644 })
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+  })
+
+  it('refuses a linked credential on Windows', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    const elsewhere = mkdtempSync(join(tmpdir(), 'adapter-hook-other-')); tmpDirs.push(elsewhere)
+    writeFileSync(join(elsewhere, 'token'), `${'b'.repeat(43)}\n`)
+    symlinkSync(join(elsewhere, 'token'), join(dataDir, 'hook-credential'))
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+    expect(requests).toEqual([])
+  })
+
+  it('refuses a credential that links to a file inside the data folder: the link itself is refused', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    writeFileSync(join(dataDir, 'token'), `${'b'.repeat(43)}\n`)
+    symlinkSync(join(dataDir, 'token'), join(dataDir, 'hook-credential'))
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+    expect(requests).toEqual([])
   })
 })

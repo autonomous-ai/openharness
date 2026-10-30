@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { parseDevinQuestionPane } from './askQuestion.js'
+import { parseDevinPermissionPane, parseDevinQuestionPane } from './askQuestion.js'
 import type { QuestionView } from '../../lib/askQuestion.js'
 
 /**
@@ -64,5 +64,51 @@ describe('devin question dialog', () => {
 
   it('ignores a footer with no dialog above it', () => {
     expect(parseDevinQuestionPane('some prose\n↑↓ navigate · ↵ select · esc cancel')).toBeNull()
+  })
+})
+
+/**
+ * The `-3000-11` fixtures are the same capture from devin 3000.11.92, where a single-select or approval row
+ * carries a marker only under the cursor. A parser that needed a marker on every row read one option of the
+ * question, and none of the approval, so a device kept showing Working over a prompt that was waiting.
+ */
+describe('devin 3000.11 dialogs, rows marked only under the cursor', () => {
+  const rows = (view: unknown): string[][] => (view as QuestionView).rows.map((r) => [r.number, r.label])
+
+  it('reads every option of a single-select question', () => {
+    const view = parseDevinQuestionPane(fixture('question-devin-3000-11.txt')) as QuestionView
+    expect(view.question).toBe('Which color do you like?')
+    expect(rows(view)).toEqual([['1', 'Red'], ['2', 'Green'], ['3', 'Blue']])
+    expect(view.multi).toBe(false)
+  })
+
+  it('reads the rows away from the cursor too', () => {
+    // The cursor moved to Green: Red has lost its marker and is still option 1.
+    const moved = fixture('question-devin-3000-11.txt').replace('❭ 1 Red', '  1 Red').replace('  2 Green', '❭ 2 Green')
+    expect(rows(parseDevinQuestionPane(moved))).toEqual([['1', 'Red'], ['2', 'Green'], ['3', 'Blue']])
+  })
+
+  it('still reads a multi-select question, whose rows all keep their boxes', () => {
+    const view = parseDevinQuestionPane(fixture('question-devin-multi-3000-11.txt')) as QuestionView
+    expect(view.question).toBe('Which colors do you like?')
+    expect(view.multi).toBe(true)
+    expect(rows(view)).toEqual([['1', 'Red'], ['2', 'Green'], ['3', 'Blue']])
+  })
+
+  it('reads an approval, without the row that switches approvals off', () => {
+    const view = parseDevinPermissionPane(fixture('permission-devin-3000-11.txt')) as QuestionView
+    expect(view.question).toBe('Approve curl -s https://example.com -o out.html')
+    expect(rows(view)).toEqual([
+      ['1', 'Yes (Approve once)'],
+      ['2', 'Yes, allow `curl` commands'],
+      ['3', 'Yes, always allow `curl` commands in `work-devin`'],
+      ['4', 'Yes, always allow `curl` commands in all projects'],
+      ['8', 'No'],
+    ])
+  })
+
+  it('never takes a description that starts with a number for the next option', () => {
+    const pane = ['── Size ──', '  How many?', '  ❭ 1 One', '      3 items fit', '    2 Two', '─────', '↑↓ navigate · ↵ select · esc cancel'].join('\n')
+    expect(rows(parseDevinQuestionPane(pane))).toEqual([['1', 'One'], ['2', 'Two']])
   })
 })

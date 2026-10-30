@@ -10,6 +10,28 @@ import 'package:xterm/src/ui/custom_text_edit.dart';
 
 void main() {
   testWidgets(
+    'Windows terminal registers its text input client with the Flutter view',
+    (tester) async {
+      final terminal = Terminal(maxLines: 20)..resize(80, 4);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 800,
+            height: 200,
+            child: TerminalView(terminal, autofocus: true),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final viewId = View.of(tester.element(find.byType(TerminalView))).viewId;
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+      expect(tester.testTextInput.setClientArgs?['viewId'], viewId);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
+  testWidgets(
     'native accessibility can insert text once into a writable terminal',
     (tester) async {
       final semantics = tester.ensureSemantics();

@@ -1,0 +1,2 @@
+# fake-cdn.sh: the throwaway CA and its keys, the staged bucket, the pty payloads and builds. Never committed.
+.fake-cdn/

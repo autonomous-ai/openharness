@@ -1,12 +1,15 @@
 import 'support/open_harness.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
+import 'keymap_host_test.dart' show key;
 import 'keymap_runtime_test.dart' show native;
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -17,6 +20,32 @@ Finder get selectedRow =>
     find.byWidgetPredicate((w) => w is ListTile && w.selected);
 
 void main() {
+  testWidgets(
+    'Windows command palette shows New Tab keys with an outside-terminal marker',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final app = createApp();
+      await mount(tester, app);
+      await key(tester, LogicalKeyboardKey.keyP, ctrl: true, shift: true);
+      await tester.enterText(jumpField, '> New Tab');
+      await tester.pump();
+      final row = find.byKey(const ValueKey('command:swarm.new'));
+      expect(row, findsOneWidget);
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text('Ctrl+Shift+T / Ctrl+T (outside a terminal)'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
   for (final nativeTabs in [false, true]) {
     testWidgets(
       'New Tab offers Open Harness and preserves the selected runtime (native=$nativeTabs)',

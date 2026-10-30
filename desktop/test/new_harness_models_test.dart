@@ -386,6 +386,49 @@ void main() {
     expect(connections['m']!.creates.single.keys, isNot(contains('gridName')));
   });
   testWidgets(
+    'the desktop Model chooser heads each list, a line above every list after the first',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1100, 800);
+      addTearDown(tester.view.reset);
+      final box = controller();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NewHarnessForm(
+              controller: box,
+              onClose: () {},
+              onCreated: () {},
+              desktop: true,
+              embedded: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-model')));
+      await tester.pumpAndSettle();
+      expect(box.field, NewHarnessField.model);
+      Border? lineAbove(String heading) =>
+          (tester
+                          .widget<Container>(
+                            find
+                                .ancestor(
+                                  of: find.text(heading),
+                                  matching: find.byType(Container),
+                                )
+                                .first,
+                          )
+                          .decoration
+                      as BoxDecoration?)
+                  ?.border
+              as Border?;
+      expect(lineAbove('Subscription'), isNull);
+      expect(lineAbove('Your models')?.top.width, greaterThan(0));
+      expect(lineAbove('Shared with you')?.top.width, greaterThan(0));
+    },
+  );
+  testWidgets(
     'switching from a model to Terminal clears routing and still opens a shell',
     (tester) async {
       final box = controller();
@@ -572,16 +615,16 @@ void main() {
     addTearDown(usage.dispose);
     await menu.refresh();
     expect(
-      menu.subscriptionFor('codex', local: true, machineName: '')?['account'],
-      '111111',
+      menu.subscriptionFor('codex', local: true, machineName: '')?['accountKey'],
+      '1111111111111111',
     );
     expect(
       menu.subscriptionFor(
         'codex',
         local: false,
         machineName: 'M2',
-      )?['account'],
-      '333333',
+      )?['accountKey'],
+      '3333333333333333',
     );
     expect(
       menu.subscriptionFor('claude', local: false, machineName: 'M2'),
@@ -668,7 +711,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(connections['m']!.modelReads, greaterThan(beforeRefresh));
         await tester.scrollUntilVisible(
-          find.text('Manage Models…'),
+          find.text('Your models…'),
           60,
           scrollable: find.descendant(
             of: find.byKey(const ValueKey('new-harness-choices')),
@@ -679,7 +722,7 @@ void main() {
             ),
           ),
         );
-        await tester.tap(find.text('Manage Models…'));
+        await tester.tap(find.text('Your models…'));
         await tester.pumpAndSettle();
         expect(managed, 1);
         await startHarness(tester);

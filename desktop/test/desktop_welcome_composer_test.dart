@@ -197,6 +197,42 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Swarm shortcut shows only the lead form and preserves existing harnesses',
+    (tester) async {
+      await setup(tester, storage: MemoryStore());
+      app.currentUser = const CurrentUserProfile(
+        id: 'owner',
+        email: 'owner@example.com',
+      );
+      app.machineStates['m']!.agents = [
+        Agent(
+          id: 'recent-existing',
+          name: 'Continue existing work',
+          engine: 'codex',
+          terminalAvailable: true,
+          lastOpenedAt: DateTime.now(),
+          lastActivityAt: DateTime.now(),
+        ),
+      ];
+      final pane = app.adoptSessionForTest(terminal('recent-existing', []));
+      final originalTab = app.activeSwarm;
+      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+      await tester.pumpAndSettle();
+      final target = app.activeSwarm;
+      expect(target.isSuperTab, isTrue);
+      expect(form, findsOneWidget);
+      expect(find.text('Continue existing work'), findsNothing);
+      expect(find.text('Recent harnesses'), findsNothing);
+      expect(target.panes, isEmpty);
+      expect(originalTab.panes.single, same(pane));
+      expect(connection.starts, isEmpty);
+      expect(form, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('Cmd-P round trip opens a fresh form with successful defaults', (
     tester,
   ) async {

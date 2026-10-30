@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/test_run.dart';
+import '../core/viewer_mode.dart';
 import 'claude_usage_source.dart';
 import 'codex_usage_source.dart';
 import 'usage_accounts.dart';
@@ -26,7 +27,14 @@ class UsageController extends ChangeNotifier {
     this.remote,
     this.interval = const Duration(seconds: 60),
     bool autoStart = true,
-  }) : _sources = sources ?? [ClaudeUsageSource(), CodexUsageSource()] {
+    bool? readsThisComputer,
+  }) : _sources =
+           sources ??
+           // A viewer build (a browser) runs no agent CLI, so it has no tokens of its own to
+           // read: its figures are the account's computers' ([remote]).
+           ((readsThisComputer ?? !kViewerMode)
+               ? [ClaudeUsageSource(), CodexUsageSource()]
+               : const []) {
     for (final source in _sources) {
       _readings[source.provider] = ProviderUsage.loading(source.provider);
     }
@@ -122,6 +130,16 @@ class UsageController extends ChangeNotifier {
     // A slower, older answer must not overwrite a newer one.
     if (_disposed || request != _remoteRequest) return;
     _remote = answers;
+    notifyListeners();
+  }
+
+  /// Drops every remote machine's figures: they belonged to the account that
+  /// just signed out, and its emails must not show under the next one. A read
+  /// still on its way lands nowhere, like any older answer.
+  void forgetRemote() {
+    if (_disposed) return;
+    _remoteRequest++;
+    _remote = const [];
     notifyListeners();
   }
 

@@ -70,12 +70,12 @@ class DesktopVerificationTests(unittest.TestCase):
     def run_verification(self, **kwargs):
         return verify.verify("1.2.3", self.base + "/metadata.json", **kwargs)
 
-    def test_all_six_full_downloads_with_updater_agent_and_bounded_parallelism(self):
+    def test_all_nine_full_downloads_with_updater_agent_and_bounded_parallelism(self):
         receipt = self.run_verification(jobs=2)
         self.assertEqual(receipt["status"], "passed", receipt)
-        self.assertEqual(len(receipt["artifacts"]), 6)
+        self.assertEqual(len(receipt["artifacts"]), 9)
         self.assertEqual(self.peak, 2)
-        self.assertEqual(len(self.requests), 7)
+        self.assertEqual(len(self.requests), 10)
         self.assertTrue(all(agent == verify.USER_AGENT for _, agent in self.requests))
         self.assertTrue(all(item["actual_size"] == len(self.payload) for item in receipt["artifacts"]))
 
@@ -108,13 +108,14 @@ class DesktopVerificationTests(unittest.TestCase):
                 receipt = self.run_verification()
                 self.assertEqual(receipt["status"], "failed")
                 self.assertEqual(receipt["artifacts"][0]["status"], "failed")
-                self.assertEqual(sum(item["status"] == "passed" for item in receipt["artifacts"]), 5)
+                self.assertEqual(sum(item["status"] == "passed" for item in receipt["artifacts"]), 8)
                 self.manifest[verify.KEYS[0]] = original
 
     def test_transfer_deadline_fails_in_bounded_time(self):
         self.delay = 1.5
         start = time.monotonic()
-        receipt = self.run_verification(timeout=0.1, jobs=6)
+        # One wave, as with six downloads: two waves of nine sat at the 1.3 s bound on a loaded Mac.
+        receipt = self.run_verification(timeout=0.1, jobs=len(verify.KEYS))
         self.assertEqual(receipt["status"], "failed")
         self.assertLess(time.monotonic() - start, 1.3)
 
@@ -126,7 +127,7 @@ class DesktopVerificationTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(receipt.read_text())["status"], "failed")
 
-    def test_internal_macos_scope_keeps_all_four_and_release_still_requires_six(self):
+    def test_internal_macos_scope_keeps_all_four_and_release_still_requires_nine(self):
         macos = tuple(key for key in verify.KEYS if key.startswith("desktop-macos"))
         manifest = {key: self.manifest[key] for key in macos}
         self.assertEqual(len(verify.entries_for_version(manifest, "1.2.3", keys=macos)), 4)

@@ -17,6 +17,7 @@
  */
 import { env } from '../config/env.js'
 import type { AppSwarms } from '../cable/cableSession.js'
+import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
@@ -102,6 +103,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     viewing = asking
     return asking
   }
+  /** What the devices say again to a core that connects (services/devices.ts `onCoreConnected`). */
+  let coreConnected: (() => void) | undefined
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -193,6 +196,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       return validUsage(usage) ? usage : null
     },
     daemon: DAEMON_UNKNOWN,
+    // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts `super_tabs`).
+    superTabRequest: (payload) => ask('super_tabs', payload).catch((): Record<string, unknown> => ({ error: 'SERVICE_UNAVAILABLE' })),
     // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
     wifi: unasked.wifi,
   }
@@ -205,6 +210,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     cableDisabled: env.CABLE_DISABLE,
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
+    onCoreConnected: (run) => { coreConnected = run },
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
@@ -214,6 +220,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     card: ({ frame }) => port.card(object(frame)),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),
+    swarmCards: ({ items }) => port.swarmCards(Array.isArray(items) ? items as SwarmCard[] : []),
+    swarmCardRecap: ({ recap }) => port.swarmCardRecap(object(recap) as unknown as LeadRecap),
     unread: ({ items }) => port.unread(Array.isArray(items) ? items as UnreadNotification[] : []),
     appFocus: ({ machineId, agentId }) => port.appFocus(text(machineId), text(agentId)),
     seen: ({ agentId, readToken }) => port.seen(text(agentId), typeof readToken === 'string' ? readToken : undefined),
@@ -266,6 +274,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     onConnected: (connection) => {
       core = connection
+      coreConnected?.()
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },

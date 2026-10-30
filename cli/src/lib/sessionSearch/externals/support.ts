@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
-import { processRows } from '../../tmux.js'
+import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 import { externalReadFailed } from '../evidence.js'

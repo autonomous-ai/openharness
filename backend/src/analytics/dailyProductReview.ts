@@ -1,4 +1,4 @@
-import { PRODUCT_FEEDBACK, PRODUCT_FEEDBACK_REASONS, PRODUCT_FEEDBACK_OUTCOMES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LONG_FLOWS, PRODUCT_USAGE_LONG_MEASURES, PRODUCT_USAGE_ONBOARDING_MARKS, PRODUCT_USAGE_SETUP_FLOWS, PRODUCT_USAGE_SURFACES, PRODUCT_USAGE_UI_SURFACES, PRODUCT_USAGE_USER_OPENED_ACTIONS } from '../types/productUsage.js'
+import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_FEEDBACK, PRODUCT_FEEDBACK_REASONS, PRODUCT_FEEDBACK_OUTCOMES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_ADD_PHONE_OPENINGS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LONG_FLOWS, PRODUCT_USAGE_LONG_MEASURES, PRODUCT_USAGE_ONBOARDING_MARKS, PRODUCT_USAGE_PHONE_OFFER_SKIP_REASONS, PRODUCT_USAGE_SETUP_FLOWS, PRODUCT_USAGE_SIGN_IN_END_REASONS, PRODUCT_USAGE_SURFACES, PRODUCT_USAGE_UI_SURFACES, PRODUCT_USAGE_USER_OPENED_ACTIONS } from '../types/productUsage.js'
 import { DAILY_PRODUCT_METRICS } from './dailyProductUsage.js'
 
 type Row = { dayUtc: Date; metric: string; value: number }
@@ -52,6 +52,11 @@ export function dailyProductReview(rows: Row[], now: Date) {
     ...PRODUCT_USAGE_ACTIONS.map(action => comparison(`${action}: request refusal`, [`${action}_failed`], [`${action}_ok`, `${action}_failed`])),
   ]
   const c = recent.counters
+  // The fixed codes counted beside an `other` total, most frequent first: production had 23 of 25 launch failures
+  // as `other` on 2026-10-16 with nothing to say which. Codes only; there is no message to look up.
+  const topCodes = (family: typeof LAUNCH_ERROR_FAMILIES[number]) => LAUNCH_ERROR_CODES
+    .map(code => ({ code, count: c[`${family}_${code}`] ?? 0 })).filter(entry => entry.count > 0)
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 5)
   const marksOf = (prefix: string) => {
     const marks = PRODUCT_USAGE_ONBOARDING_MARKS.filter(metric => metric.startsWith(prefix))
     return marks.length ? { marks: Object.fromEntries(marks.map(metric => [metric.slice(prefix.length), c[metric] ?? 0])) } : {}
@@ -61,7 +66,8 @@ export function dailyProductReview(rows: Row[], now: Date) {
     { area: 'Sign-in or permission', count: c.launch_failed_auth ?? 0, next: 'Exercise expired sign-in and reconnect with a test account; verify recovery and the visible explanation.' },
     { area: 'Dependency availability', count: c.launch_failed_unavailable ?? 0, next: 'Test an unavailable model/service and recovery; verify that a saved launch starts exactly once.' },
     { area: 'Launch choices', count: c.launch_failed_invalid ?? 0, next: 'Reproduce invalid project/model selections with fixtures; verify validation before starting work.' },
-    { area: 'Unknown launch refusal', count: c.launch_failed_other ?? 0, next: 'Exercise launch failure fixtures and add a justified fixed category; do not retrieve user error messages.' },
+    { area: 'Unknown launch refusal', count: c.launch_failed_other ?? 0, codes: topCodes('launch_failed_code'), next: 'Reproduce the most frequent codes with launch failure fixtures and add a justified fixed category; `unlisted` is a code missing from LAUNCH_ERROR_CODES. Do not retrieve user error messages.' },
+    { area: 'Engine did not start after create', count: c.launch_late_failed ?? 0, codes: topCodes('launch_late_failed_code'), next: 'Reproduce an engine that exits, is missing or never shows its process in a new pane; these launches are also counted as created.' },
     { area: 'Response wait', count: c.turns_waiting_over_1m ?? 0, next: 'Benchmark the same synthetic task and toolchain before/after; separate model wait from Harness overhead locally.' },
     { area: 'No observed response', count: c.turns_ended_without_response ?? 0, next: 'Reproduce interruptions, provider failures and tool-only turns; a missing text event alone does not establish task failure.' },
     { area: 'Launch outcome coverage', count: (c.launch_unobserved ?? 0) + (c.launch_unconfirmed ?? 0), next: 'Verify receipt polling, window close and daemon restart; unknown outcomes must not be counted as failed launches.' },
@@ -108,6 +114,14 @@ export function dailyProductReview(rows: Row[], now: Date) {
           ...(channel === 'ui' && surface === 'phone' && (PRODUCT_USAGE_LONG_FLOWS as readonly string[]).includes(flow)
             ? { over1mBuckets: Object.fromEntries(PRODUCT_USAGE_LONG_MEASURES.map(bucket => [bucket, c[`${prefix}${bucket}`] ?? (started ? 0 : null)])) } : {}),
           ...(channel === 'ui' ? marksOf(prefix) : {}),
+          // Beside the Desktop's signed-out sign-in: why each one that did not go through ended.
+          ...(channel === 'setup' && surface === 'desktop' && flow === 'sign_in'
+            ? { endReasons: Object.fromEntries(PRODUCT_USAGE_SIGN_IN_END_REASONS.map(reason => [reason, c[`setup_desktop_sign_in_reason_${reason}`] ?? 0])) } : {}),
+          // Beside the Desktop's card: openings, new phones by opening, and reasons a card did not show.
+          ...(channel === 'ui' && surface === 'desktop' && flow === 'phone_offer'
+            ? { addPhoneOpenings: Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => [opening, c[`ui_desktop_add_phone_${opening}`] ?? 0])),
+              addPhonePaired: Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => [opening, c[`ui_desktop_add_phone_paired_${opening}`] ?? 0])),
+              phoneOfferSkipped: Object.fromEntries(PRODUCT_USAGE_PHONE_OFFER_SKIP_REASONS.map(reason => [reason, c[`ui_desktop_phone_offer_skipped_${reason}`] ?? 0])) } : {}),
           interpretation: channel === 'setup'
             ? 'Optional signed-out app-session counts, untrusted and self-selected. No cross-step linkage, unique people or signup conversion. Web pre-sign-in is not collected.'
             : 'Observed app operations, possibly automatic. Missing outcomes include closed apps, offline reports and choice changes; absence is not failure. Viewer opening is not page rendering; update staging is not successful relaunch.',

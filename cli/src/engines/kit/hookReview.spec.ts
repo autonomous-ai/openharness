@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { hooks } from '../codex/hookContract.js'
 import { installHookSettings } from './hookSettings.js'
-import { recordReviewed, reviewHash, reviewRecords, withReviewRecords } from './hookReview.js'
+import { recordReviewed, reviewHash, reviewRecords, withoutReviewRecords, withReviewRecords } from './hookReview.js'
 
 const record = hooks.settings.reviewed!
 const roots: string[] = []
@@ -182,5 +182,34 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).toBe(false)
     expect(error).toHaveBeenCalled()
+  })
+})
+
+describe('Harness’s review records, taken out for harness uninstall', () => {
+  const map = new Map([['/h/hooks.json:session_start:0:0', 'sha256:ours']])
+  const records = (key: string, hash: string) => map.get(key) === hash
+  const ours = '[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:ours"\n'
+
+  it('takes out the table Harness appended, leaving the text as it was before it', () => {
+    const before = 'model = "o3"\r\n[hooks.state]\n'
+    const after = withReviewRecords(before, record, map) as string
+    expect(withoutReviewRecords(after, record, records)).toEqual({ text: before.replace(/\s*$/, '\n'), removed: 1 })
+    expect(withoutReviewRecords(ours, record, records)).toEqual({ text: '', removed: 1 })
+  })
+
+  it('reads a single-quoted key and spaced dots as the same table, and leaves a header inside a string', () => {
+    const spaced = "[ hooks . state . '/h/hooks.json:session_start:0:0' ]\ntrusted_hash = 'sha256:ours'\n\n[x]\ny = 1\n"
+    expect(withoutReviewRecords(spaced, record, records)).toEqual({ text: '[x]\ny = 1\n', removed: 1 })
+    const quoted = `note = """\n${ours}"""\n`
+    expect(withoutReviewRecords(quoted, record, records)).toEqual({ text: quoted, removed: 0 })
+  })
+
+  it('keeps a record with a comment, another field or another hash, and another hook’s', () => {
+    for (const text of [
+      ours.replace('\n', ' # mine\n'),
+      `${ours}enabled = false\n`,
+      ours.replace('sha256:ours', 'sha256:theirs'),
+      ours.replace(':0:0', ':1:0'),
+    ]) expect(withoutReviewRecords(text, record, records)).toEqual({ text, removed: 0 })
   })
 })

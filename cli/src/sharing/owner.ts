@@ -4,7 +4,7 @@ import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
 import { encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
-import { HarnessGrantStore, inviteSchema, type HarnessGrant } from './grants.js'
+import { HarnessGrantStore, inviteSchema, type HarnessGrant, type DerivedGrant } from './grants.js'
 import { ownerHandshake, signedOwnerHandshake, type ObserverCipher, type OwnerKey } from './crypto.js'
 import { HarnessCollaborationStore, linkVisibility, type CommentAuthor } from './collaboration.js'
 import { rosterGrants } from './rosterGrants.js'
@@ -40,6 +40,13 @@ export interface ShareOwnerDeps {
   /** The shared tabs' rosters this computer verified against their pins, and the account signed in here, which the
    *  observers each tab wants are derived from (`harness_share_rosters`); null when either cannot be read. */
   rosters?: () => Promise<{ accountId: string; rosters: Roster[]; consent: ReadonlySet<string> } | null>
+  /** The Swarm observers this machine's host wants, or null while no roster of its is in force (superTabs/observers.ts
+   *  `known`): their invitations are then kept as they are, neither withdrawn nor sent again. */
+  derivedGrants?: () => Array<Omit<DerivedGrant, 'ownerPublicKey'>> | null
+  allowsGrant?: (grant: HarnessGrant) => boolean
+  /** Whether a grant `allowsGrant` refuses is only waiting for the Swarm's next roster (superTabs/observers.ts `paused`):
+   *  its viewer is then told to retry. Without it every refusal is final. */
+  pausedGrant?: (grant: HarnessGrant) => boolean
   now?: () => number
 }
 
@@ -67,15 +74,22 @@ export class HarnessShareOwner {
           payload: { bytes: Buffer.from(bytes).toString('base64') } })
       },
     })
+    let derivedSignature = ''
     let ticks = 0
     this.timer = setInterval(() => {
       for (const [id, observer] of this.observers) {
-        if (!this.authorized(observer)) this.close(id, 'Sharing ended or invitation expired')
+        if (!this.authorized(observer)) this.close(id, 'Sharing ended or invitation expired', this.paused(observer.grant))
       }
       // Derived again every 30 s: the renewals fall due, and a roster change whose nudge never came is caught here. A
       // refused grant is tried again at most hourly from here: up to 256 of them every 30 s would hammer the backend.
       // One already waiting to run makes another pointless; it publishes what waits as it ends.
-      if (++ticks % 30 === 0 && this.derivesQueued === 0) void this.derive(this.now() - HOUR).catch(ignore)
+      // A roster no longer in force is no change of membership: deriving from it withdrew every Swarm invitation and
+      // sent it again a moment later (superTabs/observers.ts `OBSERVER_VALID_MS`).
+      const derived = this.deps.derivedGrants?.()
+      const signature = derived === null ? derivedSignature : JSON.stringify(derived ?? [])
+      const changed = signature !== derivedSignature
+      derivedSignature = signature
+      if ((++ticks % 30 === 0 || changed) && this.derivesQueued === 0) void this.derive(this.now() - HOUR).catch(ignore)
     }, 1000)
     this.timer.unref()
     // Once as it starts: a member removed while Share was off loses the view now, and a refused grant is tried again.
@@ -84,11 +98,19 @@ export class HarnessShareOwner {
   private authorized(observer: Observer): boolean {
     if (observer.linkId) {
       const link = this.deps.collaboration?.active(observer.linkId, this.deps.machineId())
+      // A session that turns confidential closes its links' viewers too, as it refuses them at open (`receive`).
       return !!link && !!this.deps.resolveAgent(link.agentId) && (link.visibility === 'public'
         || observer.author?.owner === true || this.invited(link.agentId, observer.grant.recipientEmail))
+        && (this.deps.allowsGrant?.(observer.grant) ?? true)
     }
     return !!this.deps.grants.active(observer.grant.id, observer.grant.recipientEmail, this.deps.machineId())
+      && (this.deps.allowsGrant?.(observer.grant) ?? true)
       && !!this.deps.resolveAgent(observer.grant.agentId)
+  }
+  /** A view refused only until the Swarm host's next roster: after a restart a viewer reconnects within a second or two,
+   *  before that roster, and a final refusal there left their pane closed for good (Ken, 2026-10-28). */
+  private paused(grant: HarnessGrant): boolean {
+    return !!this.deps.grants.active(grant.id, grant.recipientEmail, this.deps.machineId()) && (this.deps.pausedGrant?.(grant) ?? false)
   }
   private invited(agentId: string, email: string): boolean {
     return this.deps.grants.list(this.deps.machineId(), agentId)
@@ -129,8 +151,9 @@ export class HarnessShareOwner {
       const grant: HarnessGrant | null = link && (link.visibility === 'public' || author?.owner || this.invited(link.agentId, email))
         ? { ...link, recipientEmail: email, createdAt: '', expiresAt: '', revoked: false, publicationError: null, tab: null, failedAt: null }
         : payload.linkId ? null : this.deps.grants.active(String(payload.shareId), email, this.deps.machineId())
-      if (!grant || !this.deps.resolveAgent(grant.agentId) || this.observers.size >= 100) {
-        this.deps.send(connId, 'observer_closed', { reason: 'Sharing ended or invitation expired' }); return
+      if (!grant || !(this.deps.allowsGrant?.(grant) ?? true) || !this.deps.resolveAgent(grant.agentId) || this.observers.size >= 100) {
+        this.deps.send(connId, 'observer_closed', { reason: 'Sharing ended or invitation expired',
+          retry: !!grant && !!this.deps.resolveAgent(grant.agentId) && this.paused(grant) }); return
       }
       try {
         const { cipher, welcome } = this.deps.key
@@ -143,7 +166,7 @@ export class HarnessShareOwner {
     }
     const observer = this.observers.get(connId)
     if (!observer) return
-    if (!this.authorized(observer)) { this.close(connId, 'Sharing ended or invitation expired'); return }
+    if (!this.authorized(observer)) { this.close(connId, 'Sharing ended or invitation expired', this.paused(observer.grant)); return }
     const frame = type === 'observer_frame' ? observer.cipher.open(payload) : null
     if (!frame || typeof frame.type !== 'string' || !frame.payload || typeof frame.payload !== 'object') {
       this.close(connId, 'Invalid observer message'); return
@@ -261,9 +284,15 @@ export class HarnessShareOwner {
     // A roster file that cannot be read, or an account that cannot be said, revokes nothing: a passing read error
     // would otherwise take every member's view away and give it back a moment later.
     const source = await this.deps.rosters?.().catch(() => null)
-    if (!source) return { invited: 0, revoked: 0 }
+    if (!source && !this.deps.derivedGrants) return { invited: 0, revoked: 0 }
     const machineId = this.deps.machineId()
-    const wanted = rosterGrants(source.rosters, { machineId, accountId: source.accountId }, source.consent)
+    // What is held of one kind, kept as it is when what decides that kind cannot be read now.
+    const kept = (swarm: boolean) => this.deps.grants.all()
+      .filter(g => g.machineId === machineId && g.tab && g.tab.startsWith('super:') === swarm && !g.revoked)
+      .map(g => ({ agentId: g.agentId, email: g.recipientEmail, tab: g.tab!, name: g.name, engine: g.engine }))
+    const legacy = source ? rosterGrants(source.rosters, { machineId, accountId: source.accountId }, source.consent) : kept(false)
+    const derived = this.deps.derivedGrants?.()
+    const wanted = [...legacy, ...derived === null ? kept(true) : derived ?? []]
     // Asked only when there is something to grant: in Share's own process each ask goes to the gateway.
     const key = wanted.length ? await this.ownerPublicKey().catch(() => null) : ''
     // Without this machine's key (its gateway is down) nothing new can be published, but a member who left must still
@@ -303,7 +332,8 @@ export class HarnessShareOwner {
           const result = await this.deps.publish(grant.revoked ? 'DELETE' : 'PUT', `/api/harness-shares/${grant.id}`,
             grant.revoked ? undefined : { machineId: grant.machineId, agentId: grant.agentId,
               recipientEmail: grant.recipientEmail, name: grant.name, engine: grant.engine,
-              ownerPublicKey: grant.ownerPublicKey, expiresAt: grant.expiresAt })
+              ownerPublicKey: grant.ownerPublicKey, expiresAt: grant.expiresAt,
+              ...(grant.tab?.startsWith('super:') ? { superTabId: grant.tab.slice(6) } : {}) })
           if (result.status >= 200 && result.status < 300 || grant.revoked && result.status === 404) {
             // A revoke may have happened while this network request was in flight.
             const current = this.deps.grants.all().find(g => g.id === grant.id)

@@ -1,0 +1,56 @@
+# s7 round 2: install again, start, reboot (the pid file goes stale), then uninstall --keep-data (2026-10-18 09:00:27)
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  OK added C:\Users\hxe2e\.harness\bin to your PATH
+  OK harness 0.4.18-dev.win1 installed.
+   status     ● started · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   pid        5240
+## reboot (09:01:56)
+VM up at 09:07:17
+   status     ○ stopped
+   pid        5240
+5240
+hxe2e node.exe processes: 0
+## harness uninstall --yes --keep-data, from a batch logon (09:07:35)
+Γ£ô removed the Harness daemon from Task Scheduler: it no longer starts at login
+Γ£ô removed Harness's hooks from ~\.claude\settings.json
+Γ£ô removed Harness's hooks from ~\.codex\hooks.json
+Γ£ô removed Codex's record of Harness's hooks from ~\.codex\config.toml
+Γ£ô removed Harness's hooks from ~\.copilot\hooks\harness.json
+Γ£ô removed Harness's hooks from ~\.commandcode\settings.json
+Γ£ô removed ~\.config\kilo\plugin\launcher-register.js
+Γ£ô removed ~\.pi\agent\extensions\launcher-register.ts
+Γ£ô removed ~\.config\amp\plugins\launcher-register.ts
+Γ£ô removed ~\.config\opencode\plugin\launcher-register.js
+Γ£ô removed ~\.config\opencode\plugins\launcher-register\tui.js
+┬╖ if you had added a permission rule in ~\.claude\settings.json that is the same as one of Harness's, it went too: add it again if you need it
+┬╖ Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~\.codex\hooks.json, and taking Harness's out moved them
+Γ£ô removed ~\.harness\bin from your PATH
+Γ£ô the program in ~\.harness goes once this command has exited (anything left is listed in C:\Users\hxe2e\AppData\Local\Temp\harness-uninstall-3608-1792289282716.log)
+Harness is uninstalled. Your sign-in and history are kept for the next install.
+uninstall exit=0 in 21.2 s
+exit=0
+## what stays
+agent-messages
+cli
+computer-id
+connections
+dsh
+hook-routes
+data
+agent-messages
+amp-sessions
+bin
+daemon-18474.json
+daemon-token
+e2e
+harness.log
+harnessd-status.json
+hook-credential
+machines.json
+registry-boot
+session-search.db
+session-search.db-shm
+session-search.db-wal

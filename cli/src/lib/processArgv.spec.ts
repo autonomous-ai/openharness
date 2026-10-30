@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
-import { ambiguousAgentProcess, argvTokens, engineProcessMatchScore } from './tmux.js'
+import { ambiguousAgentProcess, argvTokens, engineProcessMatchScore } from './processTable.js'
 
 const ownership: AgentCommandOwnershipSnapshot = {
   cursorFileKeys: new Set(), grokFileKeys: new Set(), conflictingFileKeys: new Set(),

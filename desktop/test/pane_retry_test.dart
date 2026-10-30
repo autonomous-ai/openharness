@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,8 +25,14 @@ class _Connection extends WsConn {
       );
   final opened = <String>[];
   final opens = <Map<String, dynamic>>[];
+  int forceReconnects = 0;
+
+  /// The machine's link is gone: nothing sent on it goes through.
+  bool refuse = false;
   @override
   Future<void> waitUntilReady({required Duration timeout}) async {}
+  @override
+  Future<void> forceReconnect() async => forceReconnects++;
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -62,7 +69,7 @@ class _Connection extends WsConn {
       opened.add(payload['agentId'] as String);
       opens.add(payload);
     }
-    return true;
+    return !refuse;
   }
 }
 
@@ -262,6 +269,69 @@ void main() {
     for (var i = 0; i < 30; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
+    r.app.dispose();
+  });
+
+  // Each dead pane's first reattach may redial the machine when its open goes unanswered, and a
+  // redial knocks every pane on the machine over: N dead panes redialled one machine N times.
+  testWidgets('dead panes on one machine redial its link once, not once each', (
+    tester,
+  ) async {
+    final connection = _Connection();
+    final app = createApp(connectionForTest: (_) => connection);
+    app.machineStates['m']!.nodeOnline = true;
+    // Tiles the app attaches itself once the machine answers, so an unanswered open asks the app to
+    // redial the machine.
+    unawaited(app.addAgentToSwarm('m', 'a0'));
+    unawaited(app.addAgentToSwarm('m', 'a1'));
+    await app.handleEventForTest('m', {
+      'type': 'node_status',
+      'payload': {'online': false},
+    });
+    await app.handleEventForTest('m', {
+      'type': 'node_status',
+      'payload': {'online': true},
+    });
+    for (var i = 0; i < 30; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final sessions = [for (final pane in app.panes) pane.session!];
+    expect(sessions, hasLength(2));
+    expect(connection.opened, ['a0', 'a1']);
+
+    connection.refuse = true;
+    for (final session in sessions) {
+      session.transportLost('gone');
+    }
+    // Both first reattaches (1 s), each with its redial and resends (3 s).
+    for (var i = 0; i < 50; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(connection.opened.skip(2).toSet(), {
+      'a0',
+      'a1',
+    }, reason: 'both reattached');
+    expect(connection.forceReconnects, 1);
+    app.dispose();
+  });
+
+  testWidgets('only a stream dying or coming back runs the sweep', (
+    tester,
+  ) async {
+    final r = await rig(tester);
+    final sweeps = r.app.paneSweepsForTest;
+
+    // A live session notifies on all sorts of changes: a title, a resize, a watcher band.
+    for (var i = 0; i < 100; i++) {
+      r.background.setEngineId(i.isEven ? 'claude' : 'codex');
+    }
+    expect(r.app.paneSweepsForTest, sweeps);
+
+    r.background.transportLost('gone');
+    expect(r.app.paneSweepsForTest, sweeps + 1);
+    await tester.pump(const Duration(milliseconds: 1100));
+    expect(r.connection.opened, ['a0'], reason: 'the retry still runs');
     r.app.dispose();
   });
 }

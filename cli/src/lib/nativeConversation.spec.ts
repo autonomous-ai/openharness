@@ -148,7 +148,9 @@ it('does not decode a partial body character after a valid header with leading b
 })
 it('holds path aliases that loop and pools that exceed the candidate budget', async () => {
   const loop = join(home, 'rollout-loop.jsonl'); symlinkSync(loop, loop); held = [loop]
-  await expect(find()).rejects.toThrow('alias depth limit')
+  // macOS's longer temporary root can exhaust the component budget first;
+  // either explicit bound must hold the identity instead of following the loop.
+  await expect(find()).rejects.toThrow(/alias depth limit|path component limit/)
   const own = rollout(); held = Array(65).fill(own)
   await expect(find()).rejects.toThrow('descriptor limit')
 })

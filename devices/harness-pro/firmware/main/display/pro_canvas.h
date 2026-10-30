@@ -29,12 +29,8 @@ static inline bool ht_pro_can_draw(const ht_pro_font_t *f, uint32_t cp)
     return ht_pro_extra_pos(f, cp) >= 0;
 }
 int ht_pro_width(const ht_pro_font_t *font, const char *text);
-int ht_pro_text_rows(const char *text, const ht_pro_font_t *font, int width);
 bool ht_pro_text(ht_scene_t *s, int x, int y, int width, const ht_pro_font_t *font,
                  uint16_t ink, const char *text);
-int ht_pro_wrap(ht_scene_t *s, int x, int y, int width, int rows, int skip,
-                const ht_pro_font_t *font, uint16_t ink, const char *text);
-void ht_pro_center(ht_scene_t *s, int y, const ht_pro_font_t *font, uint16_t ink, const char *text);
 bool ht_pro_rect(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t ink);
 // Like ht_pro_rect, but each corner pixel is blended onto the colour under it by its coverage of the circle.
 bool ht_pro_rect_aa(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t ink);

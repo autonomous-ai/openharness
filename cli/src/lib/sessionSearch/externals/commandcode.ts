@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { externalReadFailed } from '../evidence.js'
 
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
+import { engineProcessMatch, resumeSessionId } from '../../processTable.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
 import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 

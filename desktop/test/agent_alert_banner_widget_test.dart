@@ -142,10 +142,10 @@ void main() {
         ),
       );
       await tester.pump();
-      // No news: the footer alone, in the top-right.
+      // No news: the footer alone, in the top-right, below the top-right pane's header.
       final alone = tester.getRect(find.byKey(const Key('banner-footer')));
       expect(alone.right, 1200 - 12);
-      expect(alone.top, 12);
+      expect(alone.top, 12 + AgentAlertBanners.footerDrop);
 
       app.agentAlerts.post(
         AgentAlert(
@@ -162,7 +162,8 @@ void main() {
         find.byKey(const Key('agent-alert-banner')),
       );
       final under = tester.getRect(find.byKey(const Key('banner-footer')));
-      expect(under.top, greaterThan(banner.bottom));
+      // Already below the header: no drop on top of the banners' own gap.
+      expect(under.top, banner.bottom + 8);
       expect(under.right, banner.right);
       await tester.tap(find.byKey(const Key('agent-alert-dismiss')));
       await tester.pumpAndSettle();

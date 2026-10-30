@@ -130,15 +130,14 @@ int main(void)
         CHECK(pod_pet_has("claude", sending ? POD_SCENE_SEND : POD_SCENE_LISTEN));
         CHECK(pod_view_next_ms(&N, &M, 4000) == ph_talk_next_ms(&N, &M, 4000));
     }
-    // Codex's painted robot is drawn smooth at 13/8, a fifth under the 2x of the others (pod_cell_smooth marks its cell runs); Claude's pixel art
-    // keeps doubled pixels at 2x. Both stand on the same floor.
+    // Codex's HD robot is drawn at exactly 8 (stored at the size it is shown); Claude's pixel art is doubled pixels at 2x. Both stand on the same floor.
     for (int sending = 0; sending < 2; sending++) {
-        int smooth = 0, plain = 0;
+        int hd = 0, plain = 0;
         talk("x", sending, 4000);
-        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_CELL) { CHECK(S.runs[i].radius == 13); smooth += S.runs[i].text[1] == 1; }
+        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_CELL) { CHECK(S.runs[i].radius == 8 && S.runs[i].text[1] == 0); hd++; }
         talk("p", sending, 4000);
         for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_CELL && S.runs[i].radius == 16) { plain++; CHECK(S.runs[i].text[1] == 0); }
-        CHECK(smooth >= 1 && plain >= 1);
+        CHECK(hd >= 1 && plain >= 1);
     }
     printf("test_ph_talk: %d checks passed\n", checks);
     return 0;

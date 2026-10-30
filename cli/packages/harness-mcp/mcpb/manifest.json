@@ -3,8 +3,8 @@
   "name": "harness",
   "display_name": "Harness",
   "version": "0.0.0",
-  "description": "Start Claude Code and Codex agents the person can watch, wait for them and read their answers.",
-  "long_description": "Harness runs coding agents (Claude Code, Codex) in sessions of their own, on this computer or the person's other machines. The person can watch and join every one in the Harness app. With this extension, Claude can start harnesses, wait for them, read their answers and close them.\n\n**It needs the Harness CLI** (macOS or Linux):\n\n```\ncurl -fsSL https://harness.autonomous.ai/cli/install.sh | bash\nharness start\n```\n\nOn Linux the installer installs tmux and curl with apt-get, which asks for your password.\n\nNo account is needed for harnesses on this computer. Until the CLI is installed, the extension offers one tool, `harness_setup`, that says how to install it.\n\nClaude may give work to, and close, only the harnesses it started. The rest are the person's.",
+  "description": "Start coding agents (Claude Code, Codex, and more) the person can watch and read.",
+  "long_description": "Harness runs coding agents (Claude Code, Codex, and other engines) in sessions of their own, on this computer or the person's other machines. The person can watch and join every one in the Harness app. With this extension, Claude can start harnesses, wait for them, read their answers and close them.\n\n**It needs the Harness CLI** (macOS or Linux):\n\n```\ncurl -fsSL https://harness.autonomous.ai/cli/install.sh | bash\nharness start\n```\n\nOn Linux the installer installs tmux and curl with apt-get, which asks for your password.\n\nNo account is needed for harnesses on this computer. Until the CLI is installed, the extension offers one tool, `harness_setup`, that says how to install it.\n\nClaude may give work to, and close, only the harnesses it started. The rest are the person's.",
   "author": {
     "name": "Autonomous",
     "url": "https://harness.autonomous.ai"
@@ -35,8 +35,16 @@
       "description": "The harnesses on this machine: name, agent, state, who started each, when it was last active, its folder, and what it is about."
     },
     {
+      "name": "harness_search",
+      "description": "Search the conversations on this computer for the words that say them: every turn of every harness, live or stopped."
+    },
+    {
+      "name": "harness_machines",
+      "description": "The machines on this account: name, status, and which is this one, to run a harness on another of the person's machines."
+    },
+    {
       "name": "harness_start",
-      "description": "Start a new harness: an agent in a session of its own, working on a task in a folder, or in a new project Harness makes for it. Returns at once."
+      "description": "Start a new harness: an agent (claude, codex, opencode, pi, …) in a session of its own, working on a task in a new project Harness makes and owns (no approval) or in an existing folder (the engine asks the person to trust it). Prefer project."
     },
     {
       "name": "harness_wait",
@@ -45,6 +53,14 @@
     {
       "name": "harness_read",
       "description": "A harness's state and its last turn: what it was asked and what it answered."
+    },
+    {
+      "name": "harness_tell",
+      "description": "Give more work to a harness you started, on any machine, in the conversation it already has. Only while the person allows it."
+    },
+    {
+      "name": "harness_settings",
+      "description": "What agents may do here, the person's settings: each one and whether it is on, or turn one on (once the person says yes) or off."
     },
     {
       "name": "harness_close",

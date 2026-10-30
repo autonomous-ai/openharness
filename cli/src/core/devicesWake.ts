@@ -1,11 +1,14 @@
 /**
  * When the devices' process starts (harnessd/services.ts `devices`, on demand since protocol 4): once there is
- * a device, so a computer with none never pays for it (about 72 MiB at idle, measured for step 9).
+ * a device on Unix, avoiding about 72 MiB at idle (measured for step 9). Windows starts it even without a dial:
+ * its native USB watcher must run for a fresh daemon to discover the first dial (Windows dial plan E2.2).
  *
  * What asks for it:
  * - **a dial's port**: a USB modem's callout node in /dev (`cu.usbmodem*` on macOS, `ttyACM*` or `ttyUSB*` on
  *   Linux), looked for every two seconds, the dial's own scan's cadence (#909). A listing of /dev and nothing
  *   more: no `ioreg`, no open, no read of a port. The devices' own scan then decides whether it is a dial.
+ * - **Windows USB dial discovery**, as the core starts: its native watcher belongs to the devices' process,
+ *   so that process must start before the first dial is connected, without waiting for a Devices request.
  * - **a paired Wi-Fi device**, as the core starts: one the gateway's pairings name as a device, or one its direct
  *   links connect out to, which start only once the device's service serves (gateway/start.ts `wifiService`).
  *   Read once, bounded; the pairings' file holds public keys and labels.
@@ -17,8 +20,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** The services in the devices' process, which a request or a notice for wakes. */
-export const DEVICES_ON_DEMAND = ['devices', 'wifi'] as const
+/** The services in the devices' process, which a request or a notice for wakes: a device that is this machine's add-ons too. */
+export const DEVICES_ON_DEMAND = ['devices', 'wifi', 'machineAddons'] as const
 /** How often /dev is looked at for a dial's port while there is none: the dial's own scan's cadence. */
 export const DIAL_LOOK_MS = 2_000
 /** The Wi-Fi device's direct links (lib/autonomous-device/direct.ts) and the gateway's pairings (lib/e2ee/store.ts),
@@ -126,13 +129,17 @@ export function createDevicesWake(deps: DevicesWakeDeps) {
   }
 
   return {
-    /** The core is bound and its master hears it: what was asked meanwhile is asked now, and, with the dials
-     *  in their own process, a device already here asks for it, or /dev is looked at until one is. */
+    /** The core is bound and its master hears it: what was asked meanwhile is asked now. Windows starts the
+     *  devices' native watcher; Unix looks at /dev until a dial is there, keeping its measured idle saving. */
     start(outOfProcess: ReadonlySet<string>): void {
       out = outOfProcess
       for (const [service, why] of early.splice(0)) if (outOfProcess.has(service)) want(service, why)
       if (wifiDeviceSaved(deps.dataDir, read)) ask('wifi', 'a paired Wi-Fi device')
       if (!outOfProcess.has('devices') || asked.has('devices') || deps.cableDisabled) return
+      if ((deps.platform ?? process.platform) === 'win32') {
+        ask('devices', 'Windows USB dial discovery')
+        return
+      }
       if (look()) ask('devices', 'a dial\'s port is there')
       else lookAgain()
     },

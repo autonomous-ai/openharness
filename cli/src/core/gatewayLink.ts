@@ -191,7 +191,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     holdRequests: () => { requestsOpen = false; send('hold') },
     openRequests: () => { requestsOpen = true; send('open') },
     connected: () => up && linkUp,
-    broadcast: (frame) => { bulk('broadcast', { frame }) },
+    broadcast: (frame, guest) => { bulk('broadcast', guest ? { frame, guest } : { frame }) },
     commander: (frame) => { bulk('commander', { frame }) },
     user: (frame) => { send('user', { frame }) },
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },
@@ -214,7 +214,11 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
 
   const http = async (type: string, payload: Record<string, unknown> = {}, waitMs?: number): Promise<HttpAnswer> => {
     const answer = await deps.call(type, payload, waitMs)
-    return typeof answer.status === 'number' ? { status: answer.status, body: record(answer.body) } : UNAVAILABLE
+    if (typeof answer.status !== 'number') return UNAVAILABLE
+    // A busy answer's Retry-After (gateway/accountHttp.ts), which the daemon passes on to the Desktop's reports.
+    const retry = answer.retryAfterMs
+    return { status: answer.status, body: record(answer.body),
+      ...(typeof retry === 'number' && Number.isFinite(retry) && retry >= 0 ? { retryAfterMs: retry } : {}) }
   }
 
   /**

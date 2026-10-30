@@ -15,7 +15,9 @@ export interface SharedMachinesAccount {
   trust(desired: { pins?: SharedTrustPeer[]; keys?: SharedTrustPeer[] }): Promise<{ pins: number; keys: number }>
 }
 
-export interface SharedTrustPeer { machineId: string; pub: string; label: string }
+/** A machine and its key, as sharing trusts or pins it. `email`: on a key this machine trusts, the account it
+ *  is shared with — the guest its sessions are (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
+export interface SharedTrustPeer { machineId: string; pub: string; label: string; email?: string }
 
 const MACHINE_RE = /^[a-f0-9]{32}$/
 

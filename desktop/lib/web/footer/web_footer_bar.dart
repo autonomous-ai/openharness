@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_icons.dart';
@@ -7,6 +9,7 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../widgets/box_chrome.dart' show kWorkspaceInset;
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/web_download_button.dart';
 import '../../widgets/workspace_bar_control.dart';
@@ -34,8 +37,12 @@ class WebFooterBar extends StatelessWidget {
       child: Material(
         key: const ValueKey('workspace-status-bar'),
         type: MaterialType.transparency,
+        // Each control a finger's size, so the bar is at least that tall.
         child: SizedBox(
-          height: workspaceBarControlHeight(context) + kWorkspaceInset,
+          height: math.max(
+            kFingerTarget,
+            workspaceBarControlHeight(context) + kWorkspaceInset,
+          ),
           child: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: workspaceBarCellSizeOf(context).width,
@@ -46,21 +53,32 @@ class WebFooterBar extends StatelessWidget {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Builder(
-                      builder: (context) => WebDropdownControl(
-                        key: const ValueKey('web-footer-menu-button'),
-                        label: footer.summary,
-                        tooltip: 'Status',
-                        color: foreground,
-                        onPressed: () => _open(context),
+                      builder: (context) => fingerTarget(
+                        enabled: true,
+                        WebDropdownControl(
+                          key: const ValueKey('web-footer-menu-button'),
+                          label: footer.summary,
+                          tooltip: 'Status',
+                          color: foreground,
+                          onPressed: () => _open(context),
+                        ),
                       ),
                     ),
                   ),
                 ),
-                // One filled action in the bar: Share when it is on.
-                WebDownloadButton(prominent: share == null),
+                // One filled action in the bar: Share when it is on. A phone's
+                // download is the store bar's.
+                if (!browserHasAppStore())
+                  fingerTarget(
+                    enabled: true,
+                    WebDownloadButton(prominent: share == null),
+                  ),
                 if (share != null) ...[
                   SizedBox(width: workspaceBarCellSizeOf(context).width),
-                  _WebShareIconButton(share: share),
+                  fingerTarget(
+                    enabled: true,
+                    _WebShareIconButton(share: share),
+                  ),
                 ],
               ],
             ),
@@ -86,10 +104,14 @@ class WebFooterBar extends StatelessWidget {
             onTap: () => close(item),
             child: KeyedSubtree(
               key: ValueKey('web-footer:${item.title}'),
-              child: PaneMenuRow(
-                selected: false,
-                title: item.title,
-                status: item.detail.isEmpty ? null : item.detail,
+              // The footer is a phone's: its rows are a finger's size.
+              child: fingerTarget(
+                enabled: true,
+                PaneMenuRow(
+                  selected: false,
+                  title: item.title,
+                  status: item.detail.isEmpty ? null : item.detail,
+                ),
               ),
             ),
           ),

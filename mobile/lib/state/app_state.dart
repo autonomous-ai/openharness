@@ -1,4 +1,6 @@
 import '../core/app_version.dart';
+import '../core/client_build.dart';
+import '../core/install_source.dart';
 import '../core/test_run.dart';
 import '../measurement/launch_measurement.dart';
 import '../measurement/onboarding_measurement.dart';
@@ -8,11 +10,14 @@ import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
+// The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -33,6 +38,7 @@ import '../core/agent_git_context.dart';
 import '../core/agent_preference.dart';
 import '../core/engine_availability.dart';
 import '../core/device_name.dart';
+import '../core/agent_handoff.dart';
 import '../core/permission_modes.dart';
 import '../core/last_opened_agent.dart';
 import '../core/phone_search_history.dart';
@@ -78,6 +84,8 @@ import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
+import '../swarm/swarm_notices.dart';
+import '../swarm/swarm_request.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
 
@@ -87,11 +95,89 @@ enum AgentLoadStatus { idle, needsLink, loading, loaded, error }
 /// whether the daemon reattached the agent's prior session or fell back to a fresh one (e.g. the
 /// engine's resume flag wasn't recognized) — worth telling the user about, since it's not a failure
 /// but the conversation may not have continued the way "Restart" implies.
+///
+/// A non-null [error] is a sentence to show as it is, and not always a failure: a restart whose
+/// reply never came says it could not be confirmed (see `AppNotifier._restartUnconfirmed`).
 class RestartAgentResult {
   final String? error;
   final bool resumed;
 
   const RestartAgentResult({this.error, this.resumed = true});
+}
+
+/// What became of a Change agent ([AppNotifier.changeAgent]).
+///
+/// [error] is a sentence to show as it is; with it the old agent is either still running or saved
+/// and stopped, and choosing the same agent again carries the same switch on (it never starts a
+/// second harness). Without it [agentId] is the harness to open now, and [notice], when set, is the
+/// desktop's line for a switch that carried no history.
+class AgentChangeResult {
+  final String? error;
+  final String? agentId;
+  final String? notice;
+
+  const AgentChangeResult({this.error, this.agentId, this.notice});
+}
+
+/// What became of a Fork ([AppNotifier.forkAgent]) — the desktop's `ForkAgentResult`.
+///
+/// [error] is a sentence to show as it is. Without it [agentId] is the fork to open now, and
+/// [level] says what it got: `native` (the engine's own fork, the whole context) or `handoff` (a
+/// first message composed from what the machine remembers of the source, for an engine that cannot
+/// fork). [notice], when set, is a line to say once it is open.
+class ForkAgentResult {
+  final String? error;
+  final String level;
+  final String? agentId;
+  final String? notice;
+
+  const ForkAgentResult({
+    this.error,
+    this.level = 'native',
+    this.agentId,
+    this.notice,
+  });
+}
+
+/// The Fork form's draft and its one deliberate fork — the desktop's `AgentForkAttempt`.
+///
+/// ⚠️ **Kept while the form is closed, receipt and all.** A fork starts a process, and its reply can
+/// be lost: then the attempt is locked on its choices until Check status asks `agent_create_status`
+/// about the SAME `creationId`, or the person explicitly starts another
+/// ([AppNotifier.discardForkAttempt]). Reopening the form while it is on its way joins it.
+class AgentForkAttempt {
+  AgentForkAttempt._(
+    this._machine,
+    this.source,
+    this._authRevision, {
+    this.name = '',
+    this.prompt = '',
+  });
+
+  /// The machine as it was when the form opened: a fork belongs to that connection.
+  final MachineState? _machine;
+
+  /// The agent as it was when the form opened. A fork is sent only while the machine still lists
+  /// this one — same id, same conversation.
+  final Agent? source;
+  final int _authRevision;
+
+  /// What the form holds: the fork's name and its first task.
+  String name, prompt;
+  String? _id;
+  bool _awaitingConfirmation = false;
+  Future<ForkAgentResult>? _inFlight;
+
+  /// The last answer, so the form opened again says what the last one ended on.
+  ForkAgentResult? result;
+
+  /// The fork was sent and its outcome is not known: Check status, not Fork.
+  bool get awaitingConfirmation => _awaitingConfirmation;
+  bool get busy => _inFlight != null;
+
+  /// The form's choices are held — while it is on its way, and while its outcome is unknown.
+  bool get locked => busy || awaitingConfirmation;
+  Future<ForkAgentResult>? get pending => _inFlight;
 }
 
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
@@ -114,13 +200,35 @@ class AgentCreationAttempt {
   /// The desk tab the agent joins once started, picked before it was asked for — see
   /// [PhoneDesk.adopt]. Null joins the tab the phone is in.
   String? _deskTabId;
+
+  /// The agent opens a desk tab of its own once started — the `+` at the end of Find's tab chips.
+  /// See [PhoneDesk.adopt].
+  bool _newDeskTab = false;
   Map<String, dynamic>? _choices;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
+
+  /// The Codex profile came off an agent the machine already runs on it (Clone), so the machine
+  /// is known to take one — the desktop's `_codexHomeTrusted`. The New form, which offers profiles
+  /// only from the machine's own engine list, leaves it false.
+  bool _codexHomeTrusted = false;
+
+  /// What the machine holds the request on — "Installing Kilo. The harness starts once it is
+  /// installed." — from a `pending` answer that names one. Null when it holds nothing: then it is
+  /// already starting the harness, and there is nothing left to cancel.
+  String? _holdReason;
+  bool _cancelling = false;
   String? _outcome;
   String? _agentId;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+
+  /// The machine holds this request before starting anything (an engine it is installing), so it
+  /// can still be called off — the desktop's `canCancelPending`, behind the form's Cancel request.
+  bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
+
+  /// A cancel is on its way to the machine.
+  bool get cancelling => _cancelling;
 
   /// The agent this attempt started, once the machine has confirmed it.
   ///
@@ -133,8 +241,60 @@ class AgentCreationAttempt {
   String? _complete(String? error) {
     _finished = true;
     _awaitingConfirmation = false;
+    _holdReason = null;
     return _outcome = error;
   }
+}
+
+/// One Change agent: the harness it moves off, the engine it moves to, and what it has done so far
+/// — the desktop's `_AgentChange`.
+///
+/// ⚠️ **Kept across a retry, receipt and all.** The switch is several round trips (write the record,
+/// save and stop the old agent, start the new one), and any of them can lose its reply. Choosing
+/// the same agent again carries THIS switch on: the same [creation] asks `agent_create_status`
+/// about the harness it may already have started instead of starting a second, and the same
+/// [creation] id names the same handoff file. See [AppNotifier.changeAgent] for when it is let go.
+class _AgentChange {
+  _AgentChange(this.source, this.engine, this.revision);
+
+  /// The harness as it was when the switch was chosen. Every step checks the machine still lists
+  /// this one — same registration, same conversation — before acting on it.
+  final Agent source;
+  final String engine;
+
+  /// The account session the switch belongs to; signing out ends it.
+  final int revision;
+
+  /// The new harness's creation receipt. Its id is also the handoff's `changeId`.
+  final AgentCreationAttempt creation = AgentCreationAttempt();
+  Future<AgentChangeResult>? pending;
+
+  /// The new agent's first message: the machine's record of the conversation, or, from an older
+  /// machine, the last requests and answer. Null when there was nothing to hand off.
+  String? handoff;
+
+  /// The handoff was settled (the record written, or confirmed empty), so a retry reads nothing.
+  bool contextLoaded = false;
+
+  /// The switch is held on the handoff, with the old agent still running: only the same engine
+  /// carries it on.
+  bool handoffHeld = false;
+
+  /// Settled with nothing to hand off, and whether that is because the reads failed rather than
+  /// because there was no conversation — which notice the switch ends on.
+  bool handoffEmpty = false, handoffFailed = false;
+
+  /// The old agent is being, or has been, saved and stopped: the switch must be finished, never
+  /// dropped, or the person is left with neither agent.
+  bool preservingViews = false;
+
+  /// The machine said the old agent is saved and stopped. A retry starts the new one without
+  /// closing again: this phone's list can still show the old one running until the machine's
+  /// update arrives, and a second Stop of it is not this switch's to send.
+  bool closed = false;
+
+  /// The new agent's launch failed: another engine may be chosen.
+  bool launchFailed = false;
 }
 
 class MachineState {
@@ -185,7 +345,8 @@ class MachineState {
   bool terminalPasteRawAvailable = false;
   // Whether this machine's CLI daemon understands TerminalBinaryKind.imagePaste (a native clipboard
   // IMAGE paste — see TerminalSession.pasteImage). False for any CLI published before this existed;
-  // the panel falls back to forwarding a bare Ctrl+V, today's only option for an image paste.
+  // the phone then says the machine is too old to receive images (phone/terminal_paste.dart) and
+  // never forwards a bare Ctrl+V, which would paste the far machine's clipboard, not the phone's.
   bool terminalImagePasteAvailable = false;
   // Whether this machine's CLI daemon understands TerminalBinaryKind.pasteFile (a dropped non-image
   // file, written to disk on that machine and pasted as a path — see TerminalSession.pasteFile).
@@ -284,8 +445,12 @@ class AppNotifier extends ChangeNotifier {
   late ApiClient api;
   late final ProductMeasurement productMeasurement;
 
-  /// The phone's onboarding steps after sign-in, counted through [productMeasurement].
-  late final onboardingMeasurement = OnboardingMeasurement(productMeasurement);
+  /// The phone's onboarding steps after sign-in, counted through [productMeasurement]. A wait for a
+  /// computer is remembered in the app's own store, for the launch that finds the computer.
+  late final onboardingMeasurement = OnboardingMeasurement(
+    productMeasurement,
+    storage: _paneLayout?.storage,
+  );
   final _measurementConnections = <String, void Function(ProductOutcome)>{};
 
   /// Each machine's dials, the person's (`connect_user`) apart from the app's own (`connect_auto`).
@@ -597,9 +762,13 @@ class AppNotifier extends ChangeNotifier {
   void addAgentToDeskTab(String tabId, AgentRef agent) =>
       _desk.addToTab(tabId, agent);
 
-  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// A tab renamed by hand, from holding its chip in Find.
   /// See [PhoneDesk.renameTab].
   void renameDeskTab(String tabId, String name) => _desk.renameTab(tabId, name);
+
+  /// A tab closed by hand, from holding its chip in Find. Its harnesses keep
+  /// running. See [PhoneDesk.closeTab].
+  void closeDeskTab(String tabId) => _desk.closeTab(tabId);
 
   /// An agent that already exists opens a tab of its own — the `+` on the tab
   /// row. See [PhoneDesk.createTabFor].
@@ -609,7 +778,11 @@ class AppNotifier extends ChangeNotifier {
   /// The next agent made on this phone gets a tab of its own — armed by the `+`
   /// on the tab row before the new-agent form opens, and spent (or forgotten)
   /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
-  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+  void openNextAgentInNewDeskTab({String? name}) =>
+      _desk.openNextAgentInNewTab(name: name);
+
+  /// Read the desk now and wait for it, so a write that follows has a desk to go to.
+  Future<void> readDesk() => _desk.refresh();
 
   /// That form closed without making anything.
   void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
@@ -1145,6 +1318,8 @@ class AppNotifier extends ChangeNotifier {
     // a launch of this app.
     if (!kUnderTest && paneLayoutStore != null) {
       launchMeasurement = LaunchMeasurement(this.productMeasurement);
+      // The install's first launch, once: the step between a store's download and a sign-in.
+      unawaited(this.productMeasurement.noteFirstOpen());
     }
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
@@ -1160,11 +1335,13 @@ class AppNotifier extends ChangeNotifier {
     try {
       release = await runningAppVersion();
     } catch (_) {}
+    final source = await installSource();
     if (_disposed) return;
     productMeasurement.context = {
       'surface': 'phone',
       // The backend refuses a whole report whose release is not a plain x.y.z.
-      'release': RegExp(r'^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){2}$').hasMatch(release)
+      'release':
+          RegExp(r'^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){2}$').hasMatch(release)
           ? release
           : 'unknown',
       'platform': switch (defaultTargetPlatform) {
@@ -1172,7 +1349,8 @@ class AppNotifier extends ChangeNotifier {
         TargetPlatform.android => 'android',
         _ => 'other',
       },
-      'channel': kReleaseMode ? 'production' : 'development',
+      // A tester's build (TestFlight) is `testing`: the backend keeps its totals apart.
+      'channel': measurementChannel(release: kReleaseMode, source: source),
     };
   }
 
@@ -1232,6 +1410,31 @@ class AppNotifier extends ChangeNotifier {
                 ? ProductOutcome.ok
                 : ProductOutcome.failed,
           );
+    }
+  }
+
+  /// The app went to the background with dials or a launch still open. Every dial ends `cancelled` —
+  /// `remote_connect`'s ([_cancelMeasurementConnections]) and `connect_user`/`connect_auto`'s
+  /// ([ProductConnections.cancelOpen]) — and the launch, if no computer has answered, `unknown`
+  /// ([LaunchMeasurement.foreground]), as it does when the app is hidden. Only the background ends them: a
+  /// system sheet or the app switcher (`inactive`) is not leaving, and a dial after the app is back is a
+  /// new count.
+  void _endOpenMeasurementsForBackground() {
+    _cancelMeasurementConnections();
+    productConnections.cancelOpen();
+    launchMeasurement?.foreground(false);
+  }
+
+  /// Ends every dial still going as `cancelled`: the person left the screen before it had an answer,
+  /// which is neither a success nor a failure of the socket. Each count is dropped from
+  /// [_measurementConnections] as it ends, so the socket's own answer later finds none to end again
+  /// (no second outcome), and a dial after the app is back starts a fresh count.
+  void _cancelMeasurementConnections() {
+    if (_measurementConnections.isEmpty) return;
+    final open = _measurementConnections.values.toList();
+    _measurementConnections.clear();
+    for (final finish in open) {
+      finish(ProductOutcome.cancelled);
     }
   }
 
@@ -1596,6 +1799,7 @@ class AppNotifier extends ChangeNotifier {
     // Which computer's tabs to show (Settings ▸ Profile). Queued behind the record above on
     // purpose, and not awaited: nothing picks a tab before the desk's network read lands.
     unawaited(_loadMachineProfile());
+    unawaited(_loadHarnessOsComputers());
     // No screen from the last run: the agent that record names is drawn as the skeleton until its
     // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
     // the app, on the store's terms: a test never reaches the real cache directory.
@@ -1711,6 +1915,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        // Made by a sign-in in this run, or coming back to it.
+        onboardingMeasurement.accountCreated(currentUser?.createdAt);
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser?.id case final id?) {
           unawaited(_deviceLog?.signedInAs(id));
@@ -2179,6 +2385,7 @@ class AppNotifier extends ChangeNotifier {
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
+    launchMeasurement?.waiting(LaunchWait.locked);
     // …unless the log already vouches for it and this phone's key is new to it: then the machine
     // has only not read that key yet — see [_redialOnceVouched].
     unawaited(_redialOnceVouched(machine.machine.machineId));
@@ -2352,6 +2559,9 @@ class AppNotifier extends ChangeNotifier {
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       accessTokenProvider: _socketToken,
+      // Which release, and whether a debug or simulator build, goes in the socket's query. A test dials
+      // as itself, with a fake channel, and says neither.
+      clientBuild: kIsWeb || kUnderTest ? null : runningClientBuild,
       relayCodecs: viewer.relayCodecs,
       transportPlugins: viewer.transportPlugins,
       onAuthFailure: _signedOutAtRuntime,
@@ -2374,6 +2584,12 @@ class AppNotifier extends ChangeNotifier {
       settling ? ConnectionStatus.connecting : nextStatus,
       ProductFlow.remoteConnect,
     );
+    // A socket retries only once a dial ended without the machine's welcome (`WsConn`).
+    if (nextStatus == ConnectionStatus.reconnecting &&
+        !machine.needsLink &&
+        _nodeOnlineFromStatus(machine.machine.status) == true) {
+      launchMeasurement?.waiting(LaunchWait.connectFailed);
+    }
     productConnections.status(
       machineId,
       connecting:
@@ -2392,6 +2608,8 @@ class AppNotifier extends ChangeNotifier {
     if (nextStatus == ConnectionStatus.connected) {
       // The first computer to answer ends the launch.
       launchMeasurement?.ready();
+      // Back with a new sign-in, maybe: a Swarm read it refused may be asked of it again.
+      _swarmRefused.remove(machineId);
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
       // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
@@ -2505,6 +2723,11 @@ class AppNotifier extends ChangeNotifier {
         // (dropping [machinesLoading]); one that answers only after an earlier failure does not.
         if (!machinesLoading) notifyListeners();
       }
+    } catch (_) {
+      if (_authWorkCurrent(revision)) {
+        launchMeasurement?.waiting(LaunchWait.listFailed);
+      }
+      rethrow;
     } finally {
       if (_authWorkCurrent(revision)) _machinesFetchedFor = revision;
       // Said out loud: the list's own notify fires before this, so a flag
@@ -2554,6 +2777,16 @@ class AppNotifier extends ChangeNotifier {
     machines = list
         .where((machine) => machine.authMode == MachineAuthMode.remote)
         .toList();
+    // A wait for a computer that an earlier launch left open, with the computer now here.
+    if (machines.isNotEmpty) unawaited(onboardingMeasurement.computersSeen());
+    // What this launch's wait for a computer is up against, as the list says.
+    if (machines.isEmpty) {
+      launchMeasurement?.waiting(LaunchWait.noComputer);
+    } else if (machines.every(
+      (machine) => _nodeOnlineFromStatus(machine.status) == false,
+    )) {
+      launchMeasurement?.waiting(LaunchWait.offline);
+    }
     final visible = machines.map((machine) => machine.machineId).toSet();
     // A code scanned for a machine this account does not have can never be
     // spent: the pairing screen waits for that machine to show up locked.
@@ -2961,7 +3194,11 @@ class AppNotifier extends ChangeNotifier {
           prev.tokensUpdatedAt != agent.tokensUpdatedAt ||
           prev.outputStats != agent.outputStats ||
           // Whether a stopped row can be opened at all ([Agent.canPauseAndResume]).
-          prev.resumeMode != agent.resumeMode);
+          prev.resumeMode != agent.resumeMode ||
+          // What Change agent closes the harness by, and the mode it carries over.
+          prev.createdAt != agent.createdAt ||
+          prev.closeSupported != agent.closeSupported ||
+          prev.permissionMode != agent.permissionMode);
 
   /// Public retry hook used by the offline join guide's "Retry now" action.
   Future<void> retryOfflineMachine(String machineId) =>
@@ -5886,14 +6123,15 @@ class AppNotifier extends ChangeNotifier {
 
   /// Hands a sign-in this phone caught back to [machineId], to the program waiting for it there
   /// (`browser_callback`, cli core/terminals/browser.ts). `{'error': 'UNAVAILABLE'}` when the line is down.
-  Future<Map<String, dynamic>> browserCallback(String machineId, String url) async {
+  Future<Map<String, dynamic>> browserCallback(
+    String machineId,
+    String url,
+  ) async {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(machineId).request(
-        'browser_callback',
-        payload: {'url': url},
-      );
+      return await _conn(machineId)
+          .request('browser_callback', payload: {'url': url});
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -5910,9 +6148,8 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(
-        machineId,
-      ).request('os_device', payload: payload, timeout: timeout);
+      return await _conn(machineId)
+          .request('os_device', payload: payload, timeout: timeout);
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -5923,11 +6160,126 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> osStatus = {};
   final Map<String, DateTime> _osAsked = {};
 
-  bool runsHarnessOs(String machineId) => osStatus[machineId]?['harnessOs'] == true;
+  bool runsHarnessOs(String machineId) =>
+      osStatus[machineId]?['harnessOs'] == true;
+
+  /// What a Harness OS computer's daemon does for a phone beyond its update and Wi-Fi, as its status
+  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`, and
+  /// `computer_use` on one that carries them. An older one says none.
+  bool osFeature(String machineId, String feature) {
+    final features = osStatus[machineId]?['features'];
+    return features is List && features.contains(feature);
+  }
 
   bool updateAvailable(String machineId) {
     final update = osStatus[machineId]?['update'];
-    return update is Map && update['available'] == true;
+    if (update is! Map || update['available'] != true) return false;
+    final parts = osParts(machineId);
+    // Named part by part: only what changes. A computer that does not name its parts says it whole.
+    if (parts.isEmpty) return true;
+    return osNewRelease(machineId) ||
+        parts['hn']?['available'] == true ||
+        parts['cli']?['available'] == true;
+  }
+
+  /// A Harness OS release newer than the one running — 0.1.9 after 0.1.8, not a later build of
+  /// 0.1.8, which a computer on 0.1.8 still offers (os/release_update.py compared whole packages).
+  bool osNewRelease(String machineId) {
+    final os = osParts(machineId)['os'];
+    if (os?['available'] != true) return false;
+    final next = os?['next'] as String?, running = os?['running'] as String?;
+    return next == null ||
+        running == null ||
+        releaseOf(next) != releaseOf(running);
+  }
+
+  /// A package version as its release: `0.1.8.r1792577066.g8df82cc2bc-1` is `0.1.8`.
+  static String releaseOf(String version) =>
+      RegExp(r'^\d+\.\d+\.\d+').firstMatch(version)?.group(0) ?? version;
+
+  /// Each part of a Harness OS computer, as its last status said (CLI osDevice.ts `update.parts`):
+  /// `os`, `hn`, `cli`, each `{running, available, next}`. Empty from a computer that does not say.
+  Map<String, Map<String, dynamic>> osParts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    final parts = update is Map ? update['parts'] : null;
+    if (parts is! Map) return const {};
+    return {
+      for (final entry in parts.entries)
+        if (entry.key is String && entry.value is Map)
+          entry.key as String: Map<String, dynamic>.from(entry.value as Map),
+    };
+  }
+
+  /// The update waiting needs the computer restarted: a new OS package, or one applied already that
+  /// is waiting for its restart. hn and the CLI alone do not.
+  bool updateRestarts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    if (update is! Map) return false;
+    if (update['restartRequired'] == true) return true;
+    return osNewRelease(machineId);
+  }
+
+  static const _harnessOsKey = 'harness_os_computers';
+
+  /// The Harness OS computers this phone has seen, kept between launches: the hotspot each opens and
+  /// whether its disk is encrypted. A computer switched off and on again is offline to the account,
+  /// waiting at its password; this is how the phone still knows to offer Unlock there.
+  final Map<String, ({String hotspot, bool encrypted})> harnessOsComputers = {};
+
+  Future<void> _loadHarnessOsComputers() async {
+    try {
+      final stored = await _paneLayout?.storage.read(_harnessOsKey);
+      if (stored == null || _disposed) return;
+      final decoded = jsonDecode(stored);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final value = entry.value;
+        if (entry.key is! String ||
+            value is! Map ||
+            value['hotspot'] is! String) {
+          continue;
+        }
+        harnessOsComputers[entry.key as String] = (
+          hotspot: value['hotspot'] as String,
+          encrypted: value['encrypted'] == true,
+        );
+      }
+      notifyListeners();
+    } catch (_) {
+      // Unreadable: learned again from each computer's next status.
+    }
+  }
+
+  void _rememberHarnessOs(String machineId, Map<String, dynamic> status) {
+    final hotspot = status['hotspot'];
+    if (status['harnessOs'] != true || hotspot is! String || hotspot.isEmpty) {
+      return;
+    }
+    final next = (hotspot: hotspot, encrypted: status['encrypted'] == true);
+    if (harnessOsComputers[machineId] == next) return;
+    harnessOsComputers[machineId] = next;
+    _saveHarnessOs();
+  }
+
+  /// Signed out from here: no Unlock for it any more. Its unlock would open the disk of a computer
+  /// that is set up again — with a sign-in, Set up Intern 3 — before it is online anywhere.
+  void forgetHarnessOs(String machineId) {
+    if (harnessOsComputers.remove(machineId) == null) return;
+    _saveHarnessOs();
+    notifyListeners();
+  }
+
+  void _saveHarnessOs() {
+    final json = jsonEncode({
+      for (final entry in harnessOsComputers.entries)
+        entry.key: {
+          'hotspot': entry.value.hotspot,
+          'encrypted': entry.value.encrypted,
+        },
+    });
+    unawaited(
+      _paneLayout?.storage.write(_harnessOsKey, json).catchError((_) {}),
+    );
   }
 
   /// Asks [machineId] what it is and whether it has an update, unless asked lately ([force] asks now).
@@ -5946,7 +6298,328 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     osStatus[machineId] = status;
+    _rememberHarnessOs(machineId, status);
     notifyListeners();
+  }
+
+  /// The machine the Swarm was last asked through, kept while it stays up so the reads of one
+  /// screen do not hop between computers.
+  String? _swarmMachineId;
+
+  /// Machines that refused a Swarm read another machine then answered: passed over until they
+  /// reconnect ([_onConnectionStatus]).
+  ///
+  /// ⚠️ Kept up, a refusing machine was asked for every read. On the owner's iPhone (2026-10-27)
+  /// the phone moved to a Team sign-in computer while the owner's Mac was briefly offline, then
+  /// read through it from 14:26 to 14:37 while the server refused every read, the Mac connected
+  /// all along — until the Team computer itself was marked offline.
+  final _swarmRefused = <String>{};
+
+  /// How long a Swarm call waits for a computer on its way back — a socket redialling — before it
+  /// says there is none.
+  @visibleForTesting
+  Duration swarmReconnectWait = const Duration(seconds: 8);
+
+  /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
+  /// the one asked last while it stays so, else the first by id, as the web build picks
+  /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`) — never one that refused. Null with
+  /// none up, or none but those in [except].
+  MachineState? _swarmMachine({Set<MachineState> except = const {}}) {
+    bool usable(MachineState? machine) =>
+        machine != null &&
+        !except.contains(machine) &&
+        machine.connectionStatus == ConnectionStatus.connected &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
+    final kept = machineStates[_swarmMachineId];
+    if (usable(kept)) return kept;
+    MachineState? best;
+    for (final machine in machineStates.values) {
+      if (!usable(machine)) continue;
+      if (best == null ||
+          machine.machine.machineId.compareTo(best.machine.machineId) < 0) {
+        best = machine;
+      }
+    }
+    // Looking past [except] chooses nothing yet: the read through it decides.
+    if (except.isEmpty) _swarmMachineId = best?.machine.machineId;
+    return best;
+  }
+
+  /// One Swarm backend call ([method] on [path], `/api/super-tabs…`), forwarded by one of the
+  /// account's own machines with its session (`super_tabs`, `action: backend`,
+  /// cli/src/superTabs/service.ts). The phone holds no Swarm credential: the machine checks that
+  /// this connection is its owner's, and the backend what that account may read. Answers the
+  /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
+  /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
+  ///
+  /// A refusal is asked again through each other machine that is up, one after another, up to
+  /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
+  /// machines' own — a Team sign-in the server will not read the person's Swarm for, say — and
+  /// they are passed over until they reconnect. Refusals alone pass over none: on #1802's review
+  /// a Team computer's refusal of its own once passed over the Mac that had said the person left
+  /// the Swarm. A command asked twice is the same command, under its operation id.
+  ///
+  /// With none answering, a refusal saying the person lost the Swarm stands over every other,
+  /// as everywhere: what was read of it must go. Otherwise, with no other machine up to ask, one
+  /// on its way back is waited for as below. With none, refusals from every machine up while
+  /// another of the account's is away tell nothing yet: no computer, so the list is read again
+  /// and Swarm soon retries ([SwarmInbox]). On the owner's iPhone (2026-10-27, 15:06) Swarm
+  /// showed a Team sign-in's refusal instead, and stayed on it until its next 15-second read,
+  /// 14 seconds after the Mac was back. With no other machine of the account, the last refusal
+  /// is the read's own.
+  ///
+  /// Nor is one read lost on the way — a timeout, a socket dropped — the end of it: it is asked
+  /// again through another computer that is up. With none up but one redialling, the call waits
+  /// [swarmReconnectWait] for it: Swarm said "Connect one of your computers" for 10 to 25 seconds
+  /// at a time on the owner's iPhone (2026-10-27) while the computer stayed connected.
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    var machine = _swarmMachine() ?? await _swarmMachineBack();
+    if (machine == null) throw _swarmNoComputer();
+    final asked = <MachineState>{}, refused = <MachineState>[];
+    SuperTabFailure? lost;
+    late Object failure;
+    late StackTrace trace;
+    while (machine != null) {
+      asked.add(machine);
+      try {
+        final value = await _swarmRequestVia(machine, method, path, body);
+        _swarmRefused.addAll([for (final m in refused) m.machine.machineId]);
+        _swarmMachineId = machine.machine.machineId;
+        return value;
+      } on SuperTabFailure catch (refusal, stack) {
+        if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
+        (failure, trace) = (refusal, stack);
+        refused.add(machine);
+        if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(refusal.code)) {
+          lost ??= refusal;
+        }
+      } catch (error, stack) {
+        (failure, trace) = (error, stack);
+      }
+      if (asked.length == _swarmAsksPerCall) break;
+      machine =
+          _swarmMachine(except: asked) ??
+          (failure is SuperTabFailure
+              ? await _swarmMachineBack(except: asked)
+              : null);
+    }
+    if (lost != null) throw lost;
+    if (machine == null &&
+        failure is SuperTabFailure &&
+        _swarmAnyOther(asked)) {
+      throw _swarmNoComputer();
+    }
+    Error.throwWithStackTrace(failure, trace);
+  }
+
+  /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
+  /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
+  /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
+  /// that lands after the account changed is dropped.
+  Future<Map<String, dynamic>> swarmUpload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    try {
+      final answer = await api.uploadSwarmAttachment(
+        tabId: tabId,
+        conversationId: conversationId,
+        name: name,
+        mime: mime,
+        bytes: bytes,
+        cancel: cancel,
+        onProgress: onProgress,
+      );
+      stillThisAccount();
+      return answer;
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+  }
+
+  /// How many machines one Swarm call asks at most, one after another.
+  static const _swarmAsksPerCall = 5;
+
+  /// No computer to ask the Swarm through, with the list read again.
+  SuperTabFailure _swarmNoComputer() {
+    _swarmListAgain();
+    return const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'Connect one of your computers to open Swarm.',
+    );
+  }
+
+  /// Another of the account's machines than those [asked] could be asked once it is up: linked,
+  /// and not passed over.
+  bool _swarmAnyOther(Set<MachineState> asked) => machineStates.values.any(
+    (other) =>
+        !asked.contains(other) &&
+        !other.needsLink &&
+        !_swarmRefused.contains(other.machine.machineId),
+  );
+
+  /// When the computer list was last read again for Swarm: at most once in [_swarmListGap].
+  DateTime? _swarmListedAt;
+  static const _swarmListGap = Duration(seconds: 2);
+
+  /// No computer to ask: the list is read again, as a refresh by hand would. What it says of each
+  /// one can be stale — a computer reported off at launch whose socket waits parked for a word
+  /// that it is back — and with any socket up, nothing else reads it again ([_rereadMachinesWhileDeaf]).
+  /// Swarm's own retries set the pace ([SwarmInbox]).
+  void _swarmListAgain() {
+    final now = DateTime.now();
+    final last = _swarmListedAt;
+    if (last != null && now.difference(last) < _swarmListGap) return;
+    _swarmListedAt = now;
+    _rereadMachines();
+  }
+
+  /// A computer that comes up within [swarmReconnectWait], when one is on its way: dialling or
+  /// redialling, linked, not reported off, and not passed over — nor in [except]. Null otherwise.
+  Future<MachineState?> _swarmMachineBack({
+    Set<MachineState> except = const {},
+  }) async {
+    bool coming(MachineState machine) =>
+        !except.contains(machine) &&
+        (machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting) &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
+    if (!machineStates.values.any(coming)) return null;
+    final back = Completer<MachineState?>();
+    void look() {
+      if (back.isCompleted) return;
+      final machine = _swarmMachine(except: except);
+      if (machine != null || !machineStates.values.any(coming)) {
+        back.complete(machine);
+      }
+    }
+
+    addListener(look);
+    final timer = Timer(swarmReconnectWait, () {
+      if (!back.isCompleted) back.complete(null);
+    });
+    try {
+      return await back.future;
+    } finally {
+      timer.cancel();
+      removeListener(look);
+    }
+  }
+
+  Future<Object?> _swarmRequestVia(
+    MachineState machine,
+    String method,
+    String path,
+    Map<String, dynamic>? body,
+  ) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    final Map<String, dynamic> answer;
+    try {
+      answer = await _conn(machine.machine.machineId).request(
+        'super_tabs',
+        payload: {
+          'action': 'backend',
+          'method': method,
+          'path': path,
+          'body': ?body,
+        },
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      stillThisAccount();
+      throw SuperTabFailure(
+        failure.code,
+        failure.detail ?? 'Could not reach this Swarm.',
+      );
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+    stillThisAccount();
+    if (answer['error'] != null) {
+      throw SuperTabFailure(
+        answer['error'].toString(),
+        answer['detail'] as String? ?? 'Could not reach this Swarm.',
+        statusCode: (answer['status'] as num?)?.toInt() ?? 0,
+      );
+    }
+    return answer['value'];
+  }
+
+  /// Asks the account's own computer [machineId] a Swarm question of its own
+  /// (`super_tabs`), such as preparing a Buddy's folder there
+  /// (`prepareContribution`, as the desktop's `prepareBuddyMachine` asks it).
+  /// A refusal throws; so does an account change while it was asked.
+  Future<Map<String, dynamic>> swarmAskComputer(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) {
+      throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'This computer is not connected. Open Harness on it, then try again.',
+      );
+    }
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    final Map<String, dynamic> answer;
+    try {
+      answer = await _conn(machineId).request(
+        'super_tabs',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      stillThisAccount();
+      throw SuperTabFailure(
+        failure.code,
+        failure.detail ?? 'Could not reach this computer.',
+      );
+    }
+    stillThisAccount();
+    return answer;
   }
 
   Future<Map<String, dynamic>> connectors(
@@ -5957,11 +6630,8 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(machineId).request(
-        'connectors',
-        payload: payload,
-        timeout: timeout,
-      );
+      return await _conn(machineId)
+          .request('connectors', payload: payload, timeout: timeout);
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6093,17 +6763,23 @@ class AppNotifier extends ChangeNotifier {
   /// picked — cannot be forgotten.
   ///
   /// [deskTabId] is the desk tab the agent joins once started — the one Find was narrowed to —
-  /// instead of the tab the phone is in. See [PhoneDesk.adopt].
+  /// instead of the tab the phone is in. [newDeskTab] opens a desk tab of its own for it instead —
+  /// Find's `+` at the end of the tab chips. See [PhoneDesk.adopt].
   Future<String?> createAgent(
     String machineId, {
     required String engine,
-    required String folder,
+
+    /// Where the harness works. Null only for a terminal (`kTerminalEngine`), which the machine
+    /// then opens at its home folder, as a terminal app would — the desktop's rule. The CLI refuses
+    /// every other engine without one (`INVALID_CWD`), so null is never a way to mean "anywhere".
+    required String? folder,
     ProjectFolderRequest? projectFolder,
     String? permissionMode,
     String? codexHome,
     GridModel? model,
     String? swarmId,
     String? deskTabId,
+    bool newDeskTab = false,
     AgentCreationAttempt? attempt,
     String? prompt,
     String? name,
@@ -6118,7 +6794,9 @@ class AppNotifier extends ChangeNotifier {
       // What the agent is called until its engine titles the session. Absent, the machine names it
       // after the engine and the time ("Codex harness 9-17 15:26").
       if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
-      if (projectFolder == null) 'cwd': folder,
+      // ⚠️ Left out, not sent empty, when there is no folder: the CLI opens a terminal at home only
+      // when `cwd` is ABSENT (`launches.ts`), and refuses an empty one as INVALID_CWD.
+      if (projectFolder == null && folder != null) 'cwd': folder,
       ...?projectFolder?.payload,
       'permissionMode': ?permissionMode,
       // ⚠️ **Both keys, and the older one is not redundant.** `permissionMode`
@@ -6134,14 +6812,135 @@ class AppNotifier extends ChangeNotifier {
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
     };
-    return _create(
+    final created = _create(
       machineId,
       choices,
       swarmId: swarmId,
       deskTabId: deskTabId,
+      newDeskTab: newDeskTab,
       attempt: creation,
     );
+    if (task == null || task.isEmpty) return created;
+    // A task typed into New Harness is a message sent to a session too: the onboarding's first
+    // message, if it is still waiting for one (`terminal_page.dart` counts every other send).
+    return created.then((error) {
+      if (error == null) {
+        onboardingMeasurement.end(ProductFlow.firstMessage, ProductOutcome.ok);
+      }
+      return error;
+    });
   }
+
+  /// Clones on their way or still to be confirmed, by machine and source agent — see [cloneAgent].
+  final Map<(String, String), AgentCreationAttempt> _agentClones = {};
+
+  /// Whether a Clone of this agent is on its way: the menu's row says so and takes no tap.
+  bool agentCloning(String machineId, String agentId) =>
+      _agentClones[(machineId, agentId)]?._inFlight != null;
+
+  /// Clone: another agent of the same kind as [agentId], with a fresh conversation — fork minus the
+  /// context. The desktop's `cloneAgent` (⌘⇧N): same machine, same project folder, same engine or
+  /// harness, Codex profile, named agent and permission mode, every one read off the agent's own
+  /// frame. Nothing of the source is touched, so a clone works while the source is busy or has no
+  /// conversation yet, where a fork would wait or refuse.
+  ///
+  /// A machine from before the frame carried the launch choices reports them null; the clone then
+  /// opens the way New Harness would by default. A terminal clones to a terminal in the same
+  /// folder, which the machine names itself.
+  ///
+  /// Null once the clone exists — its id is on [cloneAttempt] — else the sentence to show.
+  ///
+  /// ⚠️ **A lost reply is kept, receipt and all.** The machine may have started the clone, so the
+  /// next Clone of the same agent asks `agent_create_status` about the same receipt instead of
+  /// starting a second one; only a confirmed outcome lets it go.
+  Future<String?> cloneAgent(String machineId, String agentId) {
+    final key = (machineId, agentId);
+    final held = _agentClones[key];
+    if (held != null) {
+      if (held._inFlight case final inFlight?) return inFlight;
+      if (held.awaitingConfirmation) {
+        return _settleClone(key, checkAgentCreation(held), held);
+      }
+      _agentClones.remove(key);
+    }
+    final machine = machineStates[machineId];
+    if (machine == null) return Future.value('Machine not found');
+    final source = machine.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (source == null) {
+      return Future.value('The source harness is no longer available.');
+    }
+    final engine = source.engine;
+    if (engine == null) {
+      return Future.value('${source.displayName} has no engine to clone.');
+    }
+    if (!source.canClone) {
+      return Future.value(
+        '${source.displayName} runs on a grid; cloning a grid harness is not supported.',
+      );
+    }
+    final terminal = engine == 'terminal';
+    final cwd = source.project?.cwd;
+    if ((cwd == null || cwd.isEmpty) && !terminal) {
+      return Future.value(
+        '${source.displayName} has no project folder to clone into.',
+      );
+    }
+    final attempt = AgentCreationAttempt()
+      .._codexHomeTrusted = source.codexHome != null;
+    final work = _create(machineId, {
+      'engine': engine,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      'dsh': ?source.dsh,
+      if (engine == 'codex') 'codexHome': ?source.codexHome,
+      'agent': ?source.namedAgent,
+      'permissionMode': ?source.permissionMode,
+      // Unrecorded is not "off": an older machine's agent clones the way a new one would open. A
+      // terminal has no permissions to bypass. The desktop's rule.
+      'bypassPermission': source.bypassPermission ?? !terminal,
+      // A terminal is named by the machine, as the desktop's ⌘⇧T is.
+      if (!terminal) 'name': cloneNameFor(source.displayName),
+    }, attempt: attempt);
+    _agentClones[key] = attempt;
+    return _settleClone(key, work, attempt);
+  }
+
+  /// The attempt behind the last Clone of [agentId], for the page to open what it started.
+  AgentCreationAttempt? cloneAttempt(String machineId, String agentId) =>
+      _agentClones[(machineId, agentId)];
+
+  /// Lets a clone's attempt go once its outcome is known — kept only while it is still to be
+  /// confirmed — and tells the menu it is no longer on its way.
+  Future<String?> _settleClone(
+    (String, String) key,
+    Future<String?> work,
+    AgentCreationAttempt attempt,
+  ) {
+    notifyListeners();
+    return work
+        .then(
+          // The New form's "Check status" is a button this menu does not have: here it is Clone
+          // again, which asks about the same receipt.
+          (error) => error != null && attempt.awaitingConfirmation
+              ? 'The clone is not confirmed yet. Tap Clone again to check '
+                    'before starting another.'
+              : error,
+        )
+        .whenComplete(() {
+          if (identical(_agentClones[key], attempt) &&
+              !attempt.awaitingConfirmation &&
+              attempt._inFlight == null &&
+              attempt.agentId == null) {
+            _agentClones.remove(key);
+          }
+          if (!_disposed) notifyListeners();
+        });
+  }
+
+  /// The name a clone is offered: the source's, marked as a clone — the desktop's `cloneNameFor`.
+  static String cloneNameFor(String name) =>
+      '${name.trim().isEmpty ? 'Harness' : name.trim()} - clone';
 
   /// A Claude Code or Codex conversation Harness did not start, opened as a harness that resumes
   /// it, in its own folder (Find's "not in Harness" rows, `ExternalSessionRef`) — the desktop's
@@ -6189,6 +6988,7 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> choices, {
     String? swarmId,
     String? deskTabId,
+    bool newDeskTab = false,
     AgentCreationAttempt? attempt,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
@@ -6207,6 +7007,7 @@ class AppNotifier extends ChangeNotifier {
       creation._targetId = swarmId ?? activeSwarmId;
       // With the request, not read again on a Check status: the tab picked is the one asked for.
       creation._deskTabId = deskTabId;
+      creation._newDeskTab = newDeskTab;
     }
     final work = _createAgentWithReceipt(creation);
     creation._inFlight = work;
@@ -6227,85 +7028,127 @@ class AppNotifier extends ChangeNotifier {
     String? detail,
     String machine, {
     Map<String, dynamic>? choices,
-  }) =>
-      switch (code) {
-        // A New Folder named after its first task (`projectNameMode:
-        // suggested`). A current machine numbers that name past a folder that
-        // exists (`robot-2`), so only one that predates the mode refuses it, and
-        // its sentence is written for a name somebody typed. The phone has no
-        // name field to change instead, so it says the way to a fresh folder.
-        'PROJECT_EXISTS' when choices?['projectNameMode'] == 'suggested' =>
-          'A folder named after this task already exists on $machine. '
-              'Choose it from your projects, or update Harness there to make '
-              'a new one.',
-        // Making the project folder (a new one, a clone, a worktree or a
-        // branch) before anything starts in it: `cli/src/lib/projectFolder.ts`
-        // and `gitProject.ts`. The machine's sentence says what to change: the
-        // URL, the branch, Worktree.
-        'INVALID_PROJECT_SOURCE' ||
-        'INVALID_REPOSITORY' ||
-        'PROJECT_PREPARATION_FAILED' ||
-        'PROJECT_EXISTS' ||
-        'CLONE_FAILED' ||
-        'CLONE_TIMEOUT' ||
-        'GIT_PROJECT_UNAVAILABLE' ||
-        'INVALID_BRANCH' ||
-        'BRANCH_SWITCH_FAILED' ||
-        'WORKTREE_FAILED' ||
-        'GIT_UNAVAILABLE' =>
-          detail ?? 'Could not prepare the project folder on $machine.',
-        'CWD_NOT_FOUND' || 'INVALID_CWD' =>
-          'The project folder is unavailable on $machine. '
-              'Choose another folder and try again.',
-        'TMUX_UNAVAILABLE' =>
-          'Harness needs tmux to start harnesses on $machine. '
-              'Install tmux there, then try again.',
-        // The machine's own sentence names the engine and the flag it lacks.
-        // Without one, the phone's Approvals names the way out.
-        'CODEX_CLI_TOO_OLD' =>
-          detail ??
-              'The installed Codex CLI on $machine is too old for '
-                  'Auto-approve. Update Codex there, or choose Ask first under '
-                  'Approvals.',
-        'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-          'Update the harness CLI on this machine to create a harness',
-        'INVALID_DSH' =>
-          'This harness is not installed on $machine. '
-              '${detail ?? 'Install it there, then try again.'}',
-        'PROMPT_UNSUPPORTED' =>
-          'This engine cannot be opened with a first message on $machine.',
-        'PROMPT_TOO_LONG' =>
-          'This first task is too long for $machine. Shorten it and try again.',
-        'AGENT_UNSUPPORTED' =>
-          'This engine cannot be opened as a named agent on $machine.',
-        'INVALID_AGENT' =>
-          'This engine cannot be opened as that named agent on $machine.',
-        'INVALID_PERMISSION_MODE' =>
-          'This engine has no such permission mode on $machine.',
-        // A daemon older than the engine refuses it by name, with no detail;
-        // the fix is the update the UNSUPPORTED codes ask for. A detail is a
-        // reason of its own (the sample runs only Claude Code and Codex).
-        'INVALID_ENGINE' =>
-          detail ?? 'Update the harness CLI on $machine to start this agent.',
-        // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
-        // stopped it: open elsewhere, already a harness, gone.
-        'SESSION_OPEN_ELSEWHERE' ||
-        'SESSION_IN_HARNESS' ||
-        'SESSION_NOT_FOUND' ||
-        'SESSION_FOLDER_GONE' ||
-        'SESSION_BUSY_IN_TERMINAL' ||
-        'SESSION_STOP_FAILED' ||
-        'INVALID_SESSION' =>
-          detail ?? 'Could not open that conversation on $machine.',
-        // Not the machine's own sentence: it ends "Moving it here quits it
-        // there", written for the desktop's take-over button. A phone sends no
-        // `takeOver` and has no such button, so what it can offer is the way
-        // that works from here.
-        'SESSION_OPEN_IN_TERMINAL' =>
-          'It is open in a terminal on $machine. Close it there, then open '
-              'it here.',
-        _ => 'Create harness failed: ${detail ?? code}',
-      };
+  }) => switch (code) {
+    // A New Folder named after its first task (`projectNameMode:
+    // suggested`). A current machine numbers that name past a folder that
+    // exists (`robot-2`), so only one that predates the mode refuses it, and
+    // its sentence is written for a name somebody typed. The phone has no
+    // name field to change instead, so it says the way to a fresh folder.
+    'PROJECT_EXISTS' when choices?['projectNameMode'] == 'suggested' =>
+      'A folder named after this task already exists on $machine. '
+          'Choose it from your projects, or update Harness there to make '
+          'a new one.',
+    // Making the project folder (a new one, a clone, a worktree or a
+    // branch) before anything starts in it: `cli/src/lib/projectFolder.ts`
+    // and `gitProject.ts`. The machine's sentence says what to change: the
+    // URL, the branch, Worktree.
+    'INVALID_PROJECT_SOURCE' ||
+    'INVALID_REPOSITORY' ||
+    'PROJECT_PREPARATION_FAILED' ||
+    'PROJECT_EXISTS' ||
+    'CLONE_FAILED' ||
+    'CLONE_TIMEOUT' ||
+    'GIT_PROJECT_UNAVAILABLE' ||
+    'INVALID_BRANCH' ||
+    'BRANCH_SWITCH_FAILED' ||
+    'WORKTREE_FAILED' ||
+    'GIT_UNAVAILABLE' =>
+      detail ?? 'Could not prepare the project folder on $machine.',
+    'CWD_NOT_FOUND' || 'INVALID_CWD' =>
+      'The project folder is unavailable on $machine. '
+          'Choose another folder and try again.',
+    'TMUX_UNAVAILABLE' =>
+      'Harness needs tmux to start harnesses on $machine. '
+          'Install tmux there, then try again.',
+    'PTY_HOST_UNAVAILABLE' =>
+      'Harness could not open a terminal on $machine. '
+          'Run harness start on that computer, then try again.',
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail != null && detail.isNotEmpty
+          ? detail
+          : 'This engine cannot start on $machine. Nothing was started.',
+    // The machine's own sentence names the engine and the flag it lacks.
+    // Without one, the phone's Approvals names the way out.
+    'CODEX_CLI_TOO_OLD' =>
+      detail ??
+          'The installed Codex CLI on $machine is too old for '
+              'Auto-approve. Update Codex there, or choose Ask first under '
+              'Approvals.',
+    'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+      'Update the harness CLI on this machine to create a harness',
+    'INVALID_DSH' =>
+      'This harness is not installed on $machine. '
+          '${detail ?? 'Install it there, then try again.'}',
+    'PROMPT_UNSUPPORTED' =>
+      'This engine cannot be opened with a first message on $machine.',
+    'PROMPT_TOO_LONG' =>
+      'This first task is too long for $machine. Shorten it and try again.',
+    'AGENT_UNSUPPORTED' =>
+      'This engine cannot be opened as a named agent on $machine.',
+    'INVALID_AGENT' =>
+      'This engine cannot be opened as that named agent on $machine.',
+    'INVALID_PERMISSION_MODE' =>
+      'This engine has no such permission mode on $machine.',
+    // A daemon older than the engine refuses it by name, with no detail;
+    // the fix is the update the UNSUPPORTED codes ask for. A detail is a
+    // reason of its own (the sample runs only Claude Code and Codex).
+    'INVALID_ENGINE' =>
+      detail ?? 'Update the harness CLI on $machine to start this agent.',
+    // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
+    // stopped it: open elsewhere, already a harness, gone.
+    'SESSION_OPEN_ELSEWHERE' ||
+    'SESSION_IN_HARNESS' ||
+    'SESSION_NOT_FOUND' ||
+    'SESSION_FOLDER_GONE' ||
+    'SESSION_BUSY_IN_TERMINAL' ||
+    'SESSION_STOP_FAILED' ||
+    'INVALID_SESSION' =>
+      detail ?? 'Could not open that conversation on $machine.',
+    // Not the machine's own sentence: it ends "Moving it here quits it
+    // there", written for the desktop's take-over button. A phone sends no
+    // `takeOver` and has no such button, so what it can offer is the way
+    // that works from here.
+    'SESSION_OPEN_IN_TERMINAL' =>
+      'It is open in a terminal on $machine. Close it there, then open '
+          'it here.',
+    _ => 'Create harness failed: ${detail ?? code}',
+  };
+
+  /// Calls off a request the machine holds — the New form's Cancel request, the desktop's
+  /// `cancelAgentCreation`. Null once the machine says it is cancelled; otherwise what to tell the
+  /// person, with the request still kept to check.
+  ///
+  /// ⚠️ **Confirmed by the machine's own receipt.** A lost reply here cannot turn the original
+  /// request into a fresh one: the attempt keeps its receipt, and Check status asks about it.
+  Future<String?> cancelAgentCreation(AgentCreationAttempt creation) async {
+    if (!creation.canCancelPending ||
+        creation._cancelling ||
+        creation._inFlight != null) {
+      return 'Check the request status before cancelling.';
+    }
+    final machineId = creation._machineId;
+    if (machineId == null || !machineStates.containsKey(machineId)) {
+      return 'The original machine is unavailable. The request is still saved.';
+    }
+    creation._cancelling = true;
+    try {
+      final result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creation._id},
+        timeout: const Duration(seconds: 10),
+      );
+      if (result['creationId'] == creation._id &&
+          result['state'] == 'cancelled') {
+        creation._complete('Creation cancelled.');
+        return null;
+      }
+      return 'The request may already be starting. Check status before starting another.';
+    } catch (_) {
+      return 'Cancellation is not confirmed. Check status before starting another.';
+    } finally {
+      creation._cancelling = false;
+    }
+  }
 
   Future<String?> _createAgentWithReceipt(AgentCreationAttempt creation) async {
     final machineId = creation._machineId!;
@@ -6323,7 +7166,8 @@ class AppNotifier extends ChangeNotifier {
         if (choices['engine'] != 'codex') {
           return 'Choose a Codex profile only for Codex';
         }
-        if (machine.engines['codex']?.supportsCodexHome != true) {
+        if (!creation._codexHomeTrusted &&
+            machine.engines['codex']?.supportsCodexHome != true) {
           return 'Update the harness CLI on this machine to choose a Codex profile';
         }
       }
@@ -6417,6 +7261,8 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_AGENT',
         'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         // An engine too old for the approval mode's flag: refused rather than
         // left printing its help in a pane.
         'CODEX_CLI_TOO_OLD',
@@ -6467,7 +7313,20 @@ class AppNotifier extends ChangeNotifier {
         return '$machineName has no record of this request. '
             'Use Find a harness to look for it before creating another.';
       case 'pending':
+        // Held before anything started — an engine being installed, a model waking — the machine
+        // says on what, in a sentence of its own, and the request can still be called off.
+        final held = result['held'];
+        if (held is Map) {
+          final detail = held['detail'];
+          if (detail is String && detail.isNotEmpty) {
+            creation._holdReason = detail;
+            return detail;
+          }
+        }
+        creation._holdReason = null;
         return '$machineName is still starting your harness. Check again in a moment.';
+      case 'cancelled':
+        return creation._complete('Creation cancelled.');
       case 'unconfirmed':
         return '$machineName could not confirm whether this harness started. '
             'Use Open Harness to look for it before creating another.';
@@ -6531,12 +7390,14 @@ class AppNotifier extends ChangeNotifier {
       return null;
     }
     // Created HERE, so it joins the tab this phone is in — the way an agent
-    // created in a window joins that window's tab — or the tab picked for it.
-    // See [PhoneDesk.adopt] for what happens when the phone is in no tab.
+    // created in a window joins that window's tab — or the tab picked for it,
+    // or a tab of its own. See [PhoneDesk.adopt] for what happens when the
+    // phone is in no tab.
     _desk.adopt(
       (machineId: machineId, agentId: agent.id),
       name: agent.displayName,
       tabId: creation._deskTabId,
+      newTab: creation._newDeskTab,
     );
     await assignAgentToPane(null, machineId, agent.id, swarmId: targetId);
     return null;
@@ -6546,7 +7407,7 @@ class AppNotifier extends ChangeNotifier {
   /// `backend/src/routes/machines.ts` refuses anything longer.
   static const machineNameMaxLength = 40;
 
-  /// Computers this phone just set up (Settings ▸ Set up a device): Computers marks them "new" until
+  /// Computers this phone just set up (Settings ▸ Set up Intern 3): Computers marks them "new" until
   /// one is opened. This run only.
   final Set<String> _newMachines = {};
 
@@ -6558,6 +7419,20 @@ class AppNotifier extends ChangeNotifier {
 
   void sawMachine(String machineId) {
     if (_newMachines.remove(machineId)) notifyListeners();
+  }
+
+  /// New computers whose Start was pressed and is still bringing up their harness: their row drops
+  /// "new" and its Start spins.
+  final Set<String> _startingMachines = {};
+
+  bool machineStarting(String machineId) =>
+      _startingMachines.contains(machineId);
+
+  void setMachineStarting(String machineId, bool starting) {
+    final changed = starting
+        ? _startingMachines.add(machineId)
+        : _startingMachines.remove(machineId);
+    if (changed) notifyListeners();
   }
 
   /// Renames a machine via `PATCH /api/machines/:machineId` (control-plane REST — the machine's
@@ -6638,7 +7513,8 @@ class AppNotifier extends ChangeNotifier {
 
   Future<String?> _performDeleteMachine(String machineId) async {
     final revision = _authRevision;
-    final name = machineStates[machineId]?.machine.displayName ?? 'This computer';
+    final name =
+        machineStates[machineId]?.machine.displayName ?? 'This computer';
     final device = await _machineDeviceKey(machineId);
     // Signed out, or into another account, while the log was read: nothing here is theirs.
     if (!_authWorkCurrent(revision)) return null;
@@ -6655,7 +7531,9 @@ class AppNotifier extends ChangeNotifier {
       // Gone from the log already — another device signed it out after this phone read the log:
       // what this step was for is done.
       if (failure == 'NOT_IN_LOG') failure = null;
-      if (failure != null) return 'Couldn’t sign $name out ($failure). Try again.';
+      if (failure != null) {
+        return 'Couldn’t sign $name out ($failure). Try again.';
+      }
       // The account let it go meanwhile (removed from another device): no record is left to delete.
       if (machineStates[machineId] == null) return null;
     }
@@ -6727,7 +7605,9 @@ class AppNotifier extends ChangeNotifier {
         return null;
       }().timeout(_machineKeyReadCap);
     } catch (error) {
-      debugPrint('devices: could not read the key of ${_shortId(machineId)}: $error');
+      debugPrint(
+        'devices: could not read the key of ${_shortId(machineId)}: $error',
+      );
       return null;
     }
   }
@@ -6825,6 +7705,116 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
+  /// Queued Stops on their way to the machine, by machine and agent — what a second press joins.
+  final Map<(String, String), Future<String?>> _closePlanRequests = {};
+
+  /// Whether a Stop after it finishes, or calling one off, is on its way for this agent.
+  bool agentClosePlanPending(String machineId, String agentId) =>
+      _closePlanRequests.containsKey((machineId, agentId));
+
+  /// Whether this agent can be stopped once it finishes: its machine closes harnesses on request
+  /// (`agent_close`), and it has a conversation to finish — a shell never reads as idle, so its
+  /// Stop would wait forever.
+  static bool canStopAfterTask(Agent agent) =>
+      agent.closeSupported &&
+      agent.createdAt != null &&
+      agent.engine != 'terminal' &&
+      !agent.isStopped;
+
+  /// Stop after it finishes: the machine waits for the agent to be idle, then saves and stops it
+  /// (`agent_close`, `after_task`) — what the desktop's close does with a session still working.
+  /// Its conversation is kept, as Stop's is. Null once the machine has queued it, else the
+  /// sentence to show.
+  Future<String?> stopAfterTask(String machineId, String agentId) =>
+      _requestClosePlan(machineId, agentId, 'after_task');
+
+  /// Keep running: the queued Stop called off (`agent_close`, `cancel`).
+  Future<String?> keepRunning(String machineId, String agentId) =>
+      _requestClosePlan(machineId, agentId, 'cancel');
+
+  Future<String?> _requestClosePlan(
+    String machineId,
+    String agentId,
+    String mode,
+  ) {
+    final key = (machineId, agentId);
+    if (_closePlanRequests[key] case final pending?) return pending;
+    final request = _sendClosePlan(machineId, agentId, mode).whenComplete(() {
+      _closePlanRequests.remove(key);
+      if (!_disposed) notifyListeners();
+    });
+    _closePlanRequests[key] = request;
+    notifyListeners();
+    return request;
+  }
+
+  Future<String?> _sendClosePlan(
+    String machineId,
+    String agentId,
+    String mode,
+  ) async {
+    final machine = machineStates[machineId];
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null) {
+      return 'This harness is no longer available.';
+    }
+    if (!canStopAfterTask(agent)) {
+      return 'Update the Harness CLI on this machine to stop a harness once it finishes.';
+    }
+    final revision = _authRevision;
+    final Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        'agent_close',
+        payload: {
+          'agentId': agent.id,
+          'sessionId': agent.sessionId ?? '',
+          'createdAt': agent.createdAt!.toUtc().toIso8601String(),
+          'mode': mode,
+        },
+        timeout: const Duration(seconds: 15),
+      );
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'AGENT_CHANGED') {
+        return 'The harness changed. Open its menu again.';
+      }
+      final detail = failure.detail;
+      return detail != null && detail.isNotEmpty
+          ? detail
+          : mode == 'cancel'
+          ? 'Could not keep it running: ${failure.code}'
+          : 'Could not queue the stop: ${failure.code}';
+    } catch (_) {
+      // A lost reply is not a refusal: the machine may have queued it. Its frame says which once
+      // the agents are read again, and the row follows that.
+      unawaited(reloadMachineData(machineId));
+      return mode == 'cancel'
+          ? 'Could not confirm it keeps running. Check its menu again in a moment.'
+          : 'Could not confirm the stop is queued. Check its menu again in a moment.';
+    }
+    final done = mode == 'cancel'
+        ? result['cancelled'] == true
+        : result['deferred'] == true || result['closed'] == true;
+    if (!done) {
+      final detail = result['detail'];
+      return detail is String && detail.isNotEmpty
+          ? detail
+          : 'The machine did not confirm it. Check its menu again in a moment.';
+    }
+    // The machine's push says the same in a moment; the menu reads it now.
+    if (!_disposed && _machineWorkCurrent(machine, revision)) {
+      final index = machine.agents.indexWhere((a) => a.id == agentId);
+      if (index != -1 && result['closed'] != true) {
+        machine.agents = [...machine.agents]
+          ..[index] = mode == 'cancel'
+              ? machine.agents[index].copyWith(clearClosePlan: true)
+              : machine.agents[index].copyWith(closePlanState: 'waiting');
+        notifyListeners();
+      }
+    }
+    return null;
+  }
+
   /// Tells the machine that owns an agent it was just opened here, so it can stamp
   /// `lastOpenedAt` and every app — this phone, each desktop — sorts by the same
   /// last use. Fire and forget: a daemon too old to keep the stamp answers
@@ -6838,7 +7828,14 @@ class AppNotifier extends ChangeNotifier {
     final key = '$machineId/$agentId';
     final now = DateTime.now();
     final last = _touchedAt[key];
-    if (last != null && now.difference(last) < _touchEvery) return;
+    // A Stop queued for after it finishes is called off by opening the agent again (CLI
+    // agents/update.ts), so that open is never coalesced away — the desktop's rule.
+    final queuedStop = machine.agents.any(
+      (agent) => agent.id == agentId && agent.closePlanState != null,
+    );
+    if (!queuedStop && last != null && now.difference(last) < _touchEvery) {
+      return;
+    }
     _touchedAt[key] = now;
     final revision = _authRevision;
     unawaited(() async {
@@ -6902,15 +7899,32 @@ class AppNotifier extends ChangeNotifier {
 
   /// Deletes an agent via `agent_delete`. Returns null on success, or an error message to show
   /// inline in the caller's dialog.
+  ///
+  /// A refusal the machine says is worth asking again (`retryable`: `IDENTITY_UNAVAILABLE`, its
+  /// conversation file changing under the lookup) is asked again after [stopRetryDelays], before it
+  /// is shown. On 2026-10-19, 3 of the phone's 4 stops were refused as `other`, the kind this code
+  /// falls under. Any other refusal is shown at once — `STOP_UNCONFIRMED` asks for a look at the
+  /// harness first, not another stop.
   Future<String?> deleteAgent(String machineId, String agentId) async {
     final machine = machineStates[machineId];
     if (machine == null) return 'Machine not found';
     Map<String, dynamic> result;
-    try {
-      result = await _conn(machineId)
-          .request('agent_delete', payload: {'agentId': agentId});
-    } catch (error) {
-      return 'Delete failed: $error';
+    for (var attempt = 0; ; attempt++) {
+      try {
+        result = await _conn(machineId)
+            .request('agent_delete', payload: {'agentId': agentId});
+      } catch (error) {
+        return 'Delete failed: $error';
+      }
+      if (result['error'] is! String ||
+          result['retryable'] != true ||
+          attempt >= stopRetryDelays.length) {
+        break;
+      }
+      await Future<void>.delayed(stopRetryDelays[attempt]);
+      if (_disposed || machineStates[machineId] == null) {
+        return 'Machine not found';
+      }
     }
     final error = result['error'];
     if (error is String) return 'Delete failed: $error';
@@ -6922,13 +7936,126 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  /// Restarts an agent via `agent_restart` — exits its current engine process and relaunches it
-  /// daemon-side, resuming its session where possible.
+  /// How long [deleteAgent] waits before asking again after a refusal the machine marks `retryable`,
+  /// one entry per retry.
+  @visibleForTesting
+  List<Duration> stopRetryDelays = const [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+  ];
+
+  /// Deletes on their way, by machine and agent — what a second press joins rather than reviewing
+  /// the same harness twice.
+  final Map<(String, String), Future<String?>> _agentPurges = {};
+
+  /// Whether a Delete of this agent is on its way: the menu's row says so, as Restart does.
+  bool agentPurging(String machineId, String agentId) =>
+      _agentPurges.containsKey((machineId, agentId));
+
+  /// Delete Harness — the desktop's `purgeAgent`. Unlike Stop ([deleteAgent]), which keeps the
+  /// conversation to reopen, this stops a running harness and deletes its saved conversation for
+  /// good, so it can never be opened again. Project files and worktrees are kept.
   ///
-  /// The reply carries the same fresh `Agent` shape `agent_synced` pushes once the new process is
-  /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
-  /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
-  /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
+  /// The machine's reviewed deletion (`agent_purge`): `inspect` first, then `delete` under that
+  /// review's id, both naming the harness exactly — id, conversation and when it was registered —
+  /// so a delete meant for one that has since been replaced under the same id is refused rather
+  /// than taking the replacement. Null on success, or the sentence to show.
+  ///
+  /// ⚠️ **A lost reply is not a failed delete.** The second step may have run; the answer says to
+  /// check rather than inviting another press that would only find nothing to delete.
+  Future<String?> purgeAgent(String machineId, String agentId) {
+    final key = (machineId, agentId);
+    if (_agentPurges[key] case final pending?) return pending;
+    final request = _purgeAgent(machineId, agentId).whenComplete(() {
+      _agentPurges.remove(key);
+      if (!_disposed) notifyListeners();
+    });
+    _agentPurges[key] = request;
+    notifyListeners();
+    return request;
+  }
+
+  Future<String?> _purgeAgent(String machineId, String agentId) async {
+    final machine = machineStates[machineId];
+    final agent = machine?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    final createdAt = agent?.createdAt;
+    if (machine == null || agent == null || createdAt == null) {
+      return 'This harness is no longer listed. Refresh and try again.';
+    }
+    // The desktop's rule: a terminal keeps no conversation, so there is nothing to delete past
+    // what Stop already does.
+    if (agent.engine == 'terminal') {
+      return 'A terminal keeps no conversation. Stop it instead.';
+    }
+    final revision = _authRevision;
+    final sessionId = agent.sessionId;
+    final target = {
+      'agentId': agentId,
+      'sessionId': sessionId == null || sessionId.isEmpty ? null : sessionId,
+      'createdAt': createdAt.millisecondsSinceEpoch,
+    };
+    String refused(Object? code, Object? detail) =>
+        'Delete failed: ${detail is String && detail.isNotEmpty ? detail : code}';
+    const unconfirmed =
+        'Could not confirm the deletion. Refresh harnesses to check.';
+    var deleting = false;
+    try {
+      final review = await _conn(machineId).request(
+        'agent_purge',
+        payload: {...target, 'mode': 'inspect'},
+        timeout: const Duration(seconds: 30),
+      );
+      if (review['error'] != null) {
+        return refused(review['error'], review['detail']);
+      }
+      final reviewId = review['reviewId'];
+      if (reviewId is! String) {
+        return 'Could not review this harness for deletion.';
+      }
+      if (!_machineWorkCurrent(machine, revision)) {
+        return 'The machine changed before the delete. Try again.';
+      }
+      deleting = true;
+      final result = await _conn(machineId).request(
+        'agent_purge',
+        payload: {...target, 'mode': 'delete', 'reviewId': reviewId},
+        timeout: const Duration(seconds: 60),
+      );
+      if (result['error'] != null) {
+        return refused(result['error'], result['detail']);
+      }
+      if (result['deleted'] != true) return unconfirmed;
+    } on WsRequestFailure catch (failure) {
+      return refused(failure.code, failure.detail);
+    } on WsRequestTimeout {
+      return deleting
+          ? unconfirmed
+          : 'Could not review this harness for deletion. Try again.';
+    } catch (_) {
+      return deleting
+          ? unconfirmed
+          : 'Could not delete the harness. Try again.';
+    }
+    if (_disposed || !_machineWorkCurrent(machine, revision)) return null;
+    await _removeAgent(machine, agentId);
+    // Gone from the machine, so gone from the desk — as Stop does ([deleteAgent]).
+    _desk.drop((machineId: machineId, agentId: agentId));
+    notifyListeners();
+    return null;
+  }
+
+  /// Takes a harness off this phone's lists while its computer does not answer, so `agent_delete`
+  /// cannot reach it: nothing is stopped there. Its desk tab keeps it, and the computer's own list
+  /// brings it back as soon as it answers again (`_replaceAgents`) if it is still there.
+  Future<void> forgetUnreachableAgent(String machineId, String agentId) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return;
+    await _removeAgent(machine, agentId);
+    notifyListeners();
+  }
+
   /// Bring a stopped agent back, so something can be opened on it.
   ///
   /// The desktop's `resumeAgent`: a thin guard over [restartAgent], which is the
@@ -7090,16 +8217,87 @@ class AppNotifier extends ChangeNotifier {
 
   /// The desktop's `_restartFailure` wording for a resume the machine refused.
   String _resumeFailure(String code, Object? detail) =>
-      detail is String && detail.isNotEmpty
+      code == 'PTY_HOST_UNAVAILABLE'
+      ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
+      : detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
+          'ENGINE_LAUNCH_REFUSED' =>
+            'This engine cannot start on this machine. Nothing was started.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             'Update the harness CLI on this machine to open saved harnesses.',
           'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',
           _ => 'Could not open this harness: $code',
         };
 
-  Future<RestartAgentResult> restartAgent(
+  /// Restarts on their way, by machine and agent ([restartAgent]) — the Restart row of the
+  /// terminal's menu says so while one runs ([agentRestarting]).
+  ///
+  /// ⚠️ **A second `agent_restart` is a second restart, not a duplicate.** The machine works
+  /// through what one connection sends in order, so a press that came while the first restart
+  /// ran — the menu opened again because nothing seemed to happen — waited behind it and then
+  /// replaced the engine that had only just come back, cutting it off as it started. So a restart
+  /// of an agent that already has one on its way joins that one and sends nothing; Connectors'
+  /// restart button guards itself the same way (`_restarting` in `connectors_page.dart`), and
+  /// joins here too.
+  final Map<(String, String), Future<RestartAgentResult>> _agentRestarts = {};
+
+  /// Whether a restart of this agent is on its way — see [_agentRestarts].
+  bool agentRestarting(String machineId, String agentId) =>
+      _agentRestarts.containsKey((machineId, agentId));
+
+  /// How long a restart's reply is waited for: longer than the machine can take to answer one.
+  ///
+  /// ⚠️ **Not the 20s every other request waits.** The machine answers once the new engine is up,
+  /// and getting there can take more than that: up to 5s asking the shell whether the engine is
+  /// still installed, up to 3s for the old process to go, up to 8s for the new one to show — and,
+  /// when the resumed one never shows, another 8s for a fresh one (`cli/src/core/agents/restart.ts`,
+  /// `swap.ts`). At 20s the phone gave up on a restart still running, said it had failed, and
+  /// offered Restart again — which would have restarted it a second time.
+  static const _restartReplyWait = Duration(seconds: 45);
+
+  /// What the phone says when it cannot know how a restart ended: the desktop's sentence for the
+  /// same case (`restart_agent_action.dart`), word for word.
+  ///
+  /// ⚠️ **Not knowing is not failing.** A reply that did not come in time, a socket that dropped
+  /// under the request, a machine that lost track of its own answer — in all of these the restart
+  /// may have happened, or may be happening still. "Restart failed" sent people to press Restart
+  /// again; this sends them to the terminal first, which shows what really happened.
+  static const _restartUnconfirmed =
+      'Could not confirm the restart. Check the terminal before restarting again.';
+
+  /// Restarts an agent via `agent_restart` — exits its current engine process and relaunches it
+  /// daemon-side, resuming its session where possible.
+  ///
+  /// The reply carries the same fresh `Agent` shape `agent_synced` pushes once the new process is
+  /// confirmed, so this upserts from the reply directly — idempotent on `agent.id`, same as
+  /// [createAgent], and safe even if the CLI's own `agent_synced` push for the restart arrives
+  /// separately (fire-and-forget on the CLI side, unordered relative to this reply).
+  ///
+  /// A restart of an agent that already has one on its way returns that one's future and sends
+  /// nothing — see [_agentRestarts]. Listeners hear when one starts and when it ends.
+  ///
+  /// [RestartAgentResult.error] is a sentence to show as it is: why the machine refused, in the
+  /// desktop's words ([_restartRefused]), or [_restartUnconfirmed] when the outcome is not known.
+  Future<RestartAgentResult> restartAgent(String machineId, String agentId) {
+    final key = (machineId, agentId);
+    final inFlight = _agentRestarts[key];
+    if (inFlight != null) return inFlight;
+    // Answered before anything is held, so a machine that is not there never reads as restarting.
+    if (machineStates[machineId] == null) {
+      return Future.value(const RestartAgentResult(error: 'Machine not found'));
+    }
+    late final Future<RestartAgentResult> run;
+    run = _performRestartAgent(machineId, agentId).whenComplete(() {
+      if (identical(_agentRestarts[key], run)) _agentRestarts.remove(key);
+      if (!_disposed) notifyListeners();
+    });
+    _agentRestarts[key] = run;
+    notifyListeners();
+    return run;
+  }
+
+  Future<RestartAgentResult> _performRestartAgent(
     String machineId,
     String agentId,
   ) async {
@@ -7109,20 +8307,24 @@ class AppNotifier extends ChangeNotifier {
     }
     Map<String, dynamic> result;
     try {
-      result = await _conn(machineId)
-          .request('agent_restart', payload: {'agentId': agentId});
-    } catch (error) {
-      return RestartAgentResult(error: 'Restart failed: $error');
+      result = await _conn(machineId).request(
+        'agent_restart',
+        payload: {'agentId': agentId},
+        timeout: _restartReplyWait,
+      );
+    } on WsRequestFailure catch (failure) {
+      // How a refusal really arrives: the socket throws it rather than handing back the map.
+      return _restartRefused(failure.code, failure.detail);
+    } catch (_) {
+      // A timeout, a socket that dropped or could not send: no answer, so no outcome to report.
+      return const RestartAgentResult(error: _restartUnconfirmed);
     }
     final error = result['error'];
-    if (error is String) {
-      final detail = result['detail'];
-      return RestartAgentResult(
-        error: detail is String ? detail : 'Restart failed: $error',
-      );
-    }
+    if (error is String) return _restartRefused(error, result['detail']);
     final raw = result['agent'];
-    if (raw is Map) {
+    // Not after the app let go of its state: with [_restartReplyWait] a reply can land long after
+    // the tap, and a disposed notifier cannot notify.
+    if (raw is Map && !_disposed) {
       try {
         final json = Map<String, dynamic>.from(raw);
         _upsertAgent(machine, Agent.fromJson(json), json: json);
@@ -7135,6 +8337,832 @@ class AppNotifier extends ChangeNotifier {
     // session that may not have happened, since this field is purely additive UI polish.
     final resumed = result['resumed'];
     return RestartAgentResult(resumed: resumed is bool ? resumed : true);
+  }
+
+  /// A restart the machine answered with an error code, as the desktop reads one
+  /// (`AppNotifier._runAgentRestart` there).
+  ///
+  /// ⚠️ **Three of the codes are not refusals.** `RESTART_FAILED` can follow a relaunch that did
+  /// happen but was not seen in time — the machine itself files it as "unconfirmed" when it keeps a
+  /// receipt (`cli/src/core/agents/launches.ts`) — and `INTERNAL` and `CREATION_STORAGE_FAILED`
+  /// say nothing about the pane at all. Telling those as a failure would invite the second restart
+  /// the terminal may not need; the desktop calls them unconfirmed, and so does this.
+  RestartAgentResult _restartRefused(String code, Object? detail) =>
+      const {
+        'INTERNAL',
+        'CREATION_STORAGE_FAILED',
+        'RESTART_FAILED',
+      }.contains(code)
+      ? const RestartAgentResult(error: _restartUnconfirmed)
+      : RestartAgentResult(error: _restartFailure(code, detail));
+
+  /// The desktop's `_restartFailure` wording for a restart the machine refused: the machine's own
+  /// [detail] when it sends one — already a sentence (`That harness has already exited.`) — or a
+  /// sentence for the code.
+  ///
+  /// Not [_resumeFailure], which words the same codes for opening saved work.
+  String _restartFailure(String code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+            'Update the harness CLI on this machine to restart a harness.',
+          'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',
+          'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
+          'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
+          'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
+          _ => 'Restart failed: $code',
+        };
+
+  /// Fork's attempts, by machine and source agent — see [AgentForkAttempt] for why one outlives
+  /// its form.
+  final Map<(String, String), AgentForkAttempt> _agentForks = {};
+
+  /// Whether a fork of this agent is on its way: the terminal menu's Fork row says so, as Restart
+  /// does.
+  bool agentForking(String machineId, String agentId) =>
+      forkPending(machineId, agentId) != null;
+
+  /// The fork of this agent on its way, if one is — what the terminal page waits on once the
+  /// form closed before it landed.
+  Future<ForkAgentResult>? forkPending(String machineId, String agentId) =>
+      _agentForks[(machineId, agentId)]?.pending;
+
+  /// Whether the attempt's source is still the agent its machine lists — the same connection, the
+  /// same id and the same conversation.
+  bool _forkSourceCurrent(AgentForkAttempt attempt) {
+    final machine = attempt._machine;
+    final source = attempt.source;
+    if (machine == null ||
+        source == null ||
+        !_machineWorkCurrent(machine, attempt._authRevision)) {
+      return false;
+    }
+    final current = machine.agents
+        .where((agent) => agent.id == source.id)
+        .firstOrNull;
+    return current != null && current.sessionId == source.sessionId;
+  }
+
+  /// The Fork form's attempt for [agentId]: the one already held while its source is unchanged or
+  /// its outcome is still to be checked, else a new one starting from [name] and [prompt].
+  AgentForkAttempt forkAttempt(
+    String machineId,
+    String agentId, {
+    String name = '',
+    String prompt = '',
+  }) {
+    final existing = _agentForks[(machineId, agentId)];
+    if (existing != null &&
+        (_forkSourceCurrent(existing) ||
+            (existing.locked &&
+                existing._machine != null &&
+                _machineWorkCurrent(
+                  existing._machine,
+                  existing._authRevision,
+                )))) {
+      return existing;
+    }
+    final machine = machineStates[machineId];
+    final source = machine?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    return _agentForks[(machineId, agentId)] = AgentForkAttempt._(
+      machine,
+      source,
+      _authRevision,
+      name: name,
+      prompt: prompt,
+    );
+  }
+
+  /// Lets an unconfirmed fork go — only the form's explicit Start another fork does this, and
+  /// never while it is on its way. False when [attempt] is not the one held.
+  bool discardForkAttempt(
+    String machineId,
+    String agentId,
+    AgentForkAttempt attempt,
+  ) {
+    if (attempt.busy ||
+        !identical(_agentForks[(machineId, agentId)], attempt)) {
+      return false;
+    }
+    _agentForks.remove((machineId, agentId));
+    return true;
+  }
+
+  /// Fork: a NEW harness that starts with everything [agentId]'s conversation has, in the same
+  /// project folder — the desktop's `forkAgent`. The source is not touched, not even paused, which
+  /// is why it has to be idle (`cli/src/core/agents/fork.ts`).
+  ///
+  /// One fork per agent at a time: asking again while one is on its way joins it, and once its
+  /// outcome is unknown the same attempt checks it (`agent_create_status`) rather than sending a
+  /// second `agent_fork`.
+  Future<ForkAgentResult> forkAgent(
+    String machineId,
+    String agentId, {
+    AgentForkAttempt? attempt,
+  }) {
+    final operation = attempt ?? forkAttempt(machineId, agentId);
+    if (operation.result case final result?
+        when result.error == null && result.agentId != null) {
+      return Future.value(result);
+    }
+    if (operation.pending case final pending?) return pending;
+    late final Future<ForkAgentResult> request;
+    request = _runAgentFork(machineId, agentId, operation)
+        .then((result) {
+          operation.result = result;
+          return result;
+        })
+        .whenComplete(() {
+          if (identical(operation._inFlight, request)) {
+            operation._inFlight = null;
+          }
+          if (!_disposed && _authWorkCurrent(operation._authRevision)) {
+            notifyListeners();
+          }
+        });
+    operation._inFlight = request;
+    notifyListeners();
+    return request;
+  }
+
+  /// The steps of [forkAgent], in the desktop's order and words.
+  Future<ForkAgentResult> _runAgentFork(
+    String machineId,
+    String agentId,
+    AgentForkAttempt attempt,
+  ) async {
+    final machine = attempt._machine;
+    if (machine == null) {
+      return const ForkAgentResult(error: 'Machine not found');
+    }
+    if (machine.machine.machineId != machineId ||
+        attempt.source?.id != agentId) {
+      return const ForkAgentResult(
+        error: 'The source harness is no longer available.',
+      );
+    }
+    if (!_machineWorkCurrent(machine, attempt._authRevision)) {
+      return const ForkAgentResult(
+        error: 'This fork is no longer active. Reopen Fork Harness.',
+      );
+    }
+    if (!attempt.awaitingConfirmation) {
+      if (!_forkSourceCurrent(attempt)) {
+        return const ForkAgentResult(
+          error: 'The source harness changed. Close this prompt and reopen Fork Harness.',
+        );
+      }
+      if (attempt.source?.canFork != true) {
+        return const ForkAgentResult(
+          error: 'This harness does not support forking.',
+        );
+      }
+      if (agentIsProcessing(machineId, agentId)) {
+        return const ForkAgentResult(
+          error: 'This harness is working. Wait for its turn to finish, then fork.',
+        );
+      }
+      if (attempt.name.characters.length > 80) {
+        return const ForkAgentResult(
+          error: 'Use at most 80 characters for the name.',
+        );
+      }
+      if (attempt.prompt.length > 2000) {
+        return const ForkAgentResult(
+          error: 'Use at most 2000 characters for the first task.',
+        );
+      }
+      attempt._id = _newReceiptId();
+    }
+    final checking = attempt.awaitingConfirmation;
+    attempt._awaitingConfirmation = true;
+    const unknown = ForkAgentResult(
+      error: 'The fork is not confirmed yet. Check status, or look for it in Find before starting another.',
+    );
+    Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        checking ? 'agent_create_status' : 'agent_fork',
+        payload: {
+          'creationId': attempt._id,
+          if (!checking) ...{
+            'agentId': agentId,
+            if (attempt.name.trim().isNotEmpty) 'name': attempt.name.trim(),
+            if (attempt.prompt.trim().isNotEmpty) 'prompt': attempt.prompt,
+          },
+        },
+        timeout: checking
+            ? const Duration(seconds: 10)
+            : const Duration(seconds: 20),
+      );
+    } on WsRequestFailure catch (failure) {
+      // Refusals before anything started are safe to correct. These cannot prove nothing did, and
+      // no answer to a status check can.
+      if (checking ||
+          const {
+            'INTERNAL',
+            'CREATION_STORAGE_FAILED',
+            'SPAWN_FAILED',
+            'REGISTRATION_FAILED',
+          }.contains(failure.code)) {
+        return unknown;
+      }
+      attempt._awaitingConfirmation = false;
+      return ForkAgentResult(error: _forkFailure(failure.code, failure.detail));
+    } catch (_) {
+      // Disconnects, timeouts and malformed replies: not evidence that the machine did nothing.
+      return unknown;
+    }
+    if (_disposed || !_machineWorkCurrent(machine, attempt._authRevision)) {
+      return const ForkAgentResult(
+        error: 'The machine changed while forking. Check its harnesses after reconnecting.',
+      );
+    }
+    if ((checking ||
+            result.containsKey('creationId') ||
+            result.containsKey('state')) &&
+        result['creationId'] != attempt._id) {
+      return unknown;
+    }
+    switch (result['state']) {
+      case 'pending':
+        return const ForkAgentResult(
+          error: 'The machine is still starting the fork. Check again in a moment.',
+        );
+      case 'missing':
+      case 'unconfirmed':
+        return unknown;
+      case 'unavailable':
+        attempt._awaitingConfirmation = false;
+        return const ForkAgentResult(
+          error: 'The fork was created but is no longer available. You can start another.',
+        );
+      case 'failed':
+        final failure = result['failure'];
+        if (failure is! Map || failure['code'] is! String) return unknown;
+        attempt._awaitingConfirmation = false;
+        return ForkAgentResult(
+          error: _forkFailure(failure['code'] as String, failure['detail']),
+        );
+      case 'created':
+      case null: // A first answer from a machine predating receipts.
+        break;
+      default:
+        return unknown;
+    }
+    final raw = result['agent'];
+    if (raw is! Map ||
+        raw['id'] is! String ||
+        (raw['id'] as String).isEmpty ||
+        raw['id'] == agentId) {
+      return unknown;
+    }
+    final Map<String, dynamic> json;
+    final Agent fork;
+    try {
+      json = Map<String, dynamic>.from(raw);
+      fork = Agent.fromJson(json);
+    } catch (_) {
+      return unknown;
+    }
+    attempt._awaitingConfirmation = false;
+    if (identical(_agentForks[(machineId, agentId)], attempt)) {
+      _agentForks.remove((machineId, agentId));
+    }
+    _upsertAgent(machine, fork, json: json);
+    // Into the tab the phone is in — the source's, since Fork is asked from its terminal — the way
+    // the desktop places a fork beside its source.
+    _desk.adopt((
+      machineId: machineId,
+      agentId: fork.id,
+    ), name: fork.displayName);
+    notifyListeners();
+    return ForkAgentResult(
+      level: result['level'] == 'handoff' ? 'handoff' : 'native',
+      agentId: fork.id,
+    );
+  }
+
+  /// The desktop's `_forkFailure`: the machine's own [detail] when it sends one, else a sentence
+  /// for the code.
+  String _forkFailure(String code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+            'Update the harness CLI on this machine to fork a harness.',
+          'AGENT_BUSY' =>
+            'This harness is working. Wait for its turn to finish, then fork.',
+          _ => 'Fork failed: $code',
+        };
+
+  /// Change agent's switches, by machine and agent — see [_AgentChange] for why one outlives a
+  /// failed step.
+  final Map<(String, String), _AgentChange> _agentChanges = {};
+
+  /// Whether a switch of this agent is on its way: the terminal menu's Change agent row says so
+  /// and takes no tap, as Restart does.
+  bool agentChanging(String machineId, String agentId) =>
+      _agentChanges[(machineId, agentId)]?.pending != null;
+
+  /// Whether Change agent is offered for [agent] — the desktop's pane agent selector.
+  ///
+  /// ⚠️ **Plain engines only, on the phone.** A domain-specific harness can run only the engines its
+  /// package lists (`dsh_list`, the desktop's `agentSwitchEngines`), and this app carries no Store
+  /// catalog to read that from (deliberately off, `agent_model_sections.dart`): offered here, the
+  /// switch would close the harness and start one the machine then refuses. A terminal is a shell,
+  /// not an agent to switch (the desktop offers it none either).
+  static bool canChangeAgent(Agent agent) =>
+      agent.engine != null && agent.dsh == null && agent.engine != 'terminal';
+
+  /// The engines a harness can be switched to, in the desktop picker's order: OpenCode first, the
+  /// rest by name. The current one is listed too, as the one it is on.
+  static List<String> agentChangeEngines() {
+    final ids = [for (final engine in allEngines) engine.id]
+      ..sort(
+        (a, b) => a == 'opencode'
+            ? -1
+            : b == 'opencode'
+            ? 1
+            : engineIdentity(a).label.compareTo(engineIdentity(b).label),
+      );
+    return ids;
+  }
+
+  /// Change agent: the same project, carried on by another engine — the desktop's `changeAgent`.
+  /// Mostly for a subscription that ran out: Claude Code to Codex, and back.
+  ///
+  /// The steps, in the desktop's order, each one only if the one before it held:
+  /// 1. The machine writes a record of the conversation into the project (`agent_handoff_prepare`)
+  ///    and the new agent is told to read it. An older machine answers UNSUPPORTED, and the last
+  ///    requests and answer are handed over instead (`agent_recent`). An engine that takes no first
+  ///    message gets neither: it starts a new conversation in the same folder.
+  /// 2. The old agent is saved and stopped (`agent_close`, `now`). Never before step 1: a switch
+  ///    that cannot carry the conversation leaves the old agent running.
+  /// 3. The new agent starts in the same folder, in the same permission mode where it has one.
+  ///
+  /// One switch per harness at a time. Choosing the same engine again while one runs joins it;
+  /// once one fails it is carried on by the same choice, receipt and all, until it is safe to drop
+  /// — see [_AgentChange].
+  Future<AgentChangeResult> changeAgent(
+    String machineId,
+    String agentId,
+    String engine,
+  ) {
+    final machine = machineStates[machineId];
+    final source = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || source == null) {
+      return Future.value(
+        const AgentChangeResult(error: 'This harness is no longer available.'),
+      );
+    }
+    if (source.engine == engine) {
+      return Future.value(AgentChangeResult(agentId: agentId));
+    }
+    if (!canChangeAgent(source) || !allEngines.any((e) => e.id == engine)) {
+      return Future.value(
+        const AgentChangeResult(
+          error: 'This agent is not supported by the installed harness.',
+        ),
+      );
+    }
+    final key = (machineId, agentId);
+    var change = _agentChanges[key];
+    if (change?.pending case final pending?) {
+      return change!.engine == engine
+          ? pending
+          : Future.value(
+              const AgentChangeResult(error: 'The agent is already switching.'),
+            );
+    }
+    // Let go of a switch that left nothing to finish: the old agent still running and the handoff
+    // not held for this engine, or a launch that failed, or a creation refused for good. One whose
+    // old agent was already stopped is never let go — only finished.
+    if (change != null &&
+        ((!change.preservingViews &&
+                (!change.handoffHeld || change.engine != engine)) ||
+            change.launchFailed ||
+            (change.creation._finished && change.creation.agentId == null))) {
+      _agentChanges.remove(key);
+      change = null;
+    }
+    if (change != null && change.engine != engine) {
+      return Future.value(
+        AgentChangeResult(
+          error:
+              'Check the pending switch to '
+              '${engineIdentity(change.engine).label} before choosing another agent.',
+        ),
+      );
+    }
+    final operation = change ?? _AgentChange(source, engine, _authRevision);
+    _agentChanges[key] = operation;
+    _logChange(
+      operation,
+      change == null
+          ? 'switching from ${source.engine} to $engine'
+          : 'carrying the switch to $engine on',
+    );
+    late final Future<AgentChangeResult> run;
+    run = _changeAgent(machineId, operation)
+        .then((result) {
+          _logChange(
+            operation,
+            result.error == null
+                ? 'switched; ${result.agentId} opens'
+                : 'stopped: ${result.error}',
+          );
+          return result;
+        })
+        .whenComplete(() {
+          if (identical(operation.pending, run)) operation.pending = null;
+          if (!_disposed) notifyListeners();
+        });
+    operation.pending = run;
+    notifyListeners();
+    return run;
+  }
+
+  /// The steps of [changeAgent], for the switch [change] holds.
+  Future<AgentChangeResult> _changeAgent(
+    String machineId,
+    _AgentChange change,
+  ) async {
+    final machine = machineStates[machineId];
+    final source = change.source;
+    const inactive = AgentChangeResult(
+      error: 'This switch is no longer active.',
+    );
+    const changed = AgentChangeResult(
+      error: 'The conversation changed. Reopen Change agent.',
+    );
+    bool live() =>
+        machine != null &&
+        machineStates[machineId] == machine &&
+        _machineWorkCurrent(machine, change.revision);
+    // The harness as the machine lists it now, if it is still the one chosen.
+    Agent? same() {
+      final now = machine?.agents.where((a) => a.id == source.id).firstOrNull;
+      return now != null &&
+              now.createdAt == source.createdAt &&
+              now.sessionId == source.sessionId
+          ? now
+          : null;
+    }
+
+    if (!live()) return inactive;
+    final current = same();
+    if (current == null) {
+      change.handoffHeld = false;
+      return changed;
+    }
+    final folder = source.project?.cwd;
+    if (folder == null || folder.isEmpty) {
+      return const AgentChangeResult(
+        error: 'This harness has no project folder to open with another agent.',
+      );
+    }
+    // Asked before anything is written on the machine: one that cannot save and stop the old agent
+    // safely cannot finish the switch, and a handoff file left behind for nothing helps nobody.
+    if (!current.isStopped &&
+        !change.closed &&
+        (current.createdAt == null || !current.closeSupported)) {
+      return const AgentChangeResult(
+        error: 'Update the Harness CLI on this machine to close saved sessions safely.',
+      );
+    }
+    if (supportsAgentHandoff(change.engine) && !change.contextLoaded) {
+      final error = await _loadSwitchHandoff(machineId, change, folder);
+      if (error != null) return AgentChangeResult(error: error);
+      if (!live()) return inactive;
+    }
+    // The handoff can outlive a binding, an engine or a project change: close only the same one.
+    final latest = same();
+    if (latest == null ||
+        latest.engine != source.engine ||
+        latest.project?.cwd != folder) {
+      return changed;
+    }
+    change.preservingViews = true;
+    if (!latest.isStopped && !change.closed) {
+      _logChange(change, 'saving and stopping the old agent');
+      final refused = await _closeAgentNow(machineId, latest);
+      if (refused != null) {
+        change.preservingViews = false;
+        return AgentChangeResult(error: refused);
+      }
+      change.closed = true;
+      _logChange(change, 'the old agent is saved and stopped');
+      if (!live()) return inactive;
+    }
+    // The old agent's mode where the new engine has it; otherwise asking first, never more freedom
+    // than it had. An engine with no modes is sent none (the CLI refuses a mode an engine lacks).
+    final modes = permissionModesOf(change.engine);
+    final mode = modes.isEmpty
+        ? null
+        : modes.any((m) => m.id == source.permissionMode)
+        ? source.permissionMode
+        : 'ask';
+    _logChange(
+      change,
+      'starting ${change.engine} in the same folder '
+      '(${change.handoff == null ? 'no first message' : 'with the handoff'})',
+    );
+    final error = await createAgent(
+      machineId,
+      engine: change.engine,
+      folder: folder,
+      permissionMode: mode,
+      name: source.displayName,
+      prompt: change.handoff,
+      attempt: change.creation,
+    );
+    if (error != null) return AgentChangeResult(error: error);
+    final nextId = change.creation.agentId;
+    if (nextId == null) {
+      return const AgentChangeResult(
+        error: 'The new agent has not confirmed its start yet. Choose it again to check.',
+      );
+    }
+    if (!live()) return inactive;
+    final target = machine!.agents.where((a) => a.id == nextId).firstOrNull;
+    if (target?.launchState == 'failed') {
+      change.launchFailed = true;
+      return AgentChangeResult(
+        error: target!.launchDetail ?? 'The new agent could not start.',
+      );
+    }
+    _agentChanges.remove((machineId, source.id));
+    unawaited(agentPreference.select(change.engine));
+    String? notice;
+    if (change.handoffEmpty) {
+      final from = engineIdentity(source.engine).label;
+      final to = engineIdentity(change.engine).label;
+      notice = change.handoffFailed
+          ? agentSwitchHandoffFailedHint(from, to)
+          : agentSwitchNoHistoryHint(from, to);
+    }
+    return AgentChangeResult(agentId: nextId, notice: notice);
+  }
+
+  /// Fills [change]'s handoff for the new agent, or says why the switch must not go on — the
+  /// desktop's `_loadSwitchHandoff`. Both reads happen BEFORE the old agent is closed.
+  ///
+  /// First choice: the machine writes the whole conversation into the project and the new agent is
+  /// told to read it. A reply that does not hold up ([acceptAgentHandoffReply]) holds the switch with
+  /// the old agent still running. Only an explicit UNSUPPORTED — a machine older than the request —
+  /// falls back to the last requests and answer.
+  Future<String?> _loadSwitchHandoff(
+    String machineId,
+    _AgentChange change,
+    String folder,
+  ) async {
+    const waiting =
+        'Waiting for the conversation handoff. Try switching again.';
+    const unreadable =
+        'Could not read the conversation for the handoff. Try switching again.';
+    final source = change.source;
+    change.handoffHeld = true;
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_handoff_prepare',
+        payload: {
+          'agentId': source.id,
+          'changeId': change.creation._id,
+          'targetEngine': change.engine,
+        },
+        timeout: const Duration(seconds: 6),
+      );
+      final accepted = acceptAgentHandoffReply(
+        reply,
+        agentId: source.id,
+        changeId: change.creation._id,
+        folder: folder,
+        sourceLabel: engineIdentity(source.engine).label,
+      );
+      if (!accepted.accepted) {
+        _logChange(
+          change,
+          'handoff reply did not hold up; the old agent keeps running',
+        );
+        return waiting;
+      }
+      _logChange(
+        change,
+        accepted.prompt == null
+            ? 'handoff: nothing to hand over'
+            : 'handoff: the machine wrote the record',
+      );
+      change
+        ..handoff = accepted.prompt
+        ..handoffEmpty = accepted.prompt == null
+        ..handoffFailed = false
+        ..contextLoaded = true
+        ..handoffHeld = false;
+      return null;
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'CHANGE_CONFLICT') {
+        change.handoffHeld = false;
+        _logChange(change, 'handoff: the conversation changed');
+        return 'The conversation changed. Choose the agent again to start a new switch.';
+      }
+      if (failure.code != 'UNSUPPORTED') {
+        _logChange(
+          change,
+          'handoff refused (${failure.code}); the old agent keeps running',
+        );
+        return agentHandoffHeldMessage(
+          failure.code,
+          failure.hold,
+          engineIdentity(source.engine).label,
+        );
+      }
+      _logChange(
+        change,
+        'handoff: an older machine; reading the last requests instead',
+      );
+    } catch (error) {
+      _logChange(
+        change,
+        'handoff unanswered ($error); the old agent keeps running',
+      );
+      return waiting;
+    }
+    try {
+      final recent = await _conn(machineId).request(
+        'agent_recent',
+        payload: {'agentId': source.id, 'n': 5},
+        timeout: const Duration(seconds: 4),
+      );
+      if (recent['agentId'] != null && recent['agentId'] != source.id) {
+        return unreadable;
+      }
+      final handoff = agentSwitchHandoff(
+        source.engine ?? 'the previous agent',
+        recent,
+      );
+      _logChange(
+        change,
+        handoff == null
+            ? 'handoff: no excerpt to hand over'
+            : 'handoff: excerpt read',
+      );
+      change
+        ..handoff = handoff
+        ..handoffEmpty = handoff == null
+        ..handoffFailed = handoff == null
+        ..contextLoaded = true
+        ..handoffHeld = false;
+      return null;
+    } catch (error) {
+      _logChange(
+        change,
+        'excerpt unreadable ($error); the old agent keeps running',
+      );
+      return unreadable;
+    }
+  }
+
+  /// One line of a switch's progress in the app log: which harness, and what just happened. Never
+  /// the conversation itself — no prompt, no excerpt, no path — only the steps, so a switch that
+  /// stopped somewhere can be followed afterwards (the first one on a phone stopped on a close that
+  /// never came back, and nothing said where).
+  void _logChange(_AgentChange change, String step) => appLog.info(
+    'agents',
+    'change agent ${_shortId(change.source.id)}: $step',
+  );
+
+  /// Saves and stops [agent] at once (`agent_close`, `now`) — the desktop's session close, for
+  /// Change agent. Null once the machine says it closed; otherwise what to tell the person.
+  ///
+  /// ⚠️ **A lost reply never sends a second Stop.** The machine's own list is read instead, and only
+  /// a harness it lists as stopped, the same one, counts as closed.
+  Future<String?> _closeAgentNow(String machineId, Agent agent) async {
+    const notChanged =
+        'Could not save and stop this conversation. Its agent has not been changed.';
+    final machine = machineStates[machineId];
+    final revision = _authRevision;
+    try {
+      final result = await _conn(machineId).request(
+        'agent_close',
+        payload: {
+          'agentId': agent.id,
+          'sessionId': agent.sessionId ?? '',
+          'createdAt': agent.createdAt!.toUtc().toIso8601String(),
+          'mode': 'now',
+        },
+        // Saving the conversation and letting the engine exit can take seconds on the machine.
+        timeout: const Duration(seconds: 30),
+      );
+      if (result['closed'] == true) return null;
+      final detail = result['detail'];
+      return detail is String && detail.isNotEmpty ? detail : notChanged;
+    } on WsRequestFailure catch (failure) {
+      appLog.info(
+        'agents',
+        'change agent ${_shortId(agent.id)}: close refused (${failure.code})',
+      );
+      if (failure.code == 'AGENT_CHANGED') {
+        return 'The conversation changed. Reopen Change agent.';
+      }
+      final detail = failure.detail;
+      return detail != null && detail.isNotEmpty ? detail : notChanged;
+    } catch (error) {
+      appLog.warn(
+        'agents',
+        'change agent ${_shortId(agent.id)}: close reply lost ($error); '
+            'asking the machine whether it stopped',
+      );
+      if (machine == null) return _closeUnconfirmed;
+      final stopped = await _stoppedAfterLostClose(machine, agent, revision);
+      final now = switch (stopped) {
+        true => 'stopped',
+        false => 'still running',
+        null => 'unknown',
+      };
+      appLog.info(
+        'agents',
+        'change agent ${_shortId(agent.id)}: after the lost reply the old '
+            'agent is $now',
+      );
+      return switch (stopped) {
+        true => null,
+        false =>
+          'The computer did not confirm the close, and the old agent is still '
+              'running. Try switching again.',
+        null => _closeUnconfirmed,
+      };
+    }
+  }
+
+  static const _closeUnconfirmed =
+      'Could not confirm the close. Check the machine connection and try again.';
+
+  /// How long a lost close waits for its socket to come back before it reads the machine's list.
+  static const _closeRecheckReady = Duration(seconds: 15);
+
+  /// How long between the reads of the machine's list after a lost close. A field only so a test
+  /// need not wait it out, as [resumeRedialAfter] is.
+  @visibleForTesting
+  Duration closeRecheckEvery = const Duration(seconds: 3);
+
+  /// After an `agent_close` whose reply never came: whether the machine stopped [agent], read from
+  /// its own list once the socket is back. True stopped, false still running, null not known (no
+  /// socket, a harness gone or replaced, the account changed).
+  ///
+  /// ⚠️ **Why the switch asks rather than giving up.** The first switch tried on a phone sent its
+  /// close and heard nothing for 28s, until the relay dropped the socket (2026-10-16, a Codex
+  /// harness). Whether the close ran at all could not be told from the phone, and "could not
+  /// confirm" left the person with nothing to go on. The machine's list says it: stopped, and the
+  /// switch carries on as if the reply had come; still running, and it says so, with the old agent
+  /// untouched. Read three times, [closeRecheckEvery] apart, because saving a conversation can
+  /// still be finishing when the socket comes back. Read straight from the machine rather than from
+  /// this phone's list, which the reconnect may still be refreshing.
+  Future<bool?> _stoppedAfterLostClose(
+    MachineState machine,
+    Agent agent,
+    int revision,
+  ) async {
+    final connection = _conn(machine.machine.machineId);
+    try {
+      await connection.waitUntilReady(timeout: _closeRecheckReady);
+    } catch (_) {
+      return null;
+    }
+    bool? stopped;
+    for (var read = 0; read < 3; read++) {
+      if (read > 0) await Future<void>.delayed(closeRecheckEvery);
+      if (!_machineWorkCurrent(machine, revision)) return null;
+      try {
+        final listed = await connection.request(
+          'agents_list',
+          payload: kAgentsListPayload,
+          timeout: const Duration(seconds: 10),
+        );
+        final raw = (listed['agents'] as List?)
+            ?.whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .where((m) => m['id'] == agent.id)
+            .firstOrNull;
+        final observed = raw == null ? null : Agent.fromJson(raw);
+        // Gone, or another harness under the id now: not this close's to call either way.
+        if (observed == null || !observed.continuesSession(agent)) return null;
+        if (observed.isStopped) {
+          if (_machineWorkCurrent(machine, revision)) {
+            _upsertAgent(machine, observed, json: raw);
+            notifyListeners();
+          }
+          return true;
+        }
+        stopped = false;
+      } catch (_) {
+        // No answer this time: the next read may get one.
+      }
+    }
+    return stopped;
   }
 
   /// Live models on every harness grid this machine is signed into, for the
@@ -7255,19 +9283,25 @@ class AppNotifier extends ChangeNotifier {
       );
       return null;
     } on WsRequestFailure catch (failure) {
-      return _retargetRefusal(machineId, agentId, failure.code);
+      return _retargetRefusal(machineId, agentId, failure.code, failure.detail);
     } catch (_) {
       return null;
     }
   }
 
-  String _retargetRefusal(String machineId, String agentId, String code) {
+  String _retargetRefusal(
+    String machineId,
+    String agentId,
+    String code,
+    String? detail,
+  ) {
     final agent = machineStates[machineId]?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
     return retargetRefusalMessage(
       code,
       engineLabel: engineIdentity(agent?.engine).label,
+      detail: detail,
     );
   }
 
@@ -8624,9 +10658,20 @@ class AppNotifier extends ChangeNotifier {
         _wakeMachinesBackOnline(payload['statuses']);
         return;
       case 'machine_select_error':
-        _lastError =
-            'Machine selection failed: ${payload['error'] ?? 'unknown error'}';
-        _lastErrorRetryable = true;
+        if (payload['error'] == 'NOT_YOUR_MACHINE') {
+          // Removed from the account, or no longer shared with it: no redial brings it back, and
+          // its socket has stopped (WsConn._selectRefused). The account's list is read again so the
+          // machine leaves the list, its tabs and the cache it came from. Prod, 2026-10-28: a laptop
+          // removed in September was still selected every ~7 s.
+          _lastError =
+              '${machine.machine.displayName} is no longer on your account.';
+          _lastErrorRetryable = false;
+          unawaited(refreshMachines());
+        } else {
+          _lastError =
+              'Machine selection failed: ${payload['error'] ?? 'unknown error'}';
+          _lastErrorRetryable = true;
+        }
         machine.connectionStatus = ConnectionStatus.disconnected;
         break;
       case 'agent_synced':
@@ -8713,10 +10758,10 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_loadMachineData(machine, force: true));
         }
         break;
-      // An agent stopped and is waiting on the person. Ignored by this window
-      // until now, even though the daemon had already shaped the question for
-      // the dial — `sendCommander` is device-only, so it never came down this
-      // wire at all.
+      // An agent stopped and is waiting on the person. Over the relay since
+      // 2026-10-21 (cli core/questions.ts `sendRemote`); a daemon from before
+      // shaped it for the dial and its own computer only, so it never came
+      // down this wire.
       case 'commander_question':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -8766,6 +10811,18 @@ class AppNotifier extends ChangeNotifier {
           ), requestId: requestId is String ? requestId : null);
         }
         break;
+      // Which questions the machine has open at all, said as an app connects,
+      // after each one still open (cli core/questions.ts `reannounceRemote`).
+      // One held here and not among them was answered while the phone was away.
+      case 'commander_questions_open':
+        final requestIds = payload['requestIds'];
+        if (requestIds is! List) return;
+        final open = requestIds.whereType<String>().toSet();
+        machine.blockedAgents.removeWhere(
+          (_, asked) => !open.contains(asked.requestId),
+        );
+        agentNotices.questionsOpen(machine.machine.machineId, open);
+        break;
       case 'turn_started':
       case 'turn_heartbeat':
         var changed = false;
@@ -8811,12 +10868,21 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      // The recap that follows a turn's end. Nothing here draws it: it says
+      // how loudly that end tells.
+      case 'turn_summary':
+        _announceTurnTier(machine, event, payload);
+        return;
       // A program in a harness's pane opened a page (Claude Code's `/login`) while this phone was the one
       // typing there (cli core/terminals/browser.ts): it opens on this phone. Nothing here to redraw.
       case 'browser_open':
         final url = payload['url'];
         if (url is String && url.isNotEmpty) {
-          onBrowserOpen?.call(machineId, payload['agentId'] as String? ?? '', url);
+          onBrowserOpen?.call(
+            machineId,
+            payload['agentId'] as String? ?? '',
+            url,
+          );
         }
         return;
       // ⚠️ Everything else changed nothing here, so it must not redraw. The machine streams every
@@ -8926,7 +10992,8 @@ class AppNotifier extends ChangeNotifier {
       machine.agents.where((a) => a.id == agentId).firstOrNull;
 
   /// One agent's turn ended: tell the person as the dial would — see
-  /// `notify/done_notice.dart` for when that is a tap, a mark or a notice.
+  /// `notify/done_notice.dart` for when that is a tap, a mark or a notice —
+  /// once the daemon's `turn_summary` says how loudly ([_announceTurnTier]).
   void _announceTurnEnd(
     MachineState machine,
     String agentId,
@@ -8936,7 +11003,7 @@ class AppNotifier extends ChangeNotifier {
     final agent = _knownAgent(machine, agentId);
     if (agent == null) return;
     final who = _noticeAgent(machine, agent);
-    agentNotices.turnEnded(
+    agentNotices.turnEndedAwaitingTier(
       who,
       turnEndFrom(
         event,
@@ -8947,6 +11014,23 @@ class AppNotifier extends ChangeNotifier {
       ),
       watching: () => _watchedAgent == who.ref,
     );
+  }
+
+  /// The recap after a turn's end, with how loudly the daemon says it tells
+  /// (`tier`, cli `services/recaps.ts`): the turn waiting for it is announced
+  /// now. A daemon that decides none sends its recap without one, and the old
+  /// rule goes at once.
+  void _announceTurnTier(
+    MachineState machine,
+    Map<String, dynamic> event,
+    Map<String, dynamic> payload,
+  ) {
+    final agentId = _eventAgentId(machine, event, payload);
+    if (agentId == null) return;
+    agentNotices.tierDecided((
+      machineId: machine.machine.machineId,
+      agentId: agentId,
+    ), noticeTierFrom(payload['tier']));
   }
 
   /// An agent stopped to ask the person something — see
@@ -9022,14 +11106,26 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
   /// to run, since closing it from the app switcher starts by sending it here.
+  ///
+  /// What the phone was still waiting on has no one to wait for it now, and ends before the counts are
+  /// sent ([_endOpenMeasurementsForBackground]): an app the OS suspends in its first seconds away never
+  /// hears the socket's answer, and the dial or launch would stay without an outcome.
   void handleAppPaused() {
     // The first pause of this time away: a second without a resume between (the OS repeating
     // itself) does not move the moment the phone actually left.
     _pausedAt ??= DateTime.now();
     _desk.pause();
     _stopDeafPoll();
+    // A socket waiting on a machine that is off stops dialling it while nobody is looking;
+    // [handleAppResumed]'s reconnectAll asks again the moment the phone is back
+    // ([WsConn.pauseParkedRecheck]).
+    for (final machine in machines) {
+      _heldConnection(machine.machineId)?.pauseParkedRecheck();
+    }
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
+    _endOpenMeasurementsForBackground();
+    _sendMeasurementBeforeBackground();
   }
 
   /// When the app last went into the background ([handleAppPaused]); null while it is in front.
@@ -9087,8 +11183,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
   /// only the machine cache is written ([_keepMachineCache]), because the switcher is where an app
-  /// is closed, and closing it there need not pass through [handleAppPaused] first.
-  void handleAppInactive() => _keepMachineCache();
+  /// is closed, and closing it there need not pass through [handleAppPaused] first. The queued
+  /// counts go now too, for the same reason ([_sendMeasurementBeforeBackground]).
+  void handleAppInactive() {
+    _keepMachineCache();
+    _sendMeasurementBeforeBackground();
+  }
+
+  /// Whether leaving the screen sends the queued product counts ([ProductMeasurement
+  /// .sendBeforeBackground]). Off under test, where a report would go to the network; a test that
+  /// passes its own measurement turns it on.
+  @visibleForTesting
+  bool sendMeasurementBeforeBackground = !kUnderTest;
+
+  /// Counts kept in RAM are lost when iOS ends a suspended app; the minute's report may never come.
+  /// Never awaited: leaving the screen waits for nothing.
+  void _sendMeasurementBeforeBackground() {
+    if (!sendMeasurementBeforeBackground) return;
+    unawaited(productMeasurement.sendBeforeBackground());
+  }
 
   /// How often a phone with no machine connected reads the machine list again. Every push
   /// (`machines_changed`, `device_keys_changed`) reaches the phone over a machine's socket; with none
@@ -9257,6 +11370,15 @@ final appStateProvider = Provider<AppNotifier>((ref) {
     configStore: ConfigStore(),
     paneLayoutStore: PaneLayoutStore(),
   );
+  // The app icon's Swarm count: a launch that starts signed out has no
+  // Swarm session to take the last account's number off.
+  if (app.agentNotices.system case final SwarmNotices notices) {
+    swarmBadgeOffWhileSignedOut(
+      app,
+      signedOut: () => app.status == AppStatus.unauthenticated,
+      notices: notices,
+    );
+  }
   app.bootstrap();
   return app;
 });

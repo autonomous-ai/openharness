@@ -8,6 +8,13 @@
 #include "app/pod_glue.h"
 #include "pod/home/ph.h"
 
+// A recap only lands on a Lead that was asked for (LOADING), as the Lead view does: the fixtures ask first.
+static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pod_model_supertab_loading(m, tab, lead);
+    pod_model_supertab_recap(m, tab, lead, text, at, none);
+}
+
 static int checks;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); abort(); } checks++; } while (0)
 
@@ -439,6 +446,7 @@ static void recent_swipe_steps_tabs(void) {
 static void overview_pages(void) {   // Home pages by tab: the frame's scroll is the tab index
     fresh6();
     pod_model_question_close(&U.model, "a4");   // no notice, so no Notices card: the pages are the tabs (home_notices_pages has the card)
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     render(1000);
     CHECK(top()->view == POD_V_TABS && U.nav.depth == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 6 && top()->scroll == 0);
     swipe(600, 300, 200, 310, 1000);
@@ -461,6 +469,7 @@ static void overview_pages(void) {   // Home pages by tab: the frame's scroll is
 static void home_pages(void) {
     fresh();
     pod_model_question_close(&U.model, "a4");   // no notice: no Notices card
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     static const char *x[] = {"a1", "a2", "a3"};
     const char *const *ids[3] = {x, x, x};
     uint8_t cnt[3] = {3, 3, 3};
@@ -656,12 +665,12 @@ static void room_agent_gone_lands_home(void) {
 // Pets: no toast over Home or Notices; the unread entry and the beep (notify's true) stay.
 static void no_toast_on_home_pets(void) {
     fresh();
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));   // on Home
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));   // on Home
     render(1000);
     CHECK(!U.frame.banner && !U.ban_on && !find(POD_A_BANNER) && pod_model_unread_find(&U.model, "a3"));
     fresh();
     act(POD_A_INBOX, 0);   // on Notices
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(!U.frame.banner && !U.ban_on && !find(POD_A_BANNER) && pod_model_unread_find(&U.model, "a3"));
 }
@@ -986,7 +995,7 @@ static void toast_and_edges(void) {
     // A toast over a room: the bar's swipe down still opens Notices, but a contact on the toast belongs to the toast (below).
     fresh();
     to_agent(0, 0);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(U.ban_on && U.frame.banner);
     t_(true, 360, 190, 1100); t_(true, 360, 240, 1140); t_(false, 360, 300, 1180);   // under the toast: a drag on the room
@@ -999,7 +1008,7 @@ static void toast_shows_and_expires(void) {
     fresh();
     calm();
     to_agent(0, 2);   // a3's Recap: a still room
-    CHECK(pod_ui_notify(&U, "a1", true, 1000));   // the beep still plays
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000));   // the beep still plays
     CHECK(U.ban_on && U.ban_until == 6000 && pod_ui_banner_shown_ms(&U) == 1000);
     render(1000);
     CHECK(U.frame.banner && hits_of_banner() == 1);
@@ -1014,18 +1023,95 @@ static void toast_shows_and_expires(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     for (uint32_t t = 1000; t < 6000; t += 5) CHECK(pod_ui_wake_ms(&U, t) <= 66);
     // a newer notice replaces it: 5 s from then
-    CHECK(pod_ui_notify(&U, "a2", true, 3000));
+    CHECK(pod_ui_notify(&U, "a2", POD_TIER_ALERT, true, 3000));
     CHECK(!strcmp(U.ban_agent, "a2") && U.ban_until == 8000 && pod_ui_banner_shown_ms(&U) == 3000);
+}
+// A Super Tab's question (decision or stuck) raises a toast that does not run out: it stays past POD_TOAST_MS with no 66 ms
+// beat after its slide, and goes when swiped up, when the question closes, or once Notices is on screen. A plain question's runs out.
+static void supertab_ask(const char *id, const char *q, pod_attention_t attn, uint32_t t) {
+    pod_ui_question(&U, id, q, attn == POD_ATTN_NONE ? NULL : "Launch v2", attn);
+    pod_ui_notify_text(&U, id, POD_TIER_ALERT, q, true, true, t);
+}
+static void supertab_toast_stays(void) {
+    fresh();
+    calm();
+    to_agent(0, 2);   // a3's Recap: a still room
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    CHECK(U.ban_on && U.ban_stay && pod_ui_banner_shown_ms(&U) == 1000);
+    for (uint32_t t = 1000; t < 1000 + POD_TOAST_SLIDE_MS; t += 7) { render(t); CHECK(U.frame.banner && pod_ui_wake_ms(&U, t) <= 66); }
+    {   // after the slide nothing on the toast moves: the room's own beat, as if there were no toast
+        render(3000);
+        const uint32_t with = pod_ui_wake_ms(&U, 3000);
+        U.ban_on = false;
+        const uint32_t without = pod_ui_wake_ms(&U, 3000);
+        U.ban_on = true;
+        CHECK(with == without);
+    }
+    render(6000);
+    CHECK(U.frame.banner && U.ban_on);   // past the 5 s of a plain toast
+    render(600000);
+    CHECK(U.frame.banner && U.ban_on && find(POD_A_BANNER) && !strcmp(find(POD_A_BANNER)->id, "a1"));
+    pod_ui_question_close(&U, "a1");   // answered elsewhere: its entry goes, and the toast with it
+    render(600100);
+    CHECK(!U.frame.banner && !U.ban_on && !pod_model_unread_find(&U.model, "a1"));
+
+    // a stuck agent's stays too; a swipe up dismisses it, the entry stays listed
+    supertab_ask("a2", "Stuck: no write access to staging", POD_ATTN_STUCK, 700000);
+    render(700000);
+    render(800000);
+    CHECK(U.frame.banner && U.ban_stay);
+    t_(true, 360, 110, 800100); t_(true, 360, 80, 800140); t_(false, 360, 40, 800180);
+    render(800200);
+    CHECK(!U.ban_on && !U.frame.banner && pod_model_unread_find(&U.model, "a2") && top()->view == POD_V_RECAP);
+
+    // Notices on screen ends it: back in the room it does not return
+    fresh();
+    calm();
+    to_agent(0, 2);
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    render(9000);
+    CHECK(U.frame.banner);
+    const int depth = U.nav.depth;
+    act(POD_A_INBOX, 0);
+    render(9100);
+    CHECK(!U.ban_on && !U.frame.banner && top()->view == POD_V_INBOX);
+    act(POD_A_BACK, 0);
+    render(9200);
+    CHECK(U.nav.depth == depth && top()->view == POD_V_RECAP && !U.frame.banner && pod_model_unread_find(&U.model, "a1"));
+
+    // a plain question's toast runs out as before
+    fresh();
+    calm();
+    to_agent(0, 2);
+    supertab_ask("a1", "Which branch?", POD_ATTN_NONE, 1000);
+    CHECK(U.ban_on && !U.ban_stay);
+    render(5999);
+    CHECK(U.frame.banner);
+    render(6000);
+    CHECK(!U.frame.banner && !U.ban_on && pod_model_unread_find(&U.model, "a1"));
+    // and a newer plain notice replaces a staying toast (and runs out)
+    supertab_ask("a2", "Staging first, or straight to prod?", POD_ATTN_DECISION, 7000);
+    CHECK(U.ban_stay);
+    CHECK(pod_ui_notify(&U, "a4", POD_TIER_ALERT, true, 8000));
+    CHECK(!strcmp(U.ban_agent, "a4") && !U.ban_stay);
+    // not while talking: no toast is raised for it at all (as for any alert)
+    fresh();
+    calm();
+    to_agent(0, 2);
+    act(POD_A_TALK, 0);
+    CHECK(top()->view == POD_V_TALK);
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    CHECK(!U.ban_on);
 }
 static void toast_tap_opens_notices(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     const int depth = U.nav.depth;
     pod_out_t o = tap_(360, 80, 1100);
@@ -1037,7 +1123,7 @@ static void toast_tap_opens_notices(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     o = tap_(360, 300, 1100);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a3") && top()->view == POD_V_TALK);
@@ -1046,7 +1132,7 @@ static void toast_swipe_up_dismisses(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     const int depth = U.nav.depth;
     CHECK(!U.talk_armed);
@@ -1059,7 +1145,7 @@ static void toast_swipe_up_dismisses(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     t_(true, 360, 40, 1100); t_(true, 360, 90, 1140); t_(false, 360, 170, 1180);
     CHECK(U.nav.depth == 3 && top()->view == POD_V_RECAP && U.ban_on);
@@ -1069,8 +1155,8 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000) && !U.ban_on);
-    CHECK(pod_ui_notify(&U, "a3", false, 1100) && !U.ban_on);
+    CHECK(!pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, false, 1100) && !U.ban_on);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     // a room over Notices (opened from a notice) shows toasts for the others
     // not over Talk: recording or sending
@@ -1078,7 +1164,7 @@ static void toast_not_here(void) {
     to_agent(0, 0);
     act(POD_A_TALK, 0);
     CHECK(top()->view == POD_V_TALK);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000) && !U.ban_on);
     render(1000);
     CHECK(!U.frame.banner);
     // not over the update
@@ -1086,7 +1172,7 @@ static void toast_not_here(void) {
     calm();
     to_agent(0, 2);
     pod_ui_ota(&U, "0.1.1", "0.1.2", 10, false);
-    CHECK(pod_ui_notify(&U, "a1", true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000) && !U.ban_on);
     pod_ui_ota(&U, NULL, NULL, -1, false);
     render(1100);
     CHECK(!U.frame.banner && pod_model_unread_find(&U.model, "a1"));
@@ -1094,7 +1180,7 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     CHECK(U.frame.banner);
     act(POD_A_INBOX, 0);
@@ -1104,7 +1190,7 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     act(POD_A_PREV, 0);   // a3 -> a2
     act(POD_A_PREV, 0);   // a2 -> a1
     render(1100);
@@ -1113,15 +1199,15 @@ static void toast_not_here(void) {
 
 // ---- Home's Notices card: paging, tap, and a position that survives notices coming and going ----
 static void home_notices_pages(void) {
-    fresh();   // a4 asks: one notice, so the card exists: Notices, Build, Docs
+    fresh(); calm();   // a4 asks: one notice, so the card exists: Notices, Build, Docs
     render(1000);
     CHECK(pod_tabs_pages_of(&U.nav, &U.model) == 3 && top()->scroll == 0);
     swipe(200, 300, 600, 310, 1000);   // right: the page before tab 0
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     render(1200);
     CHECK(find(POD_A_INBOX) && !find(POD_A_ENTER_TAB));
     swipe(200, 300, 600, 310, 2000);   // the first page: stays
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     swipe(600, 300, 200, 310, 3000);
     CHECK(top()->scroll == 0);
     swipe(600, 300, 200, 310, 4000);
@@ -1130,12 +1216,12 @@ static void home_notices_pages(void) {
     CHECK(top()->scroll == 1 && U.nav.depth == 1);
     // a tap on the Notices card opens Notices, and Back returns to the card
     swipe(200, 300, 600, 310, 6000); swipe(200, 300, 600, 310, 7000);
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     render(8000);
     pod_out_t o = tap_(360, 300, 8100);
     CHECK(o.fx == POD_FX_NONE && U.nav.depth == 2 && top()->view == POD_V_INBOX);
     act(POD_A_BACK, 1);
-    CHECK(U.nav.depth == 1 && top()->scroll == -1);
+    CHECK(U.nav.depth == 1 && top()->scroll == -2);
     // a tap on a tab card still enters the tab
     swipe(600, 300, 200, 310, 9000);
     render(9500);
@@ -1144,23 +1230,24 @@ static void home_notices_pages(void) {
 }
 static void home_notices_come_and_go(void) {
     // on tab 1 with a notice: the notice goes, the page under the person is still tab 1; a notice comes, still tab 1
-    fresh();
+    fresh(); calm();
     act(POD_A_SCROLL, 1);
     render(1000);
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 3);
-    pod_ui_question_close(&U, "a4");
+    pod_ui_question_close(&U, "a4"); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // back to work, then done: no Working card
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 2);
     render(1100);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
-    CHECK(pod_ui_notify(&U, "a3", true, 1200));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1200));
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 3);
     render(1300);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
     // on the Notices card the last notice goes: Home settles on tab 0
-    fresh();
-    act(POD_A_SCROLL, -1);
-    CHECK(top()->scroll == -1);
-    pod_ui_question_close(&U, "a4");
+    fresh(); calm();
+    act(POD_A_SCROLL, -2);
+    CHECK(top()->scroll == -2);
+    pod_ui_question_close(&U, "a4"); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // back to work, then done: no Working card
+    pod_nav_sync(&U.nav, &U.model);
     CHECK(top()->scroll == 0 && U.nav.depth == 1);
     render(1000);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s1") && !find(POD_A_INBOX));
@@ -1169,10 +1256,10 @@ static void home_notices_come_and_go(void) {
     CHECK(top()->scroll == 0);
 }
 static void home_swipe_up_lands_on_room_tab(void) {
-    fresh();
-    act(POD_A_SCROLL, -1);       // Home was left on the Notices card
+    fresh(); calm();
+    act(POD_A_SCROLL, -2);       // Home was left on the Notices card
     to_agent(1, 0);              // a room of Docs, opened another way
-    CHECK(U.nav.depth == 3 && U.nav.stack[0].scroll == -1);
+    CHECK(U.nav.depth == 3 && U.nav.stack[0].scroll == -2);
     render(1000);
     swipe(360, 660, 360, 520, 1000);   // up from the bottom zone
     CHECK(U.nav.depth == 1 && top()->scroll == 1);
@@ -1226,6 +1313,7 @@ static void overview_down_opens_inbox(void) {
 static void fresh8(void) {
     fresh();
     pod_model_question_close(&U.model, "a4");   // no notice, so no Notices card: the pages are the tabs
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     static const char *x[] = {"a1", "a2", "a3"};
     const char *const *ids[8] = {x, x, x, x, x, x, x, x};
     uint8_t cnt[8] = {3, 3, 3, 3, 3, 3, 3, 3};
@@ -1309,7 +1397,7 @@ static void toast_cap_only_when_drawn(void) {
     fresh();
     calm();
     to_agent(0, 2);   // a3's Recap: a still room
-    CHECK(pod_ui_notify(&U, "a1", true, 1000));
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(U.ban_on && U.frame.banner);
     for (uint32_t t = 1000; t < 2000; t += 7) CHECK(pod_ui_wake_ms(&U, t) <= 66);
@@ -1377,6 +1465,7 @@ static void wake_rates(void) {
         fresh();
         calm();
         pod_model_question_close(&U.model, "a4");
+        calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
         pod_model_turn(&U.model, "a4", "done", NULL, 0, 30);
         if (k == 1) act(POD_A_INBOX, 0);
         render(1000);
@@ -1446,16 +1535,552 @@ static void home_page(void) {
     CHECK(tap_(h->x + h->w / 2, h->y + h->h / 2, 1400).fx == POD_FX_AGENT_OPEN && !strcmp(top()->agent, "a3"));
 }
 
-// A notice for the agent already on screen still adds its unread entry (the finished bubble shows).
+// A notice for the agent already on screen is shown in place: no beep or wake (false), no toast, and its entry is read at once.
+// Dark (not awake), the same screen is not looked at: the entry stays and the glass is to be lit.
 static void notify_while_looking(void) {
     fresh();
     to_agent(0, 2);   // a3, Recap
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(!pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
+    CHECK(pod_model_unread_find(&U.model, "a3") == NULL && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, false, 1100));
     CHECK(pod_model_unread_find(&U.model, "a3") != NULL);
+    // list: filed, never a beep (false) nor a toast; silent: nothing filed.
+    CHECK(!pod_ui_notify(&U, "a1", POD_TIER_LIST, true, 1200) && pod_model_unread_find(&U.model, "a1") && !U.ban_on);
+    CHECK(!pod_ui_notify(&U, "a2", POD_TIER_SILENT, true, 1300) && !pod_model_unread_find(&U.model, "a2"));
+}
+
+// One swipe is one page, in the list's order: Notices, Working, Build, Docs.
+static void home_pages_one_swipe_each(void) {
+    fresh();   // a1 works, a4 asks
+    render(1000);
+    CHECK(pod_tabs_pages_of(&U.nav, &U.model) == 4);
+    swipe(200, 300, 600, 310, 1000); CHECK(top()->scroll == -1);
+    swipe(200, 300, 600, 310, 2000); CHECK(top()->scroll == -2);
+    swipe(200, 300, 600, 310, 3000); CHECK(top()->scroll == -2);
+    for (int i = 0; i < 4; i++) swipe(600, 300, 200, 310, 4000 + i * 1000);
+    CHECK(top()->scroll == 1);
+    swipe(200, 300, 600, 310, 9000); swipe(200, 300, 600, 310, 10000);
+    CHECK(top()->scroll == -1);
+    pod_ui_question_close(&U, "a4");   // Notices goes: Working is still the page shown
+    CHECK(top()->scroll == -1);
+    swipe(200, 300, 600, 310, 11000);  // the first page now
+    CHECK(top()->scroll == -1);
+}
+
+// Home's Working card: a swipe starting on the pet band pages the pets, any other swipe pages cards, a tap opens a pet, Back returns to the card.
+static void working_card(int n) {
+    fresh();
+    static const char *const id[6] = {"w1", "w2", "w3", "w4", "w5", "w6"};
+    static const uint32_t since[6] = {10000, 50000, 30000, 40000, 20000, 5000};   // turn starts, ms: the newest (w2) first
+    static const char *x[] = {"w1", "w2", "w3", "w4", "w5", "w6"};
+    pod_model_reset(&U.model);
+    pod_model_agents_begin(&U.model);
+    for (int i = 0; i < n; i++) pod_model_agent(&U.model, id[i], id[i], "claude", "mac");
+    pod_model_agents_end(&U.model);
+    const char *const *ids[1] = {x};
+    uint8_t cnt[1] = {(uint8_t)n};
+    cable_swarm_t it[1] = {{"s1", "Build", (uint8_t)n, (uint8_t)n}};
+    pod_model_swarms(&U.model, it, ids, cnt, 1, "s1", NULL, 0);
+    for (int i = 0; i < n; i++) pod_model_turn(&U.model, id[i], "started", NULL, 0, since[i]);
+    pod_model_clock(&U.model, 100000u);
+    U.model.linked = true;
+    U.nav.stack[0].scroll = POD_HOME_WORKING;
+    render(100000);
+}
+static void working_card_swipes(void) {
+    working_card(5);
+    CHECK(top()->scroll == POD_HOME_WORKING && U.nav.work_page == 0);
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    swipe(600, 256, 200, 440, 1300);   // the band's first row (where the pet hits start): still the pets; already the last page
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    swipe(200, 536, 600, 440, 1600);
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+    swipe(200, 430, 600, 440, 1900);   // before the first pet page: stays, and the cards do not page
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+    swipe(600, 430, 200, 440, 2200);
+    swipe(600, 150, 200, 160, 2500);   // the title area: the next card, and the pets go back to page 0
+    CHECK(top()->scroll == 0 && U.nav.work_page == 0);
+    swipe(200, 150, 600, 160, 2800);
+    CHECK(top()->scroll == POD_HOME_WORKING);
+    swipe(600, 255, 200, 160, 3100);   // just above the band: cards
+    CHECK(top()->scroll == 0);
+    swipe(200, 150, 600, 160, 3400);
+    swipe(600, 537, 200, 440, 3700);   // just below the band: cards
+    CHECK(top()->scroll == 0 && U.nav.work_page == 0);
+    working_card(6);   // a multiple of 3: two pages, no empty third
+    swipe(600, 430, 200, 440, 1000);
+    swipe(600, 430, 200, 440, 1300);
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    working_card(3);   // exactly 3: nothing to page, so the band swipe pages cards like any other (work_page stays 0)
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 0 && top()->scroll == 0);
+}
+static void working_card_shrinks(void) {
+    working_card(5);
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 1);
+    pod_model_turn(&U.model, "w1", "done", NULL, 0, 60000);   // 4 left: still 2 pages
+    pod_nav_sync(&U.nav, &U.model);
+    CHECK(U.nav.work_page == 1);
+    pod_model_turn(&U.model, "w5", "done", NULL, 0, 61000);   // 3 left: one page
+    pod_nav_sync(&U.nav, &U.model);
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+}
+static void working_card_tap_and_back(void) {
+    working_card(5);
+    const pod_hit_t *h = &U.frame.hits[0];
+    int x = h->x + h->w / 2, y = h->y + h->h / 2;
+    pod_out_t o = tap_(x, y, 2000);   // slot 0: the newest, w2
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "w2") && top()->view != POD_V_TABS && !strcmp(top()->agent, "w2"));
+    act(POD_A_BACK, 1);
+    CHECK(U.nav.depth == 1 && top()->view == POD_V_TABS && top()->scroll == POD_HOME_WORKING);
+    render(103000);
+    o = tap_(x, y, 4000);
+    CHECK(o.fx == POD_FX_AGENT_OPEN);
+    swipe(360, 690, 360, 500, 5000);   // the swipe up home
+    CHECK(U.nav.depth == 1 && top()->scroll == POD_HOME_WORKING);
+    // the agent leaves the model between draw and tap: nothing opens, and the screen is redrawn
+    render(106000);
+    pod_model_agents_begin(&U.model);
+    pod_model_agent(&U.model, "w1", "w1", "claude", "mac");
+    pod_model_agent(&U.model, "w3", "w3", "claude", "mac");
+    pod_model_agent(&U.model, "w4", "w4", "claude", "mac");
+    pod_model_agent(&U.model, "w5", "w5", "claude", "mac");
+    pod_model_agents_end(&U.model);
+    bool changed = false;
+    t_(true, x, y, 7000);
+    o = pod_ui_touch(&U, false, x, y, 7050, &changed);
+    CHECK(o.fx == POD_FX_NONE && changed && U.nav.depth == 1);
+}
+
+
+// Home's Swarm card: tab "s1" (Build) is linked to Swarm sw1 with n Leads, an unlinked Swarm sw2 follows the tabs. A swipe in the pet band pages the Leads,
+// past the last page it moves to the next card, anywhere else it pages cards; a tap on a pet is a POD_A_LEAD hit and opens nothing yet.
+static void swarm_home(int n) {
+    fresh();
+    pod_model_question_close(&U.model, "a4");   // no notice: no Notices card
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // nobody works: no Working card
+    static const char sw_ids[2][ID_MAX] = {"sw1", "sw2"};
+    static pod_swarm_t sw;
+    pod_model_supertab_ids(&U.model, sw_ids, 2);
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness");
+    sw.count = (uint16_t)n; sw.lead_n = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj%d", i);
+        snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); sw.leads[i].state = POD_LEAD_DONE;
+    }
+    pod_model_supertab(&U.model, &sw, 1000);
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw2"); snprintf(sw.name, sizeof sw.name, "Solo"); sw.count = 1; sw.lead_n = 1;
+    snprintf(sw.leads[0].id, ID_MAX, "s0"); snprintf(sw.leads[0].project, sizeof sw.leads[0].project, "ops"); snprintf(sw.leads[0].engine, sizeof sw.leads[0].engine, "claude");
+    pod_model_supertab(&U.model, &sw, 1000);
+    U.nav.stack[0].scroll = 0;
+    render(2000);
+}
+static void swarm_card_pages(void) {
+    swarm_home(4);
+    CHECK(pod_tabs_pages_of(&U.nav, &U.model) == 3 && top()->scroll == 0 && U.nav.swarm_page == 0);   // Build (the Swarm), Docs, then Solo with no desk tab
+    CHECK(find(POD_A_LEAD) && !find(POD_A_ENTER_TAB));
+    swipe(600, 430, 200, 440, 3000);   // the pet band: the second page of Leads
+    CHECK(U.nav.swarm_page == 1 && top()->scroll == 0);
+    swipe(600, 256, 200, 440, 3300);   // the band's first row; past the last page: the next card
+    CHECK(top()->scroll == 1 && U.nav.swarm_page == 0);
+    swipe(200, 150, 600, 160, 3600);   // back on the Swarm
+    CHECK(top()->scroll == 0);
+    swipe(600, 430, 200, 440, 4000);
+    swipe(200, 536, 600, 440, 4300);   // the band's last row, to the first page
+    CHECK(U.nav.swarm_page == 0 && top()->scroll == 0);
+    swipe(200, 430, 600, 440, 4600);   // before the first page: no card before it, nothing moves
+    CHECK(U.nav.swarm_page == 0 && top()->scroll == 0);
+    swipe(600, 430, 200, 440, 5000);
+    swipe(600, 150, 200, 160, 5300);   // the title area pages cards and the Leads go back to page 0
+    CHECK(top()->scroll == 1 && U.nav.swarm_page == 0);
+    swipe(600, 150, 200, 160, 5600);   // Solo, the Swarm with no desk tab, is the last page
+    CHECK(top()->scroll == 2);
+    render(6000);
+    CHECK(find(POD_A_LEAD) && !strcmp(find(POD_A_LEAD)->id, "sw2"));
+    swipe(600, 430, 200, 440, 6300);   // one page of Leads only: the band swipe moves on, and there is no card after the last
+    CHECK(top()->scroll == 2);
+    swipe(200, 430, 600, 440, 6600);   // and back
+    CHECK(top()->scroll == 1);
+}
+static void swarm_card_few_leads(void) {
+    swarm_home(3);   // exactly 3: nothing to page, so the band swipe pages cards like any other
+    swipe(600, 430, 200, 440, 3000);
+    CHECK(U.nav.swarm_page == 0 && top()->scroll == 1);
+}
+static uint32_t NOW = 3000;   // the clock a focus is fed (the quiet window counts from the last touch)
+static pod_supertab_out_t Q[POD_SUPERTAB_OUT_MAX];
+static int take(void) { return pod_ui_take_supertab(&U, Q, POD_SUPERTAB_OUT_MAX); }
+static bool is_q(int i, const char *t, const char *tab, const char *lead) { return !strcmp(Q[i].t, t) && !strcmp(Q[i].tab, tab) && !strcmp(Q[i].lead, lead); }
+static void tap_lead(int k, uint32_t t) {   // a tap on the pet of the card's Lead at index k (the page holding it must be on screen)
+    render(t - 50);
+    for (int i = 0; i < U.frame.hit_count; i++)
+        if (U.frame.hits[i].action == POD_A_LEAD && U.frame.hits[i].arg == k) { tap_(U.frame.hits[i].x + U.frame.hits[i].w / 2, U.frame.hits[i].y + U.frame.hits[i].h / 2, t); return; }
+    CHECK(!"no hit for that Lead");
+}
+static void swarm_card_tap(void) {
+    swarm_home(4);
+    const pod_hit_t *h = find(POD_A_LEAD);
+    CHECK(h && h->arg == 0 && !strcmp(h->id, "sw1"));
+    const int x = h->x + h->w / 2, y = h->y + h->h / 2;
+    pod_out_t o = tap_(x, y, 3000);   // the tap opens the Lead view over Home (the card's page stays under it) and picks the Lead on the desktop
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 2 && top()->view == POD_V_LEAD && U.nav.stack[0].view == POD_V_TABS && U.nav.stack[0].scroll == 0);
+    CHECK(!strcmp(top()->swarm, "sw1") && !strcmp(top()->lead_id, "l0") && top()->lead == 0);
+    swarm_home(4);
+    swipe(600, 430, 200, 440, 4000);
+    render(4500);
+    h = find(POD_A_LEAD);
+    CHECK(h && h->arg == 3 && !strcmp(h->id, "sw1"));
+    CHECK(tap_(h->x + h->w / 2, h->y + h->h / 2, 5000).fx == POD_FX_NONE && top()->view == POD_V_LEAD && top()->lead == 3 && U.nav.swarm_page == 1);
+}
+
+// A notice of a harness that is a Swarm's Lead: its row opens that Lead's view in the Swarm (and picks it on the desktop), not the agent as a plain one
+// (which sent agent.open, and the desktop opened the agent in a new tab). The entry is read. A notice of any other agent still opens the agent.
+static void notice_opens_lead(void) {
+    swarm_home(4);
+    snprintf(U.model.swarms[0].leads[2].local, ID_MAX, "a3");
+    pod_model_unread_add(&U.model, "a3", "Gamma", "Merged.", 20, 2100);
+    act(POD_A_INBOX, 0);
+    render(2500);
+    const pod_hit_t *h = find(POD_A_OPEN_NOTIF);
+    CHECK(h && !strcmp(h->id, "a3"));
+    take();
+    pod_out_t o = tap_(h->x + h->w / 2, h->y + h->h / 2, 3000);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw1") && !strcmp(top()->lead_id, "l2"));
+    CHECK(U.nav.depth == 2 && U.nav.stack[0].view == POD_V_TABS && !pod_model_unread_find(&U.model, "a3"));   // Back lands on the Swarm's card
+    CHECK(take() >= 1 && is_q(0, "supertab.select", "sw1", "l2"));
+    // not a Lead: the agent opens as before
+    swarm_home(4);
+    pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 2100);
+    act(POD_A_INBOX, 0);
+    render(2500);
+    h = find(POD_A_OPEN_NOTIF);
+    CHECK(h && !strcmp(h->id, "a2"));
+    o = tap_(h->x + h->w / 2, h->y + h->h / 2, 3000);
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a2") && top()->view != POD_V_LEAD);
+}
+
+// ---- the Lead view ----
+static void lead_tap_sends(void) {
+    swarm_home(4);
+    tap_lead(1, 3000);
+    CHECK(top()->view == POD_V_LEAD && top()->lead == 1 && !strcmp(top()->lead_id, "l1"));
+    CHECK(take() == 3 && is_q(0, "supertab.select", "sw1", "l1") && is_q(1, "supertab.open", "sw1", "l1") && is_q(2, "supertab.recap.get", "sw1", "l1"));
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING && take() == 0);   // asked once; nothing repeats while nothing changes
+    render(3500);
+    CHECK(U.frame.hit_count == 0);
+    // the text arrives: LOADED, nothing more is sent
+    pod_ui_supertab_recap(&U, "sw1", "l1", "Merged.", 1792560000u, false);
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && take() == 0);
+    pod_nav_act(&U.nav, &U.model, POD_A_BACK, 0, 4000);
+    CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_NONE && U.model.swarms[0].leads[1].text == NULL);   // closed: its text would go stale, so it goes
+    // a Lead whose text is already LOADED is not asked for again: select and open only
+    swarm_home(4);
+    asked_recap(&U.model, "sw1", "l2", "Cached.", 1, false);
+    tap_lead(2, 3000);
+    CHECK(take() == 2 && is_q(0, "supertab.select", "sw1", "l2") && is_q(1, "supertab.open", "sw1", "l2"));
+}
+// A lost supertab.open / supertab.recap.get is asked again every 3 s while the Lead is LOADING (5 times at most); a loaded Lead hears supertab.open once more.
+static void lead_retry(void) {
+    swarm_home(4);
+    tap_lead(1, 3000);
+    CHECK(take() == 3 && U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING);
+    render(5000);
+    CHECK(take() == 0);   // not yet
+    for (int k = 1; k <= POD_SUPERTAB_RETRIES; k++) {
+        render(3000 + 3000u * (uint32_t)k);
+        CHECK(take() == 2 && is_q(0, "supertab.open", "sw1", "l1") && is_q(1, "supertab.recap.get", "sw1", "l1"));
+        render(3000 + 3000u * (uint32_t)k + 2999);
+        CHECK(take() == 0);
+    }
+    render(60000);
+    CHECK(take() == 0 && U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING);   // then it stops, the "…" stays
+    // a send the link dropped is not counted: the retry comes again in 3 s
+    swarm_home(4);
+    tap_lead(1, 3000);
+    CHECK(take() == 3);
+    render(6000);
+    CHECK(take() == 2);
+    pod_ui_supertab_unsent(&U, &Q[0]);
+    pod_ui_supertab_unsent(&U, &Q[1]);
+    render(8999);
+    CHECK(take() == 0);
+    render(9000);
+    CHECK(take() == 2 && U.sup_tries == 1);
+    // a Lead that answered is told once more that it is open, then left alone
+    pod_ui_supertab_recap(&U, "sw1", "l1", "Merged.", 1792560000u, false);
+    render(12000);
+    CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l1"));
+    render(20000);
+    CHECK(take() == 0);
+    // a re-open that was dropped is owed again
+    swarm_home(4);
+    pod_model_supertab_loading(&U.model, "sw1", "l2");
+    asked_recap(&U.model, "sw1", "l2", "Cached.", 1, false);
+    tap_lead(2, 3000);
+    CHECK(take() == 2);
+    render(6000);
+    CHECK(take() == 1);
+    pod_ui_supertab_unsent(&U, &Q[0]);
+    render(9000);
+    CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l2"));
+    // a full queue records nothing: the next sync sends the whole of it
+    swarm_home(4);
+    tap_lead(1, 3000);
+    U.sup_qn = POD_SUPERTAB_OUT_MAX - 1;
+    CHECK(take() == POD_SUPERTAB_OUT_MAX - 1 && U.sup_lead[0] == 0 && U.model.swarms[0].leads[1].recap == POD_RECAP_NONE);
+    CHECK(take() == 2 && is_q(0, "supertab.open", "sw1", "l1") && is_q(1, "supertab.recap.get", "sw1", "l1") && U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING);
+}
+static void lead_swipe_steps(void) {
+    swarm_home(4);
+    tap_lead(1, 3000);
+    CHECK(take() == 3);
+    pod_ui_supertab_recap(&U, "sw1", "l1", "One.", 1, false);
+    render(3500);
+    swipe(600, 400, 200, 410, 4000);   // left: the next Lead, in card order
+    CHECK(top()->view == POD_V_LEAD && top()->lead == 2 && !strcmp(top()->lead_id, "l2") && U.nav.depth == 2);
+    CHECK(take() == 3 && is_q(0, "supertab.select", "sw1", "l2") && is_q(1, "supertab.open", "sw1", "l2") && is_q(2, "supertab.recap.get", "sw1", "l2"));
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_NONE);   // the one left goes cold
+    swipe(200, 400, 600, 410, 5000);   // right: back to the previous
+    CHECK(top()->lead == 1 && take() == 3 && is_q(0, "supertab.select", "sw1", "l1"));
+    swipe(200, 400, 600, 410, 6000);
+    swipe(200, 400, 600, 410, 7000);
+    CHECK(top()->lead == 3);   // before the first Lead is the last: the Leads go round like panes
+    CHECK(take() >= 3);
+    swipe(600, 400, 200, 410, 8000);
+    CHECK(top()->lead == 0);
+    CHECK(sc_events == 0);   // no pane of the host scrolls for a swipe or a drag here
+    // a Swarm with one Lead has nowhere to go: no select
+    swarm_home(4);
+    U.nav.stack[0].scroll = 2;
+    render(2000);
+    tap_lead(0, 3000);
+    CHECK(!strcmp(top()->swarm, "sw2") && take() == 3);
+    swipe(600, 400, 200, 410, 4000);
+    CHECK(top()->lead == 0 && take() == 0);
+}
+static void lead_leave_closes(void) {
+    swarm_home(4);
+    swipe(600, 430, 200, 440, 2500);   // the second page of Leads
+    CHECK(U.nav.swarm_page == 1);
+    tap_lead(3, 3000);
+    CHECK(top()->view == POD_V_LEAD && take() == 3);
+    CHECK(U.nav.depth == 2 && U.nav.swarm_page == 1);   // Home kept the page it was on under the view
+    pod_nav_act(&U.nav, &U.model, POD_A_BACK, 1, 4000);   // the side button
+    CHECK(U.nav.depth == 1 && U.nav.swarm_page == 1 && take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+    render(4500);
+    CHECK(find(POD_A_LEAD) && find(POD_A_LEAD)->arg == 3);   // back on the card, on the page the person left
+    // a swipe up from the bottom zone is Home too
+    tap_lead(3, 5000);
+    CHECK(top()->view == POD_V_LEAD && take() == 3);
+    render(5500);
+    swipe(360, 690, 360, 400, 6000);
+    CHECK(U.nav.depth == 1 && U.nav.swarm_page == 1 && take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+    // Notices over the view closes it for the desktop, and Back from Notices opens it again
+    tap_lead(3, 7000);
+    take();
+    pod_nav_act(&U.nav, &U.model, POD_A_INBOX, 0, 7500);
+    CHECK(top()->view == POD_V_INBOX && take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+    pod_nav_act(&U.nav, &U.model, POD_A_BACK, 1, 8000);
+    CHECK(top()->view == POD_V_LEAD && take() == 2 && is_q(0, "supertab.open", "sw1", "l3") && is_q(1, "supertab.recap.get", "sw1", "l3"));
+}
+static void lead_scrolls(void) {
+    swarm_home(4);
+    tap_lead(0, 3000);
+    take();
+    pod_ui_supertab_recap(&U, "sw1", "l0", "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+                          "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two", 1, false);
+    render(3500);
+    CHECK(pod_scroll_max(&U.nav, &U.model) > 1 && top()->scroll == 0);
+    t_(true, 360, 500, 4000); t_(true, 360, 400, 4100); t_(true, 360, 300, 4200); t_(false, 360, 300, 4250);
+    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && take() == 0);   // the drag moved the text and sent no Swarm frame
+    CHECK(sc_down == 1 && sc_move > 0 && sc_up == 1);   // and the desktop's chat follows it, as an agent screen's drag scrolls its pane
+    t_(true, 360, 300, 5000); t_(true, 360, 500, 5100); t_(true, 360, 700, 5200); t_(false, 360, 700, 5250);
+    CHECK(top()->scroll == 0);
+}
+static void lead_talk(void) {
+    swarm_home(4);
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
+    snprintf(sw->leads[1].local, ID_MAX, "a1");   // Alpha is this Lead's harness
+    snprintf(sw->leads[2].local, ID_MAX, "nobody");   // a harness the roster does not hold: nothing to talk to
+    tap_lead(1, 3000);
+    CHECK(!strcmp(top()->agent, "a1") && take() == 3);
+    render(3500);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);   // a tap on the view: talk to the harness
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1") && top()->view == POD_V_TALK && !strcmp(top()->swarm, "sw1") && take() == 0);   // still the open recap: no close
+    render(4500);
+    o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_END && top()->view == POD_V_TALK);
+    pod_ui_talk_over(&U);
+    CHECK(top()->view == POD_V_LEAD && take() == 0 && U.nav.depth == 2);
+    // a step while talking moves nothing
+    pod_nav_act(&U.nav, &U.model, POD_A_TALK, 0, 6000);
+    CHECK(top()->view == POD_V_TALK);
+    pod_nav_act(&U.nav, &U.model, POD_A_NEXT, 0, 6100);
+    CHECK(top()->view == POD_V_TALK && top()->lead == 1);
+    pod_ui_talk_over(&U);
+    // a remote Lead, or one whose harness is not on the roster, has no talk control
+    swipe(600, 400, 200, 410, 7000);
+    CHECK(top()->lead == 2 && !top()->agent[0]);
+    render(7500);
+    CHECK(tap_(MID_X, MID_Y, 8000).fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+    swipe(600, 400, 200, 410, 9000);
+    CHECK(top()->lead == 3 && !top()->agent[0] && tap_(MID_X, MID_Y, 10000).fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+    CHECK(pod_nav_act(&U.nav, &U.model, POD_A_TALK, 0, 11000).fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+}
+static void lead_focus(void) {
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw1", "l2", NOW);   // the desktop opened that project
+    CHECK(U.nav.depth == 2 && top()->view == POD_V_LEAD && top()->lead == 2 && !U.model.focus_pending && U.nav.stack[0].scroll == 0 && U.nav.swarm_page == 0);
+    CHECK(take() == 2 && is_q(0, "supertab.open", "sw1", "l2") && is_q(1, "supertab.recap.get", "sw1", "l2"));   // no select: the desktop is already there
+    pod_ui_supertab_focus(&U, "sw1", "l2", NOW);   // the same Lead again: nothing changes
+    CHECK(top()->lead == 2 && take() == 0);
+    pod_ui_supertab_focus(&U, "sw1", "l3", NOW);   // another: the view moves on, the open recap follows
+    CHECK(top()->lead == 3 && U.nav.swarm_page == 1 && take() == 2 && is_q(0, "supertab.open", "sw1", "l3"));
+    // a Swarm the person has no desk tab for: Home lands on its own page
+    pod_ui_supertab_focus(&U, "sw2", "s0", NOW);
+    CHECK(top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw2") && U.nav.stack[0].scroll == 2 && U.nav.swarm_page == 0);
+    take();
+    // not while recording
+    swarm_home(4);
+    to_agent(0, 0);
+    render(1000);
+    pod_out_t o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && pod_ui_talking(&U));
+    pod_ui_supertab_focus(&U, "sw1", "l2", NOW);
+    CHECK(pod_ui_talking(&U) && top()->view == POD_V_TALK && !U.model.focus_pending);   // dropped, not kept
+    // not while the update is on screen
+    swarm_home(4);
+    pod_ui_ota(&U, "0.1.0", "0.1.1", 30, false);
+    pod_ui_supertab_focus(&U, "sw1", "l2", NOW);
+    CHECK(U.nav.depth == 1 && !U.model.focus_pending);
+    pod_ui_ota(&U, NULL, NULL, -1, false);
+    // not while the person is driving elsewhere (a touch within the quiet window)
+    swarm_home(4);
+    to_agent(0, 2);
+    render(1000);
+    U.touched = true; U.last_touch_ms = 1000;   // a touch a moment ago
+    U.model.clock_ms = 1500;
+    pod_ui_supertab_focus(&U, "sw1", "l1", NOW);
+    CHECK(top()->view == POD_V_RECAP && !U.model.focus_pending);
+    // pending until the Swarm list has it
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw9", "x1", NOW);
+    CHECK(U.nav.depth == 1 && U.model.focus_pending);
+    static const char ids[3][ID_MAX] = {"sw1", "sw2", "sw9"};
+    pod_ui_supertab_ids(&U, ids, 3);
+    CHECK(U.nav.depth == 1 && U.model.focus_pending);   // listed, not received
+    static pod_swarm_t sw;
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw9"); snprintf(sw.name, sizeof sw.name, "Late"); sw.count = 1; sw.lead_n = 1;
+    snprintf(sw.leads[0].id, ID_MAX, "x1"); snprintf(sw.leads[0].project, sizeof sw.leads[0].project, "p"); snprintf(sw.leads[0].engine, sizeof sw.leads[0].engine, "claude");
+    pod_ui_supertab(&U, &sw, 2000);
+    CHECK(top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw9") && !U.model.focus_pending && take() == 2);
+    // a focus that never finds its Lead is dropped after the waiting time
+    swarm_home(4);
+    pod_ui_supertab_focus(&U, "sw1", "ghost", NOW);
+    CHECK(U.model.focus_pending);
+    U.model.clock_ms += POD_FOLLOW_PENDING_MS + 100;
+    pod_ui_supertab_ids(&U, ids, 2);
+    CHECK(!U.model.focus_pending && U.nav.depth == 1);
+}
+static void lead_removed(void) {
+    swarm_home(4);
+    tap_lead(1, 3000);
+    take();
+    // l1 leaves: the view moves to the Lead that took its place (the next one)
+    static pod_swarm_t sw;
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = 3; sw.lead_n = 3;
+    const char *keep[3] = {"l0", "l2", "l3"};
+    for (int i = 0; i < 3; i++) { snprintf(sw.leads[i].id, ID_MAX, "%s", keep[i]); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj"); snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); }
+    pod_ui_supertab(&U, &sw, 4000);
+    CHECK(U.nav.depth == 2 && top()->view == POD_V_LEAD && !strcmp(top()->lead_id, "l2") && top()->lead == 1);
+    CHECK(take() == 2 && is_q(0, "supertab.open", "sw1", "l2") && is_q(1, "supertab.recap.get", "sw1", "l2"));
+    // it leaves too: the next one again (l3 is now at its index)
+    snprintf(sw.leads[1].id, ID_MAX, "l3"); sw.lead_n = 2;
+    pod_ui_supertab(&U, &sw, 4050);
+    CHECK(!strcmp(top()->lead_id, "l3") && top()->lead == 1 && U.nav.depth == 2);
+    take();
+    // the last Lead leaves while it is the one open: the one before it
+    sw.lead_n = 1;
+    pod_ui_supertab(&U, &sw, 4100);
+    CHECK(!strcmp(top()->lead_id, "l0") && top()->lead == 0 && U.nav.depth == 2 && take() == 2);
+    // the Lead's index moved (a Lead ahead of it arrived): the id still names it
+    snprintf(sw.leads[0].id, ID_MAX, "new"); snprintf(sw.leads[1].id, ID_MAX, "l0"); sw.lead_n = 2;
+    pod_ui_supertab(&U, &sw, 4200);
+    CHECK(!strcmp(top()->lead_id, "l0") && top()->lead == 1 && take() == 0);
+    // none left: Home, and the desktop is told the recap closed
+    sw.lead_n = 0; sw.count = 0;
+    pod_ui_supertab(&U, &sw, 4300);
+    CHECK(U.nav.depth == 1 && take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+    // the Swarm itself goes
+    swarm_home(4);
+    tap_lead(0, 3000);
+    take();
+    static const char ids[1][ID_MAX] = {"sw2"};
+    pod_ui_supertab_ids(&U, ids, 1);
+    CHECK(U.nav.depth == 1 && take() == 1 && is_q(0, "supertab.open", "sw1", ""));
+}
+static void lead_relink(void) {
+    swarm_home(4);
+    tap_lead(1, 3000);
+    take();
+    pod_ui_link(&U, false);   // the model drops the list; the view stays and nothing is sent to a dead cable
+    CHECK(top()->view == POD_V_LEAD && U.nav.depth == 2 && take() == 0 && !pod_ui_pet_on_screen(&U));
+    render(3500);
+    pod_ui_link(&U, true);
+    CHECK(top()->view == POD_V_LEAD && take() == 0);   // linked, but the daemon has not sent the list yet: wait
+    static const char ids[2][ID_MAX] = {"sw1", "sw2"};
+    pod_ui_supertab_ids(&U, ids, 2);
+    CHECK(top()->view == POD_V_LEAD && take() == 0);   // the Swarm is listed, not received
+    static pod_swarm_t sw;
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = 4; sw.lead_n = 4;
+    for (int i = 0; i < 4; i++) { snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj%d", i); snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); }
+    pod_ui_supertab(&U, &sw, 4000);
+    CHECK(top()->view == POD_V_LEAD && !strcmp(top()->lead_id, "l1") && take() == 2 && is_q(0, "supertab.open", "sw1", "l1") && is_q(1, "supertab.recap.get", "sw1", "l1"));
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING);
+    // after the list comes back without that Swarm the view goes
+    pod_ui_link(&U, false);
+    pod_ui_link(&U, true);
+    static const char one[1][ID_MAX] = {"sw2"};
+    pod_ui_supertab_ids(&U, one, 1);
+    CHECK(U.nav.depth == 1 && take() == 0);   // nothing was open as far as the new link knows
+}
+static void swarm_card_shrinks(void) {
+    swarm_home(4);
+    swipe(600, 430, 200, 440, 3000);
+    CHECK(U.nav.swarm_page == 1);
+    static const char sw_ids[1][ID_MAX] = {"sw2"};
+    pod_model_supertab_ids(&U.model, sw_ids, 1);   // sw1 is gone: the page list changes under the person
+    pod_nav_sync(&U.nav, &U.model);
+    CHECK(U.nav.swarm_page == 0 && pod_tabs_pages_of(&U.nav, &U.model) == 3);   // Build and Docs are plain tab cards again, Solo the last
+    CHECK(top()->scroll == 0);
+    render(6000);
+    CHECK(!find(POD_A_LEAD) && find(POD_A_ENTER_TAB));
 }
 
 int main(void) {
     notify_while_looking();
+    swarm_card_pages();
+    swarm_card_few_leads();
+    swarm_card_tap();
+    notice_opens_lead();
+    lead_tap_sends();
+    lead_retry();
+    lead_swipe_steps();
+    lead_leave_closes();
+    lead_scrolls();
+    lead_talk();
+    lead_focus();
+    lead_removed();
+    lead_relink();
+    swarm_card_shrinks();
     overview_pages();
     bottom_up_goes_back();
     swipe_up_home();
@@ -1468,10 +2093,12 @@ int main(void) {
     toast_shows_and_expires();
     toast_tap_opens_notices();
     toast_swipe_up_dismisses();
+    supertab_toast_stays();
     toast_not_here();
     home_notices_pages();
     home_notices_come_and_go();
     home_swipe_up_lands_on_room_tab();
+    home_pages_one_swipe_each();
     selected_tab_follows();
     start_enters_first_tab();
     start_then_focus();
@@ -1509,6 +2136,9 @@ int main(void) {
     asking_agents_do_not_talk();
     talk_stays_with_its_target();
     refused_talk_stays_on_the_agent();
+    working_card_swipes();
+    working_card_shrinks();
+    working_card_tap_and_back();
     printf("test_ph_glue: %d checks ok\n", checks);
     return 0;
 }

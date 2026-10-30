@@ -66,6 +66,11 @@ void main() {
   String? formTab(WidgetTester tester) =>
       tester.widget<NewAgentPage>(find.byType(NewAgentPage)).deskTabId;
 
+  bool formNewTab(WidgetTester tester) =>
+      tester.widget<NewAgentPage>(find.byType(NewAgentPage)).newDeskTab;
+
+  final newTab = find.byKey(const ValueKey('find-new-tab'));
+
   /// Takes the form down and runs its clocks out, so no timer outlives the test.
   Future<void> unmount(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
@@ -104,6 +109,72 @@ void main() {
 
     expect(formTab(tester), isNull);
     await unmount(tester);
+  });
+
+  // Find's `+` after the last tab chip is the desktop's New Tab: the harness made opens a tab of
+  // its own, whatever tab the chips are narrowed to.
+  testWidgets('the + after the last tab makes it in a tab of its own', (
+    tester,
+  ) async {
+    await openFind(tester);
+    await pickTab(tester, 'Docker');
+
+    await openForm(tester, newTab);
+
+    expect(find.byType(NewAgentPage), findsOneWidget);
+    expect(formNewTab(tester), isTrue);
+    expect(formTab(tester), isNull);
+    await unmount(tester);
+  });
+
+  testWidgets('the + sits after the last tab, on the chips row', (
+    tester,
+  ) async {
+    await openFind(tester);
+
+    expect(newTab, findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(DeskTabFilterBar), matching: newTab),
+      findsOneWidget,
+    );
+    final docker = find.descendant(
+      of: find.byType(DeskTabFilterBar),
+      matching: find.text('Docker'),
+    );
+    expect(
+      tester.getTopLeft(newTab).dx,
+      greaterThan(tester.getTopRight(docker).dx),
+    );
+    expect(
+      tester.getCenter(newTab).dy,
+      closeTo(tester.getCenter(docker).dy, 1),
+    );
+    expect(find.bySemanticsLabel('New Tab'), findsOneWidget);
+  });
+
+  testWidgets('the foot and the row still join the tab picked, not a new one', (
+    tester,
+  ) async {
+    await openFind(tester);
+    await pickTab(tester, 'Docker');
+
+    await openForm(tester, find.byKey(const ValueKey('find-new-harness')));
+
+    expect(formNewTab(tester), isFalse);
+    expect(formTab(tester), 't2');
+    await unmount(tester);
+  });
+
+  testWidgets('no + while no computer can take a new harness', (tester) async {
+    final app = await openFind(tester);
+    app.stateOf('m')!.nodeOnline = false;
+    app.notifyListeners();
+    await tester.pump();
+
+    // The chips stay; only the doors to a new harness go.
+    expect(find.byType(DeskTabFilterBar), findsOneWidget);
+    expect(newTab, findsNothing);
+    expect(find.byKey(const ValueKey('find-new-harness')), findsNothing);
   });
 
   // The first screen after pairing draws Find's own list, chips and `+ New Harness` included.

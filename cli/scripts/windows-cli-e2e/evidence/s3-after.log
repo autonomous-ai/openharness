@@ -1,0 +1,82 @@
+# s3 after (08:44:24)
+0.4.20-e2e.1
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.20-e2e.1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     2 available
+   pid        2952
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+0.4.20-e2e.1
+0.4.19-e2e.1
+0.4.20-e2e.1
+current
+data
+notify.mjs
+SHA256 hash of C:\Users\hxe2e\.harness\cli\notify.mjs:
+a177f39fba13310105094b80a2149fcc3df4e63a27cb36b0fd88cdd3f4a8430c
+CertUtil: -hashfile command completed successfully.
+{"id":"0361bf7d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:50","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"ab00669d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:51","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"575c8f5a…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:53","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"297854ec…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:55","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+PS C:\Users\hxe2e\proj> Write-Output ('BEFORE_' + (40+2))
+BEFORE_42
+PS C:\Users\hxe2e\proj> Write-Output ('AFTER_' + (40+2))
+AFTER_42
+PS C:\Users\hxe2e\proj>
+## claude screen
+       Light mode
+       Dark mode (colorblind-friendly)
+       Light mode (colorblind-friendly)
+       Dark mode (ANSI colors only)
+       Light mode (ANSI colors only)
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1  function greet() {
+  2 -  console.log("Hello, World!");
+  2 +  console.log("Hello, Claude!");
+  3  }
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Syntax theme: Monokai Extended (ctrl+t to disable)
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     4900            5028 OpenConsole.exe 18:43:05 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a0
+      744            5028 powershell.exe  18:43:05 powershell.exe -NoLogo                                                                                        
+     3824            5028 OpenConsole.exe 18:43:06 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1fc
+     5768            5028 claude.exe      18:43:06 C:\Users\hxe2e\.local\bin\claude.exe                                                                          
+     2952            5788 node.exe        18:43:49 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.20-e2e.1\
+     3276            2952 node.exe        18:43:49 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     4368            2952 node.exe        18:43:49 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+
+
+
+2026-10-17 18:43:47.221 [update] staged 0.4.20-e2e.1 — restarting now
+2026-10-17 18:43:47.225 [harnessd] service updater staged 0.4.20-e2e.1
+2026-10-17 18:43:47.225 [harnessd] the updater staged 0.4.20-e2e.1 — asking the core to hand over
+2026-10-17 18:43:47.228 [update] applying 0.4.19-e2e.1 → 0.4.20-e2e.1 — restarting daemon
+2026-10-17 18:43:47.246 [harnessd] service updater asked to start again (code 75) — restarting
+2026-10-17 18:43:47.261 [harnessd] service updater started (pid 1828) · restart 1
+2026-10-17 18:43:48.243 [update] handing 0.4.20-e2e.1 to harnessd
+2026-10-17 18:43:48.266 [harnessd] core exited (code 75) for an update — restarting
+2026-10-17 18:43:49.004 [update] self-update on · v0.4.20-e2e.1 · every 60s
+2026-10-17 18:43:49.035 [harnessd] service updater stopped (code 0)
+2026-10-17 18:43:49.882 [harnessd] service updater started (pid 4368)
+2026-10-17 18:43:49.915 [harnessd] handed over to the new master (pid 2952) — leaving
+2026-10-17 18:43:50.250 [update] self-update on · v0.4.20-e2e.1 · every 60s
+2026-10-17 18:44:20.769 [harnessd] the update stayed up — keeping it
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}

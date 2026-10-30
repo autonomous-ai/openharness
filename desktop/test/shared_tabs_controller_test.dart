@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:harness/measurement/product_measurement.dart';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
@@ -47,6 +50,63 @@ SharedTabsController make(SharedTabsRequest r, {void Function(SharedActivity)? o
     SharedTabsController(request: r, foreground: front ?? ValueNotifier(true), onActivity: onActivity);
 
 void main() {
+  test('invite measurement counts acknowledgements without addresses or ids and separates pending acceptance', () async {
+    final reports = <Map<String, dynamic>>[];
+    final usage = ProductMeasurement(
+      surface: 'desktop',
+      automatic: false,
+      context: ProductUsageContext(
+        release: '1.2.3',
+        platform: 'macos',
+        production: true,
+      ),
+      sendSetup: (_) async => {'accepted': true},
+    );
+    usage.account(
+      'PRIVATE_ACCOUNT',
+      choice: () async => {'enabled': true, 'revision': 0},
+      send: (report) async {
+        reports.add(jsonDecode(jsonEncode(report)));
+        return {'accepted': true};
+      },
+    );
+    await usage.flush();
+    usage.proxyVocabulary = 5;
+    var pending = true;
+    final c = SharedTabsController(
+      foreground: ValueNotifier(true),
+      measurement: usage,
+      request: (p) async => switch (p['action']) {
+        'share_invite' => {
+          'invited': ['PRIVATE_1', 'PRIVATE_2'],
+          'refused': ['PRIVATE_3'],
+        },
+        'share_accept' => {'sharedTabId': 'PRIVATE_TAB', 'pending': pending},
+        _ => shares(),
+      },
+    );
+    await c.act('share_invite', {
+      'emails': ['PRIVATE_1', 'PRIVATE_2', 'PRIVATE_3'],
+    });
+    await c.act('share_accept', {'inviteId': 'PRIVATE_INVITE'});
+    pending = false;
+    await c.act('share_accept', {'inviteId': 'PRIVATE_INVITE'});
+    await usage.flush();
+    final totals = <String, int>{};
+    for (final r in reports) {
+      for (final e in (r['counters'] as Map).entries) {
+        totals[e.key as String] = (totals[e.key] ?? 0) + (e.value as int);
+      }
+    }
+    expect(totals['health_desktop_shared_invites_sent'], 2);
+    expect(totals['health_desktop_shared_invites_refused'], 1);
+    expect(totals['ui_desktop_share_accept_unknown'], 1);
+    expect(totals['ui_desktop_share_accept_ok'], 1);
+    expect(jsonEncode(reports), isNot(contains('PRIVATE')));
+    c.dispose();
+    usage.dispose();
+  });
+
   test("reads shares, and a member's desk tab is derived from its shared tab id (R1)", () async {
     final c = make((p) async => shares(rosters: [roster()]));
     await c.refresh();
@@ -58,6 +118,19 @@ void main() {
     // crosses accounts, the desk id for the member's own harnesses.
     expect(c.agentMessagesTabIds(memberDeskTabId(id1)), [memberDeskTabId(id1), id1]);
     expect(c.agentMessagesTabIds('other'), ['other']);
+  });
+
+  // tabForDesk asks every shared tab for its desk id, for each desk tab, on
+  // every native menu flush; each answer was a fresh SHA-256.
+  test("a member tab's desk id is worked out once, not on every ask", () async {
+    final c = make((p) async => shares(rosters: [roster()]));
+    await c.refresh();
+    final tab = c.snapshot.tabs.single;
+    final desk = tab.deskTabId('bob');
+    expect(desk, memberDeskTabId(id1));
+    expect(identical(tab.deskTabId('bob'), desk), isTrue);
+    expect(identical(c.tabForDesk(desk!), tab), isTrue);
+    expect(tab.deskTabId('alice'), isNull, reason: "the owner's: its own tab id");
   });
 
   test("the owner's tab's Agent Messages are its desk tab's alone", () async {
@@ -194,6 +267,132 @@ void main() {
     });
   });
 
+  // With the account's Agent Messages switch off (the default) every daemon
+  // refuses `shares` with MESSAGES_OFF; asking anyway was a request and an
+  // fsync'd WARN every 60 s and on each reconnect, for everyone.
+  group("the account's Agent Messages switch", () {
+    test('off: nothing is asked, by the poll or anything else, and the state is off', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = ValueNotifier<bool?>(false);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares(rosters: [roster()]);
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        async.flushMicrotasks();
+        expect(c.state, SharedTabsState.off);
+        async.elapse(const Duration(minutes: 5));
+        c.changed(); // a reconnect, or shared_tabs_changed
+        front.value = false;
+        front.value = true;
+        async.elapse(const Duration(minutes: 5));
+        expect(reads, 0);
+        expect(c.state, SharedTabsState.off);
+        watch.dispose();
+      });
+    });
+
+    test('turned on: read at once, then every 60 s; off again: stops, and the shares are gone', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = ValueNotifier<bool?>(false);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares(rosters: [roster()]);
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        on.value = true;
+        async.flushMicrotasks();
+        expect(reads, 1);
+        expect(c.state, SharedTabsState.ready);
+        expect(c.snapshot.tabs, hasLength(1));
+        async.elapse(const Duration(seconds: 60));
+        expect(reads, 2);
+        on.value = false;
+        expect(c.state, SharedTabsState.off);
+        expect(c.snapshot.tabs, isEmpty);
+        async.elapse(const Duration(minutes: 5));
+        expect(reads, 2);
+        watch.dispose();
+      });
+    });
+
+    test('the settings store notifying with nothing changed starts no read', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = _Switch(true);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares();
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        async.flushMicrotasks();
+        expect(reads, 1);
+        for (var i = 0; i < 10; i++) {
+          async.elapse(const Duration(seconds: 5));
+          on.ping(); // the store's 30 s read, the same answer
+        }
+        expect(reads, 1);
+        async.elapse(const Duration(seconds: 10));
+        expect(reads, 2, reason: 'the 60 s poll keeps its own pace');
+        watch.dispose();
+      });
+    });
+
+    test('not read yet, it asks as before; bound again (null), it remembers it was off', () async {
+      var reads = 0;
+      final on = ValueNotifier<bool?>(null);
+      final c = SharedTabsController(
+        request: (p) async {
+          reads++;
+          return shares();
+        },
+        foreground: ValueNotifier(true),
+        messagesSwitch: on,
+      );
+      await c.refresh();
+      expect(reads, 1);
+      expect(c.state, SharedTabsState.ready);
+      on.value = false;
+      on.value = null;
+      on.value = true;
+      await pumpEventQueue();
+      expect(reads, 2, reason: 'off to on through an unread store is a turn-on');
+    });
+
+    test('an answer in flight when it is turned off is dropped', () async {
+      final gate = Completer<Map<String, dynamic>>();
+      final on = ValueNotifier<bool?>(true);
+      final c = SharedTabsController(
+        request: (p) => gate.future,
+        foreground: ValueNotifier(true),
+        messagesSwitch: on,
+      );
+      final read = c.refresh();
+      on.value = false;
+      gate.complete(shares(rosters: [roster()]));
+      await read;
+      expect(c.state, SharedTabsState.off);
+      expect(c.snapshot.tabs, isEmpty);
+    });
+  });
+
   test('dismiss asks the daemon', () async {
     final asked = <Map<String, dynamic>>[];
     final notice = {'id': 'n1', 'sharedTabId': id1, 'kind': 'removed', 'at': '2026-10-16T10:00:00Z'};
@@ -323,6 +522,14 @@ void main() {
     });
     await c.refresh();
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
+    await expectLater(
+      c.act('share_leave', {}),
+      throwsA(isA<SharedTabsFailure>().having(
+        (e) => e.message,
+        'message',
+        'Harness could not reach this computer. Check that it is online, then try again.',
+      )),
+    );
     error = TimeoutException('slow');
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
     expect(c.snapshot.notices, hasLength(1));
@@ -490,4 +697,15 @@ void main() {
     expect(c.snapshot.tabs, isEmpty);
     expect(c.state, SharedTabsState.unknown);
   });
+}
+
+/// A switch that notifies without changing, as the settings store does on
+/// every 30 s read.
+class _Switch extends ChangeNotifier implements ValueListenable<bool?> {
+  _Switch(this.value);
+
+  @override
+  bool? value;
+
+  void ping() => notifyListeners();
 }

@@ -39,6 +39,9 @@ class AskedQuestions {
     return true;
   }
 
+  /// Whether a question is open on [ref] right now.
+  bool asking(AgentRef ref) => _asked.containsKey(_key(ref));
+
   /// The question stopped being on screen — answered, or its turn ended. An
   /// empty or null [requestId] means whichever one was open; a different one
   /// is a stale close for a question already replaced, and is ignored.
@@ -53,6 +56,16 @@ class AskedQuestions {
     }
     _asked.remove(key);
     return true;
+  }
+
+  /// The question each of [machineId]'s agents was last announced for.
+  Map<AgentRef, String> askedOn(String machineId) {
+    final prefix = '$machineId/';
+    return {
+      for (final MapEntry(:key, :value) in _asked.entries)
+        if (key.startsWith(prefix))
+          (machineId: machineId, agentId: key.substring(prefix.length)): value,
+    };
   }
 
   void clear() => _asked.clear();

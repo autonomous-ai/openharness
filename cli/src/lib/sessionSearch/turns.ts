@@ -116,8 +116,10 @@ const TOOL_KEYS = [
 ]
 const PATCH_FILE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm
 
+/** The files a patch names. Codex's code-mode `exec` keeps the patch as a JS string literal, its line breaks written
+ *  `\\n`, and those are read as breaks: the headers are matched line by line (Change agent's files, 2026-10-21). */
 function patchFiles(text: string): string[] {
-  return [...text.matchAll(PATCH_FILE)].map((match) => match[1].trim())
+  return [...text.replace(/\\n/g, '\n').matchAll(PATCH_FILE)].map((match) => match[1].trim())
 }
 
 // An unbroken run this long is an encoded blob (Codex seals sub-agent context this way), never a word.
@@ -151,8 +153,9 @@ export function toolText(tool: string, input: unknown): string {
   else if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
     for (const key of TOOL_KEYS) if (key in record) take(record[key])
-    // apply_patch and friends carry the patch as `input`/`patch`: only its file names are kept.
-    for (const key of ['input', 'patch']) {
+    // apply_patch and friends carry the patch as `input`/`patch`, or as `raw` when a freeform call's patch was not
+    // JSON (Codex's custom_tool_call): only its file names are kept.
+    for (const key of ['input', 'patch', 'raw']) {
       if (typeof record[key] === 'string') parts.push(...patchFiles(record[key] as string))
     }
   }

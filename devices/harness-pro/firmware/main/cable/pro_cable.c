@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "cJSON.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_json_guard.h"
@@ -27,6 +28,8 @@
 #include "sys/device_mac.h"
 #include "sys/fw_update.h"
 #include "sys/last_words.h"
+#include "esp_task_wdt.h"
+#include "task_stacks.h"
 
 static const char *TAG = "pro_cable";
 
@@ -38,9 +41,14 @@ static const char *TAG = "pro_cable";
 #define HELLO_ALONE_MS   2000
 #define HELLO_SESSION_MS 15000
 #define SILENCE_MS       15000
+// Self re-plug (replug_tick). After a cold start beside a booting Mac the link could stay dead both ways until a hand
+// replugged the Pro; a fresh enumeration is that replug. A daemon greets within a hello or two, so a host driving the port
+// with no session for 30 s is stuck or has no daemon; the waits double to 10 min so the second case sees it rarely.
+#define REPLUG_ALONE_MS  30000
+#define REPLUG_MAX_MS    600000
 #define NOTIF_ROWS       16   // notif.replace items kept (the daemon sends at most 8)
 
-// Everything below runs on the cable_link task (6 KB stack) unless the comment says otherwise. Parsing therefore
+// Everything below runs on the cable_link task (12 KB stack) unless the comment says otherwise. Parsing therefore
 // goes into static scratch, never into a stack local over 1 KB (the host test caps every frame at 1024 B).
 _Static_assert(POD_RECAP_BYTES == PRO_RECAP_BYTES, "the recap buffers of pro_cable and Pod must agree");
 
@@ -53,6 +61,12 @@ static uint32_t    s_bad, s_unknown;
 static char        s_machine_name[CABLE_NAME_MAX];
 static char        s_machine_id[MACHINE_ID_MAX];
 static cable_machines_t s_machines;
+// The daemon numbers every JSON frame it sends us (`seq`, reset by each welcome); a hole means a frame was lost on the way in.
+static int64_t     s_seq_last = -1;   // -1: none seen this session
+static uint32_t    s_seq_gaps;
+static bool        s_resync_pending;
+static unsigned    s_replugs;         // self re-plugs since the last session
+static bool        s_seq_on;          // the welcome carried a seq
 
 // The id of the recording in flight: written by the voice task, read by the cable_link task to match a reply.
 static SemaphoreHandle_t s_upload_lock;
@@ -213,6 +227,8 @@ static void send_hello(void)
     msg_string(&root, "activity", "steps-v1");
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
+    msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
+    msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
@@ -254,6 +270,16 @@ bool pro_cable_send_open(const char *agent_id)
     cJSON *root = msg("agent.open");
     msg_string(&root, "agentId", agent_id);
     return send_json(root);
+}
+
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead)
+{
+    if (!t || !tab || !tab[0]) return false;
+    if (strcmp(t, "supertab.recap.get") && strcmp(t, "supertab.open") && strcmp(t, "supertab.select")) return false;
+    cJSON *root = msg(t);
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "lead", lead ? lead : "");
+    return send_json_with(root, false);   // false: dropped on a busy link (the caller retries)
 }
 
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity)
@@ -348,6 +374,21 @@ void pro_cable_counters(uint32_t *bad, uint32_t *unknown)
 {
     if (bad) *bad = s_bad;
     if (unknown) *unknown = s_unknown;
+}
+
+uint32_t pro_cable_seq_gaps(void) { return s_seq_gaps; }
+
+// A frame with a `seq` that does not follow the last one means frames in between never arrived (the USB path drops
+// whole packets, and a small frame vanishes without a trace). Count it and ask for a snapshot (link_resync).
+static void track_seq(const cJSON *root, bool welcome)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "seq");
+    const bool ok = cJSON_IsNumber(v) && v->valuedouble >= 0 && v->valuedouble < 4294967296.0;
+    if (welcome) s_seq_on = ok;   // a daemon that does not number its frames is not checked at all
+    if (!s_seq_on || !ok) return;
+    const int64_t seq = (int64_t)v->valuedouble;
+    if (!welcome && s_seq_last >= 0 && seq != s_seq_last + 1) { s_seq_gaps++; s_resync_pending = true; }
+    s_seq_last = seq;   // a welcome restarts the count
 }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
@@ -499,6 +540,125 @@ static void handle_swarms(const cJSON *p)
     pro_app_swarms(s_swarm_rows, n, has_ids ? &s_swarm_members : NULL, selected, s_tiles, tn);
 }
 
+// ── the Swarm cards ─────────────────────────────────────────────────────────────────────────────────
+// Two frames, so each stays under the JSON guard's token budget: `supertabs` {ids} is the set and order, `supertab` one Swarm with its
+// Leads (about 200 tokens at 12). A Swarm or Lead that is not an object, has no usable id, or repeats an id is skipped (the
+// frame survives); an unknown `state` reads as done. Parsed into PSRAM staging: the model copies it and keeps the cached recap
+// texts, so the Lead `text` pointers stay NULL here.
+
+static EXT_RAM_BSS_ATTR pod_swarm_t s_card;
+static char s_card_ids[SWARMS_CARD_MAX][ID_MAX];
+static char s_card_text[SWARM_TEXT_MAX];
+
+static bool id_fits(const char *s) { return s && s[0] && strlen(s) < ID_MAX; }
+
+static pod_lead_state_t lead_state(const char *s)
+{
+    if (s && !strcmp(s, "ask")) return POD_LEAD_ASK;
+    if (s && !strcmp(s, "stuck")) return POD_LEAD_STUCK;
+    if (s && !strcmp(s, "work")) return POD_LEAD_WORK;
+    return POD_LEAD_DONE;
+}
+
+// The Leads in the Swarm's order (each Lead's `order`, the project's index in the app), whatever their urgency; a Lead without one keeps its place as it came.
+static void read_leads(const cJSON *it, pod_swarm_t *sw)
+{
+    double order[SWARM_LEADS_MAX];
+    const cJSON *l = NULL;
+    cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(it, "leads")) {
+        if (sw->lead_n >= SWARM_LEADS_MAX) break;
+        const char *id = str_of(l, "id");
+        if (!id_fits(id)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < sw->lead_n; i++) if (!strcmp(sw->leads[i].id, id)) duplicate = true;
+        if (duplicate) continue;
+        const cJSON *o = cJSON_GetObjectItemCaseSensitive(l, "order");
+        const double key = cJSON_IsNumber(o) ? o->valuedouble : sw->lead_n;
+        int at = sw->lead_n;
+        while (at > 0 && order[at - 1] > key) at--;   // after every equal one: ties keep their arrival order
+        memmove(&sw->leads[at + 1], &sw->leads[at], (size_t)(sw->lead_n - at) * sizeof sw->leads[0]);
+        memmove(&order[at + 1], &order[at], (size_t)(sw->lead_n - at) * sizeof order[0]);
+        order[at] = key;
+        sw->lead_n++;
+        pod_lead_t *ld = &sw->leads[at];
+        memset(ld, 0, sizeof *ld);
+        snprintf(ld->id, sizeof ld->id, "%s", id);
+        const char *pid = str_of(l, "projectId");
+        if (pid && strlen(pid) < sizeof ld->projectId) snprintf(ld->projectId, sizeof ld->projectId, "%s", pid);   // whole or none
+        cut_of(l, "project", ld->project, sizeof ld->project);
+        cut_of(l, "engine", ld->engine, sizeof ld->engine);
+        cut_of(l, "owner", ld->owner, sizeof ld->owner);
+        const char *local = str_of(l, "local");
+        if (local && strlen(local) < sizeof ld->local) snprintf(ld->local, sizeof ld->local, "%s", local);   // a harness id: whole or none
+        ld->state = lead_state(str_of(l, "state"));
+        const cJSON *since = cJSON_GetObjectItemCaseSensitive(l, "since");
+        if (cJSON_IsNumber(since) && since->valuedouble > 0) ld->since_s = since->valuedouble > 2592000 ? 2592000u : (uint32_t)since->valuedouble;
+        ld->recap = POD_RECAP_NONE;
+    }
+}
+
+static void handle_supertabs(const cJSON *p)
+{
+    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(p, "ids");
+    if (!cJSON_IsArray(ids)) return;
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, ids) {
+        if (n >= SWARMS_CARD_MAX) break;
+        if (!cJSON_IsString(it) || !id_fits(it->valuestring)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(s_card_ids[i], it->valuestring)) duplicate = true;
+        if (duplicate) continue;
+        snprintf(s_card_ids[n++], ID_MAX, "%s", it->valuestring);
+    }
+    ESP_LOGI(TAG, "supertabs: %d", n);
+    pro_app_supertab_ids(s_card_ids, n);
+}
+
+static void handle_supertab(const cJSON *p)
+{
+    const char *id = str_of(p, "id");
+    if (!id_fits(id)) return;
+    pod_swarm_t *sw = &s_card;
+    memset(sw, 0, sizeof *sw);
+    snprintf(sw->id, sizeof sw->id, "%s", id);
+    const char *tab = str_of(p, "tab");
+    if (tab && strlen(tab) < sizeof sw->tab) snprintf(sw->tab, sizeof sw->tab, "%s", tab);
+    cut_of(p, "name", sw->name, sizeof sw->name);
+    read_leads(p, sw);
+    const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
+    sw->count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
+                                      : sw->lead_n;
+    pro_app_supertab(sw);
+}
+
+// `supertab.recap`: one Lead's last message, cut to 1,500 bytes on a UTF-8 boundary. `none` (or no text) is "No message yet".
+static void handle_supertab_recap(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    if (!id_fits(t) || !id_fits(l)) return;
+    snprintf(tab, sizeof tab, "%s", t);
+    snprintf(lead, sizeof lead, "%s", l);
+    const cJSON *none = cJSON_GetObjectItemCaseSensitive(p, "none"), *at = cJSON_GetObjectItemCaseSensitive(p, "at");
+    const char *text = cut_of(p, "text", s_card_text, sizeof s_card_text);
+    if (!text) s_card_text[0] = 0;
+    const bool empty = cJSON_IsTrue(none);
+    if (empty) s_card_text[0] = 0;
+    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
+    pro_app_supertab_recap(tab, lead, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
+}
+
+static void handle_supertab_focus(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    if (!id_fits(t) || !id_fits(l)) return;
+    snprintf(tab, sizeof tab, "%s", t);
+    snprintf(lead, sizeof lead, "%s", l);
+    pro_app_supertab_focus(tab, lead);
+}
+
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
 // Streamed like the agents. cable_machines_end() answers "did anything change" before pro_app is touched, so the
 // daemon re-sending an identical list (its own diff key resets on every port reopen) costs one comparison.
@@ -577,13 +737,23 @@ static void handle_turn_stats(const char *id, const cJSON *p)
 
 static bool flag(const cJSON *p, const char *key) { return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, key)); }
 
-// restore is history filled back in, quiet is "the desktop already shows this agent", silent is a sub-agent's turn: the
-// recap is applied for all three, but none is news (no entry, no banner, no beep). Absent flags are false.
+// The recap is always applied; how loud the end is comes from `tier` (alert / list / silent). restore is history filled back
+// in: never news. A summary with no (or an unknown) tier is from an older daemon: quiet ("the desktop already shows this agent")
+// and silent (a sub-agent's turn) drop the entry as before, anything else is an alert. Absent flags are false.
+static pod_tier_t tier_of(const cJSON *p)
+{
+    if (flag(p, "restore")) return POD_TIER_SILENT;
+    const char *tier = str_of(p, "tier");
+    if (tier && !strcmp(tier, "alert")) return POD_TIER_ALERT;
+    if (tier && !strcmp(tier, "list")) return POD_TIER_LIST;
+    if (tier && !strcmp(tier, "silent")) return POD_TIER_SILENT;
+    return flag(p, "quiet") || flag(p, "silent") ? POD_TIER_SILENT : POD_TIER_ALERT;
+}
+
 static void handle_summary(const char *id, const cJSON *p)
 {
-    const bool restore = flag(p, "restore");
     pro_app_summary(id, cut_of(p, "text", s_text, sizeof s_text), cut_of(p, "recap", s_recap, sizeof s_recap),
-                    cut_of(p, "full", s_full, sizeof s_full), restore, !restore && !flag(p, "quiet") && !flag(p, "silent"));
+                    cut_of(p, "full", s_full, sizeof s_full), flag(p, "restore"), tier_of(p));
 }
 
 // The fixed field the daemon sizes a readToken by: [A-Za-z0-9_-]{1,63}. Anything else is not a token.
@@ -634,13 +804,21 @@ static void handle_notif_seen(const cJSON *p)
     pro_app_notif_seen(id, token ? token->valuestring : NULL);
 }
 
+// question {agentId, id, questions:[{q}], superTab?, attention?}. A Super Tab's question names the project (`superTab`, cut to
+// SUPER_TAB_MAX - 1 bytes) and what it needs (`attention`: "stuck", else a decision, whatever an unknown value says). Without
+// a non-empty superTab it is a plain question, attention or not.
 static void handle_question(const char *id, const cJSON *p)
 {
-    if (!str_of(p, "id")) return;   // the request this question belongs to
+    static char s_tab[SUPER_TAB_MAX];
+    const char *request = str_of(p, "id");   // the request this question belongs to
+    if (!request) return;
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, s_text);
+    const char *tab = cut_of(p, "superTab", s_tab, sizeof s_tab), *attn = str_of(p, "attention");
+    if (tab && !tab[0]) tab = NULL;
+    const pod_attention_t a = !tab ? POD_ATTN_NONE : attn && !strcmp(attn, "stuck") ? POD_ATTN_STUCK : POD_ATTN_DECISION;
+    pro_app_question(id, request, s_text, tab, a);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)
@@ -771,8 +949,9 @@ static void session_up(const cJSON *p)
         // console and `idf.py monitor` behaves as it always has.
         cable_link_set_log_framing(true);
         ESP_LOGI(TAG, "session up: %s", s_machine_name);
-        // The welcome parsed: this image's cable path works, so a fresh install may be confirmed now (fw_update.h).
-        if (fw_confirm_session_up()) pro_app_note_update();
+        if (s_replugs) ESP_LOGW(TAG, "usb: came back after %u self re-plug(s)", s_replugs);
+        s_replugs = 0;
+        fw_confirm_session_up((uint32_t)(esp_timer_get_time() / 1000));   // starts the clock a fresh image is confirmed on (fw_update.h)
     }
     if (was && !moved) return;
     // Anything held belonged to another host. Drop a half-streamed roster before its end can make it current.
@@ -800,8 +979,13 @@ static void session_down(const char *why)
     s_agent_count = 0;
     s_machine_name[0] = 0;
     s_machine_id[0] = 0;
+    s_seq_last = -1;
+    s_seq_on = false;
+    s_resync_pending = false;
+    cable_link_reset_decoder();   // runs on the tick: whatever is half-received belonged to the session that ended
     cable_link_set_log_framing(false);   // first: what follows should be readable on a plain monitor
     ESP_LOGI(TAG, "session down (%s)", why);
+    fw_confirm_session_down();
     fw_update_abort("session down");
     pro_app_machines(s_machines.rows, 0, "");
     pro_app_link(false, NULL);
@@ -828,6 +1012,10 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "machines.end")) { handle_machines_end(p); return; }
     if (!strcmp(t, "machine.updated")) { handle_machine_updated(p); return; }
     if (!strcmp(t, "swarms")) { handle_swarms(p); return; }
+    if (!strcmp(t, "supertabs")) { handle_supertabs(p); return; }
+    if (!strcmp(t, "supertab")) { handle_supertab(p); return; }
+    if (!strcmp(t, "supertab.recap")) { handle_supertab_recap(p); return; }
+    if (!strcmp(t, "supertab.focus")) { handle_supertab_focus(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }
@@ -864,7 +1052,11 @@ static void handle_message(const cJSON *root)
         }
         if (!strcmp(t, "turn.activity")) { handle_turn_activity(agent_id, p); return; }
         if (!strcmp(t, "turn.done")) { pro_app_turn(agent_id, "done", "", 0); return; }
-        if (!strcmp(t, "turn.error")) { pro_app_turn(agent_id, "error", "", 0); return; }
+        if (!strcmp(t, "turn.error")) {
+            const char *message = cut_of(p, "message", s_text, sizeof s_text);
+            pro_app_turn(agent_id, "error", message ? message : "", 0);
+            return;
+        }
         if (!strcmp(t, "turn.stats")) { handle_turn_stats(agent_id, p); return; }
         if (!strcmp(t, "summary")) { handle_summary(agent_id, p); return; }
         if (!strcmp(t, "question")) { handle_question(agent_id, p); return; }
@@ -892,7 +1084,7 @@ void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
         s_unknown++;
         return;
     }
-    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the 6 KB stack.
+    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the cable_link stack.
     if (!cable_json_guard(payload, payload_len)) { s_bad++; ESP_LOGW(TAG, "frame refused by the guard: %u B", (unsigned)payload_len); return; }
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts((const char *)payload, payload_len, &end, false);
@@ -903,33 +1095,71 @@ void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
     }
     if (!root) { s_bad++; ESP_LOGW(TAG, "frame did not parse: %u B", (unsigned)payload_len); return; }
     s_last_rx_us = esp_timer_get_time();
+    const char *kind = str_of(root, "t");
+    track_seq(root, kind && !strcmp(kind, "welcome"));
     handle_message(root);
     cJSON_Delete(root);
 }
 
-// A frame lost on the way in may have been a roster push; the daemon answers these requests with a forced push. During a
-// transfer the resend logic covers it (the loss is consumed, not replayed after). At most once per 5 s.
+// A frame lost on the way in (a bad CRC or a seq gap) may have been a roster push; `resync` (when the welcome advertises it, else the
+// old swarms.list + agents.list) asks the daemon for the whole snapshot: machines, swarms, agents, notices and open questions. During a transfer the resend logic covers it (the loss
+// is consumed, not replayed after). At most once per 2 s.
 static void link_resync(void)
 {
     static uint32_t seen;
-    static int64_t last_us = -5000000;
+    static int64_t last_us = -2000000;
     uint32_t corrupt = 0, discarded = 0;
     cable_link_counters(&corrupt, &discarded);
-    if (corrupt == seen || !atomic_load(&s_session)) return;
+    if ((corrupt == seen && !s_resync_pending) || !atomic_load(&s_session)) return;
     const int64_t now = esp_timer_get_time();
-    if (fw_update_active()) { seen = corrupt; return; }
-    if (now - last_us < 5000000) return;   // keep it pending; the next tick after the window answers
+    if (fw_update_active()) { seen = corrupt; s_resync_pending = false; return; }
+    if (now - last_us < 2000000) return;   // keep it pending; the next tick after the window answers
     seen = corrupt;
+    s_resync_pending = false;
     last_us = now;
-    send_json(msg("swarms.list"));
-    send_json(msg("agents.list"));
+    if (atomic_load(&s_features) & CABLE_FEATURE_RESYNC) {
+        send_json(msg("resync"));
+    } else {   // a daemon that predates `resync`: the old refresh
+        send_json(msg("swarms.list"));
+        send_json(msg("agents.list"));
+    }
+}
+
+// Before the silence check, so the clock starts at the session's last tick. Only a host that is there counts, but its
+// absence does not reset the wait: the re-plug itself makes the host vanish for a moment, and a reset would loop at 30 s.
+static void replug_tick(int64_t now)
+{
+    static int64_t since, wait = (int64_t)REPLUG_ALONE_MS * 1000;
+    if (atomic_load(&s_session)) wait = (int64_t)REPLUG_ALONE_MS * 1000;
+    // Never in the middle of an update or a recording: an unplug there loses the transfer.
+    if (atomic_load(&s_session) || !cable_link_host_present() || fw_update_active() || pro_voice_open()) {
+        since = now;
+        return;
+    }
+    // A frame half in is a link alive mid-message (a welcome spans two reads): wait for it. The reader drops a stale
+    // partial after 300 ms, so this defers by that at most, and whole pings in between never hold it off.
+    if (now - since < wait || cable_link_rx_pending()) return;
+    s_replugs++;
+    ESP_LOGW(TAG, "usb: no session for %llds with the host present: self re-plug #%u",
+             (long long)((now - since) / 1000000), s_replugs);
+    since = now;
+    if (wait < (int64_t)REPLUG_MAX_MS * 1000 / 2) wait *= 2; else wait = (int64_t)REPLUG_MAX_MS * 1000;
+    cable_link_replug();
 }
 
 void pro_cable_tick(void *ctx)
 {
     (void)ctx;
+    // Under the task watchdog like the render task, so a hang here is a TASK_WDT panic with a backtrace, not a silent
+    // hardware reset. Joined on the first tick (this runs on the link's reader task, which this file does not create).
+    static bool watched;
+    if (!watched) { watched = esp_task_wdt_add(NULL) == ESP_OK; }
+    else esp_task_wdt_reset();
+    last_words_phase(LW_CABLE, fw_update_active() ? "ota" : "cable.read");
+    last_words_rx((uint32_t)(s_last_rx_us / 1000));
     fw_update_tick((uint32_t)(esp_timer_get_time() / 1000));
     link_resync();
+    replug_tick(esp_timer_get_time());
     if (atomic_load(&s_session) && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000)
         session_down("silence");
 }
@@ -958,7 +1188,7 @@ void pro_cable_start(void)
     s_upload_lock = xSemaphoreCreateMutex();
     if (!s_upload_lock) { ESP_LOGE(TAG, "no memory for the upload lock - link disabled"); return; }
     s_last_rx_us = esp_timer_get_time();
-    if (xTaskCreate(hello_task, "cable_hello", 4096, NULL, 4, &hello) != pdPASS) {
+    if (xTaskCreate(hello_task, "cable_hello", STACK_CABLE_HELLO, NULL, 4, &hello) != pdPASS) {
         ESP_LOGE(TAG, "hello task create failed - no handshake");
         return;
     }

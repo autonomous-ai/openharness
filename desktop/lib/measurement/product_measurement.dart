@@ -28,6 +28,19 @@ enum ProductFlow {
   connectUser('connect_user'),
   connectAuto('connect_auto'),
   resumeRecovery('resume_recovery'),
+  // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
+  // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
+  phoneOffer('phone_offer'),
+  phoneOfferReturning('phone_offer_returning'),
+  shareInvite('share_invite'),
+  shareAccept('share_accept'),
+  // The same card offered once to a computer that never had it, after one of its own harnesses
+  // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
+  phoneOfferAfterWork('phone_offer_after_work'),
+  // The same card offered when the person comes back after five minutes or more away to a harness
+  // that waited on them, or one that finished (`AppNotifier._offerPhoneAway`), each counted apart.
+  phoneOfferAwayWaited('phone_offer_away_waited'),
+  phoneOfferAwayFinished('phone_offer_away_finished'),
   // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
   // never begins them.
   signInScan('sign_in_scan'),
@@ -42,9 +55,101 @@ enum ProductFlow {
   const ProductFlow(this.wire);
   final String wire;
   bool get beforeSignIn => index <= ProductFlow.signIn.index;
+
+  /// The revision of the local CLI's report proxy that knows this flow's
+  /// names, as [ProductHealthMeasure.vocabulary] — but its counts wait in the
+  /// queue for that answer instead of being skipped ([ProductMeasurement]).
+  int get vocabulary => switch (this) {
+    phoneOffer => 3,
+    phoneOfferReturning => 6,
+    shareInvite || shareAccept => 5,
+    phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
+    _ => 1,
+  };
+
+  /// Ended only by what the person does, never by the 15-minute observation
+  /// bound: the card waits beside the work until it is used or put away, and
+  /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
+  bool get unbounded =>
+      this == phoneOffer ||
+      this == phoneOfferReturning ||
+      this == phoneOfferAfterWork ||
+      this == phoneOfferAwayWaited ||
+      this == phoneOfferAwayFinished;
 }
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
+
+/// Why a Desktop sign-in that did not go through ended (`setup_desktop_sign_in_reason_<wire>`), once
+/// per sign-in beside its outcome: the CLI's own result code, or what the app saw instead. Fixed
+/// names only; the backend refuses any other (`PRODUCT_USAGE_SIGN_IN_END_REASONS`).
+enum SignInEndReason {
+  /// The person pressed Cancel, chose the other button, or the app closed meanwhile.
+  cancelled('cancelled'),
+
+  /// Nobody came back from the browser page within the CLI's five minutes: the person left, or
+  /// finished there and the callback never reached the CLI.
+  timeout('timeout'),
+
+  /// The phone's QR ran out unscanned.
+  expired('expired'),
+
+  /// Turned down on the phone.
+  denied('denied'),
+
+  /// The CLI could not be started at all.
+  cliUnavailable('cli_unavailable'),
+
+  /// The CLI is too old for this way in.
+  cliTooOld('cli_too_old'),
+
+  /// The CLI ended without a result line: it crashed or was killed.
+  noResult('no_result'),
+  callbackError('callback_error'),
+  exchangeFailed('exchange_failed'),
+  backendError('backend_error'),
+  authError('auth_error'),
+  daemonBusy('daemon_busy'),
+  daemonDidNotStop('daemon_did_not_stop'),
+  ticketInvalid('ticket_invalid'),
+  unavailable('unavailable'),
+
+  /// A code not named here, or an error with none.
+  other('other');
+
+  const SignInEndReason(this.wire);
+  final String wire;
+}
+
+/// Where Add Phone was opened from, counted each time it opens
+/// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
+enum AddPhoneOpening {
+  /// The Add Phone card's own button ([ProductFlow.phoneOffer]).
+  offer('offer'),
+
+  /// The title bar's phone: the native one on macOS, the tab row's elsewhere.
+  titlebar('titlebar'),
+
+  /// Harness ▸ Add Phone… in the macOS app menu, or a key bound to it there.
+  menu('menu'),
+
+  /// The account menu's Add Phone.
+  account('account'),
+
+  /// The Machines picker's Add Phone.
+  machines('machines'),
+
+  /// The `app.add_phone` command: `> add phone` in the palette, a key bound
+  /// to it outside the macOS menu, the start guide's phone row (shown only
+  /// without the New Harness box).
+  command('command');
+
+  const AddPhoneOpening(this.wire);
+  final String wire;
+
+  /// As [ProductFlow.phoneOffer]'s ([ProductFlow.vocabulary]).
+  static const vocabulary = 3;
+}
 
 typedef ProductReportRequest = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> report,
@@ -62,12 +167,14 @@ class ProductMeasurement extends ChangeNotifier {
     required this.sendSetup,
     DateTime Function()? now,
     String Function()? receipt,
+    double Function()? random,
     this.automatic = true,
     this.context,
     LocalKeyValueStore? setupStorage,
   }) : assert(const ['desktop', 'phone', 'web'].contains(surface)),
        _setupStorage = setupStorage,
        _now = now ?? DateTime.now,
+       _random = random ?? Random().nextDouble,
        _receipt = receipt ?? newProductReceipt {
     signedOutSharing = surface == 'desktop' && setupStorage == null;
     choiceLoaded = setupStorage == null;
@@ -77,9 +184,23 @@ class ProductMeasurement extends ChangeNotifier {
   final String surface;
   ProductUsageContext? context;
   bool get healthEnabled => surface == 'desktop' && context != null;
+
+  /// The counter vocabulary the local CLI's report proxy announced on its
+  /// latest answer (`x-harness-usage-vocabulary`): 1, the names every proxy
+  /// knows, until one says more. A health measure newer than it is not
+  /// counted ([ProductHealthMeasure.vocabulary]).
+  int proxyVocabulary = 1;
   String? _coverageDay;
+  // The day each once-a-day measure was last counted; cleared with
+  // collector_days' own day so the two stay comparable.
+  final _countedOn = <ProductHealthMeasure, String>{};
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
+  DateTime? _firstRunAt;
+  bool _firstRunRequested = false;
+  (String, String)? _firstRunTarget;
+  final _firstRunStages = <String>{};
+  bool _setupShown = false;
   final _expires = <Object, DateTime>{};
   final _expire = <Object, void Function(ProductOutcome)>{};
   int get choiceRevision => _revision;
@@ -87,6 +208,7 @@ class ProductMeasurement extends ChangeNotifier {
   final ProductReportRequest sendSetup;
   final bool automatic;
   final DateTime Function() _now;
+  final double Function() _random;
   final String Function() _receipt;
   bool signedOutSharing = false, choiceLoaded = false;
   static const setupPreferenceKey = 'product_setup_sharing';
@@ -109,12 +231,18 @@ class ProductMeasurement extends ChangeNotifier {
   ProductReportRequest? _sendAccount;
   Timer? _timer;
   DateTime? _lastAttempt;
+  // A channel refused as busy or failing waits until here; [_backoffs] counts
+  // those refusals in a row ([_backOff]).
+  final _heldUntil = <String, DateTime>{};
+  final _backoffs = <String, int>{};
   final _active = <Object, String>{};
   Future<void>? _flushing;
   final _days = <String, Map<String, int>>{};
   final _pending = <String, Map<String, dynamic>>{};
   final _setup = <ProductFlow, void Function(ProductOutcome)>{};
   final _setupFacts = <ProductFlow, String>{};
+  // Steps whose tool was missing at a check during the span now open; counted once per span.
+  final _setupMissing = <ProductFlow>{};
 
   bool get sharing =>
       _account != null &&
@@ -165,6 +293,7 @@ class ProductMeasurement extends ChangeNotifier {
       choiceLoaded = true;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
       if (enabled) _observeSetupFacts();
       notifyListeners();
     }
@@ -201,6 +330,7 @@ class ProductMeasurement extends ChangeNotifier {
       if (surface != 'desktop') signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
     }
     _account = scope;
     _enabled = null;
@@ -223,6 +353,10 @@ class ProductMeasurement extends ChangeNotifier {
       _enabled = null;
       return;
     }
+    // Initial preference loading must not omit an eligible first arrival.
+    // Keep only its eligibility/current harness, never pre-consent work or responses.
+    final firstRunPending = _revision < 0 && _firstRunRequested;
+    final firstRunTarget = firstRunPending ? _firstRunTarget : null;
     if (revision != _revision || !enabled) {
       _accountEpoch++;
       _clear('ui');
@@ -250,6 +384,13 @@ class ProductMeasurement extends ChangeNotifier {
       signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
+    }
+    if (firstRunPending && sharing) {
+      firstRunStarted();
+      if (firstRunTarget case final target?) {
+        firstRunReady(target.$1, target.$2);
+      }
     }
     notifyListeners();
   }
@@ -265,7 +406,14 @@ class ProductMeasurement extends ChangeNotifier {
     }
     _funnelSeen.remove(channel);
     _funnelStarted.remove(channel);
-    if (channel == 'ui') _coverageDay = null;
+    if (channel == 'ui') {
+      _coverageDay = null;
+      _countedOn.clear();
+      _firstRunAt = null;
+      _firstRunRequested = false;
+      _firstRunTarget = null;
+      _firstRunStages.clear();
+    }
   }
 
   void _coverage() {
@@ -279,12 +427,26 @@ class ProductMeasurement extends ChangeNotifier {
   /// Only fixed enum scalars enter the queue. Called after checking the account choice.
   void health(ProductHealthMeasure measure) {
     if (!healthEnabled || !sharing || _disposed) return;
+    // A proxy older than this name would refuse every report carrying it.
+    if (measure.vocabulary > proxyVocabulary) return;
     _coverage();
     _count(
       'ui',
       _now().toUtc().toIso8601String().substring(0, 10),
       'health_desktop_${measure.wire}',
     );
+  }
+
+  /// [measure] at most once per UTC day of this collector, like
+  /// collector_days, so its total reads against collector_days: how many
+  /// collector days had one, not how many there were.
+  void healthOncePerDay(ProductHealthMeasure measure) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    if (measure.vocabulary > proxyVocabulary) return;
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    if (_countedOn[measure] == day) return;
+    _countedOn[measure] = day;
+    health(measure);
   }
 
   /// Observed readiness since process launch; only its coarse duration is kept.
@@ -404,12 +566,177 @@ class ProductMeasurement extends ChangeNotifier {
       );
     }
 
-    if (healthEnabled) {
+    if (healthEnabled && !flow.unbounded) {
       _expires[ticket] = started.add(const Duration(minutes: 15));
       _expire[ticket] = finish;
     }
     return finish;
   }
+
+  /// Add Phone opened, and from where ([AddPhoneOpening]): one fixed name per
+  /// way in, nothing about the dialog or what follows. A signed-in, sharing
+  /// Desktop only; the browser has no such names.
+  void addPhoneOpened(AddPhoneOpening from) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_add_phone_${from.wire}',
+    );
+  }
+
+  /// A new non-machine key joined while Add Phone was open, by its opening only.
+  void addPhonePaired(AddPhoneOpening from) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_add_phone_paired_${from.wire}',
+    );
+  }
+
+  /// A card path declined an offer. Fixed reasons only; never account or device data.
+  void phoneOfferSkipped(String reason) {
+    if (!const {
+          'has_phone',
+          'no_device_list',
+          'already_shown',
+          'stopped',
+          'cap_reached',
+          'not_signed_in',
+          'viewer',
+          'card_showing',
+          'no_storage',
+          'account_changed',
+          'read_limit',
+        }.contains(reason) ||
+        !healthEnabled ||
+        !sharing ||
+        _disposed) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_phone_offer_skipped_$reason',
+    );
+  }
+
+  /// One first-arrival episode in this app run. Retries share its denominator;
+  /// routine launches never call this. Targets stay in RAM and are never reported.
+  void firstRunStarted() {
+    if (!healthEnabled ||
+        _disposed ||
+        _account == null ||
+        _firstRunAt != null ||
+        accountOptOutPending) {
+      return;
+    }
+    if (_enabled == null && _revision < 0) {
+      _firstRunRequested = true;
+      return;
+    }
+    if (!sharing) return;
+    _firstRunRequested = false;
+    _firstRunAt = _now().toUtc();
+    _firstRunStage('started');
+  }
+
+  /// Counts acknowledged invitation results, never addresses, tab ids or invite ids.
+  void sharedInvites({required int sent, required int refused}) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    for (final (name, count) in [('sent', sent), ('refused', refused)]) {
+      for (var i = 0; i < count.clamp(0, 1000); i++) {
+        _count('ui', day, 'health_desktop_shared_invites_$name');
+      }
+    }
+  }
+
+  void firstRunReady(String machineId, String? agentId) {
+    if ((_firstRunAt == null && !_firstRunRequested) || agentId == null) return;
+    _firstRunTarget = (machineId, agentId);
+    _firstRunStage('ready');
+  }
+
+  void firstRunWork(String machineId, String agentId) {
+    if (_firstRunTarget == (machineId, agentId)) _firstRunStage('work');
+  }
+
+  void firstRunResponse(String machineId, String agentId) {
+    if (_firstRunTarget != (machineId, agentId) ||
+        !_firstRunStages.contains('work') ||
+        _firstRunStages.contains('response')) {
+      return;
+    }
+    _firstRunStage('response');
+    final start = _firstRunAt;
+    if (start == null || !_firstRunStages.contains('response')) return;
+    final seconds = _now().toUtc().difference(start).inSeconds;
+    _firstRunStage(
+      'response_${seconds < 60
+          ? 'under_1m'
+          : seconds < 300
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
+  }
+
+  void _firstRunStage(String stage) {
+    final start = _firstRunAt;
+    if (!healthEnabled || !sharing || _disposed || start == null) return;
+    final elapsed = _now().toUtc().difference(start);
+    if (elapsed.isNegative ||
+        elapsed > const Duration(hours: 24) ||
+        !_firstRunStages.add(stage)) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      start.toIso8601String().substring(0, 10),
+      'health_desktop_first_run_$stage',
+    );
+  }
+
+  /// Called only when setup is actually visible. A successful readiness probe
+  /// on a normal launch is not an impression of setup.
+  void setupShown() {
+    _setupShown = true;
+    milestone(ProductHealthMeasure.funnelSetupSeen);
+  }
+
+  void setupHidden() => _setupShown = false;
+
+  /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
+  /// Phone card's flow and the ways Add Phone opened are 3, the card offered
+  /// after work or after time away 4, and first-run/invite counters 5. Other
+  /// health measures use [health] to wait for support before counting.
+  static int _vocabularyOf(String metric) {
+    if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
+        metric.startsWith('ui_desktop_add_phone_paired_')) {
+      return 6;
+    }
+    if (metric.startsWith('health_desktop_first_run_') ||
+        metric.startsWith('health_desktop_shared_invites_'))
+      return 5;
+    for (final flow in _newerFlows) {
+      if (metric.startsWith('ui_desktop_${flow.wire}_')) return flow.vocabulary;
+    }
+    return metric.startsWith('ui_desktop_add_phone_')
+        ? AddPhoneOpening.vocabulary
+        : 1;
+  }
+
+  /// The flows newer than revision 1, longest name first: `phone_offer_after_work_` starts with
+  /// `phone_offer_`, and must be read as itself.
+  static final _newerFlows =
+      ProductFlow.values.where((flow) => flow.vocabulary > 1).toList()
+        ..sort((a, b) => b.wire.length.compareTo(a.wire.length));
 
   /// A widget's delayed callback cannot count after sign-out or a choice revision.
   VoidCallback observer(ProductHealthMeasure measure) {
@@ -428,18 +755,27 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   void _observeSetupFacts() {
-    if (_setupFacts.isNotEmpty) milestone(ProductHealthMeasure.funnelSetupSeen);
+    if (_setupShown) milestone(ProductHealthMeasure.funnelSetupSeen);
     if (!_setupAllowed && !sharing) return;
     for (final entry in _setupFacts.entries) {
       if (!entry.key.beforeSignIn || entry.key == ProductFlow.signIn) continue;
-      if (const ['pending', 'running', 'needsTerminal'].contains(entry.value)) {
+      // `missing`: a check found the step's tool not installed yet, so setup goes on to install it.
+      // The step stays open until the install ends; only a setup that ends failed fails it.
+      if (const [
+        'pending',
+        'running',
+        'needsTerminal',
+        'missing',
+      ].contains(entry.value)) {
         _setup.putIfAbsent(entry.key, () => begin(entry.key));
+        if (entry.value == 'missing') _countSetupMissing(entry.key);
       } else if (const [
         'ready',
         'notApplicable',
         'failed',
         'unavailable',
       ].contains(entry.value)) {
+        _setupMissing.remove(entry.key);
         _setup
             .remove(entry.key)
             ?.call(
@@ -451,13 +787,68 @@ class ProductMeasurement extends ChangeNotifier {
     }
   }
 
+  /// Why a sign-in that did not go through ended. A signed-out setup count only, like
+  /// [_countSetupMissing]: the reasons are names an older CLI's report proxy does not know.
+  void signInEnded(SignInEndReason reason) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_sign_in_reason_${reason.wire}',
+    );
+  }
+
+  /// How many new computers needed a tool installed: a signed-out setup count only, because a
+  /// signed-in report goes through the local CLI, whose copy of the contract may be older.
+  void _countSetupMissing(ProductFlow flow) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    if (!_setupMissing.add(flow)) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_${flow.wire}_missing',
+    );
+  }
+
+  /// An agent download beside setup (AgentPrefetch): started when [ok] is null, then ok or failed
+  /// with how long it took. Anonymous setup counts only, so the setup preference governs them
+  /// whether or not the person has signed in meanwhile; a fixed engine name, nothing else.
+  void setupDownload(String engine, {bool? ok, Duration? took}) {
+    if (!_setupAllowed ||
+        surface != 'desktop' ||
+        _disposed ||
+        !const ['opencode', 'codex', 'claude'].contains(engine)) {
+      return;
+    }
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    final prefix = 'setup_desktop_agent_download_${engine}_';
+    if (ok == null) {
+      _count('setup', day, '${prefix}started');
+      return;
+    }
+    _count('setup', day, '$prefix${ok ? 'ok' : 'failed'}');
+    final minutes = (took ?? Duration.zero).inSeconds / 60;
+    _count(
+      'setup',
+      day,
+      '$prefix${minutes < 1
+          ? 'under_1m'
+          : minutes < 5
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
+  }
+
+  // Report days are UTC dates. Parsing a date without Z uses the machine's
+  // timezone and can make today's UTC report look like it is from the future.
+  DateTime _utcDayStart(String day) => DateTime.parse('${day}T00:00:00Z');
+
   void _count(String channel, String day, String metric) {
     final today = _now().toUtc();
-    final date = DateTime.parse(day);
+    final date = _utcDayStart(day);
     if (today.difference(date).inDays > 1 || date.isAfter(today)) return;
     _days.removeWhere(
-      (key, _) =>
-          today.difference(DateTime.parse(key.split(':')[1])).inDays > 1,
+      (key, _) => today.difference(_utcDayStart(key.split(':')[1])).inDays > 1,
     );
     final counters = _days.putIfAbsent('$channel:$day', () => {});
     if ((counters[metric] ?? 0) >= 1000 && healthEnabled && channel == 'ui') {
@@ -520,14 +911,29 @@ class ProductMeasurement extends ChangeNotifier {
       if (_disposed || (channel == 'setup' ? !_setupAllowed : !sharing)) {
         continue;
       }
+      final held = _heldUntil[channel];
+      if (held != null && _now().isBefore(held)) continue;
       final epoch = channel == 'setup' ? _guestEpoch : _accountEpoch;
       var report = _pending[channel];
       if (report == null) {
-        final keys = _days.keys.where((k) => k.startsWith('$channel:')).toList()
-          ..sort();
+        // A name newer than the proxy is known to forward waits here for an
+        // answer that says it does, rather than being skipped as a health
+        // measure is: the Add Phone card shows once per computer, often before
+        // the first answer. Each minute's runtime sample sends a report, so
+        // an answer comes; an older CLI's never does, and the day expires.
+        bool ready(String metric) => _vocabularyOf(metric) <= proxyVocabulary;
+        final keys =
+            _days.keys
+                .where(
+                  (k) => k.startsWith('$channel:') && _days[k]!.keys.any(ready),
+                )
+                .toList()
+              ..sort();
         if (keys.isEmpty) continue;
         final key = keys.first, counts = _days[key]!;
-        final batch = Map<String, int>.fromEntries(counts.entries.take(32));
+        final batch = Map<String, int>.fromEntries(
+          counts.entries.where((entry) => ready(entry.key)).take(32),
+        );
         for (final metric in batch.keys) {
           counts.remove(metric);
         }
@@ -547,7 +953,7 @@ class ProductMeasurement extends ChangeNotifier {
       }
       if (_now()
               .toUtc()
-              .difference(DateTime.parse(report['day'] as String))
+              .difference(_utcDayStart(report['day'] as String))
               .inDays >
           1) {
         _pending.remove(channel);
@@ -564,6 +970,7 @@ class ProductMeasurement extends ChangeNotifier {
                 : epoch != _accountEpoch)) {
           continue;
         }
+        _answered(channel);
         if (result['accepted'] == true || result['reason'] == 'EXPIRED') {
           _pending.remove(channel);
           if (result['reason'] == 'EXPIRED' && channel == 'ui') {
@@ -599,9 +1006,44 @@ class ProductMeasurement extends ChangeNotifier {
         // packet so new counts can proceed; transient failures keep the same receipt.
         if (error is ProductReportFailure && error.permanent)
           _pending.remove(channel);
-        /* Same receipt on the next timer. No logs, aggressive retry, or product failure. */
+        if (error is ProductReportFailure && error.backOff) {
+          _backOff(channel, error.retryAfter);
+        } else {
+          _answered(channel);
+        }
+        /* Same receipt later. No logs, aggressive retry, or product failure. */
       }
     }
+  }
+
+  // Every app of a release reported each minute whatever the answer: 165 of
+  // Desktop's 272 failed reports on 2026-10-28 were busy refusals sent again a
+  // minute later. As the CLI does (cli/src/gateway/productUsage.ts): full
+  // jitter under a ceiling that doubles with each refusal in a row, up to half
+  // an hour, and never before the answer's Retry-After (also held to that).
+  static const _backoffBase = Duration(minutes: 1);
+  static const _backoffMax = Duration(minutes: 30);
+
+  void _backOff(String channel, Duration? retryAfter) {
+    final count = min((_backoffs[channel] ?? 0) + 1, 16);
+    _backoffs[channel] = count;
+    final ceiling = min(
+      _backoffMax.inMilliseconds,
+      _backoffBase.inMilliseconds * (1 << count),
+    );
+    final r = _random();
+    final unit = r.isFinite && r >= 0 && r < 1 ? r : 0.5;
+    final wait = min(
+      _backoffMax.inMilliseconds,
+      max(retryAfter?.inMilliseconds ?? 0, (unit * ceiling).floor()),
+    );
+    _heldUntil[channel] = _now().add(Duration(milliseconds: wait));
+  }
+
+  /// An answer that was not busy: the next report goes at the next tick.
+  void _answered(String channel) {
+    _backoffs.remove(channel);
+    _heldUntil.remove(channel);
   }
 
   @override
@@ -611,6 +1053,7 @@ class ProductMeasurement extends ChangeNotifier {
     _days.clear();
     _pending.clear();
     _setup.clear();
+    _setupMissing.clear();
     _active.clear();
     _expires.clear();
     _expire.clear();

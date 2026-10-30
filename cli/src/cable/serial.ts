@@ -4,12 +4,20 @@
 // dependencies; a serial library would be its first native module and would drag node-gyp, prebuilds and
 // a per-platform release matrix into a distribution that is currently a download. A tty is a file, `stty`
 // puts it in raw mode, and that is the whole of what this needs.
+// On Windows a COM port is neither, so harness-serial.exe (serial/) holds it and this file talks to its stdio
+// (windowsSerial.ts): still no native module.
 import { execFile } from 'node:child_process'
 import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { Socket } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { promisify } from 'node:util'
 import { portStream } from './portStream.js'
+import type { CommandFor } from './windowsSerial.js'
+
+// The Windows half brings the CLI's config and host lookup with it. The Unix path and the real-port
+// fixtures bundled from this file never need them; a static import broke all eight real-PTY cases.
+const windows = () => import('./windowsSerial.js')
 
 const runFile = promisify(execFile)
 
@@ -57,6 +65,7 @@ export async function findDialPort(): Promise<DialPort | null> {
 export async function findDialPorts(): Promise<DialPort[]> {
   if (process.platform === 'darwin') return findDarwin()
   if (process.platform === 'linux') return findLinux()
+  if (process.platform === 'win32') return (await windows()).windowsDialWatch().ports()
   return []
 }
 
@@ -70,6 +79,8 @@ export async function findDialPorts(): Promise<DialPort[]> {
  * daemon that never opens anything because a tool is missing would be worse than one that sometimes does.
  */
 export async function portInUse(path: string): Promise<boolean> {
+  // Windows has no lsof, and needs none: a COM port is exclusive, so harness-serial's probe opening it is the answer.
+  if (process.platform === 'win32') return (await windows()).windowsPortInUse(path)
   const pids = (out: unknown) => String(out ?? '').split('\n').map(l => Number(l.trim())).filter(n => n > 0 && n !== process.pid)
   try {
     const { stdout } = await runFile('lsof', ['-t', '--', path], { timeout: 5000 })
@@ -223,7 +234,7 @@ function findLinux(): DialPort[] {
 export class SerialLink {
   private constructor(
     readonly path: string,
-    private readonly stream: Socket,
+    private readonly stream: Duplex,
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void,
     private readonly claimFd?: number,
@@ -250,6 +261,7 @@ export class SerialLink {
     onData: (chunk: Buffer) => void,
     onClosed: (why: string) => void,
   ): Promise<SerialLink> {
+    if (process.platform === 'win32') return SerialLink.openWindows(path, onData, onClosed)
     // Keep the claim on a separate open description: libuv reopens/replaces
     // the stream's descriptor and would otherwise release this advisory lock.
     // Acquire it before stty can change a port another Harness is using.
@@ -314,6 +326,23 @@ export class SerialLink {
     } finally {
       if (!retainedClaim && claimFd !== undefined) closeSync(claimFd)
     }
+  }
+
+  /**
+   * Windows: harness-serial.exe holds the port, and its stdio is the stream (windowsSerial.ts). There is no tty to
+   * put in raw mode and no controlling terminal to refuse, so neither stty nor O_NOCTTY applies: the child sets the
+   * DCB itself, and a COM port is exclusive without a claim. The write queue and close() below are the same.
+   */
+  static async openWindows(
+    path: string,
+    onData: (chunk: Buffer) => void,
+    onClosed: (why: string) => void,
+    command?: CommandFor,
+  ): Promise<SerialLink> {
+    const { openWindowsPort, windowsSerialCommand } = await windows()
+    const open = (command ?? windowsSerialCommand)(['open', path])
+    if (!open) throw Object.assign(new Error('harness-serial is not installed'), { code: 'ENOENT' })
+    return new SerialLink(path, await openWindowsPort(open), onData, onClosed)
   }
 
   /**

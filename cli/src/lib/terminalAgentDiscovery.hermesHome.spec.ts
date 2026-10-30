@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 
 /**
@@ -11,7 +11,7 @@ const readProcessEnv = vi.hoisted(() => vi.fn())
 vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime: vi.fn(async () => ({ kind: null })) }))
 vi.mock('./gridAssignment.js', () => ({ probeGridAssignment: vi.fn(async () => null) }))
 vi.mock('./processEnv.js', async (real) => ({ ...await real<object>(), readProcessEnv }))
-vi.mock('./tmux.js', async (real) => ({ ...await real<typeof import('./tmux.js')>(), processRows, enrichProcessRows: vi.fn(async (rows: unknown) => rows) }))
+vi.mock('./processTable.js', async (real) => ({ ...await real<typeof import('./processTable.js')>(), processRows, enrichProcessRows: vi.fn(async (rows: unknown) => rows) }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }

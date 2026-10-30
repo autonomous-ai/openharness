@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process'
-import { lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access, lstat, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
 import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
 import { scmByKind } from '../scm/scmProjects.js'
@@ -11,7 +12,9 @@ import type { ScmLaunchRecord } from '../scm/types.js'
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
  *  no name field), which is numbered past a folder that exists rather than refused. */
 export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean
+    /** Fetch nothing (gitProject.ts `offline`): set by the daemon for a Swarm start doing another person's work, never by a client. */
+    offline?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
@@ -21,7 +24,9 @@ export function projectsRoot(home = homedir()): string {
 }
 
 export class ProjectFolderError extends Error {
-  constructor(readonly code: string, message: string) { super(message) }
+  /** [folder]: on PROJECT_EXISTS for a name the person typed, the folder already there when it is one this daemon can
+   *  open, so an app can offer to start in it once the person chooses that. Never set for anything else. */
+  constructor(readonly code: string, message: string, readonly folder?: string) { super(message) }
 }
 
 // Same accepted forms as the existing desktop GitHub clone flow. Neither
@@ -30,8 +35,12 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
   if (payload.projectSource === undefined) return null
   if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
     const ref = payload.branchRef
+    // `branchBase: 'default'` starts a new worktree from the remote's default branch rather than from `HEAD`; it
+    // is for a start that names no branch, and for a worktree.
+    const base = payload.branchBase
     if (!validGitPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
         (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
+        (base !== undefined && (base !== 'default' || ref !== undefined || payload.projectSource !== 'worktree')) ||
         (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
       throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
     }
@@ -42,7 +51,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
         branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}),
-        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}) }
+        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}),
+        ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
     }
     // A new branch for the folder itself, named by `branchRef` too.
     if (payload.projectSource === 'branch' && name !== undefined) {
@@ -51,7 +61,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'branch', gitSource: payload.gitSource, branchRef: ref, branchName: name }
     }
-    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
+    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
+      ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
   }
   if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
     // Slugged again here: the name becomes a path segment, so it is never taken on trust.
@@ -89,11 +100,67 @@ async function exists(path: string): Promise<boolean> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
 }
 
+/** A folder somebody can work in: a directory (a link to one counts) this daemon may list and enter. A file, or a folder
+ *  it cannot read, is no project to offer. */
+async function openableFolder(path: string): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isDirectory()) return false
+    await access(path, constants.R_OK | constants.X_OK)
+    return true
+  } catch { return false }
+}
+
+/**
+ * One repository however git spells its address: `github.com/owner/repo` for `https://github.com/Owner/Repo.git/`,
+ * `git@github.com:owner/repo`, `ssh://git@github.com:22/owner/repo.git` and `git://github.com/owner/repo`, credentials and
+ * ports left out. Lowercased: host names are case-insensitive, and so are GitHub's owner and repository names, the only
+ * host a clone is asked for (parseProjectFolder). Null for a local path or anything else that names no host.
+ */
+export function repositoryIdentity(address: string): string | null {
+  const raw = address.trim()
+  let host: string, path: string
+  // scp-like `[user@]host:path`, which has no scheme and no slash before its colon.
+  const scp = raw.includes('://') ? null : /^(?:[^@/\s]+@)?([^:/\s]+):([^\s]+)$/.exec(raw)
+  if (scp) { host = scp[1]!; path = scp[2]! }
+  else {
+    let url: URL
+    try { url = new URL(raw) } catch { return null }
+    if (!['https:', 'http:', 'ssh:', 'git:', 'git+ssh:', 'ssh+git:'].includes(url.protocol)) return null
+    host = url.hostname
+    path = url.pathname
+  }
+  path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/i, '')
+  return host && path ? `${host}/${path}`.toLowerCase() : null
+}
+
+/**
+ * Whether [folder] is itself a checkout whose `origin` is [repositoryUrl]. Bounded and local: `.git` is looked for before
+ * git runs (on a Mac without the Command Line Tools, `git` is Apple's stub, which opens an install dialog), git may not
+ * look above [folder] for a repository (GIT_CEILING_DIRECTORIES), and it gets four seconds, as gitProject.ts's reads do.
+ * Anything else — no `.git`, another remote, an origin git cannot read — is not that repository.
+ */
+async function holdsRepository(folder: string, repositoryUrl: string): Promise<boolean> {
+  const wanted = repositoryIdentity(repositoryUrl)
+  if (!wanted || !await exists(join(folder, '.git')).catch(() => false)) return false
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0',
+    GIT_CEILING_DIRECTORIES: dirname(folder) }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[key]
+  const origin = await new Promise<string | null>((resolve) => {
+    execFile('git', ['-c', 'core.fsmonitor=false', '-C', folder, 'remote', 'get-url', 'origin'],
+      { env, timeout: 4000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 },
+      (error, stdout) => resolve(error ? null : stdout.trim()))
+  })
+  return origin !== null && repositoryIdentity(origin) === wanted
+}
+
 export async function prepareProjectFolder(
   project: ProjectFolder,
   options: {
     root?: string
-    clone?: (url: string, destination: string) => Promise<void>
+    clone?: (url: string, destination: string, env?: NodeJS.ProcessEnv) => Promise<void>
+    /** The environment a clone's git runs in instead of the daemon's own: a Swarm host's, with the Harness GitHub App's
+     *  token for the project (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
+    gitEnv?: NodeJS.ProcessEnv
     /** Who the harness is ("Codex", "Blender"): a new project folder is named after it and the time. */
     label?: string | null
     now?: () => Date
@@ -111,7 +178,7 @@ export async function prepareProjectFolder(
       // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
       // prepareGitProject call this used to make.
       const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
-        root, base: project.branchRef,
+        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}), ...(project.offline ? { offline: true } : {}),
         ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
       })
       options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
@@ -136,7 +203,11 @@ export async function prepareProjectFolder(
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
           if (!project.suggested) {
-            throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+            // Refused, and the folder told, so an app can offer "Use the existing folder" (used only once the person
+            // picks it). PROJECT_EXISTS was 4 of 7 failed starts on Oct 18 (CLI 0.4.18), all from the apps, which
+            // had nothing to offer but retyping the name as a path.
+            throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`,
+              await openableFolder(folder) ? folder : undefined)
           }
         }
       }
@@ -158,11 +229,21 @@ export async function prepareProjectFolder(
       }
     }
     const destination = join(root, project.name)
-    if (await exists(destination)) throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+    // A checkout of the very repository asked for is that project, already there: started in, never cloned again. It
+    // was refused as PROJECT_EXISTS (4 of 7 failed starts on Oct 18, CLI 0.4.18), a failed start for asking twice.
+    // Anything else there (another repository, a folder of files) is still the person's, and still refused.
+    if (await exists(destination)) {
+      if (await holdsRepository(destination, project.repositoryUrl)) return destination
+      throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+    }
     staging = await mkdtemp(join(root, '.harness-clone-'))
     const checkout = join(staging, 'checkout')
-    await (options.clone ?? cloneRepository)(project.repositoryUrl, checkout)
-    if (await exists(destination)) throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” was created while cloning. Select that folder from your projects.`)
+    await (options.clone ?? cloneRepository)(project.repositoryUrl, checkout, options.gitEnv)
+    if (await exists(destination)) {
+      // Another start cloned the same repository meanwhile: that one is kept and this staging goes (below).
+      if (await holdsRepository(destination, project.repositoryUrl)) return destination
+      throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” was created while cloning. Select that folder from your projects.`)
+    }
     await rename(checkout, destination)
     return destination
   } catch (error) {
@@ -176,12 +257,13 @@ export async function prepareProjectFolder(
 
 /** No shell interpolation or interactive password prompt. Diagnostics stay
  * bounded and private; only actionable, credential-free messages reach the UI. */
-function cloneRepository(url: string, destination: string): Promise<void> {
+function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
+    const base = gitEnv ?? process.env
     const child = spawn('git', ['clone', '--', url, destination], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
-        GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
+      env: { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
+        GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
     })
     let diagnostic = '', timedOut = false
     let forceKill: ReturnType<typeof setTimeout> | undefined
@@ -202,9 +284,26 @@ function cloneRepository(url: string, destination: string): Promise<void> {
       clearTimeout(forceKill)
       if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
       else if (code === 0) resolve()
-      else reject(new ProjectFolderError('CLONE_FAILED', /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
-        ? 'Could not access this repository. Check the URL and GitHub access on the selected machine.'
-        : 'Could not clone the repository. Check the URL and connection, then retry.'))
+      else reject(cloneFailure(diagnostic))
     })
   })
+}
+
+/** CLONE_FAILED because the host refused this machine's credentials, not because of the network or the URL. The code
+ *  stays CLONE_FAILED for the apps; a caller that knows another way in can tell the two apart. */
+export class RepositoryAccessError extends ProjectFolderError {}
+
+/** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
+export function cloneFailure(diagnostic: string): ProjectFolderError {
+  return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
+    ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
+    : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')
+}
+
+/** The same GitHub repository over the other transport, for parseProjectFolder's two forms; null for anything else. */
+export function otherGitHubTransport(url: string): string | null {
+  const ssh = /^git@github\.com:([^/\s]+\/[^/\s]+)$/.exec(url)
+  if (ssh) return `https://github.com/${ssh[1]}`
+  const https = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)$/.exec(url)
+  return https ? `git@github.com:${https[1]}` : null
 }

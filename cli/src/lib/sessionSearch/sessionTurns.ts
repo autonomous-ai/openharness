@@ -39,6 +39,8 @@ export interface ReadOptions {
   /** A caller-owned verified descriptor and finite snapshot boundary; never reopened or closed here. */
   handle?: FileHandle
   end?: number
+  /** A bounded tail starts inside a record: discard that first fragment before interpreting any text. */
+  start?: number
   /** How long to hold the thread between yields (ms). */
   sliceMs?: number
   /** Epoch ms after which the read gives up with `DEADLINE`. */
@@ -128,7 +130,9 @@ export async function readSessionTurns(source: TurnSource, options: ReadOptions 
   const normalize = source.transcriptPath ? lineNormalizer(source.engine, source.sessionId) : null
   if (source.transcriptPath && normalize) {
     let lastAt: number | null = null
-    await forEachLine(source.transcriptPath, 0, async ({ text, offset }) => {
+    const start = options.start ?? 0
+    await forEachLine(source.transcriptPath, start, async ({ text, offset }) => {
+      if (start > 0 && offset === start) return
       const at = lineTime(text) ?? lastAt
       if (at !== null && (lastAt === null || at > lastAt)) lastAt = at
       collector.feed(normalize(text).map(boundedEvent), offset, at)

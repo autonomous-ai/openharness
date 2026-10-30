@@ -44,6 +44,70 @@ void main() {
     });
 
     test(
+      'a terminal opened before the session was up starts it once it comes up, and moves onto it',
+      () {
+        fakeAsync((async) {
+          // A resume after a while in the background: the socket comes back and the terminal is
+          // reopened before the session is ready, so its open never asked (`prepareOpen`). A Galaxy
+          // S23 on 4G typed 26s over the relay like that (2026-10-19).
+          final b = bootPlugin(async: async, firstTerminal: false);
+          expect(b.links.created, isEmpty);
+          b.host.receiveWs(ready(streamA, 'r0'));
+          flush(async);
+          expect(b.links.created, hasLength(1));
+          expect(b.links.last.started, isTrue);
+          expect(b.host.dispatched.last, linkMode(streamA, 'relay'));
+          // Once only: the next terminal finds it started.
+          b.host.receiveWs(ready(streamB, 'r1'));
+          flush(async);
+          expect(b.links.created, hasLength(1));
+          // Up: the stream moves over with one resync over the channel, as any open made before
+          // the channel was does.
+          b.links.last.open();
+          flush(async);
+          expect(b.host.wsTypes, isNot(contains('terminal_resync')));
+          expect(
+            b.links.last.sent
+                .map((f) => jsonDecode(f as String)['type'])
+                .toList(),
+            ['terminal_resync', 'terminal_resync'],
+          );
+          expect(b.plugin.linkModeFor(streamA), 'p2p');
+          b.plugin.dispose();
+        });
+      },
+    );
+
+    test('a terminal coming up never restarts a channel that gave up', () {
+      fakeAsync((async) {
+        // Bringing one back is the retry's, budget and all.
+        final b = bootPlugin(async: async);
+        b.links.last.failNegotiation('peer_failed');
+        flush(async);
+        b.host.receiveWs(ready(streamA, 'r0'));
+        flush(async);
+        expect(b.links.created, hasLength(1));
+        async.elapse(const Duration(seconds: 60));
+        expect(b.links.created, hasLength(2));
+        b.plugin.dispose();
+      });
+    });
+
+    test('a terminal coming up starts nothing where p2p is off', () {
+      fakeAsync((async) {
+        for (final b in [
+          bootPlugin(async: async, policy: null, firstTerminal: false),
+          bootPlugin(async: async, peerVersion: 0, firstTerminal: false),
+        ]) {
+          b.host.receiveWs(ready(streamA, 'r0'));
+          flush(async);
+          expect(b.links.created, isEmpty);
+          b.plugin.dispose();
+        }
+      });
+    });
+
+    test(
       'signals go out sealed over the socket, answers reach the link',
       () async {
         final b = bootPlugin();
@@ -330,7 +394,7 @@ void main() {
 
   group('live migration', () {
     test(
-      'a stream opened on the socket moves to the channel in two phases',
+      'a stream opened on the socket moves to the channel with one resync, over the channel',
       () {
         fakeAsync((async) {
           final b = bootPlugin(async: async);
@@ -344,30 +408,30 @@ void main() {
           b.host.sends.clear();
           b.host.wsFrames.clear();
 
-          // Phase 1: the channel opens → a resync over the socket.
+          // The channel opens → ONE resync, over the channel itself. A first one over the
+          // socket cost a relay round trip and one more keyframe (iPhone 14, 2026-10-19).
           b.links.last.open();
           flush(async);
-          expect(b.host.wsTypes, ['terminal_resync']);
-          expect(b.links.last.sent, isEmpty);
-          // Meanwhile relay output for it is NOT read as a broken channel.
-          b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
-          flush(async);
-          expect(b.links.last.stopped, isFalse);
-
-          // Phase 2: the keyframe answering it → a resync over the channel.
-          b.host.receiveWsBinary(htrl(TerminalBinaryKind.keyframe, streamA));
-          flush(async);
+          expect(b.host.wsTypes, isNot(contains('terminal_resync')));
           expect(b.links.last.sent, hasLength(1));
           expect(
             jsonDecode(b.links.last.sent.single as String)['type'],
             'terminal_resync',
           );
           expect(b.plugin.linkModeFor(streamA), 'p2p');
-          // Still suppressed until a channel-delivered frame proves the flip…
+          // The stream's own frames take the channel from now on.
+          b.host.sendTerminalBinary(htrl(TerminalBinaryKind.input, streamA));
+          flush(async);
+          expect(b.host.wsBinary, isEmpty);
+          expect(b.links.last.sent, hasLength(2));
+          // Relay output still on its way, a keyframe included, is not a broken channel —
+          // and does not start the move over.
           b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
+          b.host.receiveWsBinary(htrl(TerminalBinaryKind.keyframe, streamA));
           flush(async);
           expect(b.links.last.stopped, isFalse);
-          // …which re-arms the ordinary rule.
+          expect(b.links.last.sent, hasLength(2), reason: 'no second resync');
+          // A channel-delivered frame proves the flip and re-arms the ordinary rule.
           b.links.last.receive(htrl(TerminalBinaryKind.output, streamA));
           flush(async);
           b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
@@ -378,27 +442,68 @@ void main() {
       },
     );
 
-    test('a migration nobody answers is swept after 30s', () {
-      fakeAsync((async) {
-        final b = bootPlugin(async: async);
-        b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
-        async.elapse(const Duration(milliseconds: 1500));
-        flush(async);
-        b.host.receiveWs(ready(streamA, 'r1'));
-        flush(async);
-        b.links.last.open();
-        flush(async);
-        async.elapse(const Duration(seconds: 41));
-        // No longer migrating: the keyframe now is just a keyframe.
-        b.links.last.sent.clear();
-        b.host.receiveWsBinary(htrl(TerminalBinaryKind.keyframe, streamA));
-        flush(async);
-        expect(b.links.last.sent, isEmpty);
-        b.plugin.dispose();
-      });
-    });
+    test(
+      'a stream that comes up on the socket after the channel moves at its first keyframe',
+      () {
+        fakeAsync((async) {
+          final b = bootPlugin(async: async);
+          // Opened before the channel was up, answered after it came up.
+          b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
+          flush(async);
+          b.links.last.open();
+          flush(async);
+          b.host.receiveWs(ready(streamA, 'r1'));
+          flush(async);
+          expect(
+            b.links.last.sent,
+            isEmpty,
+            reason: 'not while the open\'s own keyframe is being taken',
+          );
+          b.host.wsFrames.clear();
+          b.host.receiveWsBinary(htrl(TerminalBinaryKind.keyframe, streamA));
+          flush(async);
+          expect(b.host.wsTypes, isNot(contains('terminal_resync')));
+          expect(
+            b.links.last.sent.map(
+              (frame) => jsonDecode(frame as String)['type'],
+            ),
+            ['terminal_resync'],
+          );
+          expect(b.plugin.linkModeFor(streamA), 'p2p');
+          b.plugin.dispose();
+        });
+      },
+    );
 
-    test('phase 2 failing abandons only that stream', () {
+    test(
+      'a move nobody answers is swept after 30s, and the ordinary rule applies again',
+      () {
+        fakeAsync((async) {
+          final b = bootPlugin(async: async);
+          b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
+          async.elapse(const Duration(milliseconds: 1500));
+          flush(async);
+          b.host.receiveWs(ready(streamA, 'r1'));
+          flush(async);
+          b.links.last.open();
+          flush(async);
+          // In flight: relay output is the responder not having flipped yet.
+          b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
+          flush(async);
+          expect(b.links.last.stopped, isFalse);
+          async.elapse(const Duration(seconds: 41));
+          // Swept: the channel took the resync and never carried the stream — broken, so the
+          // next relay frame demotes it, which resyncs every stream over the socket.
+          b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
+          flush(async);
+          expect(b.links.last.stopReason, 'relay_binary_received');
+          expect(b.host.wsTypes, contains('terminal_resync'));
+          b.plugin.dispose();
+        });
+      },
+    );
+
+    test('a move the channel refuses abandons only that stream', () {
       fakeAsync((async) {
         final b = bootPlugin(async: async);
         b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
@@ -406,19 +511,21 @@ void main() {
         flush(async);
         b.host.receiveWs(ready(streamA, 'r1'));
         flush(async);
-        b.links.last.open();
-        flush(async);
-        b.links.last.acceptSends = false;
         b.host.wsFrames.clear();
-        b.host.receiveWsBinary(htrl(TerminalBinaryKind.keyframe, streamA));
+        b.links.last.acceptSends = false;
+        b.links.last.open();
         flush(async);
         expect(
-          b.host.wsFrames,
-          isEmpty,
+          b.host.wsTypes,
+          isNot(contains('terminal_resync')),
           reason: 'never falls back to the socket',
         );
         expect(b.links.last.stopped, isFalse);
         expect(b.plugin.linkModeFor(streamA), 'relay');
+        // Its relay output is just its output.
+        b.host.receiveWsBinary(htrl(TerminalBinaryKind.output, streamA));
+        flush(async);
+        expect(b.links.last.stopped, isFalse);
         b.plugin.dispose();
       });
     });

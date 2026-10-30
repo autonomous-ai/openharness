@@ -16,6 +16,8 @@ Future<void> showTaskFeedback(
     context: context,
     builder: (context) => Dialog(
       backgroundColor: Colors.transparent,
+      elevation: 0,
+      shape: DesktopChrome.bareDialogShape,
       constraints: const BoxConstraints(maxWidth: 520),
       child: DesktopDialogSurface(
         child: SingleChildScrollView(

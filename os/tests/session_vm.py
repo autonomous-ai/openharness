@@ -257,14 +257,8 @@ print(json.dumps(snapshot))
     print('Restoring graphics without restarting the computer or agent', flush=True)
     vm.command('sudo systemctl restart getty@tty1.service')
     if not config['encrypt']:
+        # tty1 knows its one account and asks only its password (installer.py, password.conf).
         deadline = time.monotonic() + 20
-        while 'login:' not in screen_text(vm, 'recovery-console-login'):
-            if time.monotonic() >= deadline:
-                raise AssertionError('The unencrypted installed console did not offer login')
-            time.sleep(.25)
-        vm.type_probe(config['username'])
-        vm.keys('ret')
-        deadline = time.monotonic() + 10
         while 'password:' not in screen_text(vm, 'recovery-console-password'):
             if time.monotonic() >= deadline:
                 raise AssertionError('The restored console did not request its account password')

@@ -36,6 +36,27 @@ describe('the update handoff', () => {
     ])
   })
 
+  it('settles what must finish first before the teardown, outside its deadline, and goes on when that fails', async () => {
+    vi.useFakeTimers()
+    let settle!: () => void
+    const { handoff, calls } = make({
+      beforeTeardown: () => { calls.push('settle the moves'); return new Promise<void>((resolve) => { settle = resolve }) },
+      teardownDeadlineMs: 1_000,
+    })
+    const done = handoff.restartForUpdate('2.0.0', [step(calls, 'the pty host connection')])
+    // Longer than the teardown's deadline: that is counted from the teardown, not from here.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls).toEqual(['[update] applying 1.0.0 → 2.0.0 — restarting daemon', 'settle the moves'])
+    settle()
+    await done
+    expect(calls.slice(2)).toEqual(['release the pty host connection', '[update] handing 2.0.0 to harnessd', 'exit 75'])
+    // Without a master too, after the probe; one that throws is said, and the teardown goes on.
+    const other = make({ supervised: false, beforeTeardown: async () => { throw new Error('boom') } })
+    await other.handoff.handOver([step(other.calls, 'the backend')])
+    expect(other.calls).toContain('[update] the moves did not settle (boom) — handing over all the same')
+    expect(other.calls.indexOf('release the backend')).toBeGreaterThan(other.calls.indexOf('probe the master'))
+  })
+
   it('under harnessd, tries every step when one throws, and exits for the update all the same (round 40)', async () => {
     const { handoff, calls } = make()
     await handoff.restartForUpdate('2.0.0', [

@@ -6,6 +6,7 @@ import { postReport, type ReportReason } from '@/lib/community/reports';
 import { putFollow, putLike } from '@/lib/community/social';
 import type { HarnessComment, OpenHarness, SocialState } from '@/lib/community/types';
 import { useRefreshOnReturn } from './useRefreshOnReturn';
+import { countHub } from '@/lib/community/hubMeasure';
 
 /**
  * One harness page's data and the reader's actions on it. Writes run one at a time, and a read that
@@ -80,11 +81,13 @@ export function useHarnessDetail(address: string, initial: OpenHarness | null, o
 
   const follow = () => mutate(async () => {
     if (!harness) return;
+    countHub('hub_follow');
     const next = !social.following;
     await putFollow(harness.authorId, next);
     setSocial(value => ({ ...value, following: next }));
   });
   const like = () => mutate(async () => {
+    countHub('hub_like');
     const result = await putLike(id.current, !social.liked);
     setSocial(value => ({ ...value, ...result }));
   });
@@ -95,11 +98,12 @@ export function useHarnessDetail(address: string, initial: OpenHarness | null, o
     await communityRequest(`harnesses/${id.current}/comments/${comment.id}`, { method: 'DELETE' });
     dropComment(comment);
   });
-  const report = (reason: ReportReason) => mutate(async () => { await postReport('harness', id.current, reason); setReported(true); });
-  const reportComment = (comment: HarnessComment, reason: ReportReason) => mutate(async () => { await postReport('comment', comment.id, reason); dropComment(comment); });
+  const report = (reason: ReportReason) => mutate(async () => { await postReport('harness', id.current, reason); countHub('hub_report'); setReported(true); });
+  const reportComment = (comment: HarnessComment, reason: ReportReason) => mutate(async () => { await postReport('comment', comment.id, reason); countHub('hub_report'); dropComment(comment); });
   /** `clientId` makes a retried post return the same comment rather than a second one. */
   const postComment = (body: string, clientId: string, parentId?: string) => mutate(async () => {
     const data = await communityRequest<{ comment: HarnessComment }>(`harnesses/${id.current}/comments`, { method: 'POST', body: { body, clientId, ...(parentId ? { parentId } : {}) } });
+    countHub('hub_comment_post');
     // A retried post answers with the comment it already made: replaced, not counted twice.
     setSocial(value => {
       const known = value.comments.some(item => item.id === data.comment.id);

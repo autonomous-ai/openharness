@@ -28,11 +28,3 @@ void pro_backlight_set(uint8_t level);
 // pixels: cutting the DSI stream instead would need a full re-init to come back from.
 void pro_backlight_enable(bool on);
 
-// What the backlight is ACTUALLY being driven with, logged — so a brightness bug and a video bug can be
-// told apart from the log instead of by eye. This is why the enable pin is read back rather than
-// remembered: the two failures look identical on the glass.
-void pro_backlight_log(void);
-
-// What pro_backlight_set() was last given. The idle blank restores through this rather than reading the
-// duty back out and converting, which lost a step to integer division every time it blanked.
-uint8_t pro_backlight_level(void);

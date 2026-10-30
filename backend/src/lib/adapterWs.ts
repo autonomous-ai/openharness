@@ -11,6 +11,11 @@
  * Auth: the first WebSocket subprotocol is the user's SSO access token. The stable `computer` query
  * parameter selects (or creates) that user's Remote machine; a managed machine never gains a second
  * writer for its down:{machineId} channel.
+ *
+ * A team session (lib/teamSession.ts), a Mac's team account, connects only as its own computer's machine
+ * and only while that row is a team machine. Its socket hears only the device-key pushes, never the
+ * account's grid name, raises no pairing notice on the person's apps, and may take only its own key off
+ * the device key log. Every connect records which kind of sign-in serves the machine (`sessionKind`).
  */
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
@@ -24,6 +29,7 @@ import {
 } from './bus.js'
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
+import { trackSocket } from './wsAttribution.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
 import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
@@ -35,10 +41,13 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
+import { relaySwarmDeliveries } from './swarmDeliveryPushes.js'
+import { relaySwarmHostChanges } from './swarmHostPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
 import { appendDeviceKey } from './deviceKeyLog.js'
+import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { AppError } from '../errors/index.js'
 import {
   isEncryptedTerminalFrame,
@@ -56,6 +65,7 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
+import { ShortTurnGuard } from './shortTurnGuard.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -80,10 +90,10 @@ const APP_STATES = new Set(['open', 'closed', 'missing'])
 // semver-ish token (or longer than 64 chars) is dropped rather than stored.
 const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 
-// Daily presence (`machine_daily_presence`): how often an OPEN adapter socket refreshes its row's
-// `lastSeenAt`. Rides the node role's existing 15s heartbeat (plus every app ping) rather than a
-// timer of its own — this is just the floor between two Mongo writes, so a machine that is up all
-// day costs ~300 upserts, not ~6000. Connect and close always write regardless.
+// How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
+// heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
+// Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. Connect and close always
+// write regardless.
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
 
 // Daily presence of the PERSON (`user_daily_presence`): the daemon reports its own loopback clients —
@@ -169,24 +179,39 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   // Where this computer is, per Cloudflare (absent off-Cloudflare). Read once here, at the only point
   // that still has the upgrade request, and carried into the machine row + its daily presence.
   const countryCode = countryCodeFromHeaders(req.headers)
+  const forbid = (): void => {
+    try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
+    socket.destroy()
+  }
   void (async () => {
     let user
-    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer' }) } catch (err) {
+    // A team session is taken here only as the machine of the computer it is bound to (below).
+    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer', allowTeamSession: true }) } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
-        try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
-        socket.destroy()
+        forbid()
         return
       }
       deny()
       return
     }
-    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId)
-    const machine = resolved.machine
+    const team = user.harnessSessionKind === 'team'
+    // Never another machine of the account: a team session names its own computer, or nothing is looked up at all.
+    if (team && computerId !== user.harnessComputerId) { forbid(); return }
+    let machine
+    if (team) {
+      machine = (await machineService.resolveForTeamComputer(user, computerId, label ?? 'computer', claimedMachineId)).machine
+    } else {
+      machine = (await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId, 'computer')).machine
+      // Before it attaches: a former team machine now served by a normal sign-in must not be read as a team machine. Any
+      // other row is stamped by the connect's own update below; until then it is not a team machine either.
+      if (machine.sessionKind === 'team') await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
+    }
     const machineId = machine.machineId
     if (!machineBillingAllowsDataPlane(machine)) { denyPayment(); return }
     // Single-computer claim BEFORE upgrade/attach, so a rejected second computer never supersedes the first.
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
-    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, machine.userId, machine.name, label, computerId, clientVersion, countryCode, user.harnessSessionId))
+    const name = machine.name, owner = machine.userId
+    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, owner, name, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -201,17 +226,25 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   })
 }
 
-async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string): Promise<void> {
+async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string, team = false): Promise<void> {
   // A different computer was already rejected at the upgrade (denyBusy), so this only closes our OWN
   // stale local socket on a same-computer reconnect landing on this worker.
   owners.get(machineId)?.close(4000, 'superseded')
   owners.set(machineId, ws)
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, kind: 'adapter' })
-  logger.info('adapter connected', { machineId, computer: label })
+  // Its connect and disconnect lines (lib/wsAttribution.ts): 227 adapter reconnects in 45 minutes in prod (2026-10-28)
+  // could not be explained without the close codes.
+  const track = trackSocket('adapter', 'adapter', ws, { client: 'daemon', version: clientVersion ?? null, machineId, computer: label })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
-  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on })
+  // A team machine reads none of the account's desk, zoo, machines or connections: it hears only the device-key pushes.
+  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on, team })
+  // Work waiting for this machine's Swarm agents, team machine or not: its host reads it at once (swarmDeliveryPushes.ts).
+  const swarmPushesUnsub = await relaySwarmDeliveries(machineId, send)
+  // A commit that changed what this machine's host reads: it reads its Swarm changes at once (swarmHostPushes.ts, WS Phase 2a).
+  const swarmHostUnsub = await relaySwarmHostChanges(machineId, send)
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -224,6 +257,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     if (nowMs - turnWindowStart >= 60_000) { turnWindowStart = nowMs; turnWindowCount = 0 }
     return ++turnWindowCount <= TURN_WRITES_PER_MINUTE
   }
+  const shortTurns = new ShortTurnGuard()
   const p2pSignalRate = new P2pSignalRateGuard()
   // A machine appends its own key once per sign-in, a removal when someone asks for one: a few a minute
   // is generous, and it keeps a looping daemon from rebuilding the log on every frame.
@@ -266,6 +300,9 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         ...(boundComputer ? { computerId: boundComputer } : {}),
         // Same rule again; absent (not behind Cloudflare) leaves the last value.
         ...(countryCode ? { countryCode } : {}),
+        // Which kind of sign-in serves the machine now (lib/teamSession.ts). A team row was checked, and a former team
+        // row flipped, before the socket attached; this stamps every other row.
+        sessionKind: team ? 'team' : 'computer',
       },
     }).catch(() => { /* best effort */ })
   }
@@ -275,12 +312,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // Minted and remembered by `routes/grid.ts`; read-only here. A user who has never signed in since
   // the route shipped simply has none yet, and the daemon treats that as "no grid" rather than an
   // error — the next `harness login` mints it.
-  const gridName = (await prisma.user.findUnique({ where: { id: userId }, select: { gridName: true } })
+  // Never on a team machine (lib/teamSession.ts): the grid is the person's inference endpoint, not teammates'.
+  const gridName = team ? null : (await prisma.user.findUnique({ where: { id: userId }, select: { gridName: true } })
     .catch(() => null))?.gridName ?? null
   send({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: currentName?.trim() || seededName, gridName } } })
 
-  // Daily presence row for the machine, mirroring the user/device variants in webWs/deviceWs. The
-  // guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
+  // The machine's last-seen stamp (plus the fleet's connect total), mirroring the user/device variants in
+  // webWs/deviceWs. The guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
   // heartbeat instead of being silently skipped until the interval elapses again. Heartbeats also
   // skip while a write is still in flight: `onHeartbeat` fires from two 15s sources (node role
   // interval + app ping), and before the connect write lands `presenceWriteDue` would say "due" —
@@ -332,6 +370,12 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     offlineReason: 'remote computer offline',
     deliver: (msg) => {
       if (ws.readyState !== WebSocket.OPEN) return
+      // Its computer just turned itself into a team machine (lib/harnessSession.ts): a socket still connected under the
+      // old sign-in must not keep serving a machine marked `team`. Backend-only (`__`), never forwarded.
+      if ((msg.frame as { type?: string } | undefined)?.type === TEAM_CONVERTED_FRAME) {
+        if (!team) { try { ws.close(4009, 'now a team machine') } catch { /* ignore */ } }
+        return
+      }
       send({ t: 'down', connId: msg.connId, frame: msg.frame })
       // `machine_revoked` used to be pushed and nothing more, leaving the socket open and the machine
       // still serving if the client ignored it — an old CLI, a dropped frame. Close it ourselves right
@@ -364,7 +408,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // and counted pongs only, so an adapter that was actively sending application traffic could still
   // be killed if one pong went missing. `trackSocketLiveness` counts message/ping/pong against a time
   // deadline instead, which is the same fix already applied to the hub's own sockets.
-  const releaseLiveness = trackSocketLiveness(ws)
+  const releaseLiveness = trackSocketLiveness(ws, 'adapter')
 
   onMessage = (raw: RawData, isBinary: boolean): void => {
     if (isBinary) {
@@ -462,7 +506,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
           send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'RATE_LIMITED' } } })
           return
         }
-        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId, ...(harnessSessionId ? { harnessSessionId } : {}) })
+        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId, ...(harnessSessionId ? { harnessSessionId } : {}), ...(team ? { team } : {}) })
           .then((r) => send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: r.ok
             ? { requestId, head: r.head }
             : { requestId, error: r.code, ...('head' in r ? { head: r.head } : {}) } } }))
@@ -493,6 +537,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         // (measured 2026-09-17: 42 such frames in one second credited to one agent). It still relays,
         // it is just not a turn today. A frame with no (or a malformed) agentId has nothing to
         // attribute the turn to and is not counted.
+        // A machine starting turns in a loop (lib/shortTurnGuard.ts): past the cap its turn starts are neither counted
+        // nor relayed for a while. Everything else it sends still is.
+        const verdict = shortTurns.admit()
+        if (verdict !== 'relay') {
+          if (verdict === 'pause_started') logger.warn('machine is starting turns in a loop; holding its turn starts for 60 s', { machineId, userId })
+          return
+        }
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {
@@ -501,9 +552,12 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         }
       }
       if (env.userEligible) {
-        void publishUserDeviceE2eePair(userId, machineId, env.frame).catch((err) => {
-          logger.warn('adapter user-level e2ee pair publish failed', { machineId, userId, error: String(err) })
-        })
+        // A team machine raises no notice on the person's apps: pairing a device with a machine is the person's to start.
+        if (!team) {
+          void publishUserDeviceE2eePair(userId, machineId, env.frame).catch((err) => {
+            logger.warn('adapter user-level e2ee pair publish failed', { machineId, userId, error: String(err) })
+          })
+        }
         if (env.webEligible === false && env.commanderEligible !== true && !env.targetConnId) return
       }
       // No originPid: the hub's Redis loopback must deliver to this instance's own web clients too
@@ -524,6 +578,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     releaseLiveness()
     terminalDownUnsub()
     accountPushesUnsub()
+    swarmPushesUnsub()
+    swarmHostUnsub()
     // Only the CURRENT owner tears the role down — a superseded socket must not mark the fresh
     // connection offline. A superseded socket still releases its own liveness tracking above.
     if (owners.get(machineId) === ws) {
@@ -535,7 +591,6 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
       // this delete is what stops a reconnect from briefly re-reading the dead value.
       void clearMachineAppState(machineId)
       touchMachinePresence('close') // exact lastSeenAt at disconnect; a superseded socket must not stamp it
-      logger.info('adapter disconnected', { machineId })
     }
   }
   ws.on('close', cleanup)

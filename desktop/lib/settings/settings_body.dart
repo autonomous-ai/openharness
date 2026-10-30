@@ -10,6 +10,7 @@ import 'sections/debug_section.dart';
 import 'sections/experimental_section.dart';
 import 'sections/notifications_section.dart';
 import 'sections/privacy_section.dart';
+import 'sections/routing_section.dart';
 import 'sections/shortcuts_section.dart';
 import 'sections/tab_invites_section.dart';
 import 'sections/usage_section.dart';
@@ -35,7 +36,7 @@ class SettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = switch (section) {
       SettingsSection.account => AccountSection(notifier: notifier),
-      SettingsSection.usage => const UsageSection(),
+      SettingsSection.usage => UsageSection(subscriptions: notifier.modelsMenu),
       SettingsSection.connectors => ConnectorsSection(notifier: notifier),
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',
@@ -47,6 +48,7 @@ class SettingsBody extends StatelessWidget {
         notifier: notifier,
         store: experimentalFeatures ?? notifier.experimentalFeatures,
       ),
+      SettingsSection.routing => RoutingSection(notifier: notifier),
       SettingsSection.tabInvites => TabInvitesSection(notifier: notifier),
       SettingsSection.shortcuts => const ShortcutsSection(),
       SettingsSection.debug => const DebugSection(),

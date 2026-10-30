@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-# Use the same six-entry/schema contract as public download verification.
+# Use the same nine-entry/schema contract as public download verification.
 spec = importlib.util.spec_from_file_location("desktop_verification", Path(__file__).with_name("verify-desktop-release.py"))
 verification = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verification)
@@ -23,6 +23,9 @@ PARTS = {
     "macos-apple-silicon.json": {"desktop-macos-arm64", "desktop-macos-arm64-dmg"},
     "linux-x64.json": {"desktop-linux-x64"},
     "linux-arm64.json": {"desktop-linux-arm64"},
+    # The installer is built by the x64 job: one x64 program for every PC (installer spec, Decision 4).
+    "windows-x64.json": {"desktop-windows-x64", "desktop-windows-installer"},
+    "windows-arm64.json": {"desktop-windows-arm64"},
 }
 
 
@@ -78,7 +81,7 @@ def require_new_version(version, live, allow_initialize=False):
 def read_parts(directory, version):
     files = {path.name for path in directory.glob("*.json")}
     if files != set(PARTS):
-        raise ValueError(f"expected four platform manifests; missing={sorted(set(PARTS) - files)}, extra={sorted(files - set(PARTS))}")
+        raise ValueError(f"expected {len(PARTS)} platform manifests; missing={sorted(set(PARTS) - files)}, extra={sorted(files - set(PARTS))}")
     entries = {}
     for name, keys in PARTS.items():
         part = json.loads((directory / name).read_text())
@@ -124,7 +127,7 @@ def main(argv=None):
             print(f"Desktop {args.version} is newer than the live manifest")
         else:
             publish(args.manifest, args.version, args.parts, args.allow_initialize)
-            print(f"Published all six Desktop {args.version} entries to {args.manifest}")
+            print(f"Published all {len(verification.KEYS)} Desktop {args.version} entries to {args.manifest}")
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

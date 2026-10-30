@@ -1,0 +1,56 @@
+0.4.18-dev.dbeca9ff8.dirty
+{"ok":true,"machineId":"961c7b1c…","agent":{"id":"69b406c2…","sess
+✓ stopped 1 harness
+✓ stopped the Harness daemon (pid 2818)
+✓ removed Harness's hooks from ~/.claude/settings.json
+✓ removed Harness's hooks from ~/.codex/hooks.json
+✓ removed Codex's record of Harness's hooks from ~/.codex/config.toml
+✓ removed ~/.codex/rules/harness.rules
+✓ removed Harness's hooks from ~/.grok/hooks/harness.json
+✓ removed Harness's hooks from ~/.gemini/config/hooks.json
+✓ removed Harness's hooks from ~/.copilot/hooks/harness.json
+✓ removed Harness's hooks from ~/.cursor/hooks.json
+✓ removed Harness's hooks from ~/.commandcode/settings.json
+✓ removed Harness's hooks from ~/.config/devin/config.json
+✓ removed ~/.config/kilo/plugin/launcher-register.js
+✓ removed ~/.pi/agent/extensions/launcher-register.ts
+✓ removed ~/.config/amp/plugins/launcher-register.ts
+✓ removed ~/.config/opencode/plugins/launcher-register/tui.js
+· if you had added a permission rule in ~/.claude/settings.json that is the same as one of Harness's, it went too: add it again if you need it
+· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~/.codex/hooks.json, and taking Harness's out moved them
+✓ removed ~/.local/bin/harness
+✓ removed ~/.local/bin/hn
+✓ removed the PATH line Harness added to ~/.bashrc
+✓ removed the PATH line Harness added to ~/.profile
+✓ removed ~/.harness
+Harness is uninstalled.
+exit=0 in 1 s
+/home/hx:
+total 64
+drwxr-x--- 13 hx   hx   4096 Oct 18 02:24 .
+drwxr-xr-x  1 root root 4096 Oct 18 02:24 ..
+-rw-r--r--  1 hx   hx    220 Mar 31  2024 .bash_logout
+-rw-r--r--  1 hx   hx   3771 Oct 18 02:24 .bashrc
+drwx------  3 hx   hx   4096 Oct 18 02:24 .cache
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:24 .claude
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .codex
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:24 .commandcode
+drwxr-xr-x  6 hx   hx   4096 Oct 18 02:24 .config
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .copilot
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:24 .cursor
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .gemini
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .grok
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .local
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:24 .pi
+-rw-r--r--  1 hx   hx    807 Oct 18 02:24 .profile
+
+/home/hx/.local/bin:
+total 8
+drwxr-xr-x 2 hx hx 4096 Oct 18 02:24 .
+drwxr-xr-x 3 hx hx 4096 Oct 18 02:24 ..
+no process
+  PID  PPID STAT USER     COMMAND
+    1     0 Ss   root     docker-init
+    6     1 S    root     sleep
+ 2939     0 Ss   root     sh
+ 2945  2939 R    root     ps

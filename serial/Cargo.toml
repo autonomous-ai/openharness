@@ -1,0 +1,18 @@
+[package]
+name = "harness-serial"
+version = "0.1.0"
+edition = "2024"
+
+# The Harness dial's serial port on Windows, for the CLI's cable/serial.ts
+# (docs/superpowers/specs/2026-10-19-windows-dial-design.md §1). Its own crate, not a bin of pty/: that is the
+# terminal host, and one program doing two jobs is harder to read and to debug (owner, 2026-10-19).
+[[bin]]
+name = "harness-serial"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Devices_Communication", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Threading"] }

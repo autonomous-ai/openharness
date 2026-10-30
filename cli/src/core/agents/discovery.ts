@@ -18,7 +18,9 @@ import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
-import { bypassPermissionActive, permissionModeFromArgv, tmuxPaneState } from '../../lib/tmux.js'
+import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
+import { primaryRuntime } from '../../lib/terminalRuntime.js'
+import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
 
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
@@ -41,12 +43,14 @@ export interface DiscoveryDeps {
   /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
    *  its missing pane is then one never rebuilt, not one closed. */
   restoreDegraded: (agentId: string) => boolean
+  /** The backend that holds a row's pane, asked whether an unconfirmed start's pane is still starting. */
+  terminals: Pick<TerminalBackendCoordinator, 'backendFor'>
 }
 
 export function createDiscoveryHandlers({
   registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
-  stoppedAgents, restoreDegraded,
+  stoppedAgents, restoreDegraded, terminals,
 }: DiscoveryDeps) {
   const onDiscovered = async (observed: DiscoveredTerminalAgent): Promise<void> => {
     const launching = observed.runtimes
@@ -190,7 +194,9 @@ export function createDiscoveryHandlers({
     // Preserve the conversation's public identity and give the surviving shell its own row.
     // A starting install is not an exited engine; strict uncertain starts keep their reservation.
     if (agent.resumeOnly && agent.launch?.state === 'failed') {
-      const pane = await tmuxPaneState(agent.tmuxPane)
+      const runtime = primaryRuntime(agent)
+      // No backend to ask is a pane nobody could read: it stays, like one tmux could not answer for.
+      const pane = await terminals.backendFor(runtime)?.paneState(runtime) ?? 'unknown'
       // An unconfirmed install/startup can still be about to launch the engine. Do not
       // turn its live shell into permission to start another one. A pane that is gone is the
       // reconciler's to remove, and one tmux could not read says nothing: both stay as they are.
@@ -229,7 +235,13 @@ export function createDiscoveryHandlers({
   const onTerminalAvailability = (agent: RegisteredSession, available: boolean): void => {
     const changed = registry.terminalAvailable(agent.agentId) !== available
     registry.setTerminalAvailable(agent.agentId, available)
-    if (available && changed) announceSession(agent)
+    // A shell has no engine process to observe, so nothing else reactivates it after the core's start marked every row
+    // dormant: its pane being live (on whichever pty host serves it) is all the evidence there is. Held and failed
+    // launches are inactive on purpose.
+    const revive = available && isTerminalEngine(agent.engine) && !agent.active
+      && agent.launch?.state !== 'held' && agent.launch?.state !== 'failed'
+    if (revive) registry.setActive(agent.agentId, true)
+    if (available && (changed || revive)) announceSession(agent)
   }
   return { onDiscovered, onObserved, onDormant, onRemoved, onTerminalAvailability }
 }

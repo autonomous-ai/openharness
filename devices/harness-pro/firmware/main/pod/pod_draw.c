@@ -56,14 +56,14 @@ bool pod_cell(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zo
     r->radius = (uint8_t)zoom8;
     return true;
 }
-bool pod_cell_smooth(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom8)
+// Sixteenths: odd 1..15 only (an even count is the eighths' run); text[1] marks the run, whose radius is the zoom in sixteenths.
+bool pod_cell16(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom16)
 {
-    if (zoom8 <= 8 || zoom8 > 16 || !f || f->cell != 1) return pod_cell(s, x, y, f, zoom8);
+    if (!(zoom16 & 1) || zoom16 > 15) return pod_cell(s, x, y, f, zoom16 > 32 ? 8 : zoom16 / 2);   // 17..31 odd: 8 (1x)
     if (!pod_cell(s, x, y, f, 8)) return false;
     ht_run_t *r = &s->runs[s->count - 1];
-    r->w = (int16_t)((f->cols * (int)zoom8 + 7) / 8); r->pro_height = (int16_t)((f->rows * (int)zoom8 + 7) / 8);
-    r->radius = (uint8_t)zoom8;
-    r->text[1] = 1;   // text[0] is pod_cell_flat's bake mark
+    r->w = (int16_t)((f->cols * f->cell * zoom16 + 15) / 16); r->pro_height = (int16_t)((f->rows * f->cell * zoom16 + 15) / 16);
+    r->radius = (uint8_t)zoom16; r->text[1] = 1;
     return true;
 }
 static uint16_t swapped(uint16_t v) { return __builtin_bswap16(v); }
@@ -109,108 +109,20 @@ static uint16_t soften_mix(uint16_t c, unsigned k, uint16_t dest)
 }
 static uint16_t soften(uint16_t c, uint16_t dest) { return soften_mix(c, soften_k(c), dest); }
 
-// Two RGB565 colours within a small distance (each channel in 6-bit units, summed): the same shade for the corner rule.
-static bool near565(uint16_t a, uint16_t b)
-{
-    int dr = (int)(a >> 11) * 2 - (int)(b >> 11) * 2, dg = (int)((a >> 5) & 63) - (int)((b >> 5) & 63), db = (int)(a & 31) * 2 - (int)(b & 31) * 2;
-    return (dr < 0 ? -dr : dr) + (dg < 0 ? -dg : dg) + (db < 0 ? -db : db) <= 12;
-}
 static uint16_t mix565(uint16_t fg, uint16_t bg, unsigned a, unsigned levels);
 static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     const ht_cell_frame_t *f = r->bitmap.asset;
     int left = imax(clip.x, r->x), right = imin(clip.x + clip.w, r->x + r->w);
     int top = imax(clip.y, r->y), bottom = imin(clip.y + clip.h, r->y + r->pro_height);
+    const bool s16 = r->text[1];   // z in sixteenths: a glass pixel is G = 16 units, not 8
+    const int G = s16 ? 16 : 8, GG = G * G;
     int cols = f->cols, z = r->radius, cell = f->cell, sw = cols * cell, sh = f->rows * cell;
     // Render-task only (not reentrant): the row cache and edge rows live in statics so they stay off the 4 KB stack cap.
     static row_cache_t rc;
-    static uint8_t E[3][HT_CELL_COLS_MAX];
+    static uint8_t E[5][HT_CELL_COLS_MAX];
     memset(rc.row, 0xff, sizeof rc.row);
     rc.next = 0;
-    if (z > 8 && z < 16 && cell == 1 && r->text[1] == 1) {   // pod_cell_smooth at an in-between zoom: bilinear between pixel centres
-        static uint16_t brow[2][HT_CELL_COLS_MAX];
-        int rows = f->rows, at[2] = {-2, -2};
-        for (int y = top; y < bottom; y++) {
-            int sv = ((y - r->y)  * 16 + 8) * 128 / z - 128;   // the glass pixel's centre, (y + 0.5) * 8 / z source pixels, x 256, from the source pixels' centres
-            int y0 = sv >> 8, fy = sv & 255;
-            for (int k = 0; k < 2; k++) {
-                int want = y0 + k;
-                if (at[k] == want) continue;
-                if (at[1 - k] == want) { memcpy(brow[k], brow[1 - k], sizeof brow[k]); at[k] = want; continue; }
-                at[k] = want;
-                if (want < 0 || want >= rows) { memset(brow[k], 0, sizeof brow[k]); continue; }
-                const uint8_t *src = cache_row(f, &rc, want);
-                for (int c = 0; c < cols; c++) brow[k][c] = src[c] ? (uint16_t)(swapped(f->palette[src[c]]) | 0x20) : 0;   // never 0 when opaque
-            }
-            uint16_t *dst = out + (y - clip.y) * clip.w - clip.x;
-            for (int x = left; x < right; x++) {
-                int su = ((x - r->x)  * 16 + 8) * 128 / z - 128, x0 = su >> 8, fx = su & 255;
-                const bool l = x0 >= 0 && x0 < cols, rt = x0 + 1 >= 0 && x0 + 1 < cols;
-                uint16_t p[4] = {l ? brow[0][x0] : 0, rt ? brow[0][x0 + 1] : 0, l ? brow[1][x0] : 0, rt ? brow[1][x0 + 1] : 0};
-                if (!(p[0] | p[1] | p[2] | p[3])) continue;
-                const uint16_t under = dst[x];
-                if (!(p[0] && p[1] && p[2] && p[3])) for (int k = 0; k < 4; k++) p[k] = p[k] ? soften(p[k], under) : under;
-                const unsigned w[4] = {(unsigned)((256 - fx) * (256 - fy)), (unsigned)(fx * (256 - fy)), (unsigned)((256 - fx) * fy), (unsigned)(fx * fy)};
-                unsigned rr = 0, gg = 0, bb = 0;
-                for (int k = 0; k < 4; k++) { rr += (p[k] >> 11) * w[k]; gg += ((p[k] >> 5) & 63) * w[k]; bb += (p[k] & 31) * w[k]; }
-                dst[x] = (uint16_t)(((rr + 32768) >> 16) << 11 | ((gg + 32768) >> 16) << 5 | ((bb + 32768) >> 16));
-            }
-        }
-        return;
-    }
-    if (z == 16 && cell == 1 && r->text[1] == 1) {   // pod_cell_smooth
-        // Glass pixel (2c + qx, 2r + qy) is the quadrant of source pixel C = (c, r) toward H = (c + dx, r), V = (c, r + dy) and the
-        // diagonal D, dx = qx ? 1 : -1. Where H and V agree and both differ from C and from what lies opposite them (the EPX / Scale2x
-        // corner rule, with a colour tolerance since the art is shaded), the quadrant is a stair step of a diagonal edge and takes H and V:
-        // the edge runs straight instead of in 2 px blocks. Elsewhere it is bilinear at a quarter-pixel offset: 9/16 C, 3/16 H and V,
-        // 1/16 D. A transparent pixel lends what is under it, so the outline fades into the ground; an outline colour lightens (soften).
-        // Each source row's colours are looked up once (crow, by row) and shared by the four glass pixels of every source pixel.
-        static uint16_t crow[3][HT_CELL_COLS_MAX];
-        static int crow_at[3];
-        crow_at[0] = crow_at[1] = crow_at[2] = -2;
-        int rows = f->rows;
-        for (int y = top; y < bottom; y++) {
-            int oy = y - r->y, cy = oy >> 1, dy = (oy & 1) ? 1 : -1;
-            const uint16_t *cr[3];   // rows cy - 1, cy, cy + 1 in colours; 0 is transparent (no palette colour is 0 after |1)
-            for (int k = 0; k < 3; k++) {
-                int want = cy - 1 + k, slot = ((want % 3) + 3) % 3;
-                if (crow_at[slot] != want) {
-                    crow_at[slot] = want;
-                    if (want < 0 || want >= rows) memset(crow[slot], 0, sizeof crow[slot]);
-                    else {
-                        const uint8_t *src = cache_row(f, &rc, want);
-                        for (int c = 0; c < cols; c++) crow[slot][c] = src[c] ? (uint16_t)(swapped(f->palette[src[c]]) | 0x20) : 0;   // green's low bit set: never 0
-                    }
-                }
-                cr[k] = crow[slot];
-            }
-            const uint16_t *cur = cr[1], *nb = cr[1 + dy], *op = cr[1 - dy];
-            uint16_t *dst = out + (y - clip.y) * clip.w - clip.x;
-            for (int x = left; x < right; x++) {
-                int ox = x - r->x, cx = ox >> 1, dx = (ox & 1) ? 1 : -1;
-                const bool in = cx + dx >= 0 && cx + dx < cols;
-                uint16_t pc = cur[cx], ph = in ? cur[cx + dx] : 0, pv = nb[cx], pd = in ? nb[cx + dx] : 0;
-                if (!(pc | ph | pv | pd)) continue;
-                const uint16_t under = dst[x];
-                const bool rim = !(pc && ph && pv && pd);
-                if (rim) {   // on the outline
-                    pc = pc ? soften(pc, under) : under; ph = ph ? soften(ph, under) : under;
-                    pv = pv ? soften(pv, under) : under; pd = pd ? soften(pd, under) : under;
-                }
-                if (!near565(pc, ph) && near565(ph, pv)) {   // a corner candidate: only then are the opposite pixels read
-                    const bool back = cx - dx >= 0 && cx - dx < cols;
-                    uint16_t ho = back ? cur[cx - dx] : 0, vo = op[cx];
-                    ho = !ho ? under : rim ? soften(ho, under) : ho; vo = !vo ? under : rim ? soften(vo, under) : vo;
-                    if (!near565(ph, ho) && !near565(pv, vo)) { dst[x] = mix565(ph, pv, 1, 2); continue; }
-                }
-                const unsigned rr = (pc >> 11) * 9u + (ph >> 11) * 3u + (pv >> 11) * 3u + (pd >> 11);
-                const unsigned gg = ((pc >> 5) & 63) * 9u + ((ph >> 5) & 63) * 3u + ((pv >> 5) & 63) * 3u + ((pd >> 5) & 63);
-                const unsigned bb = (pc & 31) * 9u + (ph & 31) * 3u + (pv & 31) * 3u + (pd & 31);
-                dst[x] = (uint16_t)(((rr + 8) / 16) << 11 | ((gg + 8) / 16) << 5 | ((bb + 8) / 16));
-            }
-        }
-        return;
-    }
     if (z == 16 && cell == 1) {   // exact 2x: one decision per source pixel (colour, edge flag, how far it softens), written to both output rows of its source row
         int rows = f->rows;
         for (int y = top; y < bottom;) {
@@ -261,7 +173,7 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
         return;
     }
-    if (z >= 8 && cell == 1) {
+    if (z >= 8 && !s16 && cell == 1) {
         int rows = f->rows;
         for (int y = top; y < bottom; y++) {
             int cy = y - r->y;
@@ -281,7 +193,7 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
         return;
     }
-    if (z >= 8) {
+    if (z >= 8 && !s16) {
         for (int y = top; y < bottom; y++) {
             int cy = (y - r->y) / cell;
             const uint8_t *row = cache_row(f, &rc, cy);
@@ -299,26 +211,26 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
         return;
     }
-    // Zoomed: in units where a frame pixel is z wide and a glass pixel 8, each glass pixel is the mean of the
+    // Zoomed: in units where a frame pixel is z wide and a glass pixel G (8, or 16 for sixteenths), each glass pixel is the mean of the
     // frame pixels it overlaps, weighted by overlap; what a transparent pixel leaves uncovered is whatever is
     // already in the output (the ground), so an edge fades into the scene, not into black.
     if (cell == 1 && z >= 4) {   // the pet's frames: each source row and its edge flags fetched once per output row
-                                 // (z >= 4: a glass pixel spans at most 3 source rows, all R[] holds)
+                                 // (z >= 4: a glass pixel spans at most 5 source rows, all R[] holds)
     static const uint8_t none[HT_CELL_COLS_MAX];
     for (int y = top; y < bottom; y++) {
-        int v0 = (y - r->y) * 8, v1 = v0 + 8;
+        int v0 = (y - r->y) * G, v1 = v0 + G;
         int sy0 = v0 / z, sy1 = imin(sh - 1, (v1 - 1) / z);
-        const uint8_t *R[5];
-        int nr = sy1 - sy0 + 1; if (nr > 3) nr = 3;
+        const uint8_t *R[7];
+        int nr = sy1 - sy0 + 1; if (nr > 5) nr = 5;
         for (int k = -1; k <= nr; k++) { int sy = sy0 + k; R[k + 1] = (sy < 0 || sy >= sh) ? none : cache_row(f, &rc, sy); }
-        for (int k = 0; k < nr; k++) {   /* resolve after all fetched (8 slots hold 5 rows) */
+        for (int k = 0; k < nr; k++) {   /* resolve after all fetched (8 slots hold 7 rows) */
             int sy = sy0 + k; const uint8_t *up = R[k], *cu = R[k + 1], *dn = R[k + 2];
             bool er = sy == 0 || sy + 1 >= sh;
             for (int sx = 0; sx < sw; sx++) E[k][sx] = cu[sx] && (er || sx == 0 || sx + 1 >= sw || !cu[sx-1] || !cu[sx+1] || !up[sx] || !dn[sx]);
         }
         uint16_t *dst = out + (y - clip.y) * clip.w + left - clip.x;
         for (int x = left; x < right; x++, dst++) {
-            int u0 = (x - r->x) * 8, u1 = u0 + 8;
+            int u0 = (x - r->x) * G, u1 = u0 + G;
             unsigned rr = 0, gg = 0, bb = 0, cover = 0;
             for (int k = 0; k < nr; k++) {
                 int sy = sy0 + k;
@@ -335,18 +247,18 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
                 }
             }
             if (!cover) continue;
-            unsigned rest = 64 - cover, d = *dst;
+            unsigned rest = (unsigned)GG - cover, d = *dst;
             rr += (d >> 11) * rest; gg += ((d >> 5) & 63) * rest; bb += (d & 31) * rest;
-            *dst = (uint16_t)(((rr + 32) / 64) << 11 | ((gg + 32) / 64) << 5 | ((bb + 32) / 64));
+            *dst = (uint16_t)(((rr + GG / 2) / GG) << 11 | ((gg + GG / 2) / GG) << 5 | ((bb + GG / 2) / GG));
         }
     }
     return;
     }
     for (int y = top; y < bottom; y++) {
-        int v0 = (y - r->y) * 8, v1 = v0 + 8;
+        int v0 = (y - r->y) * G, v1 = v0 + G;
         uint16_t *dst = out + (y - clip.y) * clip.w + left - clip.x;
         for (int x = left; x < right; x++, dst++) {
-            int u0 = (x - r->x) * 8, u1 = u0 + 8;
+            int u0 = (x - r->x) * G, u1 = u0 + G;
             unsigned rr = 0, gg = 0, bb = 0, cover = 0;
             for (int sy = v0 / z; sy * z < v1 && sy < sh; sy++) {
                 int wy = imin(v1, (sy + 1) * z) - imax(v0, sy * z);
@@ -361,9 +273,9 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
                 }
             }
             if (!cover) continue;
-            unsigned rest = 64 - cover, d = *dst;
+            unsigned rest = (unsigned)GG - cover, d = *dst;
             rr += (d >> 11) * rest; gg += ((d >> 5) & 63) * rest; bb += (d & 31) * rest;
-            *dst = (uint16_t)(((rr + 32) / 64) << 11 | ((gg + 32) / 64) << 5 | ((bb + 32) / 64));
+            *dst = (uint16_t)(((rr + GG / 2) / GG) << 11 | ((gg + GG / 2) / GG) << 5 | ((bb + GG / 2) / GG));
         }
     }
 }
@@ -374,11 +286,11 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 // recap's small pet) is resampled again every frame. When the caller knows what is under the frame is one colour (pod_cell_flat), the first raster
 // resamples it once onto that colour into the arena and every later one is a row copy. The result is the very pixels the resampler writes onto
 // that ground: the golden screens do not change. Keyed by the frame's identity (its pointers and shape), zoom and ground, so another engine, another
-// frame or another ground is another entry; entries are never evicted (a scene still waiting to be drawn may name one), and when the table or the
-// arena is full the frame is simply resampled each time as before. Render task only.
+// frame or another ground is another entry. When the table or the arena is full it starts over; a raster looks its entry up (and bakes it) when it
+// runs, so nothing holds an entry across rasters. Render task only.
 // 360 K pixels (720 KB of PSRAM): every frame the Notices faces and the recap's RELAX and REST scenes can show for all four pets at once come to 353 K.
 enum { BAKE_SLOTS = 64, BAKE_ARENA_PX = 360 * 1024 };
-typedef struct { const ht_cell_frame_t *f; const uint8_t *cells; const uint16_t *palette; uint16_t ground, w, h, cols; uint8_t z, rows; uint32_t off; } bake_t;
+typedef struct { const ht_cell_frame_t *f; const uint8_t *cells; const uint16_t *palette; uint16_t ground, w, h, cols, rows; uint8_t z, s16; uint32_t off; } bake_t;
 static bake_t s_bake[BAKE_SLOTS];
 static unsigned s_nbake;
 static uint32_t s_arena_used;
@@ -389,31 +301,37 @@ void pod_cell_bake_reset(void) { s_nbake = 0; s_arena_used = 0; s_bakes_made = 0
 unsigned pod_cell_bakes(void) { return s_bakes_made; }
 unsigned pod_cell_bake_px(void) { return s_arena_used; }
 
-bool pod_cell_flat(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom8, uint16_t ground)
+static bool flat_mark(ht_scene_t *s, bool ok, uint16_t ground)
 {
-    if (!pod_cell(s, x, y, f, zoom8)) return false;
+    if (!ok) return false;
     ht_run_t *r = &s->runs[s->count - 1];
-    if (r->radius < 8) { r->fg = ground; r->text[0] = 1; }   // the resampler's zooms only: from 1x on the cell paths are cheap and exact
+    if (r->radius < 8 || r->text[1]) { r->fg = ground; r->text[0] = 1; }   // the resampler's zooms only: from 1x on the cell paths are cheap and exact
     return true;
 }
+bool pod_cell_flat(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom8, uint16_t ground) { return flat_mark(s, pod_cell(s, x, y, f, zoom8), ground); }
+bool pod_cell_flat16(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom16, uint16_t ground) { return flat_mark(s, pod_cell16(s, x, y, f, zoom16), ground); }
 
 static const bake_t *bake_of(const ht_run_t *r)
 {
     const ht_cell_frame_t *f = r->bitmap.asset;
     for (unsigned i = 0; i < s_nbake; i++) {
         const bake_t *b = &s_bake[i];
-        if (b->f == f && b->cells == f->cells && b->palette == f->palette && b->z == r->radius && b->ground == r->fg &&
+        if (b->f == f && b->cells == f->cells && b->palette == f->palette && b->z == r->radius && b->s16 == r->text[1] && b->ground == r->fg &&
             b->cols == f->cols && b->rows == f->rows && b->w == r->w && b->h == r->pro_height) return b;
     }
     size_t px = (size_t)r->w * (size_t)r->pro_height;
-    if (s_nbake >= BAKE_SLOTS || px > BAKE_ARENA_PX - s_arena_used) return NULL;
+    if (px > BAKE_ARENA_PX) return NULL;
+    // Full: start the arena over (the arena never evicts one entry). The screen shown re-bakes what it draws, which fits: no
+    // screen needs more than the arena (the Working card about 126 K px), while a session that visits every Notices, Recap and
+    // Working pet adds up to more.
+    if (s_nbake >= BAKE_SLOTS || px > BAKE_ARENA_PX - s_arena_used) { s_nbake = 0; s_arena_used = 0; }
     ht_run_t plain = *r;   // the same run at the origin, an ordinary cell run: resampled over the ground into the arena
     plain.x = 0; plain.y = 0; plain.text[0] = 0;
     uint16_t *dst = s_arena + s_arena_used;
     for (size_t i = 0; i < px; i++) dst[i] = r->fg;
     cell_raster_core(&plain, (ht_rect_t){0, 0, r->w, r->pro_height}, dst);
     bake_t *b = &s_bake[s_nbake++];
-    *b = (bake_t){f, f->cells, f->palette, r->fg, (uint16_t)r->w, (uint16_t)r->pro_height, f->cols, r->radius, (uint8_t)f->rows, s_arena_used};
+    *b = (bake_t){f, f->cells, f->palette, r->fg, (uint16_t)r->w, (uint16_t)r->pro_height, f->cols, f->rows, r->radius, r->text[1], s_arena_used};
     s_arena_used += (uint32_t)px;
     s_bakes_made++;
     return b;
@@ -425,8 +343,13 @@ static void cell_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if (!b) { cell_raster_core(r, clip, out); return; }
     int left = imax(clip.x, r->x), right = imin(clip.x + clip.w, r->x + r->w);
     int top = imax(clip.y, r->y), bottom = imin(clip.y + clip.h, r->y + r->pro_height);
-    for (int y = top; y < bottom; y++)
-        memcpy(out + (y - clip.y) * clip.w + left - clip.x, s_arena + b->off + (size_t)(y - r->y) * b->w + (left - r->x), (size_t)(right - left) * sizeof *out);
+    // Only the frame's own pixels: what the resampler left as the ground is skipped, so a frame baked over one colour also sits on a ground that
+    // only nearly is (the Working card's gradient) without showing its box.
+    for (int y = top; y < bottom; y++) {
+        uint16_t *d = out + (y - clip.y) * clip.w + left - clip.x;
+        const uint16_t *src = s_arena + b->off + (size_t)(y - r->y) * b->w + (left - r->x);
+        for (int x = 0; x < right - left; x++) if (src[x] != b->ground) d[x] = src[x];
+    }
 }
 
 // ---- ring arc -------------------------------------------------------------------------------------------
@@ -590,6 +513,33 @@ void pod_grad_aa_dither(ht_scene_t *s, int x, int y, int w, int h, int radius, u
     grad_params_t p = {top, bottom, 3};
     memcpy(r->text, &p, sizeof p);
 }
+typedef struct { uint16_t top, bottom, bg; int16_t edge, gy0, gh; uint8_t k, inside_left; } veil_params_t;
+_Static_assert(sizeof(veil_params_t) <= HT_TEXT_BYTES, "veil parameters fit run->text");
+void pod_veil(ht_scene_t *s, int x, int y, int w, int h, int edge, bool inside_left, int gy0, int gh, uint16_t top, uint16_t bottom, uint16_t bg, unsigned k)
+{
+    if (w <= 0 || h <= 0) return;
+    ht_run_t *r = new_run(s, POD_VEIL, x, y, w, h);
+    if (!r) return;
+    veil_params_t p = {top, bottom, bg, (int16_t)edge, (int16_t)gy0, (int16_t)gh, (uint8_t)imin(255, (int)k), inside_left};
+    memcpy(r->text, &p, sizeof p);
+}
+static void veil_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    veil_params_t p;
+    memcpy(&p, r->text, sizeof p);
+    int x0 = imax(clip.x, r->x), x1 = imin(clip.x + clip.w, r->x + r->w);
+    int y0 = imax(clip.y, r->y), y1 = imin(clip.y + clip.h, r->y + r->pro_height);
+    const int last = p.gh > 1 ? p.gh - 1 : 1;
+    for (int y = y0; y < y1; y++) {
+        const int row = imin(imax(y - p.gy0, 0), last);
+        const uint16_t ink = mix565(p.bottom, p.top, (unsigned)row, (unsigned)last);
+        uint16_t *d = out + (y - clip.y) * clip.w - clip.x;
+        for (int x = x0; x < x1; x++) {
+            const bool in = p.inside_left ? x < p.edge : x >= p.edge;
+            d[x] = in ? mix565(ink, d[x], p.k, 255) : p.bg;
+        }
+    }
+}
 static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     grad_params_t p;
@@ -730,6 +680,7 @@ void pod_draw_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     case POD_ARC: arc_raster(r, clip, out); break;
     case POD_GRAD: grad_raster(r, clip, out); break;
     case POD_TRI: tri_raster(r, clip, out); break;
+    case POD_VEIL: veil_raster(r, clip, out); break;
     default: break;
     }
 }

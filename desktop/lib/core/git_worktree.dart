@@ -1,3 +1,6 @@
+import 'runtime_platform.dart';
+import 'folder_commands.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -295,7 +298,7 @@ Future<Map<String, List<String>?>> _refreshRemoteBranches(
 
 /// Whether [path] or a folder above it holds `.git`: a directory, or the file
 /// a linked worktree has.
-Future<bool> _insideGitCheckout(String path) async {
+Future<bool> insideGitCheckout(String path) async {
   // git resolves the folder physically: ~/proj linked into a repository's
   // packages/app is in that repository though nothing above ~/proj says so.
   final String real;
@@ -321,7 +324,7 @@ Future<Map<String, dynamic>> readLocalGitProject(
   String source, {
   bool refresh = false,
   GitProcessStarter? startProcess,
-  Future<bool> Function(String path) insideCheckout = _insideGitCheckout,
+  Future<bool> Function(String path) insideCheckout = insideGitCheckout,
 }) async {
   Future<({int code, String output, String errorOutput})> git(
     List<String> arguments,
@@ -689,7 +692,7 @@ Future<String> prepareGitProject(
       );
       // Directory.create accepts an existing directory; mkdir reserves the
       // name exclusively, so concurrent starts never share a worktree.
-      final reservation = await Process.run('mkdir', [folder]);
+      final reservation = await reserveDirectory(folder);
       if (reservation.exitCode == 0) {
         destination = folder;
         break;
@@ -836,6 +839,10 @@ Future<void> _copyIncluded(
         continue;
       }
       await Directory(p.dirname(target)).create(recursive: true);
+      if (RuntimePlatform.isWindows) {
+        await copyTree(p.join(from, relative), target);
+        continue;
+      }
       await Process.run('cp', [
         '-R',
         '-p',
@@ -860,6 +867,15 @@ bool _diskFullMessage(String message) => RegExp(
   r'no space left on device|disk quota exceeded',
   caseSensitive: false,
 ).hasMatch(message);
+
+/// Runs git in [source] the way every reader here does: a scrubbed
+/// environment, no prompts, at most 1 MiB of output, and a deadline. Throws
+/// [RepositoryCloneException] when git cannot start, overflows or times out.
+Future<({int code, String output, String errorOutput})> runLocalGit(
+  String source,
+  List<String> arguments, {
+  Duration timeout = const Duration(seconds: 4),
+}) => _git(source, arguments, timeout: timeout);
 
 Future<({int code, String output, String errorOutput})> _git(
   String source,

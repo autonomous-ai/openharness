@@ -4,6 +4,10 @@
 
 Paired robots can negotiate Store discovery and durable agent preparation separately from task delivery. See the [shared OS contract](autonomous-device-store.md), including JSON schemas, recovery rules and the Blender walkthrough. Older clients keep the operations below unchanged.
 
+## Add-ons (v1)
+
+A paired device can publish summaries of its own state for agents on this computer, and receive their proposals to judge. See [device add-ons](autonomous-device-addons.md). Older clients keep the operations below unchanged.
+
 
 The Mac discovers Autonomous OS on the local network and connects **directly to the device**.
 No manual IP address, device backend credentials, cloud device registration, or backend relay is
@@ -209,7 +213,10 @@ Events are encrypted full objects:
 ```
 
 Kinds include `receipt.updated`, `turn.started`, `turn.done`, `turn.error`, `turn.summary`,
-`turn.tool`, `agent.error`, `question.open`, `question.close`.
+`turn.tool`, `agent.error`, `question.open`, `question.close`, and with the add-on capabilities
+`addon.proposal` and `addon.republish` ([device add-ons](autonomous-device-addons.md)).
+**A device ignores an event `kind` it does not know**: newer computers add kinds, and an older device
+must keep working beside them.
 
 For an enriched `turn.summary` with resultId/correlation, use that event's fullText exclusively;
 never fetch latest recap to identify its result. The [summary contract](autonomous-device-result-correlation.md)

@@ -25,12 +25,23 @@ import { AgentNotifications } from './agentNotifications.js'
 import { deriveTurnSummary } from './deviceRecap.js'
 import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, type RecentRecap, type SessionRecaps } from './recapReads.js'
 import { atomicWriteJson } from './registry.js'
+import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
+import { TurnStats } from '../cable/turnStats.js'
 
 export type CommanderFrame = {
   type: 'commander_event'
   agentId: string
   dbSessionId: string
   payload: Record<string, unknown>
+}
+
+/** A finished turn that is news, as the recaps hand it to `decideTier`. */
+export interface TierTurn {
+  sessionId: string
+  recap: string
+  /** From its live `turn_started`; null for one picked back up at attach, whose start was not seen. */
+  durationS: number | null
+  stats: TierInput['stats']
 }
 
 export interface CommanderMirrorOpts {
@@ -92,6 +103,12 @@ export interface CommanderMirrorOpts {
    * tells the core what it now holds (services/recapsProcess.ts), which answers from it in line.
    */
   changed?: (sessionId: string) => void
+  /**
+   * How loudly a finished turn that is news tells (lib/notifyTier.ts), decided once here for every screen: the
+   * `summary` card and the apps' `turn_summary` both wait for it and carry it as `tier`. Null: nobody to tell
+   * (services/recaps.ts), and the frames carry none. Absent: no tier at all, and nothing waits.
+   */
+  decideTier?: (turn: TierTurn) => Promise<Tier | null>
 }
 
 interface SessionState {
@@ -111,6 +128,8 @@ interface SessionState {
   lastTodos: Array<{ c: string; s: string }> | null
   /** Top-level shell commands awaiting their result, by tool id: the turn stats' input (kind 'tool_end'). */
   commands: Map<string, { tool: string; command: string }>
+  /** When the live turn started, for its duration; null when its start was a replay. */
+  startedAt: number | null
   /** Sub-agents this turn spawned, in the order they started — the device's list above "Working…". */
   agents: Array<{ id: string; desc: string; startedAt: number; doneMs: number | null; carried?: true }>
   /** A turn_ended is being HELD because sub-agents this turn spawned are still running (see below). */
@@ -323,6 +342,8 @@ export class CommanderMirror {
    */
   private asks = new Map<string, string[]>()
   private revisions = new Map<string, number>()
+  /** Each session's turn's tests and commits, read off its shell results: what `decideTier` is told. */
+  private readonly turnStats = new TurnStats()
   private file: string
   private historyFile: string
   private fullTextFile: string
@@ -341,7 +362,7 @@ export class CommanderMirror {
   private stateFor(sessionId: string): SessionState {
     let st = this.states.get(sessionId)
     if (!st) {
-      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
+      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), startedAt: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
       this.states.set(sessionId, st)
     }
     return st
@@ -415,6 +436,8 @@ export class CommanderMirror {
           st.lastTool = null
           st.lastTodos = null
           st.commands.clear()
+          st.startedAt = options?.replay ? null : Date.now()
+          this.turnStats.take(sessionId)
           this.emit(sessionId, { kind: 'turn_started' }) // local-only: the devices drop the last turn's stats
           // Drop the previous turn's finished rows, KEEP the ones still running. Two reasons, both
           // measured: cursor's tool-start HOOK beats its transcript-derived turn_started by ~60ms, so a
@@ -509,6 +532,7 @@ export class CommanderMirror {
           const ran = st.commands.get(String(e.payload.id))
           if (ran) {
             st.commands.delete(String(e.payload.id))
+            this.turnStats.toolResult(sessionId, ran.command, e.payload.isError, e.payload.outputTail ?? '')
             this.emit(sessionId, { kind: 'tool_end', id: String(e.payload.id), ...ran, isError: e.payload.isError, ...(e.payload.outputTail !== undefined ? { outputTail: e.payload.outputTail } : {}) })
           }
           const done = st.agents.find((a) => a.id === String(e.payload.id))
@@ -692,6 +716,31 @@ export class CommanderMirror {
       })
   }
 
+  /**
+   * [tell] once `decideTier` answers (it waits at most its own budget, 1 s). A newer turn, a cancel or a forget
+   * waits for nothing: the recap goes out at once at the fallback's tier, from inside the abort, so it still
+   * lands before the next turn's first card — the dial would otherwise draw the old recap over "Working…".
+   */
+  private tellOnceDecided(
+    decide: (turn: TierTurn) => Promise<Tier | null>,
+    ac: AbortController,
+    turn: TierTurn,
+    tell: (tier: Tier | null) => void,
+  ): void {
+    const { sessionId } = turn
+    let told = false
+    const once = (tier: Tier | null, why: string): void => {
+      if (told) return
+      told = true
+      ac.signal.removeEventListener('abort', early)
+      this.trace(sessionId, `${sessionId.slice(0, 8)} tier ${tier ?? 'none'} · ${why}`)
+      tell(tier)
+    }
+    const early = (): void => once(fallbackTier(turn.durationS), 'superseded before it was decided')
+    ac.signal.addEventListener('abort', early, { once: true })
+    decide(turn).then((tier) => once(tier, 'decided'), () => once(fallbackTier(turn.durationS), 'decider failed'))
+  }
+
   private async resolveTurnText(
     sessionId: string,
     fallbackText: string,
@@ -776,10 +825,20 @@ export class CommanderMirror {
           this.emit(sessionId, { kind: 'done', text: 'done' })
           // One decision feeds both clients. A silent recap still updates the
           // device's tile; only real completed results create inbox entries.
-          this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
-            notification, ...(!notification ? { subagent: true } : {}) })
-          this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
-            dbSessionId: sessionId, payload: { summary, sessionId, notification } })
+          const tell = (tier: Tier | null): void => {
+            this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
+              notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
+            this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+              dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
+          }
+          const durationS = st.startedAt === null ? null : Math.round((Date.now() - st.startedAt) / 1000)
+          const stats = this.turnStats.take(sessionId)
+          const decide = this.opts.decideTier
+          if (!decide) tell(null)
+          // Not news (a sub-agent's, a replay, a turn waiting on an answer): silent, and nobody is asked.
+          else if (!notification) tell('silent')
+          // The recap first, as the dial's decision always read it (services/devices.ts): Jev keeps 600 characters.
+          else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
         } else {
           this.opts.changed?.(sessionId)
           this.trace(sessionId, `${sid} summarizer returned NULL after ${ms}ms → done`)

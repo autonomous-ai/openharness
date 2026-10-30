@@ -24,10 +24,6 @@ const board_t *board(void);
 // One line, for the boot log and the daemon.
 const char *board_describe(void);
 
-// Was a factory reset asked for by holding a button through power-on? Never on the Pro: its only switch
-// is the one that turns the board on, so it is by definition held at this moment.
-bool board_factory_reset_requested(void);
-
 // The module's Wi-Fi coprocessor (ESP32-C5) is unused: this firmware talks over the cable only. Drive its enable
 // low so it stays in reset instead of running its own firmware.
 void board_pro_hold_coprocessor(void);

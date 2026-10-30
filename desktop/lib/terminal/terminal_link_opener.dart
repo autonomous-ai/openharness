@@ -1,3 +1,5 @@
+import '../core/home_dir.dart';
+
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -17,10 +19,7 @@ class TerminalLinkOpener {
     bool? windows,
   }) : _launch = launch ?? _launchExternal,
        _fileExists = fileExists ?? _exists,
-       _homeDirectory =
-           homeDirectory ??
-           RuntimePlatform.environment['HOME'] ??
-           RuntimePlatform.environment['USERPROFILE'],
+       _homeDirectory = homeDirectory ?? maybeHomeDir(isWindows: windows),
        _windows = windows ?? RuntimePlatform.isWindows;
 
   final Future<bool> Function(Uri) _launch;
@@ -105,15 +104,21 @@ class TerminalLinkOpener {
             // knows it; never against Desktop's process directory, which
             // belongs to a different app and workspace.
             final cwd = workingDirectory;
-            final cwdAbsolute = cwd != null &&
+            final cwdAbsolute =
+                cwd != null &&
                 (_windows
-                    ? RegExp(r'^[a-z]:[\\/]', caseSensitive: false).hasMatch(cwd)
+                    ? RegExp(
+                        r'^[a-z]:[\\/]',
+                        caseSensitive: false,
+                      ).hasMatch(cwd)
                     : cwd.startsWith('/'));
             if (!cwdAbsolute) {
               return 'Use the full file path to open this preview. The harness’s working folder is not available.';
             }
             final separator = _windows ? '\\' : '/';
-            path = cwd.endsWith(separator) ? '$cwd$path' : '$cwd$separator$path';
+            path = cwd.endsWith(separator)
+                ? '$cwd$path'
+                : '$cwd$separator$path';
           }
           if (!await _fileExists(path)) {
             return 'This file is not available on this computer. It may still be generating or may have moved.';

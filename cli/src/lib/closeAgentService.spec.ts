@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,6 +34,45 @@ beforeEach(() => {
   service = new CloseAgentService(deps)
 })
 afterEach(() => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId) })
+
+it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a worker that stopped being Swarm-started at %s', async phase => {
+  row.startedBy = 'agent'
+  if (phase === 'before') row.startedBy = undefined
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.startedBy = undefined; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.startedBy = undefined })
+  const guarded = { ...request('now'), onlyIfOriginalLaunch: true }
+  expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
+// A machine restart stops a Swarm worker; reopened on its own conversation it is resume-only, and is still the Swarm's
+// (2026-10-23: such a worker could no longer be stopped by the Swarm).
+it('a Swarm close closes a worker reopened on the conversation it was started with', async () => {
+  row.startedBy = 'agent'
+  row.resumeOnly = true
+  expect(await service.request({ ...request('now'), onlyIfOriginalLaunch: true })).toEqual({ closed: true })
+})
+
+// The review of #1635: Close after task answered a Swarm Lead "deferred", saved its plan, and said LEAD_PROTECTED only once
+// the task ended. A Lead is refused at once, for every kind of close, before anything is read, saved or stopped.
+it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (%s) at once, saving no plan', async mode => {
+  const svc = new CloseAgentService({ ...deps, leadProtected: id => id === row.agentId })
+  expect(await svc.request(request(mode))).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+  expect(registry.byAgent(row.agentId)?.closePlan).toBeUndefined()
+  expect(deps.activity).not.toHaveBeenCalled()
+  expect(deps.stop).not.toHaveBeenCalled()
+  expect(await svc.request(request('inspect'))).toEqual({ activity: expect.any(String) })
+  svc.dispose()
+})
+
+it.each(['before', 'activity', 'checkpoint'] as const)('an expired native close lease preserves the worker at %s', async phase => {
+  const guarded = { ...request('now'), expiresAt: time + 1 }
+  if (phase === 'before') time += 2
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { time += 2; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { time += 2 })
+  expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
 
 it('backs up an idle session before stopping, without treating a tab switch as Close', async () => {
   service.start()
@@ -202,11 +241,23 @@ it('a close of one already closed, the same conversation, is closed: asked after
   expect(await window).toEqual({ closed: true })
   expect(await service.request(request('now'))).toEqual({ closed: true })
   expect(deps.stop).toHaveBeenCalledOnce()
-  // Asking what it is doing, or to close it after its task, is about a live one: it changed.
-  expect(await service.request(request('inspect'))).toEqual({ error: 'AGENT_CHANGED' })
+  // A close after its task is about a live one: it changed.
   expect(await service.request(request('after_task'))).toEqual({ error: 'AGENT_CHANGED' })
   // Another conversation by that id was not closed.
   expect(await service.request({ ...request('now'), sessionId: 'other' })).toEqual({ error: 'AGENT_CHANGED' })
+})
+it('an inspect of one already closed, the same conversation, is closed', async () => {
+  // The terminal client inspects before every close: one asked again after a close it shows as unconfirmed (its
+  // answer lost, or the harness bound a conversation meanwhile) was answered AGENT_CHANGED, "Stop not confirmed".
+  const asked = request()
+  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId))
+  service.dispose()
+  service = new CloseAgentService({ ...deps, closedAlready })
+  expect(await service.request(request('now'))).toEqual({ closed: true })
+  expect(await service.request(request('inspect'))).toEqual({ closed: true })
+  expect(await service.request({ ...request('inspect'), sessionId: 'other' })).toEqual({ error: 'AGENT_CHANGED' })
+  expect(deps.stop).toHaveBeenCalledOnce()
+  expect(deps.activity).toHaveBeenCalledOnce()
 })
 it('a close now asked for while a close after the task is being planned closes now', async () => {
   let read!: (activity: CloseActivity) => void
@@ -251,6 +302,39 @@ it('persists a deferred close, survives a daemon restart and waits for sustained
   time += 5_000
   await service.tick()
   expect(deps.stop).toHaveBeenCalledOnce()
+})
+
+it('durably records a deferred close that arrives during a registry discovery transaction', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    await new Promise(resolve => setImmediate(resolve))
+    expect(row.closePlan).toBeUndefined()
+    finish()
+    await transaction
+    expect(await closing).toEqual({ deferred: true })
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+    registry.load()
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+  } finally { finish(); await transaction }
+})
+
+it('does not defer a close if its conversation changes before the discovery transaction commits', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    row.sessionId = 'another-conversation'
+    finish()
+    await transaction
+    expect(await closing).toEqual({ error: 'AGENT_CHANGED' })
+    expect(row.closePlan).toBeUndefined()
+  } finally { finish(); await transaction }
 })
 it('keeps questions and subsequent turns alive during a deferred close', async () => {
   await service.request(request('after_task'))
@@ -536,6 +620,40 @@ describe('a close of a harness still starting', () => {
     expect(slept.reduce((a, b) => a + b, 0)).toBe(8_000)
     expect(stops().at(-1)?.withoutConversation).toBeTypeOf('function')
     expect(stops().slice(0, -1).every(options => !options.withoutConversation)).toBe(true)
+  })
+  it('past its start, at a question its engine asks before any conversation, is closed now without one', async () => {
+    // A Claude Code harness 18 minutes at "New MCP server found in this project" (2026-10-26): every close was refused.
+    // Its engine was launched; nothing ever bound.
+    time = row.registeredAt + 18 * 60_000
+    Object.assign(row, { launch: { state: 'ready' } })
+    vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+      if (!options.withoutConversation) throw held()
+      options.withoutConversation()
+      registry.removeAgent(id)
+    })
+    expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    deps.atStartupQuestion = vi.fn(async () => false)
+    service = new CloseAgentService(deps)
+    expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    vi.mocked(deps.atStartupQuestion).mockResolvedValue(true)
+    // Not on a close once idle: one at a question waits for the person.
+    vi.mocked(deps.activity).mockResolvedValue('needs_input')
+    expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'needs_input' })
+    expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  })
+  it('never lets a conversation go that way, whatever its screen shows', async () => {
+    time = row.registeredAt + 18 * 60_000
+    Object.assign(row, { sessionId: 'first', boundAt: time - 1 })
+    delete row.launch
+    vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+      if (!options.withoutConversation) throw held()
+      registry.removeAgent(id)
+    })
+    deps.atStartupQuestion = vi.fn(async () => true)
+    service = new CloseAgentService(deps)
+    expect(await service.request({ ...request('now'), sessionId: 'first' })).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    expect(deps.atStartupQuestion).not.toHaveBeenCalled()
   })
   it('a close that finds it idle stops it the same way; one that finds it working leaves it', async () => {
     vi.mocked(deps.stop).mockImplementation(async (id, options) => {

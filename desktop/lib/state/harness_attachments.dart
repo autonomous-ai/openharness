@@ -15,16 +15,51 @@ class HarnessAttachment {
 /// The files a New Harness box carries into its harness. Held in memory
 /// until the harness's terminal is open to take them ([deliverAttachedTask]).
 class HarnessAttachments extends ChangeNotifier {
-  HarnessAttachments({this.onDeliveryProblem});
+  HarnessAttachments({
+    this.onDeliveryProblem,
+    this.limitBytes = maxBytes,
+    this.limitFiles,
+  });
 
   /// What one file may weigh: the daemon's own ceiling for a pasted file.
   static const maxBytes = terminalLocalPasteFileMaxPayloadBytes;
+
+  /// What one file may weigh in this box; a box whose files go somewhere with
+  /// a lower ceiling than the daemon's passes it.
+  final int limitBytes;
+
+  /// How many files this box holds, or null for any number.
+  final int? limitFiles;
 
   /// Told when files could not reach a created harness — after its box has
   /// closed, so the workspace says it rather than the box.
   final void Function(String message)? onDeliveryProblem;
 
   final _files = <HarnessAttachment>[];
+  int _reading = 0;
+  bool _disposed = false;
+
+  /// Whether a picker, a drop or a paste is still reading files for this box.
+  /// An owner that would let go of an empty box waits while this is true, so
+  /// what the read brings is not lost.
+  bool get isReading => _reading > 0;
+
+  /// Runs [read], which ends by adding what it read here, and holds the box
+  /// until it is done.
+  Future<T> reading<T>(Future<T> Function() read) async {
+    _reading++;
+    try {
+      return await read();
+    } finally {
+      _reading--;
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   List<HarnessAttachment> get files => List.unmodifiable(_files);
   bool get isEmpty => _files.isEmpty;
@@ -37,20 +72,27 @@ class HarnessAttachments extends ChangeNotifier {
     Iterable<HarnessAttachment> files, {
     Iterable<String> oversized = const [],
   }) {
+    // A box given up with its conversation takes nothing more.
+    if (_disposed) return null;
     final tooLarge = [...oversized];
+    var surplus = 0;
     for (final file in files) {
       if (file.bytes.isEmpty) continue;
-      if (file.bytes.length > maxBytes) {
+      if (file.bytes.length > limitBytes) {
         tooLarge.add(file.name);
         continue;
       }
-      _files
-        ..removeWhere((kept) => kept.name == file.name)
-        ..add(file);
+      _files.removeWhere((kept) => kept.name == file.name);
+      if (limitFiles != null && _files.length >= limitFiles!) {
+        surplus++;
+        continue;
+      }
+      _files.add(file);
     }
     notifyListeners();
+    if (surplus > 0) return 'Attach at most $limitFiles files.';
     if (tooLarge.isEmpty) return null;
-    final limit = '${maxBytes ~/ (1024 * 1024)} MB';
+    final limit = '${limitBytes ~/ (1024 * 1024)} MB';
     return tooLarge.length == 1
         ? '${tooLarge.single} is over $limit.'
         : '${tooLarge.length} files are over $limit.';

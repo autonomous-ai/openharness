@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a desktop release: work out the next version, tag it, push the tag. CI does everything else —
-# ../.github/workflows/release-desktop.yml builds macOS + Linux, publishes to GCS, and creates the
+# ../.github/workflows/release-desktop.yml builds macOS, Linux and Windows, publishes to GCS, and creates the
 # GitHub Release. The tag IS the version; CI never bumps on its own. Tags are "vX.Y.Z_desktop" — the
 # "_desktop" suffix is stripped by release-desktop.yml before anything treats it as a version; it
 # exists only so this tag never also triggers the CLI's "vX.Y.Z_cli" or the backend's "vX.Y.Z_backend"
@@ -308,7 +308,7 @@ git tag -a "$TAG" --cleanup=verbatim -F "$NOTES"
 git push origin "$TAG"
 
 echo ""
-echo "  pushed $TAG → CI builds macOS + Linux, publishes to GCS, and cuts the GitHub Release."
+echo "  pushed $TAG → CI builds macOS, Linux and Windows, publishes to GCS, and cuts the GitHub Release."
 echo "  watch (from repo root): python3 scripts/watch-desktop-release.py $TAG --sha $HEAD_SHA"
 echo ""
 if [ "$WAIT" -eq 1 ]; then

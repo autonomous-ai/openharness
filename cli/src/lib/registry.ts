@@ -1,3 +1,4 @@
+import { parseSwarmSkill, type SwarmSkill } from './savedSkill.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *
@@ -53,11 +54,13 @@ import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
+import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -202,6 +205,8 @@ export interface RegisteredSession {
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
   dshRuntime?: string | null
+  /** Role and stable key of this Swarm session; absent for ordinary sessions. */
+  swarmSkill?: SwarmSkill
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -253,6 +258,13 @@ export interface RegisteredSession {
    * new harness beside the one that started it and say so in its header (docs/design/2026-10-11-agent-client.md).
    */
   parentAgentId?: string
+  /**
+   * The guest (email) this harness was started for: a session of an account the owner shares this machine
+   * with. Its process runs as that guest's OS user, and only that guest's sessions may see or drive it
+   * (core/guestPolicy.ts, docs/plans/2026-10-19-guest-machine-sharing-plan.md). Absent for the owner's own.
+   * Recorded once at creation and never changed.
+   */
+  guest?: string
   /** Legacy launcher-owned snapshots may still contain this field. New records never write it. */
   launcherId?: string
   transcriptPath: string | null
@@ -349,6 +361,8 @@ const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
+/** A pty host instance (`PtyRuntimeRef.instance`): `p<protocol>`, or `p<protocol>-<build>` (ptyHost/instance.ts). */
+const PTY_INSTANCE_RE = PTY_HOST_INSTANCE
 const GROK_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AGENT_ENGINES: ReadonlySet<string> = new Set(ENGINES)
 
@@ -397,6 +411,10 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
 }
 const LOCK_WAIT_MS = 20
 const LOCK_ATTEMPTS = 100
+/** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
+ *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
+ *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
+const OWNERLESS_STALE_MS = 5_000
 
 function sleepSync(ms: number): void {
   const view = new Int32Array(new SharedArrayBuffer(4))
@@ -421,11 +439,18 @@ function withRegistryFileLock<T>(apply: () => T): T {
       mkdirSync(LOCK_DIR, { mode: 0o700 })
       created = true
       const owner = join(LOCK_DIR, 'owner.json')
-      const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
-        fsyncSync(fd)
-      } finally { closeSync(fd) }
+        const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+        try {
+          writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
+          fsyncSync(fd)
+        } finally { closeSync(fd) }
+      } catch (ownerError) {
+        // The directory is ours (mkdir made it) but names no one: remove it whole, or it outlives this process ownerless.
+        rmSync(LOCK_DIR, { recursive: true, force: true })
+        created = false
+        throw ownerError
+      }
       try {
         return apply()
       } finally {
@@ -437,11 +462,14 @@ function withRegistryFileLock<T>(apply: () => T): T {
       let ownerPid = 0
       let ownerStartMarker = ''
       let ownerToken = ''
+      let since = Date.now()
       try {
         const stat = lstatSync(LOCK_DIR)
+        since = stat.mtimeMs
         if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid)
           || (stat.mode & 0o777) !== 0o700) throw new Error('registry lock has unsafe owner, mode, or type')
         const ownerStat = lstatSync(join(LOCK_DIR, 'owner.json'))
+        since = Math.max(since, ownerStat.mtimeMs)
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
           || (ownerStat.mode & 0o777) !== 0o600) throw new Error('registry lock owner has unsafe owner, mode, or type')
         const owner = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
@@ -453,7 +481,12 @@ function withRegistryFileLock<T>(apply: () => T): T {
       } catch (inspectionError) {
         if (inspectionError instanceof Error && inspectionError.message.startsWith('registry lock')) throw inspectionError
       }
-      if (ownerPid > 0 && ownerToken && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
+      if (!(ownerPid > 0 && ownerToken)) {
+        if (Date.now() - since > OWNERLESS_STALE_MS) {
+          rmSync(LOCK_DIR, { recursive: true, force: true })
+          continue
+        }
+      } else if (!lockOwnerAlive(ownerPid, ownerStartMarker)) {
         try {
           const current = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
             pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
@@ -511,8 +544,7 @@ export function atomicWriteJson(file: string, value: unknown, exclusive = false)
     } finally { closeSync(fd) }
     renameSync(temporary, file)
     renamed = true
-    const directoryFd = openSync(dirname(file), 'r')
-    try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+    syncStateDirectory(dirname(file))
   } catch (error) {
     if (renamed) throw new AtomicWriteUnconfirmed(error)
     throw error
@@ -527,8 +559,10 @@ function boundedIdentityPart(value: unknown, max = 200): value is string {
 
 export function validTerminalRuntime(value: unknown): value is TerminalRuntimeRef {
   if (!value || typeof value !== 'object') return false
-  const runtime = value as Partial<TerminalRuntimeRef>
-  return runtime.backend === 'tmux' && typeof runtime.paneId === 'string' && PANE_RE.test(runtime.paneId)
+  const runtime = value as { backend?: unknown; paneId?: unknown; instance?: unknown }
+  if (typeof runtime.paneId !== 'string' || !PANE_RE.test(runtime.paneId)) return false
+  if (runtime.backend === 'tmux') return true
+  return runtime.backend === 'ptyhost' && typeof runtime.instance === 'string' && PTY_INSTANCE_RE.test(runtime.instance)
 }
 
 function retiredRuntime(value: unknown): boolean {
@@ -570,16 +604,19 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
   return { rows, dropped: stored.length - rows.length, changed: cleaned.some((row, i) => row !== stored[i]) }
 }
 
+/** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
 function normalizedRuntimes(raw: unknown, legacyTmuxPane?: unknown): TerminalRuntimeRef[] {
   const fromArray = Array.isArray(raw) ? raw.filter(validTerminalRuntime) : []
   const legacy = typeof legacyTmuxPane === 'string' && PANE_RE.test(legacyTmuxPane)
+    && !fromArray.some((runtime) => runtime.paneId === legacyTmuxPane)
     ? [{ backend: 'tmux' as const, paneId: legacyTmuxPane }]
     : []
   return mergeTerminalRuntimes([], [...fromArray, ...legacy])
 }
 
-function tmuxProjection(runtimes: readonly TerminalRuntimeRef[]): string {
-  return runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId ?? ''
+/** The legacy `tmuxPane` field: the primary runtime's pane, whatever its backend. */
+function paneProjection(runtimes: readonly TerminalRuntimeRef[]): string {
+  return runtimes.length ? primaryRuntime({ runtimes }).paneId : ''
 }
 
 function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<RegisteredSession, 'tmuxPane'> {
@@ -597,7 +634,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const primary = typeof row.primaryRuntimeKey === 'string' ? row.primaryRuntimeKey : ''
   const normalizedPrimary = selectedRuntimeKey(runtimes, primary)
   const active = row.active === true
-  const projectedTmuxPane = tmuxProjection(runtimes)
+  const projectedTmuxPane = paneProjection(runtimes)
   const launch = normalizedLaunch(row.launch)
   const externalResume = row.externalResume === undefined ? undefined : parseExternalResume(row.externalResume)
   if (row.schemaVersion !== 2
@@ -1053,6 +1090,7 @@ class Registry {
   private terminalAvailableAgents = new Set<string>()
   private transactionDepth = 0
   private savePending = false
+  private readonly afterTransactionCallbacks: Array<{ run: () => void; reject: (error: unknown) => void }> = []
   /** Root corruption/unknown schemas are read-only until the operator restores valid bytes. */
   private writeBlocked = false
   /** Last committed row bytes, used for a three-way merge with daemon-down hook writes. */
@@ -1235,7 +1273,7 @@ class Registry {
       for (const raw of Array.isArray(arr) ? arr : []) {
         const engine = normalizedAgentEngine(raw?.engine)
         const runtimes = normalizedRuntimes(raw?.runtimes, raw?.tmuxPane)
-        const pane = tmuxProjection(runtimes)
+        const pane = paneProjection(runtimes)
         if (!runtimes.length) { changed = true; continue }
         let transcriptPath =
           typeof raw?.transcriptPath === 'string' && raw.transcriptPath
@@ -1306,6 +1344,7 @@ class Registry {
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
+          ...(parseSwarmSkill(raw.swarmSkill) ? { swarmSkill: parseSwarmSkill(raw.swarmSkill) } : {}),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1322,6 +1361,8 @@ class Registry {
           ...(raw.terminalHost === true || engine === 'terminal' ? { terminalHost: true } : {}),
           ...(raw.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
           ...normalizedParent(raw.startedBy, raw.parentAgentId),
+          // Rehydrated explicitly (see above): dropped, a guest's harness would read as the owner's.
+          ...(typeof raw.guest === 'string' && raw.guest ? { guest: raw.guest } : {}),
           transcriptPath,
           defaultName: normalizedDefaultName(raw.defaultName),
           title: titleDisplayName(typeof raw.title === 'string' ? raw.title : null),
@@ -1505,7 +1546,7 @@ class Registry {
       const before = rowFingerprint(persistedRow(existing))
       this.drop(existing)
       existing.runtimes = mergeTerminalRuntimes(existing.runtimes, runtimes)
-      existing.tmuxPane = tmuxProjection(existing.runtimes)
+      existing.tmuxPane = paneProjection(existing.runtimes)
       existing.primaryRuntimeKey = selectedRuntimeKey(existing.runtimes, input.primaryRuntimeKey || existing.primaryRuntimeKey)
       // The pane's current path follows a terminal tile around until an engine session is bound to
       // it; from then on the bind owns the folder (see `register`), and a pane re-observed in the
@@ -1546,7 +1587,7 @@ class Registry {
       if (!other) continue
       this.drop(other)
       other.runtimes = other.runtimes.filter((candidate) => terminalRouteKey(candidate) !== terminalRouteKey(runtime))
-      other.tmuxPane = tmuxProjection(other.runtimes)
+      other.tmuxPane = paneProjection(other.runtimes)
       other.primaryRuntimeKey = selectedRuntimeKey(other.runtimes, other.primaryRuntimeKey)
       other.active = other.runtimes.length > 0
       if (other.runtimes.length) this.index(other)
@@ -1582,7 +1623,7 @@ class Registry {
       cwd: input.cwd ?? null,
       runtimes,
       primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: tmuxProjection(runtimes),
+      tmuxPane: paneProjection(runtimes),
       source: null,
       title: null,
       model: null,
@@ -1614,6 +1655,7 @@ class Registry {
     codexHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
+    swarmSkill?: SwarmSkill
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1629,6 +1671,8 @@ class Registry {
     startedBy?: StartedBy | null
     /** The harness here that started it — see RegisteredSession.parentAgentId. Kept only with `startedBy: 'agent'`. */
     parentAgentId?: string | null
+    /** The guest it is started for — see RegisteredSession.guest. */
+    guest?: string | null
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1660,6 +1704,7 @@ class Registry {
       hermesHome: null,
       dsh: input.dsh ?? null,
       dshRuntime: input.dshRuntime ?? null,
+      ...(input.swarmSkill ? { swarmSkill: input.swarmSkill } : {}),
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -1667,12 +1712,13 @@ class Registry {
       ...normalizedForkedFrom(input.forkedFrom),
       ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...normalizedParent(input.startedBy, input.parentAgentId),
+      ...(input.guest ? { guest: input.guest } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
       runtimes,
       primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: tmuxProjection(runtimes),
+      tmuxPane: paneProjection(runtimes),
       source: null,
       title: null,
       model: null,
@@ -1710,7 +1756,7 @@ class Registry {
       processIdentity: null,
       runtimes: routes,
       primaryRuntimeKey: selectedRuntimeKey(routes, ''),
-      tmuxPane: tmuxProjection(routes),
+      tmuxPane: paneProjection(routes),
       touchedAt: Date.now(),
     }
     this.index(entry)
@@ -2008,12 +2054,15 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
+      ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
       agent: existing?.agent ?? null,
       // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
       // back without its pull request line (found by e2e/agentClient.e2e.ts).
       ...(existing?.startedBy ? { startedBy: existing.startedBy } : {}),
       // And who it was, for the same reason: dropped at the first hook, the windows lost which harness started it.
       ...(existing?.parentAgentId ? { parentAgentId: existing.parentAgentId } : {}),
+      // Whose guest's it is: dropped at the first hook, the guest would lose its own harness to the owner.
+      ...(existing?.guest ? { guest: existing.guest } : {}),
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
       ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
@@ -2031,7 +2080,7 @@ class Registry {
       ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
       ...(existing?.closePlan ? { closePlan: existing.closePlan } : {}),
     }
-    entry.tmuxPane = tmuxProjection(entry.runtimes)
+    entry.tmuxPane = paneProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
     const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
     this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })
@@ -2163,7 +2212,7 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, swarmSkill: undefined, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
@@ -2195,7 +2244,7 @@ class Registry {
     const before = rowFingerprint(persistedRow(entry))
     this.drop(entry)
     entry.runtimes = normalized
-    entry.tmuxPane = tmuxProjection(normalized)
+    entry.tmuxPane = paneProjection(normalized)
     entry.primaryRuntimeKey = selectedRuntimeKey(normalized, primaryRuntimeKey)
     entry.active = true
     if (rowFingerprint(persistedRow(entry)) !== before) entry.touchedAt = Date.now()
@@ -2435,6 +2484,16 @@ class Registry {
     return true
   }
 
+  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
+    session.swarmSkill = { ...skill }
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
    *  replaces one it already has — the harness is chosen once, at creation. */
   setDsh(agentId: string, dsh: string): boolean {
@@ -2579,9 +2638,17 @@ class Registry {
       if (!holding) return
       holding = false
       this.transactionDepth--
-      if (this.transactionDepth === 0 && this.savePending) {
-        this.savePending = false
-        this.save()
+      if (this.transactionDepth === 0) {
+        try {
+          if (this.savePending) {
+            this.savePending = false
+            this.save()
+          }
+        } catch (error) {
+          for (const callback of this.afterTransactionCallbacks.splice(0)) callback.reject(error)
+          throw error
+        }
+        while (this.transactionDepth === 0 && this.afterTransactionCallbacks.length) this.afterTransactionCallbacks.shift()!.run()
       }
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
@@ -2597,6 +2664,18 @@ class Registry {
       clearTimeout(timer)
       release()
     }
+  }
+
+  /** Run a durability-sensitive action only after the current discovery batch has committed. */
+  afterTransaction<T>(action: () => T): Promise<T> {
+    if (this.transactionDepth === 0) {
+      try { return Promise.resolve(action()) } catch (error) { return Promise.reject(error) }
+    }
+    return new Promise<T>((resolve, reject) => {
+      this.afterTransactionCallbacks.push({ run: () => {
+        try { resolve(action()) } catch (error) { reject(error) }
+      }, reject })
+    })
   }
 
   flush(options: { exiting?: boolean } = {}): void {
@@ -2952,6 +3031,8 @@ function defaultProjectDisplayName(s: RegisteredSession): string {
  * its network, and a pane keeps the name it was made under.
  */
 export function titleDisplayName(title: string | null | undefined): string | null {
+  // (A graphics query tmux took as a pane title, one a registry stored before tmux.ts stopped reading it included.)
+  if (title && isKittyGraphicsCommand(title)) return null
   const cleaned = title
     ?.trim()
     .replace(/^[\s\p{Mark}\p{Punctuation}\p{Symbol}]+/u, '')

@@ -22,7 +22,7 @@ function stores(pins: Pin[] = [], paired: PairedClient[] = []) {
     paired: () => [...trusted.values()],
     trust: vi.fn((peer: LinkedPeer) => {
       trusted.set(peer.pub, { identityPub: peer.pub, label: peer.label, pairedAt: 1, role: 'web', machineId: peer.machineId, kind: peer.kind,
-        ...(peer.shared ? { shared: true as const } : {}) })
+        ...(peer.shared ? { shared: true as const } : {}), ...(peer.sharedWith ? { sharedWith: peer.sharedWith } : {}) })
     }),
     untrust: vi.fn((pub: string) => { trusted.delete(pub) }),
     dropSessions: vi.fn(),
@@ -39,6 +39,24 @@ describe('sharedPeers', () => {
     expect(sharedPeers('nope')).toEqual([])
     const many = Array.from({ length: SHARED_TRUST_MAX + 5 }, (_, i) => ({ machineId: `m${i}`, pub: Buffer.alloc(32, i % 250).toString('base64').slice(0, 40) + `${String(i).padStart(3, '0')}=`, label: '' }))
     expect(sharedPeers(many).length).toBeLessThanOrEqual(SHARED_TRUST_MAX)
+  })
+})
+
+describe('whom a shared key is shared with', () => {
+  // Its sessions are that account's guest (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  it('keeps a valid address, lowercased, and drops one that is not', () => {
+    const peer = { machineId: id('a'), pub: key(1), label: 'Mac' }
+    expect(sharedPeers([{ ...peer, email: ' Kim@Acme.io ' }])).toEqual([{ ...peer, email: 'kim@acme.io' }])
+    expect(sharedPeers([{ ...peer, email: 'not an address' }])).toEqual([peer])
+    expect(sharedPeers([{ ...peer, email: 42 }])).toEqual([peer])
+  })
+
+  it('trusts each key with its account, and a key with none as a guest of no one', () => {
+    const { deps, trusted } = stores()
+    applySharedTrust(deps, { keys: [{ machineId: id('k'), pub: key(1), label: 'Mac · kim', email: 'kim@acme.io' }, { machineId: id('n'), pub: key(2), label: 'Mac' }] })
+    expect(trusted.get(key(1))).toMatchObject({ shared: true, sharedWith: 'kim@acme.io' })
+    expect(trusted.get(key(2))).toMatchObject({ shared: true })
+    expect(trusted.get(key(2))?.sharedWith).toBeUndefined()
   })
 })
 

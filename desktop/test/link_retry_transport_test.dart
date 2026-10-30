@@ -78,6 +78,7 @@ void main() {
           machineId: machineId,
           accessTokenProvider: (_, _) async => '',
           transportKind: WsTransportKind.localPlaintext,
+          allowLocalTcpFixture: true,
           localWsUri: Uri.parse('ws://127.0.0.1:${server.port}'),
           onAuthFailure: (_) {},
           onEvent: (_) {},

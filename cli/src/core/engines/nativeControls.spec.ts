@@ -6,7 +6,7 @@ import { NATIVE_ACTIVITY, NATIVE_CONTROL_CAPABILITIES, NATIVE_CONTROL_HOST, NATI
   NATIVE_STOP_QUERIES } from '../../engines/worker/nativeControlProtocol.js'
 import { engineNativeControlRequests } from '../../engines/worker/nativeControlRequests.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { argvTokens, type ProcessRow } from '../../lib/tmux.js'
+import { argvTokens, type ProcessRow } from '../../lib/processTable.js'
 import { createNativeControls, type NativeControlsDeps } from './nativeControls.js'
 
 const server = codexLaunch.sharedServer!

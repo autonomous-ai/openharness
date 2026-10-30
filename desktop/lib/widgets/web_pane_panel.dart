@@ -5,10 +5,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:webview_all/webview_all.dart';
-import 'package:webview_all_wkwebview/webview_all_wkwebview.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/open_in_browser.dart';
+import '../core/linux_webview_runtime.dart';
 import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -19,6 +20,7 @@ import '../state/app_state.dart';
 import '../measurement/product_measurement.dart';
 import '../state/harness_monitor_controller.dart';
 import '../state/terminal_pane.dart';
+import '../state/viewer_load_tracker.dart';
 import '../theme/app_theme.dart';
 import '../viewer/interactive_viewer.dart';
 import 'agent_drag.dart';
@@ -37,8 +39,8 @@ import 'verdict_marks.dart';
 ///
 /// The webview is a native view (WKWebView through `webview_flutter`), and a
 /// native view cannot exist where no platform implementation is registered:
-/// under `flutter test`, and on Linux today. There the body is the URL in
-/// words, so every layout around it still builds and the tests can prove the
+/// under `flutter test`, and on Linux without WebKitGTK. There the body shows
+/// the URL in words, so every layout around it still builds and the tests can prove the
 /// tile is placed, sized and closed correctly without instantiating it.
 class WebPanePanel extends StatefulWidget {
   const WebPanePanel({
@@ -85,7 +87,14 @@ class WebPanePanel extends StatefulWidget {
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
   static bool get webviewAvailable =>
-      !kUnderTest && (RuntimePlatform.isMacOS || RuntimePlatform.isLinux);
+      webviewAvailableForTest ??
+      (!kUnderTest &&
+          (RuntimePlatform.isMacOS ||
+              (RuntimePlatform.isLinux && LinuxWebViewRuntime.available)));
+
+  /// A test that installs a fake `WebViewPlatform` mounts the real webview path.
+  @visibleForTesting
+  static bool? webviewAvailableForTest;
 
   @override
   State<WebPanePanel> createState() => _WebPanePanelState();
@@ -103,11 +112,21 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ) ==
       true;
   WebViewController? _controller;
+
+  /// Whether [_controller] has its JavaScript channel. A load before then was cancelled by the one
+  /// [_mountController] makes once it is added, and the cancellation counted as a failed load.
+  bool _controllerReady = false;
   InteractiveViewerSession? _remote;
   String? _remoteIdentity;
   String? _loadedUrl;
-  bool _loading = false;
-  String? _failure;
+  late final _viewerLoad = ViewerLoadTracker(
+    begin: () =>
+        widget.notifier.productMeasurement.begin(ProductFlow.viewerLoad),
+    load: _navigate,
+    changed: () => _set(() {}),
+  );
+
+  /// The remote viewer surface's load, measured by its own first frame.
   void Function(ProductOutcome)? _finishLoad;
   void _startLoad() {
     _finishLoad?.call(ProductOutcome.cancelled);
@@ -127,11 +146,42 @@ class _WebPanePanelState extends State<WebPanePanel> {
   /// The appearance last stamped on the page, so a rebuild that changed nothing runs no script.
   Brightness? _stampedBrightness;
 
+  /// Whether the person can see this pane: its tab in front, no other pane zoomed over it, and the
+  /// window not minimised or hidden.
+  bool get _shown => widget.visible && widget.notifier.inSight.value;
+
+  /// What the Monitor's page was last told, so a rebuild that changed nothing runs no script.
+  bool? _stampedShown;
+
   @override
   void initState() {
     super.initState();
+    widget.notifier.inSight.addListener(_shownChanged);
     _mountRemote();
     if (WebPanePanel.webviewAvailable) unawaited(_mountController());
+  }
+
+  /// Harness Monitor's page reads every machine on the account for as long as it is connected, and a
+  /// tile in a tab behind another stays mounted with its page loaded. Out of sight, its page is told
+  /// to disconnect and its rendered surface stops pulling frames; back in sight, both resume and the
+  /// page catches up once (2026-10-28). Other viewers are left exactly as they were.
+  void _shownChanged() {
+    _stampShown();
+    _remote?.paused = _isMonitor && !_shown;
+  }
+
+  void _stampShown() {
+    final controller = _controller;
+    if (!_isMonitor || controller == null || _loadedUrl == null) return;
+    final shown = _shown;
+    if (shown == _stampedShown) return;
+    _stampedShown = shown;
+    controller
+        .runJavaScript(
+          "document.documentElement.dataset.hostVisible='$shown';"
+          "document.dispatchEvent(new Event('harness-host-visibility'))",
+        )
+        .catchError((_) {});
   }
 
   void _mountRemote() {
@@ -155,13 +205,16 @@ class _WebPanePanelState extends State<WebPanePanel> {
       _remote!.addListener(_remoteLoaded);
     }
     pane.focusViewerInput = _focusRemote;
+    _remote!.paused = _isMonitor && !_shown;
   }
 
   bool _focusRemote() => _remote?.focusInput?.call() ?? false;
 
   @override
   void dispose() {
+    widget.notifier.inSight.removeListener(_shownChanged);
     _finishLoad?.call(ProductOutcome.cancelled);
+    _viewerLoad.dispose();
     if (widget.pane.focusViewerInput == _focusRemote) {
       widget.pane.focusViewerInput = null;
     }
@@ -185,30 +238,28 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ..setJavaScriptMode(JavaScriptMode.unrestricted)
           ..setNavigationDelegate(
             NavigationDelegate(
-              onPageStarted: (_) => _set(() {
-                _startLoad();
-                _loading = true;
-                _failure = null;
-              }),
-              onPageFinished: (_) {
-                _finishLoad?.call(ProductOutcome.ok);
-                _set(() => _loading = false);
+              onPageStarted: _viewerLoad.started,
+              onPageFinished: (url) {
+                _viewerLoad.finished(url);
                 // A fresh document has no stamp; give it the app's appearance before it is looked at.
                 _stampedBrightness = null;
                 _stampTheme();
+                _stampedShown = null;
+                _stampShown();
               },
               onWebResourceError: (error) {
                 // Only the page itself: a harness's viewer pulls fonts, models
                 // and images of its own, and one of those failing is its business
-                // to show, not ours to call a dead viewer.
+                // to show, not ours to call a dead viewer. (WKWebView reports
+                // every navigation failure as the main frame's; the tracker
+                // tells them apart.)
                 if (error.isForMainFrame == false) return;
-                _finishLoad?.call(ProductOutcome.failed);
-                _set(() {
-                  _loading = false;
-                  _failure = error.description.isNotEmpty
-                      ? error.description
-                      : 'The viewer did not answer.';
-                });
+                _viewerLoad.failed(
+                  code: error.errorCode,
+                  domain: error is WebKitWebResourceError ? error.domain : null,
+                  url: error.url,
+                  description: error.description,
+                );
               },
             ),
           );
@@ -234,6 +285,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
         },
       );
     }
+    _controllerReady = true;
     if (mounted) _load();
   }
 
@@ -263,11 +315,11 @@ class _WebPanePanelState extends State<WebPanePanel> {
   void _load() {
     final url = widget.pane.url;
     final controller = _controller;
-    if (url == null || controller == null) return;
+    if (url == null || controller == null || !_controllerReady) return;
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     _loadedUrl = url;
-    _failure = null;
+    _viewerLoad.request(url);
     // The window colour behind the page, so a dark app never flashes white
     // while a viewer loads. WKWebView on macOS has no such setting (the plugin
     // throws UnimplementedError, seen live 2026-09-15 as a red pane), so only
@@ -276,6 +328,13 @@ class _WebPanePanelState extends State<WebPanePanel> {
       controller.setBackgroundColor(grid.AppPalette.windowBg);
     }
     controller.loadRequest(uri);
+  }
+
+  /// An automatic retry of [url], on the load already being measured.
+  void _navigate(String url) {
+    final uri = Uri.tryParse(url);
+    if (!mounted || uri == null) return;
+    _controller?.loadRequest(uri);
   }
 
   /// Tell the page which appearance the app is in.
@@ -314,19 +373,22 @@ class _WebPanePanelState extends State<WebPanePanel> {
       return;
     }
     if (_controller == null) return;
-    if (_loadedUrl != widget.pane.url) {
-      _load();
-    } else {
-      _failure = null;
-      _controller!.reload();
-    }
+    // The pane's address, never the webview's own reload: a remote viewer's address lasts one
+    // connection (the CLI's per-connection gateway), and reloading the page went back to a gateway
+    // that had closed.
+    _load();
     setState(() {});
   }
 
   @override
   void didUpdateWidget(WebPanePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.notifier != widget.notifier) {
+      oldWidget.notifier.inSight.removeListener(_shownChanged);
+      widget.notifier.inSight.addListener(_shownChanged);
+    }
     _mountRemote();
+    _shownChanged();
     // The daemon named a different page — the newest artifact, a viewer
     // restarted on another port. Navigate in place; the tile stays.
     if (widget.pane.url != _loadedUrl) _load();
@@ -344,13 +406,14 @@ class _WebPanePanelState extends State<WebPanePanel> {
           _header(context),
           Divider(height: 1, color: AppColors.border),
           Expanded(
-            // GTK overlays sit above Flutter dialogs. Keep the page mounted,
-            // but unpainted while a modal route covers the workspace.
-            child: Offstage(
-              offstage: RuntimePlatform.isLinux &&
-                  (!widget.visible || ModalRoute.isCurrentOf(context) == false),
-              child: _body(context),
-            ),
+            // Detaching the GTK widget hides its overlay; the controller keeps
+            // the loaded page, so returning from a dialog does not reload it.
+            child:
+                RuntimePlatform.isLinux &&
+                    (!widget.visible ||
+                        ModalRoute.isCurrentOf(context) == false)
+                ? const SizedBox.shrink()
+                : _body(context),
           ),
         ],
       ),
@@ -424,8 +487,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
             ),
             const SizedBox(width: 8),
             // coverage:ignore-start
-            // Only a real webview's navigation sets _loading; none under test.
-            if (_loading)
+            // Only a webview's navigation sets loading; the placeholder has none.
+            if (_viewerLoad.loading)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6),
                 child: SizedBox(
@@ -482,13 +545,14 @@ class _WebPanePanelState extends State<WebPanePanel> {
       fit: StackFit.expand,
       children: [
         WebViewWidget(controller: controller),
-        if (_failure != null)
+        if (_viewerLoad.failure case final failure?)
           ColoredBox(
+            key: const ValueKey('web-pane-waiting'),
             color: grid.AppPalette.windowBg,
             child: _Notice(
               icon: AppIcons.unplug,
               title: 'Waiting for the viewer',
-              detail: _failure!,
+              detail: failure,
               action: TextButton(
                 onPressed: _reload,
                 child: const Text('Retry'),

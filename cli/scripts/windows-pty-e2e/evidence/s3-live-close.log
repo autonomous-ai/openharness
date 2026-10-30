@@ -1,0 +1,94 @@
+12:36:20
+12:36:21.270 asked claude 20d8966b to exit
+12:36:26.111 asked codex cd88c448 to exit
+12:36:38.162 delete terminal 68b86551 → {"requestId":"269e0b6f…","deleted":true}
+12:36:38.182 delete terminal 90e2ef5f → {"requestId":"df38563b…","deleted":true}
+12:36:38.228 delete terminal 069267c4 → {"requestId":"94e26ab2…","deleted":true}
+12:36:38.249 left: {"id":"3e67bc0b…","engine":"terminal","status":"active","pane":"%1"}
+--- +5 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+--- +10 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+--- +15 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+--- +20 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+--- +25 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+--- +30 s
+
+ProcessId CommandLine                                                             
+--------- -----------                                                             
+     4344 C:\work\e2e\dist-p3\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome
+
+
+
+pty-host-2.lock
+pty-host-2.panes
+pty-host-3.json
+pty-host-3.lock
+pty-host-3.panes
+
+2026-10-15 05:35:36.487 [terminal] enabled backends: ptyhost
+2026-10-15 05:35:36.512 [terminal] ptyhost: available (p2, draining)
+2026-10-15 05:35:36.540 [terminal] ptyhost: available (p3)
+2026-10-15 05:36:38.290 [terminal] ptyhost: lost the connection to the host; reconnecting
+2026-10-15 05:36:38.322 [terminal] ptyhost: draining p2 has gone (shut down with no panes left (pid 2936))
+2026-10-15 05:36:38.323 [terminal] ptyhost: ptyhost:p2 drained and removed (shut down with no panes left (pid 2936))
+
+

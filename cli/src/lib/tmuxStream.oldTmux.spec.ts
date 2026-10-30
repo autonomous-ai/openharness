@@ -39,14 +39,17 @@ function controlClient(version: TmuxVersion, meta = '$1|@1|1|80|24|80|24|0|0|0|1
   child.kill = () => { child.exitCode = 0; child.emit('close', 0); return true }
   child.stdin = new Writable({
     write(chunk, _encoding, callback) {
-      const line = chunk.toString().replace(/\n$/, '')
-      sent.push(line)
-      const number = command++
+      // One write may carry several commands (`runTogether`): tmux answers each, in order.
+      const lines = chunk.toString().split('\n').filter((line: string) => line.length > 0)
+      sent.push(...lines)
+      const numbers = lines.map(() => command++)
       setImmediate(() => {
         callback()
-        if (line.startsWith('detach-client')) { child.kill(); return }
-        const body = line.startsWith('display-message') ? `${meta}\n` : ''
-        child.stdout.emit('data', Buffer.from(`%begin 1 ${number} 0\n${body}%end 1 ${number} 0\n`))
+        lines.forEach((line: string, index: number) => {
+          if (line.startsWith('detach-client')) { child.kill(); return }
+          const body = line.startsWith('display-message') ? `${meta}\n` : ''
+          child.stdout.emit('data', Buffer.from(`%begin 1 ${numbers[index]} 0\n${body}%end 1 ${numbers[index]} 0\n`))
+        })
       })
     },
   })

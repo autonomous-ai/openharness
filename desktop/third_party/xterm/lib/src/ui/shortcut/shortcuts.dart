@@ -6,8 +6,11 @@ Map<ShortcutActivator, Intent> get defaultTerminalShortcuts {
   switch (defaultTargetPlatform) {
     case TargetPlatform.android:
     case TargetPlatform.fuchsia:
-    case TargetPlatform.windows:
       return _defaultShortcuts;
+    case TargetPlatform.windows:
+      // The native Windows app copies and pastes with Ctrl+Shift, as Windows
+      // Terminal does. A browser on Windows keeps the browser's Ctrl+V.
+      return kIsWeb ? _defaultShortcuts : _linuxShortcuts;
     case TargetPlatform.linux:
       return _linuxShortcuts;
     case TargetPlatform.iOS:
@@ -16,7 +19,7 @@ Map<ShortcutActivator, Intent> get defaultTerminalShortcuts {
   }
 }
 
-// Ctrl-A/V belong to readline, Vim and other programs in the terminal.
+// Ctrl-A/V belong to readline, Vim, PowerShell and other programs in the terminal.
 // Keep the Linux clipboard chords separate from those input bytes.
 final _linuxShortcuts = {
   SingleActivator(LogicalKeyboardKey.keyC, control: true, shift: true):

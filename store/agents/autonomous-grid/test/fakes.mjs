@@ -66,15 +66,19 @@ function decode(buffer) {
 /**
  * The Harness daemon's loopback bridge (`ws://127.0.0.1:<port>/api/local-ws`), speaking just enough of
  * RFC 6455 for Node's own WebSocket client: unfragmented text frames, ping and close. Every JSON frame a
- * client sends is kept, per connection and in arrival order; `respond(frame, send)` answers it.
+ * client sends is kept, per connection and in arrival order; `respond(frame, send)` answers it. With a
+ * `credential` it is the daemon since 0.4.21: every request without `X-Harness-Local: <credential>`
+ * is answered 401. `shown` keeps the header each request carried.
  */
-export async function fakeBridge(respond = () => {}) {
-  const connections = [], sockets = new Set();
+export async function fakeBridge(respond = () => {}, { credential } = {}) {
+  const connections = [], sockets = new Set(), shown = [];
   let closing = false;
-  const server = createServer((_req, res) => { res.writeHead(426); res.end(); });
+  const refused = req => { shown.push(req.headers['x-harness-local']); return credential !== undefined && req.headers['x-harness-local'] !== credential; };
+  const server = createServer((req, res) => { res.writeHead(refused(req) ? 401 : 426); res.end(); });
   server.on('upgrade', (req, socket) => {
     // An upgrade that lands after close() began is never adopted: the server would wait on it forever.
     if (closing || req.url !== '/api/local-ws') { socket.destroy(); return; }
+    if (refused(req)) { socket.on('error', () => {}); socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     sockets.add(socket);
     const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}${ACCEPT_GUID}`).digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
@@ -101,6 +105,7 @@ export async function fakeBridge(respond = () => {}) {
   return {
     url: `ws://127.0.0.1:${server.address().port}/api/local-ws`,
     connections,
+    shown,
     frames: () => connections.flatMap(c => c.frames),
     close: () => new Promise(done => {
       closing = true;

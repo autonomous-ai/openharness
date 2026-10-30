@@ -171,7 +171,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
         ]
       : [
           'Usage: claude [options] [command] [prompt]', '', 'Arguments:', '  prompt  Your prompt', '',
-          '  --model <model>', '  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "plan")',
+          '  --model <model>', '  --effort <level>', '  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "plan")',
           '  --dangerously-skip-permissions', '  -r, --resume [value]', '  --fork-session', '  --session-id <uuid>', '',
         ]).filter((line) => !line.split(/[^A-Za-z0-9-]+/).some((word) => without.has(word))).join('\n'))
     return
@@ -185,6 +185,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
     process.exit(engine === 'claude' ? 1 : 2)
   }
+  // Resume checks for a live background job before opening a pane. This is a
+  // CLI query, not an agent launch: keep it out of the launch-argv ledger.
+  if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    process.stdout.write('[]\n')
+    return
+  }
+  // Every launch's argv, for a test to read what an agent was started with.
+  if (config.root) appendFileSync(join(config.root, 'launch-argv'), `${JSON.stringify({ engine, args })}\n`)
   // The process table shows it as it shows the real CLI: named `claude` or `codex`, with the command line
   // it was started with, both of which discovery reads (tmux.ts: a resume typed into a pane names its
   // conversation on that command line). The title used to be the name alone, so no argument was ever on
@@ -289,6 +297,23 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // refuses before its TUI is up (codex-rs app-server thread_processor.rs) until `codex unarchive <id>`
   // moves it back under `sessions/`.
   if (engine === 'codex' && resumed && !fork) {
+    // Codex 0.163.0 keeps a failed thread's writer in its shared app-server. A --no-daemon resume
+    // stays alive on this lock screen without opening the conversation or sending SessionStart
+    // (2026-10-19). A live terminal process alone therefore cannot prove that a restart succeeded.
+    const writer = join(codexHome, 'app-server-daemon', 'fake-writer.json')
+    const locked = () => args.includes('--no-daemon') && existsSync(writer)
+      && JSON.parse(readFileSync(writer, 'utf8')).threadId === resumed
+    if (locked()) {
+      process.stdout.write('This conversation is open in another app\r\nClose it there and press R to continue here.\r\n')
+      process.stdin.setRawMode?.(true)
+      process.stdin.resume()
+      await new Promise(resolve => {
+        const retry = data => {
+          if (/r/i.test(String(data)) && !locked()) { process.stdin.off('data', retry); resolve() }
+        }
+        process.stdin.on('data', retry)
+      })
+    }
     const holds = (dir) => {
       let names = []
       try { names = readdirSync(dir, { withFileTypes: true }) } catch { return false }
@@ -348,6 +373,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       process.stdout.write('\x1b[H\x1b[2J')
     }
   }
+  // `graphicsQuery`: Claude Code asks the terminal for kitty graphics, an APC string, when it believes it is not inside
+  // tmux, as a guest's harness on a shared machine does (its helper starts the engine with `env -i`, so no TMUX). tmux
+  // takes any APC string as the pane's title. Later it sets its title as usual (OSC 0, `title`).
+  if (config.graphicsQuery) {
+    process.stdout.write('\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
+    const titled = setTimeout(() => process.stdout.write(`\x1b]0;✳ ${config.graphicsQuery.title}\x07`), config.graphicsQuery.titleAfterMs)
+    titled.unref?.()
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
@@ -389,13 +422,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
     ? (args.includes('--dangerously-skip-permissions') ? 'bypassPermissions'
       : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
     : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
-  // The model and effort the thread runs on: what Codex writes in each turn's context, and what its
-  // `/model` picker changes (below). Its `-m`/`--model` on the command line outranks the configured one, as
-  // in the real CLI: that is how a relaunch puts an agent back on the model it had before a grid
-  // (subscriptionModel.ts).
-  const modelAt = engine === 'codex' ? args.findIndex((arg) => arg === '-m' || arg === '--model') : -1
+  // The model passed on either engine's command line outranks the fixture default, as in the real CLI.
+  // Codex writes its model and effort in each turn's context; Claude writes its model in the transcript.
+  const modelAt = args.findIndex((arg) => arg === '-m' || arg === '--model')
   let current = { model: (modelAt >= 0 && args[modelAt + 1]) || config.codexModel || 'gpt-6', effort: 'high' }
-  let claudeModel = config.claudeModel ?? 'claude-opus-5-5'
+  let claudeModel = (modelAt >= 0 && args[modelAt + 1]) || config.claudeModel || 'claude-opus-5-5'
   // Test-owned file gate, used to stop an engine worker after its command reached the live CLI.
   const modelGate = async command => {
     const log = join(config.root, 'model-control-commands')
@@ -683,6 +714,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
 
   let turn = 0
   let open = null
+  let interruptSlow = null
   // The tool `!holdtool` left running: an interrupt flushes its output, marked aborted, before the turn ends.
   let runningTool = null
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
@@ -1530,7 +1562,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
     }
-    if (directive?.[1] === 'slow') await new Promise((resolve) => setTimeout(resolve, Number(directive[2]) || 1000))
+    if (directive?.[1] === 'slow') {
+      await new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); interruptSlow = null; resolve() }
+        const timer = setTimeout(done, Number(directive[2]) || 1000)
+        interruptSlow = done
+      })
+      if (!open) return
+    }
     await finish(`answer ${turn}: ${prompt}`)
   }
 
@@ -1680,6 +1719,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
         continue
       }
       if (pasting) { pasted += part === '\r' ? '\n' : part; continue }
+      if (engine === 'claude' && part === '\x1b' && open && !suggestions(buffer)) {
+        // Observed on real Claude Code 2.1.307: Esc interrupts the response,
+        // then runs a queued follow-up; it does not restore it as an unsent draft.
+        claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+        open = null
+        say('(interrupted)\r\n')
+        interruptSlow?.()
+        continue
+      }
       if (part.startsWith('\x1b')) {
         // Esc puts the suggestions away, the draft kept; other keys move nothing here.
         const popup = suggestions(buffer)
@@ -1720,6 +1768,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
           else codex('event_msg', { type: 'turn_aborted', turn_id: open })
           open = null
           say('(interrupted)\r\n')
+          interruptSlow?.()
         } else draw()
       } else if (part === '\r' || part === '\n') {
         const line = expand(buffer)

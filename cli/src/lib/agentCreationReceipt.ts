@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
-  | { state: 'failed'; error: string; detail?: string; preparedFolder?: string }
+  // `reason`: which check a refusal failed, where its code has several (a resume's RESUME_PREPARATION_FAILED).
+  | { state: 'failed'; error: string; detail?: string; reason?: string; preparedFolder?: string; existingFolder?: string }
   | { state: 'unconfirmed' }
 
 export type AgentCreationStatus = AgentCreationOutcome
@@ -38,6 +40,8 @@ type IntentResult = { fingerprint: string; token: string; outcome: AgentCreation
 type Receipt = {
   version: 1
   fingerprint: string
+  /** The guest a launch was made for. Absent for the owner's, and for every receipt written before guests existed. */
+  guest?: string
   outcome: AgentCreationOutcome | { state: 'pending' }
 }
 
@@ -108,7 +112,29 @@ export class AgentCreationReceipts {
       : receipt.outcome
   }
 
-  run(id: string, fingerprint: string, create: () => Promise<AgentCreationOutcome>): Promise<AgentCreationStatus> {
+  /** The launch flags kept in a completed native intent, absent for legacy or fallback creates. */
+  createdLaunchModel(id: string): LaunchModel | null {
+    const receipt = this.read(id)
+    if (receipt?.version !== 2 || 'cancelled' in receipt || this.intentStatus(id, receipt).state !== 'created') return null
+    const saved = receipt.request
+    if (saved.kind !== 'native-create-v1' || !saved.input || typeof saved.input !== 'object') return null
+    const launchModel = (saved.input as Record<string, unknown>).launchModel
+    if (!launchModel || typeof launchModel !== 'object') return null
+    const { model, effort } = launchModel as Record<string, unknown>
+    return (model === null || typeof model === 'string') && (effort === null || typeof effort === 'string')
+      ? { model, effort } : null
+  }
+
+  /** Whose launch an id names: a guest's key, or null for the owner's, an intent's and an unknown id (which a
+   * guest hears the same way). */
+  creator(id: string): string | null {
+    const receipt = this.read(id)
+    return receipt?.version === 1 && receipt.guest !== undefined ? receipt.guest : null
+  }
+
+  /** `guest` marks a launch made for a guest: it is kept on the receipt so that only that guest, and the owner, can
+   * ask what became of it. A guest never attaches to a receipt that is not its own, whatever its fingerprint. */
+  run(id: string, fingerprint: string, create: () => Promise<AgentCreationOutcome>, guest?: string): Promise<AgentCreationStatus> {
     const running = this.inFlight.get(id)
     if (running) {
       if (running.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
@@ -116,6 +142,7 @@ export class AgentCreationReceipts {
     }
     const receipt = this.read(id)
     if (receipt) {
+      if (guest !== undefined && receipt.version === 2) throw new AgentCreationReceiptError('CREATION_CONFLICT')
       if (receipt.version === 2 && 'cancelled' in receipt) return Promise.resolve(this.intentStatus(id, receipt))
       if (receipt.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
       return Promise.resolve(this.status(id))
@@ -123,10 +150,11 @@ export class AgentCreationReceipts {
     // O_EXCL is also the guard against another daemon reaching the same intent.
     // A partial/corrupt reservation is refused, never treated as a missing one.
     try {
-      this.write(id, { version: 1, fingerprint, outcome: { state: 'pending' } }, true)
+      this.write(id, { version: 1, fingerprint, ...(guest === undefined ? {} : { guest }), outcome: { state: 'pending' } }, true)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         const existing = this.read(id)
+        if (guest !== undefined && existing?.version === 2) throw new AgentCreationReceiptError('CREATION_CONFLICT')
         if (existing?.version === 2 && 'cancelled' in existing) return Promise.resolve(this.intentStatus(id, existing))
         if (existing?.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
         return Promise.resolve(this.status(id))
@@ -137,7 +165,7 @@ export class AgentCreationReceipts {
       let outcome: AgentCreationOutcome
       try { outcome = await create() }
       catch { outcome = { state: 'unconfirmed' } }
-      const completed: Receipt = { version: 1, fingerprint, outcome }
+      const completed: Receipt = { version: 1, fingerprint, ...(guest === undefined ? {} : { guest }), outcome }
       try { this.write(id, completed, false) }
       catch { this.unsaved.set(id, completed) }
       return outcome
@@ -390,8 +418,7 @@ export class AgentCreationReceipts {
   }
 
   private syncDirectory(path = this.directory, ancestor = false): void {
-    const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
-    try { fsyncSync(fd) } finally { closeSync(fd) }
+    syncStateDirectory(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
   }
 
   private holdDirectory(): { verify(): void; close(): void } {
@@ -460,7 +487,8 @@ export class AgentCreationReceipts {
       if (completedIntent || this.readIntentPart(this.intentFile(id, 'claim')) || this.readIntentPart(this.intentFile(id, 'result'))) {
         throw new Error('Legacy receipt has conflicting intent evidence')
       }
-      if (value.version !== 1 || !/^[a-f0-9]{64}$/.test(value.fingerprint ?? '') || !outcome ||
+      if (value.version !== 1 || !/^[a-f0-9]{64}$/.test(value.fingerprint ?? '') || !outcome
+          || (value.guest !== undefined && (typeof value.guest !== 'string' || !value.guest)) ||
           !['pending', 'unconfirmed', 'created', 'failed'].includes(outcome.state) ||
           (outcome.state === 'created' && (typeof outcome.agentId !== 'string' || !outcome.agentId ||
             (outcome.level !== undefined && outcome.level !== 'native' && outcome.level !== 'handoff') ||
@@ -488,8 +516,7 @@ export class AgentCreationReceipts {
       try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd) }
       finally { closeSync(fd) }
       if (!exclusive) renameSync(writing, file)
-      const directoryFd = openSync(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+      syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {
       // Failed reservations stay on disk so a partial write cannot permit a
       // duplicate. Only this write's private replacement file is disposable.

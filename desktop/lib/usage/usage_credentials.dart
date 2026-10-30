@@ -5,10 +5,12 @@
 /// would be a second thing to expire and to disagree about.
 ///
 /// **Nothing in this file may be logged.** Every value it returns is a bearer
-/// token; the CLI transcript exists precisely so secrets stay out of argv, and
+/// token or account identity; the CLI transcript keeps secrets out of argv, and
 /// a `print` here would undo that. Callers get the token and nothing else —
 /// no wrapper carrying it into an error message.
 library;
+
+import '../core/home_dir.dart';
 
 import 'dart:convert';
 import 'dart:io';
@@ -50,7 +52,7 @@ class UsageCredentials {
   /// Overridden by tests so nothing shells out to the real `security`.
   final Future<ProcessResult> Function(String, List<String>)? runProcess;
 
-  String? get _home => home ?? RuntimePlatform.environment['HOME'];
+  String? get _home => home ?? maybeHomeDir();
   Map<String, String> get _env => environment ?? RuntimePlatform.environment;
 
   /// The Keychain SERVICE Claude Code writes its OAuth token under — its own rule, read off
@@ -136,6 +138,32 @@ class UsageCredentials {
     final id = profile['accountUuid'];
     return id is String && id.isNotEmpty ? id : null;
   }
+
+  /// Display metadata from the same profile that supplies [claudeAccountId].
+  Future<String?> claudeAccountEmail() async {
+    final profile = _decode(_readFile('.claude.json'))?['oauthAccount'];
+    return profile is Map ? _email(profile['emailAddress']) : null;
+  }
+
+  /// The ID token's email is a display label, never an authentication decision.
+  Future<String?> codexAccountEmail() async {
+    final tokens = _decode(_readFile('.codex/auth.json'))?['tokens'];
+    final token = tokens is Map ? tokens['id_token'] : null;
+    if (token is! String) return null;
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    try {
+      final claims = _decode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      return _email(claims?['email']);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  String? _email(Object? value) =>
+      value is String && value.trim().isNotEmpty ? value.trim() : null;
 
   UsageToken? _parseClaude(String? raw) {
     if (raw == null) return null;

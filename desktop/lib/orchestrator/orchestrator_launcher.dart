@@ -10,7 +10,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_select_field.dart';
-import '../shortcuts/app_shortcuts.dart' show altWorkspacePrefix;
+import '../shortcuts/app_shortcuts.dart' show platformActivator;
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart';
 import 'orchestrator_controller.dart';
@@ -160,10 +160,9 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
           padding: const EdgeInsets.all(24),
           child: CallbackShortcuts(
             bindings: {
-              SingleActivator(
-                LogicalKeyboardKey.enter,
-                meta: !altWorkspacePrefix,
-                alt: altWorkspacePrefix,
+              // ⌘⏎ on a Mac, Alt+⏎ on Linux and the web, Ctrl+Shift+⏎ on Windows.
+              platformActivator(
+                const SingleActivator(LogicalKeyboardKey.enter, meta: true),
               ): _start,
             },
             child: Column(

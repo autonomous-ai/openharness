@@ -4,14 +4,17 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
+import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
-import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { windowsAfterExit } from '../../lib/windows/engineStart.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { createLaunchHelpers } from './launch.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
@@ -28,6 +31,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
+  engineLaunchEnv: vi.fn(() => undefined),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
@@ -52,7 +56,7 @@ const pending = { agentId: 'f1', sessionId: '', engine: 'claude' } as Registered
 
 function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgentDeps> = {}) {
   const deps: ForkAgentDeps = {
-    tmuxBackend: {} as ForkAgentDeps['tmuxBackend'],
+    createBackend: {} as ForkAgentDeps['createBackend'],
     registry: { byAgent: vi.fn(() => row ?? undefined) } as unknown as ForkAgentDeps['registry'],
     mirror: {
       isBusy: vi.fn(() => false),
@@ -164,7 +168,7 @@ describe('forking an agent', () => {
     const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), setTail: vi.fn(),
       launchOverridesDeps: { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative,
         machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(), writeGridConfigDir: vi.fn(),
-        tmuxSupportsSessionEnv: async () => true, installCodexHooks: async () => true,
+        capabilities: async () => ({ sessionEnv: true }), installCodexHooks: async () => true,
       },
     })
     const finalHome = join(root, 'harness-codex')
@@ -190,9 +194,37 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  it('sends the launch\'s Windows variables (no /usr/bin/env there) with the pane env', async () => {
+    vi.mocked(engineLaunchEnv).mockReturnValueOnce({ HARNESS_NATIVE_FIXTURE: 'token' })
+    expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].env).toMatchObject({ HARNESS_NATIVE_FIXTURE: 'token' })
+  })
+
+  it('starts a Windows fork in the source\'s folder, its pane becoming the person\'s shell after it', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    } finally { Object.defineProperty(process, 'platform', platform) }
+    const cleared = (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { clearEnv?: string[] }).clearEnv ?? []
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].paneLaunch).toEqual({ cwd: work, afterExit: windowsAfterExit('claude'),
+      ...(cleared.length ? { clearInherited: cleared } : {}) })
+  })
+
+  it('refuses a batch-file engine on Windows whose first message cmd.exe would read, by name', async () => {
+    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+    expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: 'a & b' })).toMatchObject({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('claude.cmd') })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new Error('fixture') })
+    await expect(setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).rejects.toThrow('fixture')
+  })
+
   it('refuses without tmux, an agent, a folder, or with a grid or a turn in progress', async () => {
-    expect(await setup(source(), { tmuxBackend: null }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+    expect(await setup(source(), { createBackend: null }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+    expect(await setup(source(), { createBackend: null, noBackendCode: 'PTY_HOST_UNAVAILABLE' }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'PTY_HOST_UNAVAILABLE' })
     expect(await setup(null).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    // A guest's harness: a fork would start as the owner, with the guest's conversation.
+    expect(await setup(source({ guest: 'kim@acme.io' })).fork({ agentId: 'a1', name: null, prompt: null })).toEqual(GUEST_HARNESS_REFUSAL)
     expect(await setup(source({ cwd: undefined })).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ error: 'CWD_NOT_FOUND', detail: expect.stringContaining('no working folder') })
     expect(await setup(source({ cwd: join(root, 'file') })).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'CWD_NOT_FOUND' })
     expect(await setup(source({ cwd: join(root, 'gone') })).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'CWD_NOT_FOUND' })

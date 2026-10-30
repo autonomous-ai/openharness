@@ -36,7 +36,7 @@
 //
 // `cb` is invoked once per decoded frame, ON THE READER TASK, with the payload pointing into the
 // decoder's own buffer — it is only valid for the duration of the call. Anything that must outlive it
-// gets copied by the callback. Anything that touches LVGL takes display_lock() first.
+// gets copied by the callback. Anything shared with the render task takes pro_app_lock() first.
 //
 // Returns false if the driver would not install, which leaves the dial running with no link rather than
 // failing to boot: a device that shows "Not connected" is diagnosable from across the room, and a device
@@ -80,15 +80,34 @@ void cable_link_set_log_framing(bool on);
 //
 // It is therefore useful for exactly one thing: noticing that the cable left, or that the machine went
 // to sleep. The layer above uses it as the end of a session. A session that ends because the DAEMON quit
-// with the cable still in is invisible here — see the hello cadence in cable_client.c for what stands in.
+// with the cable still in is invisible here — see the hello cadence in pro_cable.c for what stands in.
 bool cable_link_host_present(void);
 
-// Framing health. The RATE is the diagnosis, not the totals: a handful of discarded bytes right after
-// boot is the bootloader's parting words and is expected, while a steady trickle during a session means
+// Drop off the bus and come back: the D+ pull-up goes off for 100 ms, so the host sees an unplug and a fresh plug-in and
+// enumerates the port again. Blocks the caller for those 100 ms. For the session layer's self re-plug (pro_cable.c), when
+// a host drives the port but nothing on it has answered for a long time: the one fix that otherwise takes a hand.
+void cable_link_replug(void);
+
+// Whether part of a frame is in and the rest is still due: a link that is alive, mid-message. The reader hands the
+// tick at most one read (256 B) at a time, so a longer frame (a welcome) spans ticks. Bounded: the reader drops a
+// partial after 300 ms without bytes. Reader task only, like cable_link_reset_decoder.
+bool cable_link_rx_pending(void);
+
+// Framing health, cumulative since boot. The RATE is the diagnosis, not the totals: a handful of discarded bytes
+// right after boot is the bootloader's parting words and is expected, while a steady trickle during a session means
 // the two sides disagree about the format or the cable is bad. Without a count those look identical.
+// Safe from any task; the reader owns the writes.
+typedef struct {
+    uint32_t isr_rx;            // bytes the ISR pulled from the hardware FIFO (below the driver's ring buffer)
+    uint32_t ring_drop;         // ring-buffer pushes that failed in the ISR: those bytes are gone
+    uint32_t rx_bytes;          // bytes read off the port
+    uint32_t frames_ok;         // frames decoded and delivered
+    uint32_t corrupt_frames;    // a frame whose CRC or length failed
+    uint32_t discarded_bytes;   // bytes stepped over between frames
+    uint32_t dropped_logs;      // logs skipped because the transport was busy or stalled
+} cable_link_stats_t;
+cable_link_stats_t cable_link_stats(void);
 void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes);
-// Logs skipped because the transport was busy or stalled; diagnostic only.
-uint32_t cable_link_dropped_logs(void);
 
 // Drop any half-received frame. For the layer above to call when it decides a session has ended and a
 // new one begun — leftover bytes belong to the old one, and carrying them across puts a stale half-frame
@@ -96,5 +115,5 @@ uint32_t cable_link_dropped_logs(void);
 //
 // Call it only from the reader's frame or tick callback. The decoder has one
 // reader and no lock; another task must not reset it during a feed. The reader
-// also expires a partial frame after a 15-second gap in received bytes.
+// also expires a partial frame after a 300 ms gap in received bytes (counted corrupt, resynced at once).
 void cable_link_reset_decoder(void);

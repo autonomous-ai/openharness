@@ -27,7 +27,7 @@ const START = 'Thu Oct  8 10:00:00 2026'
 
 // The process table and each process's environment, as the host would report them.
 const host = vi.hoisted(() => ({ rows: null as unknown[] | null, envs: new Map<number, Record<string, string> | null>() }))
-vi.mock('../lib/tmux.js', async (real) => ({
+vi.mock('../lib/processTable.js', async (real) => ({
   ...await real<object>(),
   processRows: vi.fn(async () => host.rows),
   enrichProcessRows: vi.fn(async (rows: unknown[]) => rows),
@@ -81,7 +81,7 @@ beforeAll(async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   root = realpathSync(mkdtempSync(join(tmpdir(), 'other-admission-golden-')))
   const env: Record<string, string | undefined> = {
-    HOME: home(), ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), HERMES_HOME: home('.hermes'),
+    HOME: home(), USERPROFILE: home(), ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), HERMES_HOME: home('.hermes'),
     CLAUDE_PROJECTS_DIR: home('.claude', 'projects'), CODEX_HOME: home('.codex'), CLAUDE_CONFIG_DIR: undefined, TZ: 'UTC',
   }
   for (const [name, value] of Object.entries(env)) {

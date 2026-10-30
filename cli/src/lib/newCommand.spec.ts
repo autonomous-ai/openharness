@@ -7,13 +7,23 @@ import { machineChoices, newAgentPayload, newCommand, NewUsageError, parseNewArg
 import { SANDBOXED } from './unreachable.js'
 import { AgentClientError } from '../agentClient/daemon.js'
 
-const env = { cwd: '/work/repo', home: '/home/me' }
+// POSIX paths, read by POSIX rules wherever the spec runs: on Windows the shell's paths are read as Windows ones.
+const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, repo: null, acuLimit: null, model: null, json: false,
     })
+  })
+
+  it('sends a model as the app\'s box does, for the machine to check, and none for a terminal', () => {
+    const args = parseNewArgs(['claude', '--model', 'haiku', 'snake', '--', 'build', 'it'], env)
+    expect(args).toMatchObject({ agent: 'claude', model: 'haiku', projectName: 'snake', prompt: 'build it' })
+    expect(newAgentPayload(args, null)).toMatchObject({ engine: 'claude', model: 'haiku', projectSource: 'new', projectName: 'snake' })
+    expect(newAgentPayload(parseNewArgs(['claude'], env), '/work/repo')).not.toHaveProperty('model')
+    expect(() => parseNewArgs(['claude', '--model'], env)).toThrow('--model needs a value.')
+    expect(() => parseNewArgs(['terminal', '--model', 'haiku'], env)).toThrow('A terminal runs no model')
   })
 
   it('reads agent, --machine and a folder in any order', () => {
@@ -60,6 +70,26 @@ describe('harness new: the words', () => {
     expect(parseNewArgs(['codex', '/home/me/code/auth'], env).cwd).toBe('/home/me/code/auth')
   })
 
+  it('reads the paths a Windows shell hands over as folders, not as a project name', () => {
+    const windows = { cwd: 'C:\\work\\repo', home: 'C:\\Users\\me', platform: 'win32' as const }
+    // The install job's check (B5.12): `harness new terminal $env:TEMP\harness-check-proj --json`.
+    expect(parseNewArgs(['terminal', 'C:\\Users\\me\\AppData\\Local\\Temp\\harness-check-proj', '--json'], windows))
+      .toMatchObject({ agent: 'terminal', cwd: 'C:\\Users\\me\\AppData\\Local\\Temp\\harness-check-proj', projectName: null })
+    expect(parseNewArgs(['codex', 'C:/code/api'], windows)).toMatchObject({ cwd: 'C:/code/api', projectName: null })
+    expect(parseNewArgs(['codex', '\\\\server\\share\\api'], windows).cwd).toBe('\\\\server\\share\\api')
+    expect(parseNewArgs(['codex', '.\\api'], windows).cwd).toBe('C:\\work\\repo\\api')
+    expect(parseNewArgs(['codex', '..\\other'], windows).cwd).toBe('C:\\work\\other')
+    expect(parseNewArgs(['codex', '~\\code\\auth'], windows).cwd).toBe('C:\\Users\\me\\code\\auth')
+    // `--new` never takes a path as the new project's name.
+    expect(() => parseNewArgs(['--new', 'C:\\x', 'codex'], windows)).toThrow(/not both/)
+    // Another machine resolves its own home, and may not be Windows.
+    expect(parseNewArgs(['codex', '--machine', 'mini', '~\\code\\auth'], windows).cwd).toBe('~/code/auth')
+    expect(parseNewArgs(['codex', '--machine', 'mini', 'C:\\Users\\me\\code\\auth'], windows).cwd).toBe('~/code/auth')
+    // A plain second word is still a new project, and off Windows a drive path is a name as before.
+    expect(parseNewArgs(['codex', 'my-game'], windows)).toMatchObject({ cwd: null, projectName: 'my-game' })
+    expect(parseNewArgs(['codex', 'C:\\x'], { ...env, platform: 'darwin' })).toMatchObject({ cwd: null, projectName: 'C:\\x' })
+  })
+
   it('says what is wrong instead of guessing', () => {
     for (const argv of [['a', 'b', 'c'], ['--machine'], ['--machine', '--json'], ['--machine', ' '], ['--machine', 'a', '--machine', 'b'], ['/x', '/y'], ['codex', 'game', '/x'], ['--mode', 'yolo'], ['--prompt'], ['--wat'], ['-x'], ['codex', '..'], ['codex', '--machine', 'mini', './rel']]) {
       // `codex ..` is a folder, not an error; every other row must throw.
@@ -89,6 +119,17 @@ describe('harness new: the words', () => {
     expect(fresh).toMatchObject({ engine: 'claude', projectSource: 'new', projectName: 'My-Game', permissionMode: 'auto', bypassPermission: true })
     expect(fresh).not.toHaveProperty('cwd')
     expect(newAgentPayload(parseNewArgs(['acme/blender', '.'], env), '/work/repo', 'codex')).toMatchObject({ engine: 'codex', dsh: 'acme/blender' })
+  })
+
+  it('sends a cloud coding agent its repository and ACU limit, and refuses them for any other agent (#1444)', () => {
+    const args = parseNewArgs(['devin-cloud', '--machine', 'office', '--repo', 'acme/api', '--acu-limit', '10', '--json', '--', 'reply', 'to', 'the', 'thread'], env)
+    expect(args).toMatchObject({ agent: 'devin-cloud', repo: 'acme/api', acuLimit: 10, prompt: 'reply to the thread' })
+    expect(newAgentPayload(args, null)).toMatchObject({ engine: 'devin-cloud', repositoryUrl: 'acme/api', acuLimit: 10, prompt: 'reply to the thread' })
+    expect(newAgentPayload(parseNewArgs(['devin-cloud', '--', 'x'], env), null)).not.toHaveProperty('repositoryUrl')
+    expect(() => parseNewArgs(['codex', '--repo', 'acme/api'], env)).toThrow(/--repo is for a cloud agent/)
+    expect(() => parseNewArgs(['devin-cloud', '--repo', ' ', '--', 'x'], env)).toThrow(/--repo needs a value/)
+    expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '0'], env)).toThrow(/1 to 1000/)
+    expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '2.5'], env)).toThrow(/1 to 1000/)
   })
 
   it('only sends a permission mode to the engines that take one', () => {
@@ -271,6 +312,29 @@ describe('harness new: the daemon', () => {
     expect(here.out.at(-1)).toBe('Open it in Harness with ⌘O.')
   })
 
+  // A typo used to reach the cloud service and come back a counted launch failure (Oct 26 report): refused here, in
+  // the service's own words, before anything is sent.
+  it.each([
+    [['cursor-cloud'], 'Tell Cursor Cloud what to do.'],
+    [['cursor-cloud', '--', '  '], 'Tell Cursor Cloud what to do.'],
+    [['cursor-cloud', '--repo', 'gitlab.com/a/b', '--', 'x'], 'That is not a GitHub repository: give owner/name or https://github.com/owner/name.'],
+    [['cursor-cloud', '--', 'x'], 'Choose a GitHub repository for Cursor Cloud.'],
+    [['fo'], 'Tell Fo what to do.'],
+  ])('refuses a cloud request the service would refuse, sending nothing: %j', async (argv, words) => {
+    expect(() => parseNewArgs(argv, env)).toThrow(new NewUsageError(words))
+    const socket = new FakeSocket(() => null)
+    const refused = deps(argv, socket)
+    expect(await newCommand(refused)).toBe(2)
+    expect(refused.err[0]).toBe(words)
+    expect(socket.sent).toEqual([])
+  })
+
+  it('lets Devin Cloud start without a repository, and a cloud agent with one', () => {
+    expect(parseNewArgs(['devin-cloud', '--', 'x'], env)).toMatchObject({ agent: 'devin-cloud', prompt: 'x', repo: null })
+    expect(parseNewArgs(['cursor-cloud', '--repo', 'https://github.com/acme/api', '--', 'x'], env)).toMatchObject({ repo: 'https://github.com/acme/api' })
+    expect(parseNewArgs(['fo', '--task', 'book a table'], env)).toMatchObject({ agent: 'fo', prompt: 'book a table' })
+  })
+
   it('refuses the old @machine before asking anything of a machine, and says what to type', async () => {
     const socket = new FakeSocket(() => null)
     const old = deps(['claude', '@office', 'lamp-first-task', '--', 'What is 2+2?'], socket)
@@ -288,6 +352,14 @@ describe('harness new: the daemon', () => {
     const refused = deps(['acme/typst'], new FakeSocket((frame) => frame.type === 'dsh_list' ? { dsh: catalog } : null))
     expect(await newCommand(refused)).toBe(1)
     expect(refused.err[0]).toBe('Install it first: harness dsh install acme/typst')
+  })
+
+  // prompt_unsupported, 4 in the Oct 21–27 report, came from `harness new <engine> --task`: say which flag to drop.
+  it('tells a first message the engine cannot take to leave out --task', async () => {
+    const refused = deps(['cursor', '--task', 'fix it'], new FakeSocket((frame) => frame.type === 'agent_create'
+      ? { creationId: 'c1', state: 'failed', failure: { code: 'PROMPT_UNSUPPORTED' } } : null))
+    expect(await newCommand(refused)).toBe(1)
+    expect(refused.err[0]).toBe('That agent cannot be started with a first message. Run it again without --task.')
   })
 
   it('says a launch the machine refused or could not confirm failed, never "Created"', async () => {
@@ -419,6 +491,30 @@ describe('harness new: the daemon', () => {
     const claimed = deps(['codex', '--machine', 'Mac mini'], answer({ state: 'unconfirmed' }), { sleep: async () => {} })
     expect(await newCommand(claimed)).toBe(1)
     expect(claimed.err.at(-1)).toBe('Harness could not confirm the harness started (unconfirmed). Check with `harness ps --machine "Mac mini"` before starting another.')
+  })
+
+  // PROJECT_EXISTS was 4 of 7 failed starts on Oct 18: "Name its folder instead" said neither where nor how.
+  it('says where a typed project already is and the command that starts in it, or to choose another name', async () => {
+    const exists = (existingFolder?: string) => new FakeSocket((frame) => frame.type === 'agent_create' ? { creationId: 'c1', state: 'failed',
+      failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists. Select that folder from your projects.', ...(existingFolder ? { existingFolder } : {}) } } : null)
+    const here = deps(['codex', 'payments', '--name', 'pay', '--', 'add refunds'], exists('/home/me/harnesses/payments'))
+    expect(await newCommand(here)).toBe(1)
+    expect(here.err).toEqual(['“payments” already exists on this computer: ~/harnesses/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness new codex ~/harnesses/payments --name pay -- …'])
+    // On another machine its path is that machine's, named as it is.
+    const there = deps(['codex', '--machine', 'Mac mini', 'payments'], exists('/home/lee/Harness Projects/payments'))
+    expect(await newCommand(there)).toBe(1)
+    expect(there.err).toEqual(['“payments” already exists on Mac mini: /home/lee/Harness Projects/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness new codex --machine "Mac mini" "/home/lee/Harness Projects/payments"'])
+    const mcp = deps(['codex', '--new', 'payments', '--name', 'pay', '--task', 'add refunds'], exists('/home/me/harnesses/payments'),
+      { env: { HARNESS_VIA_MCP: '1', HOME: '/nonexistent/home', CODEX_HOME: '/nonexistent/codex' } })
+    expect(await newCommand(mcp)).toBe(1)
+    expect(mcp.err.at(-1)).toBe('“payments” already exists on this computer: ~/harnesses/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness_start (folder: "~/harnesses/payments", …)')
+    // A file has that name, or the machine predates naming the folder: only another name helps.
+    const file = deps(['codex', 'payments', '--json'], exists())
+    expect(await newCommand(file)).toBe(1)
+    expect(JSON.parse(file.out[0]!)).toEqual({ ok: false, error: '“payments” already exists on this computer. Choose another name for the new project.' })
   })
 
   it('says why the machine refused an engine that cannot run, in the machine\'s words', async () => {

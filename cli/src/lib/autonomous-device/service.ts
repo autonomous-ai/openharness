@@ -4,6 +4,7 @@ import type { DeviceResultJournal } from './resultJournal.js'
 import type { DeviceInputStatus } from '../../core/deviceInput.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
+import { DEVICE_ADDON_CAPABILITIES, DeviceAddonError, DeviceAddons } from './addons.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { LiveEvent } from '../normalize.js'
 import { AgentStreams, STREAM_KINDS, STREAM_TTL_DEFAULT_SEC, STREAM_TTL_MAX_SEC, StreamRequestError, type StreamKind } from './stream.js'
@@ -318,6 +319,8 @@ export class AutonomousDeviceService {
     this.now = options.now ?? Date.now
     this.streams = new AgentStreams({ machineId: options.machineId, serverInstanceId: this.serverInstanceId,
       send: (deviceId, frame) => this.options.emit?.(frame, deviceId) })
+    this.addons = new DeviceAddons({ machineId: options.machineId, serverInstanceId: this.serverInstanceId,
+      send: (deviceId, frame) => this.options.emit?.(frame, deviceId), now: this.now })
     let snapshot = options.resultJournal?.load()
     // Written on this computer under ANOTHER machine id: a sign-in to another account, a switch of
     // backend, a machine re-registered. Its dedupe cannot apply here — every request naming that
@@ -356,12 +359,14 @@ export class AutonomousDeviceService {
     }
   }
   private readonly streams: AgentStreams
+  /** What devices publish for this computer's agents, and the proposals the agents send back (addons.ts). */
+  readonly addons: DeviceAddons
   /** Live events of one agent, for its subscribers only. Never recorded in the replay log. */
   stream(agentId: string, events: readonly LiveEvent[]): void { this.streams.ingest(agentId, events) }
   /** The agents a device subscribed to: the core sends their tools' events too (core/wifi.ts). */
   streamedAgents(): string[] { return this.streams.agents() }
   /** The device's last link closed: its subscriptions end with it, and a reconnect subscribes again. */
-  deviceOffline(deviceId: string): void { this.streams.dropDevice(deviceId) }
+  deviceOffline(deviceId: string): void { this.streams.dropDevice(deviceId); this.addons.offline(deviceId) }
 
   private subscription(deviceId: string, type: 'agent.subscribe' | 'agent.unsubscribe', req: Record<string, unknown>): Record<string, unknown> {
     const fields = type === 'agent.subscribe' ? ['type', 'requestId', 'machineId', 'agentId', 'ttlSec', 'include'] : ['type', 'requestId', 'subscriptionId']
@@ -474,6 +479,7 @@ export class AutonomousDeviceService {
     }
     for (const [key, step] of this.steps) if (step.deviceId === deviceId) this.steps.delete(key)
     this.streams.dropDevice(deviceId)
+    this.addons.revoke(deviceId)
     for (const [key, result] of this.results) if (result.deviceId === deviceId) this.results.delete(key)
     this.persist()
     // A newly paired identity cannot replay the previous device's request receipts.
@@ -561,7 +567,7 @@ export class AutonomousDeviceService {
       this.event(p.kind === 'summary' ? 'turn.summary' : p.kind === 'tool' ? 'turn.tool' : 'agent.error', agentId, full ? { ...p, fullText: full } : p)
     }
   }
-  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, 'input.status.v1', ...(this.options.store ? DEVICE_STORE_CAPABILITIES : [])] }
+  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, 'input.status.v1', ...(this.options.store ? DEVICE_STORE_CAPABILITIES : []), ...DEVICE_ADDON_CAPABILITIES] }
   async request(deviceId: string, req: Record<string, unknown>): Promise<AutonomousDeviceFrame> {
     const type = typeof req.type === 'string' ? req.type : 'invalid'
     const response = (data: Record<string, unknown>): AutonomousDeviceFrame => ({ type: `${type}_result`, requestId: req.requestId, ...data })
@@ -570,6 +576,7 @@ export class AutonomousDeviceService {
       if (!UUID.test(String(req.requestId))) fail('INVALID_REQUEST', 'requestId must be a UUIDv4')
       if (type === 'input.status.v1' || !this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
       if ((DEVICE_STORE_CAPABILITIES as readonly string[]).includes(type)) return response(await this.options.store!.request(deviceId, req))
+      if ((DEVICE_ADDON_CAPABILITIES as readonly string[]).includes(type)) return response(this.addons.request(deviceId, req))
       if (type === 'agent.subscribe' || type === 'agent.unsubscribe') return response(this.subscription(deviceId, type, req))
       const allowed = ['type', 'requestId', ...(['agents.list', 'focus.get', 'focus.ensure'].includes(type) ? [] : type === 'receipt.get' ? ['idempotencyKey'] : type === 'focus.step' ? ['direction', 'idempotencyKey', 'focusRevision'] : type === 'scroll' ? ['phase', 'dy', 'velocity'] : ['machineId', 'agentId']),
         ...(MUTATIONS.has(type) ? ['idempotencyKey'] : []), ...(type === 'turn.send' ? ['text', 'focusRevision'] : type === 'question.answer' ? ['questionRequestId', 'answers', 'focusRevision'] : type === 'recap' ? ['n'] : [])]
@@ -647,7 +654,8 @@ export class AutonomousDeviceService {
         reserved.receipt.error = { code: 'INTERNAL', message: 'Reserved operation could not be confirmed' }
         return response({ status: 'accepted', receipt: structuredClone(reserved.receipt) })
       }
-      return response({ error: { code: e instanceof RequestError || e instanceof DeviceStoreError ? e.code : 'INTERNAL', message: e instanceof RequestError || e instanceof DeviceStoreError ? e.message : 'Request failed' } })
+      const known = e instanceof RequestError || e instanceof DeviceStoreError || e instanceof DeviceAddonError
+      return response({ error: { code: known ? e.code : 'INTERNAL', message: known ? e.message : 'Request failed' } })
     }
   }
 }

@@ -1,0 +1,162 @@
+12:21:56.000 {"id":"bc74c769…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.001 {"id":"1f1e135d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.001 {"id":"c99673b5…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.001 {"id":"0d55651b…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.002 {"id":"364bce3e…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.002 {"id":"6ac1298d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.002 {"id":"bab75801…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.002 {"id":"e3f5d675…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.002 {"id":"41c83184…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.003 {"id":"470475a2…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.003 {"id":"42e87ad3…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.004 {"id":"a61b5044…","engine":"terminal","status":"active","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.004 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.004 {"id":"61f56d06…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.004 {"id":"ca4f5e83…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.004 {"id":"59076af0…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:21:56.004 {"id":"bab885d0…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:21:56.004 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+--- processes before
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    10444            4116 node.exe        03:50:51 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+    12232            4144 harness-pty.exe 03:32:11 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10596           10444 node.exe        03:50:54 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+     6264           10948 node.exe        05:19:50 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+    12512           12232 node.exe        05:19:48 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+    11720           12232 OpenConsole.exe 05:19:48 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x418 -
+    12648           12232 claude.exe      03:54:08 C:\Users\admin\.local\bin\claude.exe                                                      
+    12112           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1d0 -
+      168           12232 powershell.exe  03:54:08 powershell.exe -NoLogo                                                                    
+     6652           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x2d4 -
+     5380           12648 claude.exe      03:55:56 C:\Users\admin\.local\bin\claude.exe --permission-mode auto                               
+     9748           12884 powershell.exe  05:21:56 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+
+
+
+--- stop
+12:22:03
+machine stopped (pid 10444).
+  TCP    127.0.0.1:18473        127.0.0.1:63509        TIME_WAIT       0
+  TCP    127.0.0.1:18473        127.0.0.1:63540        TIME_WAIT       0
+  TCP    127.0.0.1:18473        127.0.0.1:63543        TIME_WAIT       0
+  TCP    127.0.0.1:18473        127.0.0.1:63546        TIME_WAIT       0
+  TCP    127.0.0.1:18473        127.0.0.1:63554        TIME_WAIT       0
+--- start
+create rc=0 pid=4284
+12:22:13
+listening after 2s
+12:22:17.079 {"id":"bc74c769…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.080 {"id":"1f1e135d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.080 {"id":"c99673b5…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.080 {"id":"0d55651b…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.080 {"id":"364bce3e…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"6ac1298d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"bab75801…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 {"id":"e3f5d675…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"41c83184…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"470475a2…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 {"id":"42e87ad3…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"a61b5044…","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 {"id":"61f56d06…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 {"id":"ca4f5e83…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"59076af0…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 {"id":"bab885d0…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:17.081 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:17.081 PASS terminal bc74c769 kept its id and pane — pane null → null, status stopped
+12:22:17.081 PASS terminal 1f1e135d kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS claude c99673b5 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS codex 0d55651b kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal 364bce3e kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal 6ac1298d kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS claude bab75801 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal e3f5d675 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal 41c83184 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS codex 470475a2 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal 42e87ad3 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal a61b5044 kept its id and pane — pane %8 → %8, status offline
+12:22:17.082 PASS claude 9f4d41e4 kept its id and pane — pane %9 → %9, status active
+12:22:17.082 PASS codex 61f56d06 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal ca4f5e83 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS codex 59076af0 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS terminal bab885d0 kept its id and pane — pane null → null, status stopped
+12:22:17.082 PASS codex a9332983 kept its id and pane — pane %12 → %12, status active
+12:22:17.082 PASS no new agents appeared — 18 → 18
+12:22:17.084 FAIL terminal bc74c769 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"965436af…"}
+12:22:17.084 FAIL terminal 1f1e135d stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"ddfb08ad…"}
+12:22:17.085 FAIL claude c99673b5 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"ad57b862…"}
+12:22:17.086 FAIL codex 0d55651b stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"95d597c6…"}
+12:22:17.088 FAIL terminal 364bce3e stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"24e5a1aa…"}
+12:22:17.089 FAIL terminal 6ac1298d stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"1e97dfb9…"}
+12:22:17.090 FAIL claude bab75801 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"0739c250…"}
+12:22:17.091 FAIL terminal e3f5d675 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"e801b3f6…"}
+12:22:17.091 FAIL terminal 41c83184 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"ffacce6e…"}
+12:22:17.092 FAIL codex 470475a2 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"18b82e05…"}
+12:22:17.092 FAIL terminal 42e87ad3 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"e8aba7b5…"}
+12:22:22.647 PASS terminal a61b5044 stream reattaches with its screen — AFTER_42 | PS C:\work\e2e\proj>
+12:22:25.192 PASS claude 9f4d41e4 stream reattaches with its screen — screen still shows the earlier answer: ● 42
+12:22:25.195 FAIL codex 61f56d06 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"00d3edf1…"}
+12:22:25.198 FAIL terminal ca4f5e83 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"5395981c…"}
+12:22:25.199 FAIL codex 59076af0 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"3762802a…"}
+12:22:25.200 FAIL terminal bab885d0 stream reattaches with its screen — terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"003ce30a…"}
+12:22:27.723 FAIL codex a9332983 stream reattaches with its screen — screen lacks the earlier answer:
+  >_ OpenAI Codex (v0.162.1)
+     C:\work\e2e\proj
+  To get started, describe a task or try one of these commands:
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+› Ask Codex to do anything
+  GPT-6.1-Sol default · C:\work\e2e\proj
+12:22:27.724 SUMMARY 21/37 passed
+12:22:27.725   FAILED terminal bc74c769 stream reattaches with its screen
+12:22:27.725   FAILED terminal 1f1e135d stream reattaches with its screen
+12:22:27.725   FAILED claude c99673b5 stream reattaches with its screen
+12:22:27.725   FAILED codex 0d55651b stream reattaches with its screen
+12:22:27.725   FAILED terminal 364bce3e stream reattaches with its screen
+12:22:27.725   FAILED terminal 6ac1298d stream reattaches with its screen
+12:22:27.725   FAILED claude bab75801 stream reattaches with its screen
+12:22:27.725   FAILED terminal e3f5d675 stream reattaches with its screen
+12:22:27.725   FAILED terminal 41c83184 stream reattaches with its screen
+12:22:27.725   FAILED codex 470475a2 stream reattaches with its screen
+12:22:27.725   FAILED terminal 42e87ad3 stream reattaches with its screen
+12:22:27.725   FAILED codex 61f56d06 stream reattaches with its screen
+12:22:27.725   FAILED terminal ca4f5e83 stream reattaches with its screen
+12:22:27.725   FAILED codex 59076af0 stream reattaches with its screen
+12:22:27.725   FAILED terminal bab885d0 stream reattaches with its screen
+12:22:27.726   FAILED codex a9332983 stream reattaches with its screen
+--- processes after
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+     7800             828 node.exe        05:22:06 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+    12232            4144 harness-pty.exe 03:32:11 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+      828            4284 node.exe        05:22:05 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     6264           10948 node.exe        05:19:50 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+    11720           12232 OpenConsole.exe 05:19:48 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x418 -
+    12512           12232 node.exe        05:19:48 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+    12112           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1d0 -
+      168           12232 powershell.exe  03:54:08 powershell.exe -NoLogo                                                                    
+     6652           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x2d4 -
+    12648           12232 claude.exe      03:54:08 C:\Users\admin\.local\bin\claude.exe                                                      
+     1900           12340 powershell.exe  05:22:28 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+     5380           12648 claude.exe      03:55:56 C:\Users\admin\.local\bin\claude.exe --permission-mode auto                               
+
+
+

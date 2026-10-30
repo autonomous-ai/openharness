@@ -5,3 +5,6 @@
 #define ESP_LOGW(tag, ...) ((void)(tag), (void)(0 && printf(__VA_ARGS__)))
 #define ESP_LOGI(tag, ...) ((void)(tag), (void)(0 && printf(__VA_ARGS__)))
 #define ESP_LOGD(tag, ...) ((void)(tag), (void)(0 && printf(__VA_ARGS__)))
+#include <stdarg.h>
+typedef int (*vprintf_like_t)(const char *, va_list);
+vprintf_like_t esp_log_set_vprintf(vprintf_like_t func);

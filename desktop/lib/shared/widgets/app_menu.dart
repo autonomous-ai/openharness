@@ -81,6 +81,7 @@ class AppMenuItem extends StatefulWidget {
     this.focusNode,
     this.metrics = AppMenuRowMetrics.compact,
     this.textStyle,
+    this.expandLabel = false,
   });
 
   /// The leading glyph. Null for a row in a list that PICKS one of several — the
@@ -125,6 +126,9 @@ class AppMenuItem extends StatefulWidget {
   /// passes [AppMenuRowMetrics.roomy].
   final AppMenuRowMetrics metrics;
   final TextStyle? textStyle;
+
+  /// Fill a bounded row so its selection check sits at the trailing edge.
+  final bool expandLabel;
 
   /// This row is the current choice.
   ///
@@ -211,6 +215,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 ),
                 const SizedBox(width: 9),
                 Flexible(
+                  fit: widget.expandLabel ? FlexFit.tight : FlexFit.loose,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,

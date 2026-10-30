@@ -38,7 +38,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     // running to rediscover. Its retained pane is still visible in the app.
     registry.setActive(row.agentId, false)
     await vi.waitFor(async () => {
-      const capture = await backend.capture(row.runtimes[0])
+      const capture = await backend.capture({ backend: 'tmux', paneId: pane })
       expect(capture).toMatchObject({ state: 'succeeded', value: expect.stringContaining('keep this unsent draft') })
     })
     expect(await control.captureTerminal(row.agentId)).toBeNull()
@@ -56,12 +56,12 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     }
     const actualKill = backend.kill.bind(backend)
     const kill = vi.spyOn(backend, 'kill')
-    kill.mockImplementation(async runtime => {
+    kill.mockImplementation(async (runtime, allowed) => {
       await savedScreen() // The backup must exist before the pane is killed.
-      return actualKill(runtime)
+      return actualKill(runtime, allowed)
     })
     const stop = createStopAgentService({ registry, stoppedAgents,
-      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: backend,
+      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => backend,
       agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
       forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })
@@ -76,7 +76,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     expect(await close.request({ ...request, mode: 'idle' })).toMatchObject({ error: 'SESSION_NOT_IDLE' })
     expect(kill).not.toHaveBeenCalled()
     expect(await close.request({ ...request, mode: 'now' })).toEqual({ closed: true })
-    expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: pane })
+    expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: pane }, expect.any(Function))
     expect(registry.byAgent(row.agentId)).toBeUndefined()
     await savedScreen()
     expect(await server.run('list-panes', '-t', 'terminal-close', '-F', '#{pane_id}')).toBe(neighbor)

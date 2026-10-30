@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { request } from 'node:http';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { releaseAssetBase } from './harness-web-assets.mjs';
 
 const base = new URL(process.argv[2] || 'http://127.0.0.1:3000');
 const release = JSON.parse(await readFile(new URL('../harness-web-release.json', import.meta.url), 'utf8'));
 const assetBase = releaseAssetBase(release);
-// The front door is the Hub: `/` redirects there, temporarily, unless it is an `hn view` link.
-const front = await fetch(new URL('/', base), { redirect: 'manual' });
-assert.equal(front.status, 307, '/ must redirect to the Hub');
-assert.equal(new URL(front.headers.get('location'), base).pathname, '/hub');
-for (const route of ['/web', '/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
+// The front door is the web app; its old address `/web` sends there, temporarily, query and all.
+const old = await fetch(new URL('/web?machine=fixture-machine&agent=fixture-agent', base), { redirect: 'manual' });
+assert.equal(old.status, 307, '/web must redirect to the web app at /');
+assert.equal(new URL(old.headers.get('location'), base).href, new URL('/?machine=fixture-machine&agent=fixture-agent', base).href);
+for (const route of ['/', '/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
   const response = await fetch(new URL(route, base));
   assert.equal(response.status, 200, route);
   assert.match(response.headers.get('content-type'), /text\/html/);
@@ -46,6 +48,34 @@ for (const [route, type] of [
     method: 'HEAD', cache: 'no-cache', headers: { 'If-None-Match': '"previous-release"' },
   });
   assert.equal(stale.status, 200, `Changed asset must load the new release: ${route}`);
+}
+// The bytes as sent, which fetch would decode on its own.
+const raw = (url, acceptEncoding) => new Promise((resolve, reject) => {
+  request(url, { headers: { 'accept-encoding': acceptEncoding } }, (response) => {
+    const chunks = [];
+    response.on('data', (chunk) => chunks.push(chunk));
+    response.on('end', () => resolve({ headers: response.headers, body: Buffer.concat(chunks) }));
+  }).on('error', reject).end();
+});
+// Pre-compressed at build time (scripts/precompress.mjs): brotli to a browser that takes it, gzip
+// to one that takes only gzip, the file as is to one that takes neither; one cache entry per encoding.
+for (const route of [`${assetBase}main.dart.js`, `${assetBase}canvaskit/chromium/canvaskit.wasm`]) {
+  const plain = await raw(new URL(route, base), 'identity');
+  assert.equal(plain.headers['content-encoding'], undefined, route);
+  for (const [acceptEncoding, encoding, decode] of [
+    ['gzip, deflate, br, zstd', 'br', brotliDecompressSync],
+    ['gzip, deflate', 'gzip', gunzipSync],
+    // q=0 refuses an encoding: this browser takes gzip, not brotli.
+    ['br;q=0, gzip', 'gzip', gunzipSync],
+  ]) {
+    const sent = await raw(new URL(route, base), acceptEncoding);
+    assert.equal(sent.headers['content-encoding'], encoding, `${route} for ${acceptEncoding}`);
+    assert.equal(sent.headers['content-type'], plain.headers['content-type'], route);
+    assert.match(sent.headers.vary ?? '', /accept-encoding/i, route);
+    assert.match(sent.headers['cache-control'], /immutable/, route);
+    assert.ok(sent.body.length < plain.body.length, `${route} must be smaller as ${encoding}`);
+    assert.ok(decode(sent.body).equals(plain.body), `${route} as ${encoding} must decode to the file`);
+  }
 }
 const published = await (await fetch(new URL('/harness-web/release.json', base))).json();
 assert.equal(published.version, release.version);

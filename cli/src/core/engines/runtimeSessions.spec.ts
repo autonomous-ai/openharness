@@ -3,10 +3,11 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeContext, RuntimeProfile } from '../../engines/facets/runtime.js'
 import type { RuntimeAnswer, RuntimeOperation } from '../../engines/worker/runtimeProtocol.js'
 import { blankRuntimeState, encodeRuntimeProfile } from '../../engines/kit/runtime.js'
+import { createLiveSessions, type LiveSessions } from './liveSessions.js'
 import { createRuntimeSessions, type RuntimeSessions } from './runtimeSessions.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 
-const active: RuntimeSessions[] = []
+const active: RuntimeSessions[] = [], liveActive: LiveSessions[] = []
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 const session = (id = 'agent'): RegisteredSession => ({ agentId: id, sessionId: `${id}-conversation`, engine: 'claude',
   model: null, cliVersion: '2.1.209', cwd: '/tmp', transcriptPath: '/tmp/transcript', boundAt: 1 } as RegisteredSession)
@@ -41,7 +42,7 @@ function setup() {
   const seed = () => sessions.read(s, { kind: 'records', records: [{ model: 'old', effort: 'low' }] })
   return { s, bindings, changed, read, sessions, seed }
 }
-afterEach(() => { active.splice(0).forEach(s => s.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(() => { active.splice(0).forEach(s => s.stop()); liveActive.splice(0).forEach(l => void l.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('core runtime profile authority', () => {
   it.each(['binding', 'route', 'control', 'version', 'forget', 'unchanged'] as const)(
@@ -133,6 +134,73 @@ describe('core runtime profile authority', () => {
     response.resolve(result({ session: t.s, state: blankRuntimeState() }, { kind: 'describe' }))
     await rejected
     expect(t.sessions.getState(t.s.sessionId).model).not.toBe('late')
+  })
+
+  it('stages from the version the live row holds, and still refuses a different identity or a change mid-stage', async () => {
+    // 2026-10-19: a hook attach copied the row before discovery's attach taught it the CLI version.
+    const t = setup(); t.s.cliVersion = null
+    const copy = { ...t.s }
+    t.s.cliVersion = '2.1.303'
+    const staged = t.sessions.stage(copy, false, true)
+    await staged.ingest([{ model: 'm', effort: 'low' }])
+    expect(t.read.mock.calls[0]![1].session.cliVersion).toBe('2.1.303')
+    expect(staged.commit()).toBe(true)
+    expect(t.s.cliVersion).toBe('2.1.303')
+    const mid = t.sessions.stage({ ...copy }, false, true)
+    t.s.cliVersion = '2.1.304'
+    await expect(mid.ingest([{ model: 'n' }])).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(() => t.sessions.stage({ ...copy, sessionId: 'other' }, false, true)).toThrow('ENGINE_STALE_REPLY')
+    expect(() => t.sessions.stage({ ...copy, agentId: 'other' }, false, true)).toThrow('ENGINE_STALE_REPLY')
+    expect(() => t.sessions.stage({ ...copy, boundAt: 2 }, false, true)).toThrow('ENGINE_STALE_REPLY')
+  })
+
+  it('accepts a copy holding an older non-null version', async () => {
+    const t = setup(); t.s.cliVersion = '2.1.303'
+    const staged = t.sessions.stage({ ...t.s, cliVersion: '2.1.300' }, false, true)
+    await staged.ingest([{ model: 'm', effort: 'low' }])
+    expect(t.read.mock.calls[0]![1].session.cliVersion).toBe('2.1.303')
+    expect(staged.commit()).toBe(true)
+  })
+
+  describe('with live sessions retrying through them', () => {
+    // The 2026-10-19 race: the hook attach copies the row, discovery's attach learns the version, the copy stages.
+    const wire = () => {
+      const t = setup(); t.s.cliVersion = null
+      const attempts: RegisteredSession[] = []
+      const commits: boolean[] = []
+      const live = createLiveSessions({ handles: () => true, bySession: id => [...t.bindings.values()].find(b => b.sessionId === id),
+        transport: { pull: vi.fn(), forget: vi.fn(async () => {}), close: vi.fn(), connected: vi.fn(), disconnected: vi.fn() },
+        frame: vi.fn(), watch: vi.fn(), unwatch: vi.fn(), log: vi.fn(),
+        reattach: async copy => {
+          attempts.push(copy)
+          const staged = t.sessions.stage(copy, false, true)
+          await staged.ingest([{ model: 'm', effort: 'low' }])
+          commits.push(staged.commit())
+        } })
+      liveActive.push(live)
+      return { ...t, live, attempts, commits }
+    }
+    it('(a) a copy taken before the version is learned stages on the first try', async () => {
+      vi.useFakeTimers()
+      const t = wire(), copy = { ...t.s }
+      t.s.cliVersion = '2.1.303'
+      await t.sessions.stage(copy, false, true).ingest([{ model: 'm' }])
+      expect(t.attempts).toHaveLength(0)
+    })
+    it('(b) a stage that throws mid-way is retried once with the live row, then commits', async () => {
+      vi.useFakeTimers()
+      const t = wire(), copy = { ...t.s }
+      const mid = t.sessions.stage(copy, false, true)
+      t.s.cliVersion = '2.1.303'
+      await expect(mid.ingest([{ model: 'n' }])).rejects.toThrow('ENGINE_STALE_REPLY')
+      t.live.retry(copy)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.attempts).toHaveLength(1)
+      expect(t.attempts[0]!.cliVersion).toBe('2.1.303')
+      expect(t.commits).toEqual([true])
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(t.attempts).toHaveLength(1)
+    })
   })
 
   it('does not let an old binding evict a newer view and fences staged configuration', async () => {
@@ -235,6 +303,19 @@ describe('core runtime profile authority', () => {
     expect(stage.commit()).toBe(false)
     t.sessions.confirmControlProfile(profile(t.s, 'different'))
     expect(t.sessions.getState(t.s.agentId).model).toBe('different')
+  })
+
+  // A confirmed switch is the session's effort, even one equal to what the settings filled (#1966 delta review).
+  it.each(['effort', 'profile'] as const)('a confirmed %s is no longer the settings\' effort', async confirmed => {
+    const t = setup()
+    t.read.mockImplementationOnce(async (_engine, context) => ({ ...result(context, { kind: 'config' }),
+      state: { ...context.state, effort: 'high', settingsEffort: 'high' } }))
+    await t.sessions.read(t.s, { kind: 'config' })
+    expect(t.sessions.getState(t.s.agentId).settingsEffort).toBe('high')
+    if (confirmed === 'effort') t.sessions.confirmEffort(t.s.sessionId, 'high')
+    else t.sessions.confirmControlProfile(profile(t.s, 'new', 'high'))
+    expect(t.sessions.getState(t.s.agentId).effort).toBe('high')
+    expect(t.sessions.getState(t.s.agentId)).not.toHaveProperty('settingsEffort')
   })
 
   it('commits prepared live evidence only while its binding and control revision remain current', async () => {

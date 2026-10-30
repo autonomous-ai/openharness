@@ -29,6 +29,7 @@ export function copilotTranscriptPath(copilotHome: string, sessionId: string): s
   return join(copilotHome, 'session-state', sessionId, 'events.jsonl')
 }
 
+// Windows: Copilot CLI copies `command` to its `powershell` field and runs that (docs.github.com, hooks configuration reference).
 /** The engine reads each JSON file in its hooks directory. This file is ours; preToolUse is fail-closed and is deliberately absent. Tool cards come from its transcript. */
 export const COPILOT_HOOK_SETTINGS = {
   file: hookPath(hookEnvironment.COPILOT_HOME, 'hooks', 'harness.json'),
@@ -42,6 +43,7 @@ export const COPILOT_HOOK_SETTINGS = {
   ],
   "version": 1,
   "eventFlag": "--copilot-event",
+  "win32Runner": "powershell",
   "messages": {
     "current": "[hooks] Copilot lifecycle hooks already installed",
     "installed": "[hooks] installed Copilot lifecycle hooks → {file}",

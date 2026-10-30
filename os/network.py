@@ -2,7 +2,6 @@
 """A full-page Wi-Fi step backed by NetworkManager, with no resident UI service."""
 import argparse
 import curses
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -11,9 +10,19 @@ import uuid
 import unicodedata
 
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
-# setup.py's hotspot for a phone, and the Wi-Fi it saw before taking the radio.
+# setup.py's hotspot for a phone. Opened (after someone typed this computer's password at its screen),
+# this page holds the radio: SETUP_SCREEN keeps setup.py from hosting the hotspot (setup.py SCREEN)
+# until the computer is signed in, or the page is left alone a while.
 SETUP_HOTSPOT = 'harness-setup'
-SETUP_NETWORKS = '/run/harness-os/setup-networks.json'
+SETUP_SCREEN = '/run/harness-os/setup-screen'
+# Untouched this long, the page lets the hotspot back for a phone; a key takes the radio again.
+SCREEN_IDLE = 300
+# Written by the startup's unlock hotspot (unlock/http) when a phone opened the disk: the session at
+# the screen then started by itself (autologin), with nobody there. Written too by a sign-out from a
+# phone and a factory reset (setup.py PHONE_SETS_UP): the computer waits for a phone to set it up.
+# The Wi-Fi page opened then, first or offline, leaves the radio to setup.py's hotspot, for that phone
+# to choose the Wi-Fi, until a key here.
+UNLOCKED_BY_PHONE = '/run/harness-os/unlocked-by-phone'
 
 
 def nmcli(*args, secret=None, wait=8):
@@ -42,8 +51,7 @@ def fields(line):
 
 
 def setup_hotspot_up():
-    """Whether the radio hosts setup.py's hotspot for a phone. It is not a network this computer is
-    on, and while it is up the radio cannot scan: the list shown is the one setup.py read first."""
+    """Whether the radio hosts setup.py's hotspot for a phone. It is not a network this computer is on."""
     try:
         result = nmcli('-t', '-e', 'yes', '-f', 'NAME', 'connection', 'show', '--active', wait=3)
     except (OSError, subprocess.TimeoutExpired):
@@ -64,21 +72,43 @@ def connected():
     return any(row[1] == 'ethernet' and row[2] == 'connected' for row in wired_devices())
 
 
-def setup_networks():
-    """What the radio saw before it became the setup hotspot (os/setup.py)."""
+def hold_radio():
+    """Someone at the screen is choosing a Wi-Fi: setup.py hosts no hotspot meanwhile, and one up now
+    goes first, for the radio to scan and join. Before the first scan, so the list is a real one.
+    Kept once the page is done: the Wi-Fi chosen here stays while they sign in at the screen."""
+    path = Path(SETUP_SCREEN)
     try:
-        rows = json.loads(Path(SETUP_NETWORKS).read_text())
-    except (OSError, ValueError):
-        return []
-    networks = [dict(ssid=row['ssid'], signal=int(row['signal']), security=row.get('security') or '--',
-                     device=row['device'], bssid='', active=False)
-                for row in rows if isinstance(row, dict) and row.get('ssid') and row.get('device')]
-    return sorted(networks, key=lambda row: (-row['signal'], row['ssid']))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    except OSError:
+        pass
+    if leave_setup_hotspot():
+        # A moment for the radio to leave access-point mode before it is asked to scan.
+        time.sleep(1)
+        return True
+    return False
+
+
+def phone_unlocked():
+    """Whether a phone unlocked this computer as it started (UNLOCKED_BY_PHONE), asked once: the mark
+    goes, so a Wi-Fi page opened later at the screen holds the radio as usual."""
+    path = Path(UNLOCKED_BY_PHONE)
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def release_radio():
+    """The hotspot may come back (setup.py) for a phone: the page was left alone."""
+    try:
+        Path(SETUP_SCREEN).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def scan(rescan=None):
-    if setup_hotspot_up():
-        return setup_networks()
     # Opening the page should reuse a recent scan, especially just after a
     # reconnect. NetworkManager refreshes results older than 30 seconds in auto
     # mode. Force a scan only when the user chooses Rescan.
@@ -163,10 +193,12 @@ def saved_connection(network):
 
 
 def leave_setup_hotspot():
-    # Chosen here, on the screen: the radio stops hosting the phone's setup hotspot to join it, and
-    # setup.py, seeing this computer online, stops waiting for the phone.
+    # Wanted here, on the screen: the radio stops hosting the phone's setup hotspot to scan and join,
+    # and setup.py, seeing the page hold the radio, stops waiting for the phone.
     if setup_hotspot_up():
         nmcli('connection', 'down', 'id', SETUP_HOTSPOT, wait=10)
+        return True
+    return False
 
 
 def connect(network, password=None):
@@ -351,13 +383,33 @@ class NetworkPage:
         # or a router back on. Left open, it held the first tab and OpenCode never opened there.
         # Opened while online, to change networks, it stays until closed.
         until_online = self.first_use or not online
-        self.refresh()
+        # Someone who typed this computer's password is here: the phone's hotspot goes first, and the
+        # list is the radio's own, scanned now.
+        touched = time.monotonic()
+        if (self.first_use or not online) and phone_unlocked():
+            # A phone unlocked this computer and is setting it up: its hotspot stays. A key here
+            # still takes the radio, as below.
+            self.held = False
+            self.refresh()
+            self.message = 'A phone can set this computer up now. Press a key to choose a Wi-Fi here.'
+        else:
+            self.held = True
+            self.refresh(rescan=True if hold_radio() else None)
+            # Nothing yet: just started (NetworkManager has not scanned once since the card came up,
+            # and its recent list is empty) — scanned now, rather than waiting for a Rescan.
+            if not self.networks and not self.message:
+                self.refresh(rescan=True)
         checked = time.monotonic()
         while True:
             if until_online and time.monotonic() - checked >= 2:
                 if connected():
                     return 0
                 checked = time.monotonic()
+            if self.held and time.monotonic() - touched >= SCREEN_IDLE:
+                # Left alone: a phone may set this computer up instead, until a key here.
+                release_radio()
+                self.held = False
+                self.message = 'A phone can set this computer up now. Press a key to choose a Wi-Fi here.'
             rows = [('wifi', network) for network in self.networks] + [('rescan', None)]
             rows += [('wired', device) for device in self.wired]
             self.selected = min(self.selected, len(rows) - 1)
@@ -385,6 +437,12 @@ class NetworkPage:
             try:
                 key = self.screen.get_wch()
             except curses.error:
+                continue
+            touched = time.monotonic()
+            if not self.held:
+                # Back at the screen: the radio again, and a fresh list.
+                self.held = True
+                self.refresh(rescan=True if hold_radio() else None)
                 continue
             if key in ('\x1b', '\x03') and not self.first_use:
                 return 1

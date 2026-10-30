@@ -12,6 +12,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/workspace_status.dart';
 import 'package:harness/widgets/cloud_chat_pane.dart';
 import 'package:harness/widgets/engine_identity.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/rename_connection.dart';
@@ -424,6 +425,86 @@ void main() {
     );
   });
 
+  test('New Harness sends a coding cloud agent its repository, and a box closed mid-create says nothing', () async {
+    final connection = CreateConnection();
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
+    addTearDown(app.dispose);
+    final devin = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'devin-cloud',
+    );
+    addTearDown(devin.dispose);
+    devin.focusField(NewHarnessField.projectRepository);
+    devin.setQuery('acme/api');
+    devin.accept();
+    expect(devin.cloudRepository, 'https://github.com/acme/api.git');
+    devin.setTask('fix the flaky login test');
+    expect(devin.requiredChoice, isNull);
+    expect(await devin.create(), NewHarnessOutcome.created);
+    expect(
+      connection.creates.single,
+      containsPair('repositoryUrl', 'https://github.com/acme/api.git'),
+    );
+    expect(connection.creates.single, containsPair('acuLimit', 5));
+
+    // Closed while the cloud service makes it: nothing is said to a box
+    // that is gone.
+    final fo = NewHarnessController(app, machineId: 'm', engine: 'fo');
+    fo.setTask('book a haircut');
+    final made = fo.create();
+    fo.dispose();
+    expect(await made, NewHarnessOutcome.failed);
+    expect(connection.creates, hasLength(2));
+  });
+
+  testWidgets(
+    'each press of Devin Cloud\'s limit steps to the next, round to the first',
+    (tester) async {
+      final connection = CreateConnection();
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
+      addTearDown(app.dispose);
+      final devin = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'devin-cloud',
+      );
+      addTearDown(devin.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1000,
+              height: 600,
+              child: NewHarnessForm(
+                controller: devin,
+                onClose: () {},
+                onCreated: () {},
+                desktop: true,
+                embedded: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final limit = find.byKey(const ValueKey('new-harness-field-acu'));
+      expect(devin.acuLimit, 5);
+      for (final next in [10, 20, 2, 5]) {
+        await tester.tap(limit);
+        await tester.pumpAndSettle();
+        expect(devin.acuLimit, next);
+      }
+      expect(find.text('Up to 5 ACUs'), findsOneWidget);
+    },
+  );
+
   testWidgets('the dial scrolls a focused cloud conversation', (tester) async {
     final (app, connection) = await setUp(tester, cloudFrame());
     connection.extraMessages = 60;
@@ -451,6 +532,14 @@ void main() {
     await dial({'phase': 'move', 'dy': 20});
     await dial({'phase': 'up', 'dy': 0, 'velocity': 400});
     final released = position().pixels;
+    // Inertia reads the wall clock; pumping advances only the fake timers.
+    // Wait for one real clock tick, including hosts with coarser clock precision.
+    await tester.runAsync(() async {
+      final before = DateTime.now();
+      do {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      } while (!DateTime.now().isAfter(before));
+    });
     await tester.pump(const Duration(milliseconds: 200));
     expect(position().pixels, greaterThan(released), reason: 'the fling');
     await dial({'phase': 'down', 'dy': 0});

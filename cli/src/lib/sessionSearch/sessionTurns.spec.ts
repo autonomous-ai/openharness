@@ -31,6 +31,15 @@ const codex = {
 const fixture = (relative: string) => fileURLToPath(new URL(relative, import.meta.url))
 
 describe('readSessionTurns: a JSONL transcript', () => {
+  it('discards the first tail fragment even when it looks like a complete prompt', async () => {
+    const prefix = 'part of an earlier record '
+    const path = file(prefix + claude.prompt('not a whole record', 0) + '\n'
+      + claude.prompt('keep this recent request', 1) + '\n'
+      + claude.answer('keep this recent answer', 2) + '\n')
+    const turns = await readSessionTurns({ engine: 'claude', sessionId: 's1', transcriptPath: path }, { start: Buffer.byteLength(prefix) })
+    expect(turns.map(turn => [turn.ask, turn.answer])).toEqual([['keep this recent request', 'keep this recent answer']])
+  })
+
   it('reads a Claude session whole, with no tool output', async () => {
     const path = file([
       claude.prompt('Why does the dial scroll jump?', 0),

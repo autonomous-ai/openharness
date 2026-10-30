@@ -217,6 +217,10 @@ const fields = {
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
   HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
+  // The Harness PTY host's `--home` (the `ptyhost` terminal backend, pty/): it writes `run/` (its discovery
+  // file and endpoint) and `logs/pty-host-<instance>.log` under it. Product-root state like the logs: the host outlives
+  // a daemon restart, and the next daemon finds it here.
+  HARNESS_PTY_DIR: text(join(adapterRootDir, 'pty')),
   // The dials' own product-root state: `pets/` holds the custom pet packs and which pack stands for what.
   // Not daemon data (`harness reset` must not lose a user's pets), and shared by this user's daemons.
   HARNESS_DEVICES_DIR: text(join(adapterRootDir, 'devices')),
@@ -240,6 +244,12 @@ const fields = {
   // and every `harness` command with it).
   HARNESS_STORE_CATALOG_URL: url((address) => !address.username && !address.password && (address.protocol === 'https:'
     || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname)))),
+  // Where Super Tab chat files are served: the backend's SUPER_TAB_ATTACHMENTS_PUBLIC_BASE. The host downloads a
+  // delivered message's files from here alone, so a message cannot make this computer fetch any other address.
+  // Public HTTPS; loopback HTTP for the local Super Tab rig.
+  SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: (raw: string | undefined) => url((address) => !address.username && !address.password && !address.search
+    && (address.protocol === 'https:' || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname))))(raw)
+    ?? 'https://cdn.harness.autonomous.ai',
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.
@@ -258,8 +268,9 @@ const fields = {
   // `harness start` and `harness login` install the `grid` CLI when the machine has none (see
   // lib/gridInstall.ts). Off for tests and for a machine whose grid is managed some other way.
   DISABLE_GRID_INSTALL: flag('false'),
-  // Terminal backends to watch. UNSET MEANS AUTO — every backend usable here, which is tmux. A value
-  // pins the set; a retired name still in someone's environment is dropped with a warning.
+  // Terminal backends to watch. UNSET MEANS AUTO — this platform's default (`defaultTerminalBackends`:
+  // ptyhost on Windows, tmux elsewhere). A value pins the set; a retired name still in someone's
+  // environment is dropped with a warning.
   TERMINAL_BACKENDS: (raw: string | undefined): ReturnType<typeof parseTerminalBackends> | undefined => {
     if (raw === undefined || raw === '') return undefined
     try { return parseTerminalBackends(raw) } catch (error) {
@@ -278,6 +289,8 @@ const fields = {
   OPENCODE_PATH: maybe,
   // Path to the `pi` CLI for Pi recap one-shots (else `pi` is resolved from PATH).
   PI_PATH: maybe,
+  // Path to the `omp` CLI (else `omp` is resolved from PATH).
+  OMP_PATH: maybe,
   // Path to the `hermes` CLI for Hermes recap one-shots (else `hermes` is resolved from PATH).
   HERMES_PATH: maybe,
   // Path to the `commandcode` CLI for Command Code recap one-shots (else resolved from PATH).
@@ -308,6 +321,11 @@ const fields = {
   // encrypted on the wire, so a packet capture cannot answer "what did the adapter actually send".
   // Never prints message text, transcripts, tokens or payload bodies.
   LOG_FRAMES: flag('false'),
+  // Log a remote client's keystrokes on their way to the pane and back: which wire each came on, how long it
+  // waited in line, held for a missing one, and until its echo went out. OFF by default: one line per hop per
+  // keystroke. Numbers and timings only (stream, seq, size) — never what was typed. The phone's own half is
+  // `--dart-define=HARNESS_TYPING_TRACE=true` (mobile/lib/logging/typing_trace.dart).
+  TYPING_TRACE: flag('false'),
   // TEMPORARY / diagnostic. Forces iceTransportPolicy:'relay', so the ONLY candidate either peer can
   // offer is a Cloudflare TURN allocation — the way to exercise the relay path on a pair that would
   // otherwise always connect directly. Costs money per GB while it is on; never ship it enabled.

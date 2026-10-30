@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { HARNESSD_PROTOCOL, isCoreMessage, isMasterMessage, isUpdaterMessage } from './protocol.js'
 
 describe('the spawn channel protocol', () => {
+  it('is protocol 6: the core asks its master to stop, and the master asks a process to leave', () => {
+    expect(HARNESSD_PROTOCOL).toBe(6)
+  })
+
   it.each([
     [{ type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port: 18473 }, true],
     [{ type: 'harnessd:bound', protocol: 1.5, port: 18473 }, false],
@@ -15,6 +19,8 @@ describe('the spawn channel protocol', () => {
     [{ type: 'harnessd:want', service: 'orchestrator' }, true],
     [{ type: 'harnessd:want', service: '' }, false],
     [{ type: 'harnessd:want' }, false],
+    [{ type: 'harnessd:stop' }, true],
+    [{ type: 'harnessd:shutdown' }, false],
     [{ type: 'harnessd:status', status: {} }, false],
     [{ type: 'other' }, false],
     [null, false],
@@ -31,6 +37,8 @@ describe('the spawn channel protocol', () => {
     [{ type: 'harnessd:update', version: '1.2.3' }, true],
     [{ type: 'harnessd:update', version: '' }, false],
     [{ type: 'harnessd:update' }, false],
+    [{ type: 'harnessd:shutdown' }, true],
+    [{ type: 'harnessd:stop' }, false],
     [undefined, false],
     [7, false],
   ])('a master message %j is %s', (message, valid) => {
@@ -39,8 +47,15 @@ describe('the spawn channel protocol', () => {
 
   it.each([
     [{ type: 'harnessd:staged', version: '1.2.3' }, true],
+    [{ type: 'harnessd:staged', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged', version: '1.2.3', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged', version: '', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged' }, false],
+    [{ type: 'harnessd:staged', version: '', ptyVersion: '' }, false],
     [{ type: 'harnessd:staged', version: '' }, false],
     [{ type: 'harnessd:staged', version: 3 }, false],
+    [{ type: 'harnessd:staged', ptyVersion: 3 }, false],
+    [{ type: 'harnessd:staged', version: 3, ptyVersion: '0.11.0' }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }, false],
     [null, false],
     ['harnessd:staged', false],

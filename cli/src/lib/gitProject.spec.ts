@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { fetchDefaultBranch, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
@@ -241,6 +241,15 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     }
   })
 
+  // Desktop makes the name up before the start and keeps it; the person never chose it, so taken is no refusal.
+  it('gives a made-up worktree branch name that is already taken the next free number', async () => {
+    await git('branch', 'quiet-owl')
+    await git('branch', 'quiet-owl-2')
+    const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    expect(await current(made)).toBe('quiet-owl-3')
+    expect(await git('config', '--get', 'branch.quiet-owl-3.harness')).toBe('placeholder')
+  })
+
   it('makes a new branch for the folder itself, keeping its uncommitted work, and refuses one that exists', async () => {
     await writeFile(join(repo, 'src', 'value'), 'in progress')
     expect(await prepare('branch', 'refs/heads/login-fix', repo, { branchName: 'login-fix' })).toBe(repo)
@@ -355,6 +364,279 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await readFile(join(ahead, 'src', 'value'), 'utf8')).toBe('local')
     const tracking = await prepare('worktree', 'refs/remotes/origin/fix/typo', repo, { branchName: 'fix/typo' })
     expect((await exec('git', ['-C', tracking, 'rev-parse', '--abbrev-ref', '@{upstream}'])).stdout.trim()).toBe('origin/fix/typo')
+  })
+
+  describe('a Swarm start that names no branch', () => {
+    // A Swarm host clones a project once and reuses that checkout for every Builder, so its HEAD falls behind the
+    // remote. `branchBase: 'default'` is what a Swarm start without `branchRef` asks for.
+    let origin: string, managed: string
+    const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
+    const inClone = (...args: string[]) => exec('git', ['-C', managed, ...args]).then(out => out.stdout.trim())
+    /** What the worktree a Swarm start made shows of `src/value`. */
+    const swarmStart = async (extra: Record<string, unknown> = {}, path = managed) =>
+      readFile(join(await prepareProjectFolder(parseProjectFolder({ projectSource: 'worktree', gitSource: path, branchName: 'super-tab/start-1',
+        branchBase: 'default', ...extra })!, options()), 'src', 'value'), 'utf8')
+    beforeEach(async () => {
+      origin = join(root, 'origin.git'); managed = join(root, 'managed')
+      await exec('git', ['clone', '--quiet', '--bare', repo, origin])
+      await exec('git', ['clone', '--quiet', origin, managed])
+    })
+    /** Someone pushes to the remote's default branch after the managed clone was made. */
+    const pushToOrigin = async (value: string) => {
+      const pusher = join(root, 'pusher')
+      await exec('git', ['clone', '--quiet', origin, pusher])
+      await writeFile(join(pusher, 'src', 'value'), value)
+      await exec('git', ['-C', pusher, ...identity, 'commit', '-qam', value])
+      await exec('git', ['-C', pusher, 'push', '--quiet', 'origin', 'main'])
+    }
+
+    it('starts from the remote default branch, fetched first, and leaves the checkout\'s own branch where it was', async () => {
+      const before = await inClone('rev-parse', 'HEAD')
+      await pushToOrigin('pushed')
+      expect(await swarmStart()).toBe('pushed')
+      expect(await inClone('rev-parse', 'HEAD')).toBe(before)
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
+    })
+
+    it('starts from what the checkout has when the fetch fails', async () => {
+      await pushToOrigin('pushed')
+      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
+      expect(await swarmStart()).toBe('main')
+    })
+
+    it('starts from HEAD in a repository with no remote default branch', async () => {
+      const local = join(root, 'local-only')
+      await mkdir(local)
+      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
+      await mkdir(join(local, 'src'))
+      await writeFile(join(local, 'src', 'value'), 'trunk')
+      await exec('git', ['-C', local, 'add', '.'])
+      await exec('git', ['-C', local, ...identity, 'commit', '-qm', 'initial'])
+      expect(await swarmStart({}, local)).toBe('trunk')
+    })
+
+    it('names the default branch when the remote has no origin/HEAD but has main', async () => {
+      await pushToOrigin('pushed')
+      await inClone('remote', 'set-head', 'origin', '--delete')
+      expect(await swarmStart()).toBe('pushed')
+    })
+
+    it('fetches nothing for another person\'s Swarm start: its host fetched with the app\'s token, and the worktree starts from that', async () => {
+      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
+      await pushToOrigin('pushed')
+      // The daemon's own git setup is never asked: offline, the worktree starts from what the checkout has.
+      const offline = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-1', fromDefaultBranch: true, offline: true }, options())
+      expect(await readFile(join(offline, 'src', 'value'), 'utf8')).toBe('main')
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
+      // Only the daemon sets it: a client cannot ask for it.
+      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default', offline: true })).not.toHaveProperty('offline')
+      // The host's fetch, with the environment it is given in place of the daemon's.
+      const env = { ...process.env, GIT_CONFIG_PARAMETERS: `'harness.fixture'='yes'` }
+      expect(await fetchDefaultBranch(managed, env)).toBe(true)
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
+      const folder = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-2', fromDefaultBranch: true, offline: true }, options())
+      expect(await readFile(join(folder, 'src', 'value'), 'utf8')).toBe('pushed')
+    })
+
+    it('a host\'s fetch does nothing outside a checkout or without a default branch, and says when it could not fetch', async () => {
+      expect(await fetchDefaultBranch('relative/path', process.env)).toBe(false)
+      expect(await fetchDefaultBranch(join(root, 'nowhere'), process.env)).toBe(false)
+      const local = join(root, 'no-remote')
+      await mkdir(local)
+      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
+      await exec('git', ['-C', local, ...identity, 'commit', '-q', '--allow-empty', '-m', 'initial'])
+      expect(await fetchDefaultBranch(local, process.env)).toBe(false)
+      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
+      expect(await fetchDefaultBranch(managed, process.env)).toBe(false)
+    })
+
+    it('starts from the branch it is given, not the default one', async () => {
+      await pushToOrigin('pushed')
+      expect(await swarmStart({ branchBase: undefined, branchRef: 'refs/remotes/origin/feature' })).toBe('feature')
+    })
+
+    it('is not what a start from Desktop or the CLI does: without the flag the checkout\'s HEAD is used and nothing is fetched', async () => {
+      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
+      await pushToOrigin('pushed')
+      expect(await swarmStart({ branchBase: undefined })).toBe('main')
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
+    })
+
+    it('is accepted only for a worktree that names no branch', () => {
+      const parse = (extra: Record<string, unknown>) => () => parseProjectFolder({ projectSource: 'worktree', gitSource: managed,
+        branchName: 'super-tab/start-1', ...extra })
+      expect(parse({ branchBase: 'default' })()).toMatchObject({ source: 'worktree', fromDefaultBranch: true })
+      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default' })).toMatchObject({ fromDefaultBranch: true })
+      expect(parse({})()).not.toHaveProperty('fromDefaultBranch')
+      expect(parse({ branchBase: 'default', branchRef: 'refs/remotes/origin/main' })).toThrow()
+      expect(parse({ branchBase: 'main' })).toThrow()
+      expect(parse({ branchBase: true })).toThrow()
+      expect(() => parseProjectFolder({ projectSource: 'branch', gitSource: managed, branchRef: 'refs/heads/main', branchBase: 'default' })).toThrow()
+    })
+
+    it('does not change a direct prepareGitProject call', async () => {
+      await pushToOrigin('pushed')
+      const path = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'plain' })
+      expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+      const asked = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'asked', fromDefaultBranch: true })
+      expect(await readFile(join(asked, 'src', 'value'), 'utf8')).toBe('pushed')
+    })
+  })
+
+  describe('a worktree whose git is slow or fails', () => {
+    const harnesses = () => join(root, 'harnesses')
+    const listed = () => git('worktree', 'list', '--porcelain')
+    /** A file checked out through the `name` filter, whose smudge command is [smudge]. Set after the
+     *  commit: `git add` needs no filter. */
+    const filtered = async (name: string, smudge: string) => {
+      await writeFile(join(repo, '.gitattributes'), `filtered filter=${name}\n`)
+      await writeFile(join(repo, 'filtered'), 'content\n')
+      await git('add', '.')
+      await git('commit', '-m', 'filtered file')
+      await git('config', `filter.${name}.smudge`, smudge)
+      await git('config', `filter.${name}.required`, 'true')
+    }
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('uses a checkout that finished although git was still running at the timeout, and stops what git left running', async () => {
+      // git checked everything out and is in its post-checkout hook when the time runs out.
+      const hooks = join(root, 'hooks')
+      await mkdir(hooks)
+      const pidFile = join(root, 'hook.pid')
+      await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`, { mode: 0o755 })
+      await git('config', 'core.hooksPath', hooks)
+      const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'slow', worktreeTimeout: 1_500 })
+      expect(path).toBe(join(worktrees(), 'slow'))
+      expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+      expect(await current(path)).toBe('slow')
+      expect(await git('config', '--get', 'branch.slow.harness')).toBe('created')
+      // Unlocked: git marks a worktree locked while it is being made.
+      const real = await realpath(path)
+      const entry = (await listed()).split(/\n\s*\n/).find(block => block.includes(`worktree ${real}`))
+      expect(entry).toBeDefined()
+      expect(entry).not.toContain('locked')
+      const hookPid = Number((await readFile(pidFile, 'utf8')).trim())
+      expect(() => process.kill(hookPid, 0)).toThrow()
+    }, 20_000)
+
+    it('removes the partial folder and its new branch when the checkout is cut off at the timeout', async () => {
+      await filtered('slow', 'sleep 60; cat')
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'cut', worktreeTimeout: 1_500 }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      await expect(readFile(join(worktrees(), 'cut', 'src', 'value'))).rejects.toThrow()
+      await expect(realpath(join(worktrees(), 'cut'))).rejects.toThrow()
+      expect(await git('branch', '--list', 'cut')).toBe('')
+      expect(await listed()).not.toContain('cut')
+    }, 20_000)
+
+    it('says why git failed, without credentials, and leaves no partial folder or new branch', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await filtered('broken', "echo 'cannot reach https://robot:s3cret-token@example.invalid/lfs' >&2; exit 1")
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      const lines = said.mock.calls.map(call => call.join(' ')).filter(line => line.startsWith('[worktree]'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('exit 128')
+      expect(lines[0]).toContain('cannot reach https://')
+      expect(lines[0]).not.toContain('s3cret-token')
+      await expect(realpath(join(worktrees(), 'broken'))).rejects.toThrow()
+      expect(await git('branch', '--list', 'broken')).toBe('')
+      expect(await listed()).not.toContain('broken')
+      // The next start finds the name free.
+      await git('config', '--unset', 'filter.broken.required')
+      await git('config', 'filter.broken.smudge', 'cat')
+      expect(await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' })).toBe(join(worktrees(), 'broken'))
+    })
+
+    it('leaves a registration that existed before the failed start, even one for the same folder', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      // An earlier worktree at the folder this start picks, whose folder was deleted without `git worktree remove`.
+      await git('worktree', 'add', '-b', 'earlier', '--', join(worktrees(), 'again'), 'main')
+      await rm(join(worktrees(), 'again'), { recursive: true, force: true })
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'again' }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      expect(await listed()).toContain('branch refs/heads/earlier')
+      expect(await git('branch', '--list', 'again')).toBe('')
+    })
+
+    it('never deletes a branch a person made at their own commit after the first check and before the add', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      // git, as the daemon runs it, with the person's own `git branch mine feature` landing just after the name was checked.
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const bin = join(root, 'bin'), made = join(root, 'person-made-it')
+      await mkdir(bin)
+      await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
+        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'mine' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+      expect(await git('rev-parse', 'mine')).toBe(await git('rev-parse', 'feature'))
+      await expect(realpath(join(worktrees(), 'mine'))).rejects.toThrow()
+      expect(await listed()).not.toContain('worktrees/project with spaces/mine')
+    })
+
+    it('logs none of a stateless GitHub token git printed', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const payload = 'eyJpc3MiOiIxMjM0NTYifQ', signature = `${'s'.repeat(470)}-x_y`
+      await filtered('leaky', `echo 'remote refused (token "ghs_123456_eyJhbGciOiJSUzI1NiJ9.${payload}.${signature}"), retry.' >&2; exit 1`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'leaky' })).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      const line = said.mock.calls.map(call => call.join(' ')).find(text => text.startsWith('[worktree]'))!
+      expect(line).toContain('remote refused (token "')
+      expect(line).not.toContain('ghs_123456_')
+      expect(line).not.toContain(payload)
+      expect(line).not.toContain('ssssssss')
+      expect(line).not.toContain('-x_y')
+    })
+
+    describe('on Windows, where taskkill cannot stop what git started', () => {
+      const platform = process.platform
+      beforeEach(async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+        const bin = join(root, 'bin')
+        await mkdir(bin)
+        await writeFile(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n', { mode: 0o755 })
+        vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      })
+      afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
+      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends after
+       *  [seconds] by touching `ended`. */
+      const leftBehind = async (seconds: number) => {
+        const hooks = join(root, 'hooks')
+        await mkdir(hooks)
+        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(sleep ${seconds}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
+        await git('config', 'core.hooksPath', hooks)
+      }
+
+      it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(2)
+        const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
+        expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
+        expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*could not be terminated/)
+      }, 20_000)
+
+      it('removes nothing while something git started may still be writing', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(8)
+        await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'still-running', worktreeTimeout: 1_500 }))
+          .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+        await expect(readFile(join(root, 'ended'))).rejects.toThrow()
+        expect(await readFile(join(worktrees(), 'still-running', 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] .*still running.*left as it is/)
+      }, 20_000)
+    })
+
+    it('never deletes a branch that existed before the failed start', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await filtered('broken', 'exit 1')
+      await git('branch', 'topic', 'main')
+      const before = await git('rev-parse', 'topic')
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'topic', existingBranch: true }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      expect(await git('rev-parse', 'topic')).toBe(before)
+      await expect(realpath(join(worktrees(), 'topic'))).rejects.toThrow()
+      expect(await listed()).not.toContain('topic')
+    })
   })
 
   it('copies ignored files named in .worktreeinclude into new worktrees', async () => {
@@ -491,19 +773,23 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 
-  it('keeps a worktree created before a checkout hook fails so the user can recover it', async () => {
+  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs what the hook said', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
-    await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\necho "hook refused" >&2\nexit 1\n', { mode: 0o755 })
     await git('config', 'core.hooksPath', hooks)
+    const before = await git('for-each-ref', '--format=%(refname)', 'refs/heads')
     await expect(prepare('worktree')).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
-    const linked = (await git('worktree', 'list', '--porcelain')).split('\n')
-      .find(line => line.startsWith('worktree ') && line.includes('/worktrees/'))!.slice(9)
-    expect(await readFile(join(linked, 'src', 'value'), 'utf8')).toBe('feature')
+    expect(await git('worktree', 'list', '--porcelain')).not.toContain('/worktrees/')
+    expect(await git('for-each-ref', '--format=%(refname)', 'refs/heads')).toBe(before)
+    expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] git worktree add failed \(exit 1\).*hook refused/)
     expect(await git('branch', '--show-current')).toBe('main')
+    said.mockRestore()
   })
 
   it.each(['No space left on device', 'Disk quota exceeded'])('explains worktree disk exhaustion: %s', async (message) => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
     await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho 'private-file: ${message}' >&2\nexit 1\n`, { mode: 0o755 })
@@ -512,5 +798,6 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       code: 'WORKTREE_FAILED',
       message: 'Not enough disk space to create the worktree. Free space on this machine, then retry.',
     })
+    said.mockRestore()
   })
 })

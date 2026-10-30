@@ -37,8 +37,17 @@ int pod_scroll_max(const pod_nav_t *, const pod_model_t *);
 // ---- shared helpers (pod_shared.c) ------------------------------------------------------------------------
 bool pod_hit_add(pod_out_frame_t *, int x, int y, int w, int h, pod_action_t action, int arg);
 bool pod_hit_add_id(pod_out_frame_t *, int x, int y, int w, int h, pod_action_t action, int arg, const char *id);
-// Home's pages: one a tab, and the Notices card first while there are notices.
-int pod_tabs_pages_of(const pod_nav_t *, const pod_model_t *);
+// Home's pages in order: the Notices card (POD_HOME_NOTICES) while there are notices, the Working card (POD_HOME_WORKING) while an agent works,
+// then the tabs 0..n-1. The TABS frame's scroll is one of these values.
+// A Swarm with no desk tab (Swarm cards) is one more page after the tabs: tab_count + its index among those Swarms. A desk tab linked to a Swarm
+// shows the Swarm's card on its own page.
+enum { POD_HOME_NOTICES = -2, POD_HOME_WORKING = -1, POD_HOME_PAGES_MAX = POD_TABS_MAX + SWARMS_CARD_MAX + 2 };
+const pod_swarm_t *pod_home_swarm(const pod_model_t *, int page);   // the Swarm a page draws (a linked tab's, or one of its own); NULL for any other page
+int pod_home_working(const pod_model_t *);                           // agents working now (pod_model_eff)
+bool pod_home_has(const pod_model_t *, int page);                    // is `page` in the list
+int pod_home_pages(const pod_model_t *, int16_t *out, int cap);      // the pages in order (out may be NULL); returns how many
+int pod_home_clamp(const pod_model_t *, int scroll);                 // a present page is kept, else the nearest to its right, else the nearest to its left; 0 with none
+int pod_tabs_pages_of(const pod_nav_t *, const pod_model_t *);       // the list's length
 uint32_t pod_agent_secs(const pod_agent_t *, uint32_t now_ms);              // elapsed while working, else the last
 // Milliseconds until the agent's shown elapsed text next changes (pod_elapsed_next_ms, from where it is in its second);
 // UINT32_MAX when it is not working: its clock does not run, nothing to redraw.

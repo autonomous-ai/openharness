@@ -22,11 +22,12 @@ export interface QuestionDeps {
   terminal: Pick<TerminalControl, 'captureTerminal' | 'submitTerminal' | 'keyTerminal'>
   /** Holds a pane, queue and terminal both, for the whole multi-step answer (Input.acquireTerminalControl). */
   acquireTerminalControl: (id: string, opts?: { forAnswer?: boolean }) => (() => void) | null
-  /** The dial (`sendCommander`) and the window on this computer (`sendLocal`). */
-  clients: { sendCommander(frame: Frame): void; sendLocal(frame: Frame): void }
+  /** The dial (`sendCommander`), the windows on this computer (`sendLocal`) and the owner's apps away from
+   *  this desk, over the relay (`sendRemote`). */
+  clients: { sendCommander(frame: Frame): void; sendLocal(frame: Frame): void; sendRemote(frame: Frame): void }
   agentIdFor: (sessionId: string) => string
   sessionTurnOpen: (sessionId: string) => boolean
-  /** Whether anyone could answer right now: a device watching, or a window on this computer. */
+  /** Whether anyone could answer right now: a device watching, a window on this computer, or an app away. */
   someoneCanAnswer: () => boolean
   deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
 }
@@ -70,6 +71,9 @@ export function createQuestions({
   }
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  // The same, of the questions this module asked, for an app away from this desk that connects later: the
+  // cloud agents' questions share `openQuestions` (core/agents/cloud.ts) and never go over the relay.
+  const askedRemotely = new Map<string, Frame>()
   const monitorActivity = (sessionId: string): 'needsInput' | 'working' | 'idle' => openQuestions.has(sessionId)
     ? 'needsInput' : sessionTurnOpen(sessionId) ? 'working' : 'idle'
   // Who hears that a question was asked or answered: the recaps, which do not announce a turn waiting on
@@ -101,17 +105,17 @@ export function createQuestions({
       clients.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
       // second call the app could not learn that an agent was blocked even though the question had
-      // already been shaped for the dial.
-      //
-      // `sendLocal`, not `send`: the question and its option labels are user content, and the only
-      // audience `send` would add beyond loopback is the cloud leg, where this frame would travel
-      // PLAINTEXT — `commander_question` is deliberately absent from ENCRYPTED_UP_TYPES, and putting it
-      // there means re-deriving an interop hash pinned by the browser client and the device firmware in
-      // two other repositories. Loopback needs no envelope, and it costs nothing that is reachable
-      // today: a remote machine's watcher is gated on ITS OWN audience, which a window attached over
-      // here is not part of either way.
+      // already been shaped for the dial. Loopback needs no envelope. `sendLocal`, not `send`: the tool
+      // connections (`hn`, scripts) were never sent a question, and still are not.
       clients.sendLocal(asked)
+      // ...and to the owner's apps away from this desk, over the relay (2026-10-21), so a phone hears an
+      // agent waiting on it. Sealed all the same: the gateway seals `commander_question` for the web
+      // audience as it does for the devices (lib/e2ee/manager.ts `SEALED_FOR_WEB`), without core.ts and
+      // its pinned hash, since every app opens by the envelope. Only the owner's apps, and a guest's for the
+      // guest's own harness (gateway.ts `broadcast`), can open it.
+      clients.sendRemote(asked)
       openQuestions.set(sessionId, asked)
+      askedRemotely.set(sessionId, asked)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -131,12 +135,25 @@ export function createQuestions({
       // one already answered. This is the mechanism behind "answer anywhere": the dial is cabled to
       // this very computer, so the dial and this window are always the same machine's audience.
       clients.sendLocal(closed)
+      clients.sendRemote(closed)
       openQuestions.delete(sessionId)
+      askedRemotely.delete(sessionId)
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
   })
+  /**
+   * An app away from this desk gained a session: it is told every question still open, then which are open
+   * at all, so one that was here before lets go of a question answered while it was away — as a window on
+   * this computer is when it attaches (localWsServer.ts). Over the relay this reaches every app connected,
+   * and each takes a question it already holds as the same wait continuing, never as news.
+   */
+  const reannounceRemote = (): void => {
+    for (const asked of askedRemotely.values()) clients.sendRemote(asked)
+    const requestIds = [...askedRemotely.values()].map((asked) => (asked.payload as { requestId: string }).requestId)
+    clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
+  }
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, monitorActivity, hearQuestions, questionWatcher }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
 }
 
 /**

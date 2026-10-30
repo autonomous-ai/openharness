@@ -16,6 +16,7 @@ beforeEach(() => {
     const value = join(root, key.toLowerCase())
     mkdirSync(value, { recursive: true }); vi.stubEnv(key, value)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'home'))
   for (const key of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'ZDOTDIR', 'CODEX_PATH', 'CLAUDE_CONFIG_DIR', 'HARNESS_OS']) vi.stubEnv(key, '')
   const bin = join(root, 'bin'); mkdirSync(bin)
   writeFileSync(join(bin, 'codex'), '#!/bin/sh\nif [ "$1" = --version ]; then printf "codex-cli 0.160.0\\n"; else printf "%s\\n" "--no-daemon --approve-for-me"; fi\n', { mode: 0o700 })
@@ -56,7 +57,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
     return { ok: true, pending, spawned: { runtime: { backend: 'tmux', paneId: '%fixture' } } }
   })
   const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
-    tmuxBackend: {} as CreateAgentDeps['tmuxBackend'], registry: {} as CreateAgentDeps['registry'],
+    createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
     announceSession: () => {}, attachDsh: () => {}, prepareApiTools: () => {},
     hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,

@@ -13,13 +13,35 @@ class NewHarnessAttachmentChip extends StatelessWidget {
     super.key,
     required this.file,
     required this.onRemove,
+    this.uploading = false,
+    this.progress,
   });
 
   final HarnessAttachment file;
   final VoidCallback? onRemove;
 
+  /// The file is on its way somewhere: a spinner replaces its mark, filling as
+  /// [progress] (0 to 1) says, or turning without end while that is unknown.
+  final bool uploading;
+  final double? progress;
+
+  /// The × in a chip stays small beside its file name; it is not a workspace
+  /// close mark ([AppIcons.closeSize]).
+  static const removeIconSize = 12.0;
+
   /// A picture shows itself; anything else, the mark of its kind.
   Widget _mark() {
+    if (uploading) {
+      return SizedBox.square(
+        dimension: 13,
+        child: CircularProgressIndicator(
+          key: ValueKey('new-harness-attachment-progress:${file.name}'),
+          value: progress,
+          strokeWidth: 2,
+          color: DesktopChrome.accent,
+        ),
+      );
+    }
     final icon = Icon(
       fileTypeIcon(file.name),
       key: ValueKey('new-harness-attachment-icon:${file.name}'),
@@ -71,7 +93,7 @@ class NewHarnessAttachmentChip extends StatelessWidget {
         AppIconButton(
           icon: AppIcons.close,
           tooltip: 'Remove ${file.name}',
-          size: AppIcons.closeSize,
+          size: removeIconSize,
           onPressed: onRemove,
         ),
       ],
