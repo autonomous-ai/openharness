@@ -221,7 +221,7 @@ bool pod_ui_notify(pod_ui_t *, const char *agent_id, pod_tier_t tier, bool awake
 // or on its Notices row opens that Lead (and selects it on the desktop) instead of Notices. Returns true when the caller must wake the glass and beep. Nothing
 // is filed for a Swarm or Lead the model does not hold. If that Lead's own view is on screen and the glass is lit, it is read at once: no entry, no toast, false.
 // The read (supertab.notice.read) drops the entry of that chat only, and ends its toast if that is the one showing.
-bool pod_ui_swarm_notice(pod_ui_t *, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms);
+bool pod_ui_swarm_notice(pod_ui_t *, const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text, bool awake, uint32_t now_ms);
 void pod_ui_swarm_notice_read(pod_ui_t *, const char *tab, const char *lead, const char *chat_id);
 // notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);

@@ -352,13 +352,15 @@ static void swarm_fixture(const char *kind)
     }
 }
 
-// lead:<loaded|ask|loading|none|remote|group|pm>: the Lead view over Home (the mockup swarm-card.html B1, B2, and the loading, no-message and remote-Lead states). loaded: the working
+// lead:<loaded|ask|loading|none|remote|group|pm|pill|buddy|buddy-offline|nobuddy|buddy-dot>: the Lead view over Home (the mockup swarm-card.html B1, B2, and the loading, no-message and remote-Lead states). loaded: the working
 // "harness" Lead (B1); ask: "mobile", which needs you (B2, the orange edge); loading: "website" before its message came; none: "backend", which has said nothing; remote:
 // a Lead on another person's machine (its owner shown, no talk); group / pm: the loaded Lead with its chat named ("review-cable-fit", "PM").
 static void lead_fixture(const char *kind)
 {
     const bool group = !strcmp(kind, "group"), pm = !strcmp(kind, "pm"), remote = !strcmp(kind, "remote");
-    if (group || pm) kind = "loaded";   // the loaded Lead, with the chat the desktop has open named under the project
+    const bool pill = !strcmp(kind, "pill"), buddy = !strcmp(kind, "buddy"), offline = !strcmp(kind, "buddy-offline"), nobuddy = !strcmp(kind, "nobuddy"), dot = !strcmp(kind, "buddy-dot");
+    const bool buddies = pill || buddy || offline || nobuddy || dot;
+    if (group || pm || buddies) kind = "loaded";   // the loaded Lead, with the chat the desktop has open named under the project
     swarm_fixture(remote ? "remote" : "p1");
     const pod_swarm_t *sw = pod_model_swarm(&M, remote ? "sw2" : "sw1");
     const int at = remote ? 0 : !strcmp(kind, "loaded") ? 1 : !strcmp(kind, "ask") ? 0 : !strcmp(kind, "loading") ? 2 : 3;
@@ -369,7 +371,21 @@ static void lead_fixture(const char *kind)
         cl->chat = group ? POD_CHAT_GROUP : POD_CHAT_PM;
         snprintf(cl->chat_name, sizeof cl->chat_name, "%s", group ? "review-cable-fit" : "PM");
     }
-    if (!strcmp(kind, "loaded")) asked_recap(&M, sw->id, id, "PR #1492 is merged and backend 1.2.100 is on production. The Pro took the test flash. Next: waiting for you to try it on the device.", 1792560000u, false);
+    if (buddies) {   // PM | Buddy: the pill on; pill: the PM side; buddy / buddy-offline: Mira, her chat the face; nobuddy: the Buddy side with none; buddy-dot: the PM side with the Buddy's dot
+        pod_swarm_t *ws = &M.swarms[0];
+        pod_lead_t *cl = &ws->leads[at];
+        cl->buddies = true;
+        ws->side = buddy || offline || nobuddy ? POD_SIDE_BUDDY : POD_SIDE_PM;
+        cl->buddy_unread = dot;
+        if (buddy || offline || dot || pill) {
+            cl->has_buddy = true;
+            snprintf(cl->buddy.chat_id, ID_MAX, "bc1"); snprintf(cl->buddy.name, sizeof cl->buddy.name, "Mira"); snprintf(cl->buddy.engine, sizeof cl->buddy.engine, "claude");
+            cl->buddy.cells = 0x2B5D; cl->buddy.color = 0xC49BFF; cl->buddy.live = !offline;
+        }
+        if (buddy || offline) { cl->chat = POD_CHAT_BUDDY; snprintf(cl->chat_name, sizeof cl->chat_name, "Mira"); }
+    }
+    if (buddy || offline) asked_recap(&M, sw->id, id, "Morning! I read the Swarm overnight. Two Leads are waiting on you: mobile needs a TestFlight call, and docs wants a review.", 1792560000u, false);
+    else if (!strcmp(kind, "loaded")) asked_recap(&M, sw->id, id, "PR #1492 is merged and backend 1.2.100 is on production. The Pro took the test flash. Next: waiting for you to try it on the device.", 1792560000u, false);
     else if (!strcmp(kind, "ask")) asked_recap(&M, sw->id, id, "iOS 1.0.9 finished building. Do you want it on TestFlight now, or wait for the Android banner fix?", 1792560000u, false);
     else if (remote) asked_recap(&M, sw->id, id, "Staging is up on the new region. I am moving the queue workers over now; the first batch should land within the hour.", 1792560000u, false);
     else if (!strcmp(kind, "loading")) pod_model_supertab_loading(&M, sw->id, id);

@@ -131,6 +131,9 @@ typedef struct {
     // Swarm the list does not hold yet waits for it).
     bool focus_pending;
     char focus_tab[ID_MAX], focus_lead[ID_MAX];
+    // The PM | Buddy segment the person just tapped on this Swarm (the pill draws it selected at once); the Swarm's next supertab frame ends it.
+    pod_side_t side_press;
+    char side_press_swarm[ID_MAX];
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -197,6 +200,8 @@ void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, 
 // close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
 void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
 void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
+// A tap on the pill: the segment shows selected on this Swarm until its next supertab frame (NONE clears it). `buddy_unread` of the Lead is the glue's to clear.
+void pod_model_side_press(pod_model_t *, const char *swarm_id, pod_side_t side);
 // supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
 void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
 const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none

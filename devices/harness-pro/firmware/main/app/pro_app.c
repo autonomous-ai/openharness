@@ -407,9 +407,8 @@ void pro_app_supertab_focus(const char *tab, const char *lead)
 
 void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
 {
-    if (chat && !strcmp(chat, "buddy")) return;   // the Buddy's quiet notice is a dot on its button, not a row or a toast
     pro_app_lock();
-    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
+    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
     settle((pod_out_t){0});
     leave();
 }

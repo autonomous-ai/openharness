@@ -286,7 +286,7 @@ static const char *talk_target(const pod_ui_t *u)
     const pod_frame_t *f = top(u);
     if (!f || u->ban_touch) return NULL;
     if (u->start_y < POD_BAR_H) return NULL;   // nothing in the top band talks
-    if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX)) return NULL;
+    if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX || u->hit.action == POD_A_SIDE)) return NULL;
     const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? f->agent : NULL;   // a Lead view's agent is its local harness (empty for a remote Lead: no talk)
     const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
     return a && !asks_here(&u->model, a) ? id : NULL;
@@ -628,6 +628,19 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
             return none;
         }
     }
+    // The Lead view's pill (POD_A_SIDE: arg = the side, id = the Swarm's id): the side is asked of the daemon, the tapped segment shows at once (until the Swarm's
+    // next frame) and the Buddy's dot goes with the tap. The Swarm must still be held; nothing else happens.
+    if (u->hit.id[0] && u->hit.action == POD_A_SIDE) {
+        const pod_swarm_t *sw = pod_model_swarm(&u->model, u->hit.id);
+        if (sw) {
+            const pod_side_t side = arg == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
+            if (pod_ui_supertab_side(u, sw->id, side)) pod_model_side_press(&u->model, sw->id, side);
+            const int j = top(u) ? pod_model_lead_index(sw, top(u)->lead_id) : -1;   // the Lead on screen
+            if (side == POD_SIDE_BUDDY && j >= 0) ((pod_swarm_t *)sw)->leads[j].buddy_unread = false;
+        }
+        *changed = true;
+        return none;
+    }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
     if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && u->model.unread[arg].tab[0]) { swarm_entry_open(u, &u->model.unread[arg]); *changed = true; return none; }
     if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && notice_lead(u, u->model.unread[arg].agent)) { *changed = true; return none; }
@@ -953,12 +966,18 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
     return tier == POD_TIER_ALERT;
 }
 
-bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
+bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
 {
     pod_model_clock(&u->model, now_ms);
     const pod_swarm_t *sw = pod_model_swarm(&u->model, tab);
     if (!sw || pod_model_lead_index(sw, lead) < 0) return false;
     const pod_frame_t *t = top(u);
+    if (chat && !strcmp(chat, "buddy")) {   // the Buddy's quiet notice: a dot on its segment, no row, no toast, no beep
+        pod_lead_t *bl = &((pod_swarm_t *)sw)->leads[pod_model_lead_index(sw, lead)];
+        const bool seen = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) && bl->chat == POD_CHAT_BUDDY;   // its chat is the one on screen
+        if (!seen && !bl->buddy_unread) { bl->buddy_unread = true; u->dirty = true; }
+        return false;
+    }
     pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);   // filed first, so a seen one also replaces this Lead's older row
     const pod_lead_t *face = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) ? &sw->leads[pod_model_lead_index(sw, lead)] : NULL;
     if (face && !strcmp(face->chat_id, chat_id ? chat_id : "")) {   // the face shows that very chat: seen at once
@@ -978,6 +997,12 @@ bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const c
 
 void pod_ui_swarm_notice_read(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id)
 {
+    const pod_swarm_t *bs = pod_model_swarm(&u->model, tab);   // the Buddy chat became the open one: its dot goes
+    const int bj = pod_model_lead_index(bs, lead);
+    if (bj >= 0 && bs->leads[bj].buddy_unread && chat_id && !strcmp(chat_id, bs->leads[bj].buddy.chat_id)) {
+        ((pod_swarm_t *)bs)->leads[bj].buddy_unread = false;
+        u->dirty = true;
+    }
     if (!pod_model_swarm_notice_read(&u->model, tab, lead, chat_id)) return;
     if (u->ban_on && !strcmp(u->ban_tab, tab) && !strcmp(u->ban_agent, lead)) u->ban_on = false;
     u->dirty = true;

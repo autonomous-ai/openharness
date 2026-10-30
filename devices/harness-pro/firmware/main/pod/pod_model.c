@@ -715,6 +715,10 @@ void pod_model_link(pod_model_t *m, bool up) {
         m->want_n = 0;
         m->swarm_ids = false;
         m->focus_pending = false;
+        m->side_press = POD_SIDE_NONE;
+        m->side_press_swarm[0] = 0;
+        for (int i = 0; i < SWARMS_CARD_MAX; i++)   // the Buddy's dot is the device's own: a new link starts without one
+            for (int j = 0; j < SWARM_LEADS_MAX; j++) m->swarms[i].leads[j].buddy_unread = false;
     }
     m->revision++;
 }
@@ -834,6 +838,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         l->buddy_unread = carry[j].buddy_unread;
         l->since_at_ms = now_ms;
     }
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, s->id)) { m->side_press = POD_SIDE_NONE; m->side_press_swarm[0] = 0; }   // the daemon has answered
     m->revision++;
 }
 
@@ -872,6 +877,12 @@ void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead)
     pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
     lead_free_text(l);
     l->recap = POD_RECAP_NONE;
+    m->revision++;
+}
+
+void pod_model_side_press(pod_model_t *m, const char *swarm_id, pod_side_t side) {
+    m->side_press = side;
+    pod_copy_str(m->side_press_swarm, sizeof m->side_press_swarm, side == POD_SIDE_NONE || !swarm_id ? "" : swarm_id);
     m->revision++;
 }
 

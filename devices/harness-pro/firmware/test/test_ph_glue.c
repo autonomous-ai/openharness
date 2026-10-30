@@ -1715,6 +1715,7 @@ static uint32_t NOW = 3000;   // the clock a focus is fed (the quiet window coun
 static pod_supertab_out_t Q[POD_SUPERTAB_OUT_MAX];
 static int take(void) { return pod_ui_take_supertab(&U, Q, POD_SUPERTAB_OUT_MAX); }
 static bool is_q(int i, const char *t, const char *tab, const char *lead) { return !strcmp(Q[i].t, t) && !strcmp(Q[i].tab, tab) && !strcmp(Q[i].lead, lead); }
+static int hit_count_of(pod_action_t a) { int n = 0; for (int i = 0; i < U.frame.hit_count; i++) n += U.frame.hits[i].action == a; return n; }
 static void tap_lead(int k, uint32_t t) {   // a tap on the pet of the card's Lead at index k (the page holding it must be on screen)
     render(t - 50);
     for (int i = 0; i < U.frame.hit_count; i++)
@@ -1773,7 +1774,7 @@ static void swarm_lead_open(int k) {   // sw1 on Home, the Lead at index k open
 }
 static void swarm_notice_toasts_and_beeps(void) {
     swarm_lead_open(1);   // l1's view: a notice from l2 is for another screen
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Cable fit now counts tokens. More.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Cable fit now counts tokens. More.", true, 3400));
     const pod_unread_t *e = pod_model_unread_find(&U.model, "l2");
     CHECK(e && !strcmp(e->tab, "sw1") && !strcmp(e->chat_id, "c1") && !strcmp(e->name, "proj2") && U.model.unread_count == 1);
     CHECK(U.ban_on && U.ban_until == 3400 + POD_TOAST_MS && !U.ban_stay);
@@ -1785,19 +1786,19 @@ static void swarm_notice_toasts_and_beeps(void) {
     // a room is a place for it too, and a notice for a Lead the model does not hold is dropped
     fresh();
     to_agent(0, 2);
-    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l9", "c1", "x", true, 4000) && U.model.unread_count == 0);
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l9", "pm", "c1", "x", true, 4000) && U.model.unread_count == 0);
     swarm_home(4);
     to_agent(0, 2);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l0", "c1", "Hi.", true, 4000) && U.ban_on);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l0", "pm", "c1", "Hi.", true, 4000) && U.ban_on);
     render(4000);
     CHECK(U.frame.banner);
     // a dark glass is news: the row, and the caller wakes
     swarm_lead_open(1);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Hi.", false, 4000) && pod_model_unread_find(&U.model, "l1"));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "c1", "Hi.", false, 4000) && pod_model_unread_find(&U.model, "l1"));
 }
 static void notif_replace_keeps_swarm_notices(void) {
     swarm_lead_open(1);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Merged.", true, 3400));
     pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 3410);
     pod_ui_notif_begin(&U);
     CHECK(pod_model_unread_find(&U.model, "l2") && !pod_model_unread_find(&U.model, "a2") && U.model.unread_count == 1);
@@ -1806,7 +1807,7 @@ static void notif_replace_keeps_swarm_notices(void) {
 static void swarm_notice_on_its_lead_view_reads_at_once(void) {
     swarm_lead_open(1);
     snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "c1");   // the face shows the chat the notice is for
-    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Seen already.", true, 3400));
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "c1", "Seen already.", true, 3400));
     CHECK(U.model.unread_count == 0 && !U.ban_on);
     render(3500);
     CHECK(!U.frame.banner);
@@ -1814,15 +1815,15 @@ static void swarm_notice_on_its_lead_view_reads_at_once(void) {
 static void notice_for_other_chat_on_lead_view_files_row(void) {
     swarm_lead_open(1);
     snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "g1");   // the face shows g1; the notice is for c1
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Elsewhere.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "c1", "Elsewhere.", true, 3400));
     const pod_unread_t *e = pod_model_unread_find(&U.model, "l1");
     CHECK(e && !strcmp(e->chat_id, "c1"));
 }
 static void notice_for_face_chat_on_lead_view_clears_old_row(void) {
     swarm_lead_open(1);
     snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "g1");
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Older.", true, 3300));   // an older row of this Lead
-    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "g1", "Seen.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "c1", "Older.", true, 3300));   // an older row of this Lead
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "g1", "Seen.", true, 3400));
     CHECK(!pod_model_unread_find(&U.model, "l1") && U.model.unread_count == 0);
 }
 static void chat_switch_asks_recap_at_once(void) {
@@ -1844,7 +1845,7 @@ static void chat_switch_asks_recap_at_once(void) {
 }
 static void swarm_toast_tap_opens_lead_and_selects(void) {
     swarm_lead_open(1);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Merged.", true, 3400));
     render(3400);
     CHECK(U.frame.banner);
     pod_out_t o = tap_(360, 80, 3500);
@@ -1855,7 +1856,7 @@ static void swarm_toast_tap_opens_lead_and_selects(void) {
 static void swarm_row_tap_opens_lead_and_selects(void) {
     swarm_home(4);
     pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 2100);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l3", "c1", "Merged.", true, 2200));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l3", "pm", "c1", "Merged.", true, 2200));
     act(POD_A_INBOX, 0);
     render(2500);
     const pod_hit_t *h = NULL;
@@ -1869,7 +1870,7 @@ static void swarm_row_tap_opens_lead_and_selects(void) {
 }
 static void swarm_notice_read_ends_toast(void) {
     swarm_lead_open(1);
-    pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400);
+    pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Merged.", true, 3400);
     render(3400);
     CHECK(U.frame.banner);
     pod_ui_swarm_notice_read(&U, "sw1", "l2", "c2");   // another chat's read: the row and the toast stay
@@ -1879,9 +1880,9 @@ static void swarm_notice_read_ends_toast(void) {
     render(3600);
     CHECK(!U.ban_on && !U.frame.banner && !pod_model_unread_find(&U.model, "l2"));
     // a read of an entry that is not the toast's leaves that toast up
-    pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3700);
+    pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Merged.", true, 3700);
     pod_model_unread_add(&U.model, "a1", "Alpha", "x", 1, 3700);
-    pod_ui_swarm_notice(&U, "sw1", "l0", "c5", "Other.", true, 3750);   // the newer toast is l0's
+    pod_ui_swarm_notice(&U, "sw1", "l0", "pm", "c5", "Other.", true, 3750);   // the newer toast is l0's
     pod_ui_swarm_notice_read(&U, "sw1", "l2", "c1");
     render(3800);
     CHECK(U.ban_on && !strcmp(U.ban_agent, "l0") && U.frame.banner);
@@ -2246,12 +2247,144 @@ static void side_frame_queued(void) {
     take();
 }
 
+
+// ---- PM | Buddy: the pill on the Lead view (a hit, never a talk), the Buddy's quiet dot ----
+static pod_swarm_t *buddy_swarm(void) { return (pod_swarm_t *)pod_model_swarm(&U.model, "sw1"); }
+static void buddy_lead_open(void) {   // sw1's Lead l1 open (its harness a1, talkable), with a Buddy side
+    swarm_home(4);
+    pod_swarm_t *sw = buddy_swarm();
+    snprintf(sw->leads[1].local, ID_MAX, "a1");
+    for (int i = 0; i < 4; i++) { sw->leads[i].buddies = true; sw->leads[i].has_buddy = true; snprintf(sw->leads[i].buddy.chat_id, ID_MAX, "bc%d", i); snprintf(sw->leads[i].buddy.name, sizeof sw->leads[i].buddy.name, "Mira"); }
+    sw->side = POD_SIDE_PM;
+    tap_lead(1, 3000);
+    CHECK(top()->view == POD_V_LEAD && top()->lead == 1);
+    take();
+    render(3300);
+}
+static void pill_tap_sends_side(void) {
+    buddy_lead_open();
+    CHECK(hit_count_of(POD_A_SIDE) == 2);
+    pod_out_t o = tap_(435, 38, 4000);   // the Buddy segment
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+    CHECK(take() == 1 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].tab, "sw1") && !strcmp(Q[0].side, "buddy"));
+    render(4500);
+    o = tap_(285, 38, 5000);   // PM
+    CHECK(o.fx == POD_FX_NONE && take() == 1 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].side, "pm"));
+}
+static void pill_tap_never_talks(void) {
+    buddy_lead_open();
+    t_(true, 435, 38, 4000);
+    CHECK(!U.talk_armed);
+    pod_out_t o = t_(false, 435, 38, 4050);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
+    take();
+    render(4200);
+    t_(true, MID_X, MID_Y, 5000);   // an armed talk on the body ...
+    CHECK(U.talk_armed);
+    t_(true, 435, 38, 5100);   // ... is dropped when the finger leaves for the pill
+    CHECK(!U.talk_armed);
+    o = t_(false, 435, 38, 5150);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
+    // and the body still talks
+    take();
+    o = tap_(MID_X, MID_Y, 6000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+}
+static void pill_pressed_until_frame(void) {
+    buddy_lead_open();
+    tap_(435, 38, 4000);
+    CHECK(U.model.side_press == POD_SIDE_BUDDY && !strcmp(U.model.side_press_swarm, "sw1") && buddy_swarm()->side == POD_SIDE_PM);   // pending, the daemon has not answered
+    take();
+    render(4200);
+    { bool buddy_on = false; for (int i = 0; i < S.count; i++) buddy_on |= S.runs[i].x == 360 && S.runs[i].y == 16 && S.runs[i].w == 150; CHECK(buddy_on); }
+    static pod_swarm_t fr;   // another Swarm's frame does not end it, this Swarm's does
+    memset(&fr, 0, sizeof fr);
+    snprintf(fr.id, ID_MAX, "sw2"); snprintf(fr.name, sizeof fr.name, "Solo"); fr.count = 1; fr.lead_n = 1;
+    snprintf(fr.leads[0].id, ID_MAX, "s0"); snprintf(fr.leads[0].project, sizeof fr.leads[0].project, "ops"); snprintf(fr.leads[0].engine, sizeof fr.leads[0].engine, "claude");
+    pod_ui_supertab(&U, &fr, 4300);
+    CHECK(U.model.side_press == POD_SIDE_BUDDY);
+    memset(&fr, 0, sizeof fr);
+    snprintf(fr.id, ID_MAX, "sw1"); snprintf(fr.tab, ID_MAX, "s1"); snprintf(fr.name, sizeof fr.name, "openharness"); fr.count = 4; fr.lead_n = 4; fr.side = POD_SIDE_BUDDY;
+    for (int i = 0; i < 4; i++) { snprintf(fr.leads[i].id, ID_MAX, "l%d", i); snprintf(fr.leads[i].project, sizeof fr.leads[i].project, "proj%d", i); snprintf(fr.leads[i].engine, sizeof fr.leads[i].engine, "claude"); fr.leads[i].buddies = true; }
+    pod_ui_supertab(&U, &fr, 4400);
+    CHECK(U.model.side_press == POD_SIDE_NONE && buddy_swarm()->side == POD_SIDE_BUDDY);
+}
+static void buddy_notice_sets_dot_only(void) {
+    buddy_lead_open();
+    swipe(200, 400, 600, 410, 3500);   // l0: a notice for l1's Buddy is for another screen, where a chat's notice would toast
+    take();
+    render(3700);
+    CHECK(top()->lead == 0);
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "buddy", "bc1", "Hello from your Buddy.", true, 4000));
+    CHECK(U.model.unread_count == 0 && !U.ban_on && buddy_swarm()->leads[1].buddy_unread && !buddy_swarm()->leads[0].buddy_unread);
+    render(4100);
+    CHECK(!U.frame.banner);
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l9", "buddy", "bc1", "x", true, 4200));   // an unknown Lead: nothing
+    // the same Buddy chat on screen and the glass lit: seen, no dot
+    swipe(600, 400, 200, 410, 4300);
+    CHECK(top()->lead == 1);
+    buddy_swarm()->leads[1].buddy_unread = false;
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "buddy", "bc1", "Seen.", true, 4600) && !buddy_swarm()->leads[1].buddy_unread && U.model.unread_count == 0);
+}
+static void opening_buddy_clears_dot(void) {
+    buddy_lead_open();
+    buddy_swarm()->leads[1].buddy_unread = true;
+    buddy_swarm()->leads[2].buddy_unread = true;   // another Lead's dot is its own
+    render(3400);
+    tap_(435, 38, 4000);
+    CHECK(!buddy_swarm()->leads[1].buddy_unread && buddy_swarm()->leads[2].buddy_unread);
+    take();
+    // the daemon's read of the Buddy chat clears it too (a lost tap frame never leaves it)
+    pod_ui_swarm_notice_read(&U, "sw1", "l2", "bc2");
+    CHECK(!buddy_swarm()->leads[2].buddy_unread);
+    buddy_swarm()->leads[2].buddy_unread = true;
+    pod_ui_swarm_notice_read(&U, "sw1", "l2", "other");
+    CHECK(buddy_swarm()->leads[2].buddy_unread);
+    // a tap on PM keeps it
+    tap_(285, 38, 6000);
+    CHECK(buddy_swarm()->leads[2].buddy_unread);
+}
+static void relink_clears_buddy_dot(void) {
+    buddy_lead_open();
+    buddy_swarm()->leads[1].buddy_unread = true;
+    tap_(285, 38, 4000);   // a pending side
+    pod_ui_link(&U, false);
+    CHECK(U.model.side_press == POD_SIDE_NONE);
+    pod_ui_link(&U, true);
+    static const char ids[2][ID_MAX] = {"sw1", "sw2"};
+    pod_ui_supertab_ids(&U, ids, 2);
+    static pod_swarm_t sw;
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = 4; sw.lead_n = 4; sw.side = POD_SIDE_BUDDY;
+    for (int i = 0; i < 4; i++) { snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj%d", i); snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); sw.leads[i].buddies = true; }
+    pod_ui_supertab(&U, &sw, 5000);
+    for (int i = 0; i < 4; i++) CHECK(!buddy_swarm()->leads[i].buddy_unread);
+    CHECK(buddy_swarm()->side == POD_SIDE_BUDDY);   // the side comes from the daemon's frame
+}
+static void side_kept_across_swipe(void) {
+    buddy_lead_open();
+    buddy_swarm()->side = POD_SIDE_BUDDY;
+    swipe(600, 400, 200, 410, 4000);   // NEXT: l2
+    CHECK(top()->lead == 2 && buddy_swarm()->side == POD_SIDE_BUDDY && U.model.side_press == POD_SIDE_NONE);
+    for (int i = 0, n = take(); i < n; i++) CHECK(strcmp(Q[i].t, "supertab.side"));   // nothing is said about the side
+    render(4300);
+    { bool buddy_on = false; for (int i = 0; i < S.count; i++) buddy_on |= S.runs[i].x == 360 && S.runs[i].y == 16 && S.runs[i].w == 150; CHECK(buddy_on); }
+}
+
 int main(void) {
     notify_while_looking();
     swarm_card_pages();
     swarm_card_few_leads();
     swarm_card_tap();
     side_frame_queued();
+    pill_tap_sends_side();
+    pill_tap_never_talks();
+    pill_pressed_until_frame();
+    buddy_notice_sets_dot_only();
+    opening_buddy_clears_dot();
+    relink_clears_buddy_dot();
+    side_kept_across_swipe();
     notice_opens_lead();
     swarm_notice_toasts_and_beeps();
     swarm_notice_on_its_lead_view_reads_at_once();

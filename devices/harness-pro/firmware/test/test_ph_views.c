@@ -57,6 +57,11 @@ static void check_baked(void)
 // Page dots (a small anti-aliased pill in the bottom band, y >= 660): Pets has none on any page.
 static int dot_runs(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && (S.runs[i].w == 12 || S.runs[i].w == 11 || S.runs[i].w == 32) && S.runs[i].pro_height <= 12 && S.runs[i].y >= 660; return n; }
 // The run holding the name/title: centred on x 360 within 2 px.
+static const ht_run_t *rect_at(int x, int y, int w, int h) {
+    for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT_AA && S.runs[i].x == x && S.runs[i].y == y && S.runs[i].w == w && (!h || S.runs[i].pro_height == h)) return &S.runs[i];
+    return NULL;
+}
+static bool centred_at(const ht_run_t *r, int cx) { return r && r->x + r->w / 2 >= cx - 2 && r->x + r->w / 2 <= cx + 2; }
 static bool centred_run(const ht_run_t *r) { return r && r->x + r->w / 2 >= 360 - 2 && r->x + r->w / 2 <= 360 + 2; }
 
 int main(void) {
@@ -1635,6 +1640,95 @@ int main(void) {
             const ht_run_t *cap = text_prefix("WWW");
             CHECK(cap && cap->w <= 640 + 2 && strstr(cap->text, "\xe2\x80\xa6") && strlen(cap->text) < 48);
             cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
+        }
+        {   // PM | Buddy (mockup pro-swarm-parity 2A, 2A', 3A-3D): the pill, header A, the Buddy screen, no Buddy yet, the dot
+            pod_swarm_t *sw = &M.swarms[0];
+            pod_lead_t *bl = &sw->leads[2];
+            N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l2"); N.stack[1].lead = 2;
+            asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
+            bl->chat = POD_CHAT_NONE; bl->chat_name[0] = 0; bl->buddies = false; bl->has_buddy = false; bl->buddy_unread = false; sw->side = POD_SIDE_NONE; M.side_press = POD_SIDE_NONE;
+            // pill_absent_without_buddies: phase 1's view (the header on two lines, at cy 42 and 84), no pill, no hit
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            static ht_run_t plain[HT_RUNS]; const int nplain = S.count; memcpy(plain, S.runs, sizeof(ht_run_t) * (size_t)nplain);
+            CHECK(!text_run("PM") && !text_run("Buddy") && hits_of(POD_A_SIDE) == 0 && F.hit_count == 0);
+            CHECK(text_run("openharness") && abs(text_run("openharness")->y + ph_sb_22.height * 15 / 32 - 42) <= 2 && abs(text_run("ops")->y + ph_sb_34.height * 15 / 32 - 84) <= 2);
+            CHECK(!text_run("No Buddy here yet") && !rect_at(210, 16, 300, 44));
+            // Buddies on, the PM side: the pill at (210, 16), the PM segment filled ink with dark text, Buddy muted
+            bl->buddies = true; sw->side = POD_SIDE_PM;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const int npm = S.count;   // the run count of this state: constant whichever side is selected (a dot adds its two)
+            const ht_run_t *trk = rect_at(210, 16, 300, 44);
+            CHECK(trk && trk->radius == 22 && trk->fg == ht_rgb(0x34302C));   // pill_pm_selected
+            const ht_run_t *pmf = rect_at(210, 16, 150, 44);
+            CHECK(pmf && pmf->radius == 22 && pmf->fg == ht_rgb(PH_ROOM_INK) && !rect_at(360, 16, 150, 44));
+            CHECK(text_run("PM") && text_run("PM")->fg == ht_rgb(PH_ROOM_BG) && centred_at(text_run("PM"), 285) && text_run("Buddy") && text_run("Buddy")->fg == ht_rgb(PH_ROOM_MUTED) && centred_at(text_run("Buddy"), 435));
+            CHECK(abs(text_run("PM")->y + ph_sb_22.height * 15 / 32 - 38) <= 2);
+            CHECK(hits_of(POD_A_SIDE) == 2 && nth_hit(POD_A_SIDE, 0)->x == 210 && nth_hit(POD_A_SIDE, 0)->w == 150 && nth_hit(POD_A_SIDE, 0)->arg == POD_SIDE_PM && !strcmp(nth_hit(POD_A_SIDE, 0)->id, "sw1") &&
+                  nth_hit(POD_A_SIDE, 1)->x == 360 && nth_hit(POD_A_SIDE, 1)->w == 150 && nth_hit(POD_A_SIDE, 1)->arg == POD_SIDE_BUDDY && !strcmp(nth_hit(POD_A_SIDE, 1)->id, "sw1") && nth_hit(POD_A_SIDE, 0)->y + nth_hit(POD_A_SIDE, 0)->h <= 72);
+            // header_a_one_line: the Swarm name (ph_sb_26, purple), " · " (muted) and the project (ph_sb_34) on one line at cy 94, centred together; nothing at cy 42
+            const ht_run_t *hp = text_run("ops"), *hs = text_run("openharness"), *hd = text_run(" \xc2\xb7 ");
+            CHECK(hp && abs(hp->y + ph_sb_34.height * 15 / 32 - 94) <= 2 && hp->fg == ht_rgb(PH_ROOM_INK));
+            CHECK(hs && abs(hs->y + ph_sb_26.height * 15 / 32 - 94) <= 2 && hs->fg == ht_rgb(0xB79CFF) && hd && hd->fg == ht_rgb(PH_ROOM_MUTED));
+            CHECK(hs->x + hs->w <= hd->x + 2 && hd->x + hd->w <= hp->x + 2 && abs((hs->x + hp->x + hp->w) / 2 - 360) <= 3);
+            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) { const int c = S.runs[i].y + ph_sb_22.height * 15 / 32; CHECK(!(c >= 40 && c <= 44 && strcmp(S.runs[i].text, "PM") && strcmp(S.runs[i].text, "Buddy"))); }
+            CHECK(!text_run("PM")->text[2] && S.count == npm);
+            // the Buddy side selected: the segment moves and turns lilac
+            sw->side = POD_SIDE_BUDDY; bl->has_buddy = true;
+            snprintf(bl->buddy.name, sizeof bl->buddy.name, "Mira"); snprintf(bl->buddy.engine, sizeof bl->buddy.engine, "claude"); bl->buddy.cells = 0x1234; bl->buddy.color = 0xC49BFF; bl->buddy.live = true;
+            bl->chat = POD_CHAT_BUDDY; snprintf(bl->chat_name, sizeof bl->chat_name, "Mira");
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *bf = rect_at(360, 16, 150, 44);   // pill_buddy_selected
+            CHECK(bf && bf->fg == ht_rgb(0xC49BFF) && !rect_at(210, 16, 150, 44) && text_run("Buddy")->fg == ht_rgb(PH_ROOM_BG) && text_run("PM")->fg == ht_rgb(PH_ROOM_MUTED));
+            // buddy_screen_name_lilac: the name in place of "Lead" (lilac, ph_sb_34 at the status column), the avatar d 120 in the pet's 150 px box instead of the pet, no chat name line at 130
+            const ht_run_t *bn = text_run("Mira");
+            CHECK(bn && bn->fg == ht_rgb(0xC49BFF) && bn->x == 160 && !text_run("Lead") && !text_run("offline"));
+            { int disc = 0; for (int i = 0; i < S.count; i++) disc += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 120 && S.runs[i].pro_height == 120 && S.runs[i].x == 31; CHECK(disc == 1); }
+            { int pets = 0; for (int i = 0; i < S.count; i++) pets += S.runs[i].pro_kind == POD_CELL; CHECK(pets == 0); }
+            CHECK(text_run("Deployed.") && abs(text_run("Deployed.")->y - 150) < 80);   // the bubble stays (the recap)
+            // buddy_offline_line: "offline" under the name, muted, ph_sb_22, only while the Buddy is not live
+            bl->buddy.live = false;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *off = text_run("offline");
+            CHECK(off && off->fg == ht_rgb(PH_ROOM_MUTED) && off->x == 160 && off->y > text_run("Mira")->y);
+            bl->buddy.live = true;
+            // chat_name_at_130_under_pill: a PM or group name moves to cy 130 (the bubble stays at 150), with the pill
+            bl->chat = POD_CHAT_GROUP; snprintf(bl->chat_name, sizeof bl->chat_name, "review-cable-fit"); sw->side = POD_SIDE_PM;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *c130 = text_run("review-cable-fit");
+            CHECK(c130 && c130->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(c130) && abs(c130->y + ph_sb_22.height * 15 / 32 - 130) <= 2 && S.count == npm + 1);
+            bl->chat = POD_CHAT_NONE; bl->chat_name[0] = 0;
+            // header_a cut: a long Swarm name is shortened first, the project last; the whole line fits 640 px
+            snprintf(sw->name, sizeof sw->name, "an-extremely-long-swarm-name-for-the-header-line");
+            snprintf(bl->project, sizeof bl->project, "ops");
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            { const ht_run_t *a = text_prefix("an-extremely"), *pj = text_run("ops"), *dd = text_run(" \xc2\xb7 ");
+              CHECK(a && strstr(a->text, "\xe2\x80\xa6") && pj && dd && a->x >= 360 - 320 - 2 && pj->x + pj->w <= 360 + 320 + 2); }
+            snprintf(sw->name, sizeof sw->name, "openharness");
+            // nobuddy_copy: the Buddy side with no Buddy: no bubble and no who row; a dashed circle with "+", then the two lines
+            bl->has_buddy = false; bl->chat = POD_CHAT_NONE; sw->side = POD_SIDE_BUDDY;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *nb1 = text_run("No Buddy here yet"), *nb2 = text_run("Add one in the Harness app.");
+            CHECK(nb1 && nb1->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(nb1) && abs(nb1->y + ph_sb_34.height * 15 / 32 - 364) <= 2);
+            CHECK(nb2 && nb2->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(nb2) && abs(nb2->y + ph_rg_28.height * 15 / 32 - 412) <= 2 && text_run("+"));
+            CHECK(!text_run("Deployed.") && !text_run("Lead") && !text_run("done") && !rect_at(60, 150, 600, 0) && rect_at(360, 16, 150, 44));
+            { int bub = 0; for (int i = 0; i < S.count; i++) bub += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 600 && S.runs[i].fg == ht_rgb(PH_LETTER); CHECK(bub == 0); }
+            { int arcs = 0; for (int i = 0; i < S.count; i++) arcs += S.runs[i].pro_kind == POD_ARC; CHECK(arcs >= 8); }
+            // the same screen with pending side: the pressed segment wins over the Swarm's side
+            sw->side = POD_SIDE_PM; M.side_press = POD_SIDE_BUDDY; snprintf(M.side_press_swarm, ID_MAX, "sw1");
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(rect_at(360, 16, 150, 44) && !rect_at(210, 16, 150, 44) && text_run("No Buddy here yet"));
+            M.side_press = POD_SIDE_NONE; M.side_press_swarm[0] = 0;
+            // buddy_dot_drawn: Buddy spoke while the PM side shows: a 12 px lilac disc with a 3 px track-coloured ring at the Buddy segment's top right; not on the Buddy side
+            bl->has_buddy = true; bl->buddy_unread = true; sw->side = POD_SIDE_PM;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *dot = rect_at(480, 18, 12, 12), *ring = rect_at(477, 15, 18, 18);
+            CHECK(dot && dot->fg == ht_rgb(0xC49BFF) && ring && ring->fg == ht_rgb(0x34302C) && S.count == npm + 2);
+            sw->side = POD_SIDE_BUDDY;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(!rect_at(480, 18, 12, 12));
+            bl->buddy_unread = false; bl->chat = POD_CHAT_NONE; bl->buddies = false; bl->has_buddy = false; sw->side = POD_SIDE_NONE;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nplain && !memcmp(plain, S.runs, sizeof(ht_run_t) * (size_t)nplain));   // Buddies off again: byte for byte phase 1's view
         }
         // The model does not hold the Lead (a dropped link): nothing is drawn, nothing breaks
         pod_model_link(&M, false);
