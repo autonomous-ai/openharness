@@ -351,6 +351,7 @@ Future<bool> _sendContribution(
   required int maxAgents,
   required bool Function() alive,
   bool teamAccountOnly = false,
+  bool offerTeamAccount = true,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -387,7 +388,7 @@ Future<bool> _sendContribution(
   await app.wakeSuperTabHost(machineId);
   // This Mac, added while its person is here: macOS asks once for the Harness
   // Team account (cli/src/team/autoSetup.ts).
-  if (app.stateOf(machineId)?.isLocalMachine == true) {
+  if (offerTeamAccount && app.stateOf(machineId)?.isLocalMachine == true) {
     unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
   }
   return true;
@@ -400,7 +401,9 @@ Future<bool> _sendContribution(
 /// [setupId] is the caller's to keep between tries: a setup still running
 /// answers the next try with the same one. With [teamAccountOnly], teammates'
 /// work reaches it only through its Harness Team account once that passes its
-/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
+/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`). Without
+/// [offerTeamAccount], this Mac is not offered a Harness Team account: a
+/// Personal Swarm has no teammates to run work for.
 /// [readResources] stands in for [AppNotifier.readMachineResources].
 Future<String?> contributeComputer(
   SuperTabController c,
@@ -409,6 +412,7 @@ Future<String?> contributeComputer(
   required String setupId,
   required bool Function() alive,
   bool teamAccountOnly = false,
+  bool offerTeamAccount = true,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -440,6 +444,7 @@ Future<String?> contributeComputer(
     maxAgents: slots,
     alive: alive,
     teamAccountOnly: teamAccountOnly,
+    offerTeamAccount: offerTeamAccount,
   );
   return added ? machineId : null;
 }

@@ -24,6 +24,7 @@ import 'machines.dart';
 import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
+import 'swarm_switcher.dart';
 import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
@@ -40,6 +41,7 @@ class ProjectSidebar extends StatelessWidget {
     required this.onAddAgent,
     this.app,
     this.onNewProject,
+    this.onNewSwarm,
     this.onYourDevices,
     this.devicesSelected = false,
     this.onNotifications,
@@ -56,6 +58,10 @@ class ProjectSidebar extends StatelessWidget {
   final ValueChanged<SuperTabConversation> onAddAgent;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// The existing New Swarm. Given, the bar starts with the Swarm dropdown
+  /// ([SwarmSwitcher]), which offers it last.
+  final VoidCallback? onNewSwarm;
   final VoidCallback? onYourDevices;
   final bool devicesSelected;
 
@@ -92,6 +98,7 @@ class ProjectSidebar extends StatelessWidget {
     required VoidCallback? onTap,
     bool selected = false,
     int badge = 0,
+    Widget? trailing,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
@@ -143,6 +150,11 @@ class ProjectSidebar extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.only(right: 10),
                   child: SuperTabCountBadge(badge),
+                ),
+              if (trailing != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: trailing,
                 ),
             ],
           ),
@@ -787,6 +799,25 @@ class ProjectSidebar extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
+            SwarmSwitcher(
+              app: app,
+              controller: controller,
+              onNewSwarm: onNewSwarm,
+              row:
+                  ({
+                    required label,
+                    required icon,
+                    required onTap,
+                    required trailing,
+                  }) => _navigationRow(
+                    key: 'super-swarm-switcher',
+                    label: label,
+                    icon: icon,
+                    onTap: onTap,
+                    trailing: trailing,
+                  ),
+            ),
           if (onNewProject != null)
             _navigationRow(
               key: 'super-new-project',
