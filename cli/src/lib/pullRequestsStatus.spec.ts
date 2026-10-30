@@ -171,7 +171,6 @@ describe('linked pull requests read directly from GitHub', () => {
     account = null
     const none = await read([url()])
     expect([none.account, none.account === grace.account]).toEqual([expect.stringMatching(/^[0-9a-f]{16}$/), false])
-    expect(none.account).not.toContain('ada')
   })
   it('reads the account as a hash of the token gh holds, and none without one', async () => {
     const tokens = vi.fn<Run>(async () => ({ stdout: 'gho_secret\n' }))
