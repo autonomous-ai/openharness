@@ -5,90 +5,24 @@
 // and the read it starts goes direct too. Native Desktop is unchanged.
 import 'dart:async';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/buddy_fixture.dart';
+import 'support/web_swarm_backend.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
 const _tab = '0123456789abcdef01234567';
 const _buddyChat = 'buddy-owner-lead';
-
-/// The backend, as the browser's own sign-in reaches it: each Swarm call is
-/// answered by [server] inside the backend's `{success, data|error}` envelope.
-class _Backend extends ApiClient {
-  _Backend(this.server)
-    : super(
-        config: AppConfig.dev,
-        session: AuthSession(storage: MemoryStore()),
-      );
-  final ConversationServer server;
-  final calls = <String>[];
-
-  /// The person lost the Swarm: every read is refused, as the backend
-  /// refuses one they may no longer read.
-  bool forbidden = false;
-
-  /// No answer at all: the browser is offline or the backend unreachable.
-  bool down = false;
-
-  /// While set, every call waits for it: a slow answer.
-  Completer<void>? hold;
-
-  @override
-  Future<Response<dynamic>> superTabCall(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) async {
-    calls.add('$method $path');
-    final options = RequestOptions(path: path, method: method);
-    await hold?.future;
-    if (down) {
-      throw DioException(
-        requestOptions: options,
-        type: DioExceptionType.connectionError,
-      );
-    }
-    if (forbidden) {
-      return Response(
-        requestOptions: options,
-        statusCode: 403,
-        data: {
-          'success': false,
-          'error': {'code': 'FORBIDDEN', 'message': 'Forbidden'},
-        },
-      );
-    }
-    try {
-      final data = await server.request(method, path, body: body);
-      return Response(
-        requestOptions: options,
-        statusCode: 200,
-        data: {'success': true, 'data': data},
-      );
-    } on SuperTabFailure catch (failure) {
-      return Response(
-        requestOptions: options,
-        statusCode: failure.statusCode == 0 ? 400 : failure.statusCode,
-        data: {
-          'success': false,
-          'error': {'code': failure.code, 'message': failure.message},
-        },
-      );
-    }
-  }
-}
 
 /// One of the person's machines: records what it is asked, and answers a
 /// relayed Swarm call as its daemon would.
@@ -142,7 +76,7 @@ Future<void> _until(bool Function() done, {String? what}) async {
 
 void main() {
   late ConversationServer server;
-  late _Backend backend;
+  late WebSwarmBackend backend;
   late Map<String, _Machine> machines;
   late AppNotifier app;
 
@@ -154,13 +88,15 @@ void main() {
       machineId: 'studio',
       machineOwnerId: 'owner',
     );
-    backend = _Backend(server);
+    backend = WebSwarmBackend(server);
     machines = {};
     final session = AuthSession(storage: MemoryStore());
     app = AppNotifier(
       config: AppConfig.dev,
       authSession: session,
       configStore: null,
+      // Every saved setting and Swarm view in memory: never this Mac's files.
+      paneLayoutStore: PaneLayoutStore(storage: MemoryStore()),
       viewer: ViewerServices(
         config: AppConfig.dev,
         session: session,
