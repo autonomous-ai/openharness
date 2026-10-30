@@ -10,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -210,22 +211,21 @@ void main() {
       .length;
 
   group('the Swarm page', () {
-    testWidgets('what needs the person comes first, then its projects', (
-      tester,
-    ) async {
+    testWidgets('Jump to comes first, then its projects; what needs the '
+        'person is in Needs you', (tester) async {
       // An iPhone's screen: all of Home at once.
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await pump(tester, backend(), const SwarmPage());
 
-      // Two of what waits, then See all.
-      final asks = key('swarm-home-need-decision:d1');
-      expect(asks, findsOneWidget);
-      expect(key('swarm-home-need-mention:m1'), findsOneWidget);
-      expect(key('swarm-needs-all'), findsOneWidget);
       expect(
-        tester.getTopLeft(asks).dy,
+        key('swarm-home-need-decision:d1'),
+        findsNothing,
+        reason: "the Activity tab's",
+      );
+      expect(
+        tester.getTopLeft(key('swarm-jump')).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(
@@ -234,7 +234,10 @@ void main() {
         reason: 'one Swarm: its projects, not its name',
       );
 
-      await tester.tap(key('swarm-home-need-mention:m1'));
+      openSwarmNeeds(
+        tester.element(find.byType(SwarmPage)),
+        focus: 'mention:m1',
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('Open chat'),

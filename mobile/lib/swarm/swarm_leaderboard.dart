@@ -246,11 +246,11 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
             own: score.personId == viewer,
             columns: columns!,
             onTap: () => unawaited(
-              _showPerson(
+              showSwarmPersonWeek(
                 context,
-                score,
-                personOf(score.personId),
-                nameOf(score),
+                score: score,
+                person: personOf(score.personId),
+                name: nameOf(score),
               ),
             ),
           ),
@@ -287,21 +287,28 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     if (week == null || !mounted) return;
     await reader.showWeek(week == current ? null : week);
   }
+}
 
-  /// [score]'s week in a sheet, as the desktop shows it when a name is
-  /// clicked.
-  Future<void> _showPerson(
-    BuildContext context,
-    SwarmScore score,
-    SuperTabPerson? person,
-    String name,
-  ) => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: AppGlass.rowFill,
-    showDragHandle: true,
-    shape: AppControl.sheetShape,
-    builder: (context) => _Sheet(
+/// [score]'s week in a sheet, as the desktop shows it when a name is clicked:
+/// from the leaderboard and from a project's Team. [opened] is told the
+/// sheet's route, for a screen that must close it itself.
+Future<void> showSwarmPersonWeek(
+  BuildContext context, {
+  required SwarmScore score,
+  required SuperTabPerson? person,
+  required String name,
+  ValueChanged<ModalRoute<void>>? opened,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: AppGlass.rowFill,
+  showDragHandle: true,
+  shape: AppControl.sheetShape,
+  builder: (context) {
+    if (ModalRoute.of(context) case final ModalRoute<void> route?) {
+      opened?.call(route);
+    }
+    return _Sheet(
       key: const ValueKey('swarm-leaderboard-sheet'),
       title: name,
       leading: SwarmAvatar(
@@ -314,9 +321,9 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
         for (final (label, value) in swarmPersonWeek(score))
           _WeekLine(label: label, value: value),
       ],
-    ),
-  );
-}
+    );
+  },
+);
 
 /// Figures of one width, so a column of numbers holds row under row.
 const _figures = [FontFeature.tabularFigures()];
@@ -328,7 +335,7 @@ TextStyle _rankStyle() => AppType.label(
   color: AppPalette.textSecondary,
   fontFeatures: _figures,
 );
-TextStyle _pointsStyle() => AppType.label(
+TextStyle swarmPointsStyle() => AppType.label(
   fontWeight: FontWeight.w600,
   color: AppPalette.textPrimary,
   fontFeatures: _figures,
@@ -413,7 +420,7 @@ class _Columns {
       rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
       points: width(
         widest(scores.map((score) => score.points)),
-        _pointsStyle(),
+        swarmPointsStyle(),
       ),
       trend: changes.isEmpty
           ? null
@@ -537,7 +544,11 @@ class _PersonRow extends StatelessWidget {
                   column(
                     'points',
                     columns.points,
-                    Text('${score.points}', maxLines: 1, style: _pointsStyle()),
+                    Text(
+                      '${score.points}',
+                      maxLines: 1,
+                      style: swarmPointsStyle(),
+                    ),
                   ),
                 ],
               ),
