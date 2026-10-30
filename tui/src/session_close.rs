@@ -446,7 +446,13 @@ fn finish(app: &mut App) {
     }
     let mut seen = HashSet::new();
     for view in views {
-        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { continue }
+        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) {
+            // A stopped harness's visit returns to its shell as it stops. A kept one (a Swarm Buddy) was not stopped,
+            // so return it here, as Close pane after a refused stop does (`dismiss`).
+            let kept = op.targets.iter().any(|t| t.kept && t.identity.machine == view.machine && t.identity.agent == view.agent);
+            if kept && view.matches(app) { crate::shell_context::leave(app, view.pane); }
+            continue;
+        }
         if seen.insert(view.pane) && view.matches(app) {
             app.close_pane(view.pane);
         }

@@ -557,6 +557,8 @@ fn stopped(app: &mut App, id: &str, reply: Reply) {
     let closed = reply.as_ref().ok().is_some_and(|r| r["closed"] == true);
     // A Swarm Buddy keeps running, so it keeps its agent. The daemon's refusal speaks of Stop Harness: no help here.
     if reply.as_ref().err().is_some_and(|e| e.code == "BUDDY_PROTECTED") || reply.as_ref().is_ok_and(|r| r["keptRunning"] == true) {
+        // A refusal, not a lost answer: nothing stopped, so the pane is not held for a replacement (Desktop's preservingViews).
+        if let Some(c) = app.agent_switch.changes.get_mut(id) { c.preserving = false; }
         fail(app, id, BUDDY_KEEPS_ITS_AGENT); return;
     }
     if !closed {
@@ -890,6 +892,8 @@ mod tests {
         assert_eq!(app.panes[&1].agent_id, "a1");
         assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
         assert_eq!(app.agent_switch.changes[&id].error, "A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.");
+        // A refusal, not a lost answer: the pane is no longer held for a replacement, so a later stop closes it.
+        assert!(!preserves(&app, 1), "the pane is not held after the refusal");
     }
 
     #[tokio::test]
