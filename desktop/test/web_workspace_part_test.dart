@@ -125,10 +125,40 @@ void main() {
     );
   });
 
+  test('the icon face does not hold the text face', () async {
+    final text = Completer<void>();
+    final icons = Completer<void>();
+    var done = false;
+    unawaited(
+      loadTextFaceFirst(
+        text: text.future,
+        icons: icons.future,
+      ).then((_) => done = true),
+    );
+
+    await pumpEventQueue();
+    expect(done, isFalse);
+
+    text.complete();
+    await pumpEventQueue();
+    expect(done, isTrue);
+
+    icons.complete();
+    await pumpEventQueue();
+  });
+
+  test('an icon face that fails still lets the text face finish', () async {
+    await loadTextFaceFirst(
+      text: Future<void>.value(),
+      icons: Future<void>.error(Exception('offline')),
+    );
+    await pumpEventQueue();
+  });
+
   test('the terminal font files are in the bundle the browser reads', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     expect(terminalFontAssets, hasLength(2));
-    for (final asset in terminalFontAssets) {
+    for (final asset in [...terminalFontAssets, terminalIconFontAsset]) {
       final bytes = await rootBundle.load(asset);
       // A TrueType file opens with its version, 0x00010000.
       expect(bytes.getUint32(0), 0x00010000, reason: asset);

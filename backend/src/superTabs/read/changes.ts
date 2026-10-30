@@ -67,6 +67,8 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         break
       }
       case 'start': {
+        // A Buddy reads no starts, so not a removal's id either (security review 2 of #2258).
+        if (buddy) break
         const start = live(seen.starts, part.key), group = groupOf((part.data as AgentStart).request.conversationId)
         if (part.deleted) { if (group && groupReadable(group)) out.starts.push(stub(part)) }
         else if (start) out.starts.push(start)

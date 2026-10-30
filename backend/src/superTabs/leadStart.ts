@@ -159,15 +159,17 @@ const placementOf = (state: SuperTabState, start: AgentStart): LeadPlacement | u
 }
 
 /** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
- *  meanwhile, which stays. The line its conversation shows. */
-export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): string {
+ *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine, so a Buddy reads
+ *  it without the name (store.ts withoutMachineNames; Diego, 10-30). */
+export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): { text: string; source: { kind: 'system'; machine?: string } } {
   if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
   const placement = placementOf(state, start)
   if (placement) placement.status = 'started'
-  const started = `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
+  const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
+  const started = `${LEAD_NAME} started on ${machine ?? 'its machine'}.`
   const ran = state.agents.find(a => a.id === agentId)?.configuration
   const other = ran && otherThanAsked(start.request, ran)
-  return other ? `${started} ${other}` : started
+  return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
 }
 
 /** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its

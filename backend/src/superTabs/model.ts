@@ -446,9 +446,21 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
   return { ...rest, machineId: '', harnessId: '',
     ...(target.lostTask ? { lostTask: { ...target.lostTask, reason: lostReasonWithoutMachine(target.lostTask.reason) } } : {}) } as T
 }
+/** An agent as a Buddy [buddyId] reads it: no machine, and for any agent but itself not whose machine, membership or Team
+ *  account runs it, which says whose Mac runs the PM (security reviews of #2258). Its membership's generation matches a
+ *  person's, so it goes too (delta review 1 of #2258), and so does its host grant, which under an older share policy names
+ *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
+export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant' | 'teamAccount'
+  | 'replacement' | 'lostTask'>>(target: T, buddyId: string): T => {
+  const bare = agentWithoutMachine(target)
+  if (target.id === buddyId) return bare
+  const { teamAccount: _team, ...rest } = bare
+  return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
+}
+/** A group as a Buddy reads it: its task names no machine, terminal or machine owner. */
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
-    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '' } } : {}),
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
     ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
   return { ...group, ...(assignment ? { assignment } : {}),
     ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }
@@ -721,11 +733,17 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && a.buddyOf)) {
     visible.machines = []
     visible.starts = []
-    visible.agents = visible.agents.map(agentWithoutMachine)
+    visible.agents = visible.agents.map(a => agentForBuddy(a, actor.agentId))
     visible.conversations = visible.conversations.map(groupWithoutMachines)
     // A project's repository names the machine and folder it was made from; the address is all a Buddy needs (security
     // review 2 of #2115).
     for (const project of visible.projects ?? []) if (project.repository) project.repository = { repositoryUrl: project.repository.repositoryUrl } as typeof project.repository
+    // Where its Product Manager runs names the machine and its start: a Buddy reads how it stands, and why it failed, which
+    // names no machine (leadStart.ts leadStartFailed; Diego, 10-30).
+    for (const project of visible.projects ?? []) {
+      const lead = project.lead
+      if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+    }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules
     delete visible.routingPolicy
