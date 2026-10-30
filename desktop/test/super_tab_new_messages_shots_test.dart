@@ -20,8 +20,8 @@ const _updates = [
   'Pushed the branch; the checks are running.',
 ];
 
-/// The chat opened at its New messages line, and scrolled to the end with the
-/// pill that jumps back to it.
+/// The chat opened at its New messages line, and scrolled on to the end: the
+/// line was seen, so no pill jumps back to it.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -90,8 +90,8 @@ void main() {
           .position;
       list.jumpTo(list.maxScrollExtent);
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-jump-unread')), findsOne);
-      await shot('pill');
+      expect(find.byKey(const ValueKey('super-jump-unread')), findsNothing);
+      await shot('read-on');
     });
   }
 }

@@ -423,6 +423,61 @@ void main() {
     expect(find.text('Ship it?'), findsOneWidget);
   });
 
+  testWidgets('While you were away on Home opens the Activity tab, not a '
+      'page over Home', (tester) async {
+    var now = DateTime.now();
+    final tabs = [
+      for (final entry in swarmTabs(onSettings: _settings))
+        entry.tab == SwarmTab.home
+            ? SwarmTabEntry(
+                tab: entry.tab,
+                label: entry.label,
+                icon: entry.icon,
+                screen: (_) => SwarmPage(now: () => now),
+              )
+            : entry,
+    ];
+    await pump(
+      tester,
+      SwarmTabsPage(onSettings: _settings, tabs: tabs),
+      fake: _asking(),
+    );
+    // The app hidden for an hour, then shown again.
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    now = now.add(const Duration(hours: 1));
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+
+    final away = find.byKey(const ValueKey('swarm-away'));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('swarm-away-needs')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(away);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SwarmActivityView), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('tty-back')),
+      findsNothing,
+      reason: 'the tab, not a page',
+    );
+    expect(find.text('Ship it?'), findsOneWidget);
+  });
+
   testWidgets('Buddies opens Buddies, as a tab with no way back, and counts '
       'the Buddy chats with something unread', (tester) async {
     await pump(tester, _tabs, fake: buddiesBackend());

@@ -72,7 +72,10 @@ function buddyIn(value: unknown): SwarmBuddy | null {
   const buddy = object(value)
   if (!id(buddy.chatId) || typeof buddy.name !== 'string' || typeof buddy.engine !== 'string' || typeof buddy.live !== 'boolean') return null
   if (!whole(buddy.cells) || buddy.cells > MAX_CELLS || typeof buddy.color !== 'string' || !COLOR.test(buddy.color)) return null
-  return { chatId: buddy.chatId, name: cut(buddy.name, NAME_BYTES), engine: cut(buddy.engine, ENGINE_BYTES), cells: buddy.cells, color: buddy.color, live: buddy.live }
+  // Its session here, which tells a tap on its notification from any other agent's (cableSession agent.open). Kept on this
+  // computer: the devices service strips it from every frame. An unsound one is left out and the Buddy is kept.
+  return { chatId: buddy.chatId, name: cut(buddy.name, NAME_BYTES), engine: cut(buddy.engine, ENGINE_BYTES), cells: buddy.cells, color: buddy.color, live: buddy.live,
+    ...(id(buddy.local) ? { local: buddy.local } : {}) }
 }
 
 /** A Lead the service sent, checked and cut; null when it is not one. */

@@ -352,6 +352,11 @@ class SuperTabClient {
   /// account still belongs to.
   Set<String> get hiddenIds => Set.unmodifiable(_hidden);
 
+  /// Who owns Swarm [id], as the open Swarm says or the last full list read
+  /// said; null for one this account is not listed in.
+  String? ownerOf(String id) => _loaded[id]?.snapshot?.ownerId ?? _owners[id];
+  Map<String, String> _owners = const {};
+
   void bind(String? account) {
     if (_account == account) return;
     for (final timer in _viewSaves.values) {
@@ -377,6 +382,7 @@ class SuperTabClient {
     _visibility.clear();
     _tagCounts.clear();
     _tagDigests.clear();
+    _owners = const {};
     _tagsSeen.clear();
     _listMentions = true;
     discoveryError = null;
@@ -464,6 +470,7 @@ class SuperTabClient {
         await _readHidden(account, generation);
         if (generation != _generation) return;
         final tabs = <String, SuperTabListing>{};
+        final owners = <String, String>{};
         final tags = <String, ({int count, String digest})>{};
         final cursors = <String>{};
         String? after;
@@ -480,6 +487,7 @@ class SuperTabClient {
             }
             final id = row['id'] as String;
             tabs[id] = (id: id, name: row['name'] as String);
+            if (row['ownerId'] case final String owner) owners[id] = owner;
             // Told only by a backend that counts them (and only when asked).
             if (row['mentionsWaiting'] case final int count
                 when row['mentionsDigest'] is String) {
@@ -495,6 +503,7 @@ class SuperTabClient {
           }
         } while (after != null);
         discoveryError = null;
+        _owners = owners;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.

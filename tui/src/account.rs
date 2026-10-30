@@ -163,6 +163,15 @@ pub fn label(app: &App) -> &'static str {
     if app.account.status == Status::SignedOut { "Sign in" } else { "Account" }
 }
 
+/// The side bar's account button: whose account it is — the email's name, its domain left off
+/// (`tuan.dev` for tuan.dev@autonomous.ai) — once the email is known, else [label].
+pub fn button(app: &App) -> String {
+    match &app.account.status {
+        Status::SignedIn { email: Some(email), .. } => email.split_once('@').map_or(email.as_str(), |(name, _)| name).to_string(),
+        _ => label(app).to_string(),
+    }
+}
+
 pub fn open(app: &mut App) {
     crate::input::picker(app, PickerKind::Account, "Your Harness account", "");
     refresh(app, true);
@@ -707,6 +716,17 @@ mod tests {
 
     fn key(app: &mut App, code: KeyCode) {
         crate::input::handle(app, Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    /// The side bar's account button says whose it is: the email's name, not its domain.
+    #[test]
+    fn the_account_button_says_the_username() {
+        let mut app = app();
+        assert_eq!(button(&app), "Sign in");
+        app.account.status = Status::SignedIn { offline: false, email: None };
+        assert_eq!(button(&app), "Account", "until the email is known");
+        app.account.status = Status::SignedIn { offline: false, email: Some("tuan.dev@autonomous.ai".into()) };
+        assert_eq!(button(&app), "tuan.dev");
     }
 
     fn select(app: &mut App, id: &str) {
