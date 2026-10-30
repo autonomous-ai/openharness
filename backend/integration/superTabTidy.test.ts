@@ -284,9 +284,12 @@ describe('a review the Swarm opens by itself', () => {
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
     const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
     const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
-    const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
-    // On another engine than the Builder's: a review never runs on the reviewed Builder's own (rules.ts reviewRefusal).
-    await f.started(reviewer, { role: 'reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' } })
+    const reviewerHarness = randomUUID()
+    const reviewer = await f.add('lead', 'test-host', reviewerHarness, 'Reviewer')
+    // On a model the routing table rates 2 or more (rules.ts reviewRefusal), of any engine, the Builder's own included (Ken,
+    // 2026-10-30); its machine reports it can start one (autoReview.ts pickReviewer skips a silent machine).
+    await f.started(reviewer, { role: 'reviewer', configuration: { ...config, model: 'gpt-6.1-sol' } })
+    await f.observe('test-host', [reviewerHarness])
     await f.delivered()
     await f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review',
       result: 'Ready: yes, revision abc..def. https://github.com/example/parser/pull/9' }, host, builder)

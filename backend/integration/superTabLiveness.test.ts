@@ -667,10 +667,12 @@ describe('work waiting for its review', () => {
 
 // Review of #2275: the review-capacity notice took the command's own message id, which the Ready for review row already had,
 // so the real write hit a duplicate key and rolled the whole status back: no Builder could hand over during a quota shortage.
-describe('a Ready for review while no Reviewer of another engine can start', () => {
+// Since any engine reviews any build (Ken, 2026-10-30), the notice speaks only when neither engine can start a Reviewer.
+describe('a Ready for review while no Reviewer of any engine can start', () => {
   it('saves the hand-over and tells the project chat once, through the store\'s write', async () => {
     const f = await swarm({ engines: ['codex', 'claude'] })
-    const outForDays = [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: new Date(f.clock.now + 3 * 86_400_000).toISOString() }] }]
+    const outForDays = ['claude', 'codex'].map(engine =>
+      ({ engine, known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: new Date(f.clock.now + 3 * 86_400_000).toISOString() }] }))
     await f.observe('lead-host', [f.harness.lead], { quotas: outForDays })
     await f.observe('test-host', [f.harness.worker], { quotas: outForDays })
     const status = (status: 'review' | 'working', result: string) =>
@@ -680,11 +682,11 @@ describe('a Ready for review while no Reviewer of another engine can start', () 
     const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } })
     const notices = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'review-capacity')
     expect(notices).toHaveLength(1)
-    expect(notices[0]!.text).toMatch(/^Reviews of Codex builds fall back to Codex at its top tier: Claude Code is unavailable/)
+    expect(notices[0]!.text).toMatch(/^Reviews cannot start a new Reviewer: no machine this project may use can run Claude Code or Codex now/)
     // The command's own row stays the hand-over.
     expect(rows.find(m => m.id === handed.result.messageId)!.text).toContain('Ready for review: PR #7 at 4f9c2e1')
     const project = (await f.timed.read(owner, f.tab)).state.projects![0]!
-    expect(project.reviewCapacity).toEqual({ claude: 'out' })
+    expect(project.reviewCapacity).toEqual({ any: 'out' })
     // Handed over again, the cause is the same: said once.
     await status('working', 'Fixing')
     await status('review', 'Ready for review: PR #7 at 5a0d3f2')
