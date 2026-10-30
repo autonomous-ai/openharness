@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { afterEach, expect, it } from 'vitest'
-import { frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topCalls, topSelfTime } from './selfProfile.js'
+import { busKind, frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topCalls, topSelfTime } from './selfProfile.js'
 import { enterWork, workKind } from './queryStats.js'
 
 let stop = () => {}
@@ -138,4 +138,14 @@ it('counts calls of our functions from precise coverage, an anonymous one by its
     { url: 'file:///app/node_modules/@prisma/client/runtime/library.js', functions: [{ functionName: 'parse', ranges: [{ startOffset: 1, count: 99999 }] }] },
   ])
   expect(calls).toEqual({ 'stableId dist/superTabs/model.js': 900, '(anonymous) dist/superTabs/model.js@4021': 50 })
+})
+
+it('names a Redis message by its subscriber and channel kind, never the id in the channel', () => {
+  expect(busKind('terminal', 'termup:6a8fe4fcf1a6b5972eed0103')).toBe('bus terminal termup')
+  expect(busKind('main', 'up:machine-123')).toBe('bus main up')
+  expect(busKind('app', 'appup:stream_9')).toBe('bus app appup')
+  expect(busKind('main', 'swarm-stamp')).toBe('bus main swarm-stamp')
+  // Anything that does not look like one of the bus's own names counts as other.
+  expect(busKind('main', 'Weird Channel:1')).toBe('bus main other')
+  expect(busKind('main', `${'x'.repeat(40)}:1`)).toBe('bus main other')
 })
