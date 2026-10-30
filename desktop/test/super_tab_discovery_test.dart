@@ -22,6 +22,7 @@ class _Catalog {
     {'id': '0123456789abcdef01234567', 'name': 'Pilot'},
   ];
   final paths = <String>[];
+  final reads = <String>[];
   final server = ConversationServer();
   String? fail;
   Completer<void>? hold;
@@ -32,10 +33,15 @@ class _Catalog {
     Map<String, dynamic>? body,
   }) async {
     if (Uri.parse(path).path != '/api/super-tabs/list') {
+      reads.add(path);
       return server.request(method, path, body: body);
     }
     expectSync(method, 'GET');
-    paths.add(path);
+    // These tests are about the pages, not the tags the list also carries.
+    final plain = path
+        .replaceFirst('?mentions=1&', '?')
+        .replaceFirst('?mentions=1', '');
+    paths.add(plain);
     final after = Uri.parse(path).queryParameters['after'];
     final index = after == null
         ? 0
@@ -43,7 +49,7 @@ class _Catalog {
     final rows = index < tabs.length ? [Map.of(tabs[index])] : [];
     final next = index + 1 < tabs.length ? tabs[index]['id'] : null;
     if (hold case final waiting?) await waiting.future;
-    if (fail == path) throw StateError('Connection lost');
+    if (fail == plain) throw StateError('Connection lost');
     return {'tabs': rows, 'next': next};
   }
 }
@@ -442,6 +448,43 @@ void main() {
     app.superTabs.dispose();
     await tester.pump();
   });
+
+  testWidgets(
+    'a closed Swarm reads and rebuilds nothing; Reopen reads it again',
+    (tester) async {
+      final catalog = _Catalog();
+      catalog.server.state['id'] = catalog.tabs.single['id'];
+      final app = _computer(catalog, MemoryStore());
+      await mount(tester, app);
+      await app.superTabs.refreshTabs();
+      await tester.pump();
+      final tab = app.swarms.singleWhere((s) => s.isSuperTab);
+      await tester.tap(find.byKey(ValueKey('tab-label:${tab.id}')));
+      await tester.pumpAndSettle();
+      expect(catalog.reads, isNotEmpty);
+      await _close(app, tab);
+      await tester.pump(const Duration(seconds: 1));
+      var rebuilds = 0;
+      void rebuilt() => rebuilds++;
+      app.addListener(rebuilt);
+      addTearDown(() => app.removeListener(rebuilt));
+      catalog.server.append('Said after the tab closed');
+      catalog.reads.clear();
+      await tester.pump(const Duration(seconds: 10));
+      expect(catalog.reads, isEmpty);
+      expect(rebuilds, 0);
+      await tester.tap(find.text('Reopen'));
+      await tester.pumpAndSettle();
+      expect(catalog.reads, isNotEmpty);
+      expect(
+        find.text('Said after the tab closed', findRichText: true),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets('the notice goes after about eight seconds', (tester) async {
     final app = _computer(_Catalog(), MemoryStore());

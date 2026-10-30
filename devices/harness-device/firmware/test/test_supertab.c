@@ -176,21 +176,139 @@ static void lookups_and_recap(void)
     // Recap: only the open Lead's text lands.
     ht_supertabs_recap_open(&model, "s1", "L0", 100);
     assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 100 && !model.recap.text[0]);
-    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "other", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "", "other", 1, false));
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
     char *big = malloc(1601); memset(big, 'r', 1599); strcpy(big + 1499, "\xe2\x80\xa6"); memset(big + 1502, 'r', 98); big[1600] = 0;
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", big, 1792560000u, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "", big, 1792560000u, false));
     assert(model.recap.state == HT_RECAP_LOADED && strlen(model.recap.text) == 1499 && model.recap.at == 1792560000u);
     free(big);
     ht_supertabs_recap_open(&model, "s1", "L1", 200);
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
-    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
+    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
     ht_supertabs_recap_open(&model, "", "", 300);
-    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "x", 0, false));
+    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "", "x", 0, false));
     ht_supertabs_recap_open(&model, "s1", "L0", 400);
     ht_supertabs_reset(&model);
     assert(model.n == 0 && model.id_n == 0 && model.recap.state == HT_RECAP_NONE && !model.recap.lead[0]);
     puts("supertab: desk link, local Lead, list order, recap slot (one Lead, UTF-8 cut, none), reset PASS");
+}
+
+// The round dial's face follows the chat the desktop has open (design 2026-10-28-round-dial-swarm-chat).
+static void chats(void)
+{
+    static ht_supertab_t t;
+    ht_supertabs_reset(&model);
+    const char ids[1][ID_MAX] = {"s1"};
+    ht_supertabs_ids(&model, ids, 1, NULL, 0);
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 3));
+    // lead keeps chat, chat_id, chat_name
+    ht_lead_in_t g = lead("L0", "work", 0); g.chat = "group"; g.chat_id = "g1"; g.chat_name = "Fix login";
+    ht_lead_in_t pm = lead("L1", "done", 1); pm.chat = "pm"; pm.chat_id = "pm1"; pm.chat_name = "PM";
+    // a lead without chat fields reads as the Lead chat
+    ht_lead_in_t old = lead("L2", "ask", 2);
+    assert(ht_supertab_lead_add(&t, &g) && ht_supertab_lead_add(&t, &pm) && ht_supertab_lead_add(&t, &old));
+    assert(t.leads[0].chat == HT_CHAT_GROUP && !strcmp(t.leads[0].chat_id, "g1") && !strcmp(t.leads[0].chat_name, "Fix login"));
+    assert(t.leads[1].chat == HT_CHAT_PM && !strcmp(t.leads[1].chat_id, "pm1") && !strcmp(t.leads[1].chat_name, "PM"));
+    assert(t.leads[2].chat == HT_CHAT_LEAD && !t.leads[2].chat_id[0] && !t.leads[2].chat_name[0]);
+    // A long group name is cut to 48 bytes on a UTF-8 boundary; an unknown kind, or a chat id that cannot be held, is the
+    // Lead chat with no id, and the Lead is kept.
+    static ht_supertab_t u;
+    assert(ht_supertab_init(&u, "s1", "", "openharness", 3));
+    char name[64]; memset(name, 'n', 47); strcpy(name + 47, "\xc3\xa9tail");
+    char longer[ID_MAX + 1]; memset(longer, 'x', ID_MAX); longer[ID_MAX] = 0;
+    ht_lead_in_t cut = lead("L0", "work", 0); cut.chat = "group"; cut.chat_id = "g2"; cut.chat_name = name;
+    ht_lead_in_t odd = lead("L1", "work", 1); odd.chat = "dm"; odd.chat_id = "c1"; odd.chat_name = "x";
+    ht_lead_in_t wide = lead("L2", "work", 2); wide.chat = "group"; wide.chat_id = longer; wide.chat_name = "x";
+    assert(ht_supertab_lead_add(&u, &cut) && ht_supertab_lead_add(&u, &odd) && ht_supertab_lead_add(&u, &wide));
+    assert(strlen(u.leads[0].chat_name) == 47 && u.leads[0].chat == HT_CHAT_GROUP);
+    assert(u.leads[1].chat == HT_CHAT_LEAD && !u.leads[1].chat_id[0] && !u.leads[1].chat_name[0]);
+    assert(u.leads[2].chat == HT_CHAT_LEAD && !u.leads[2].chat_id[0]);
+    ht_supertabs_put(&model, &t, 0, NULL, 0);
+
+    // drops a recap for another chat: the face is the group's, so the Lead chat's recap (or none named) is not its.
+    ht_supertabs_recap_open(&model, "s1", "L0", 100);
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "lead-web", "the Lead", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "", "no chat named", 1, false));
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.chat_id, "g1") && !strcmp(model.recap.text, "Tests green."));
+    // An old daemon's Lead (no chat) takes the recap that names none, as before.
+    ht_supertabs_recap_open(&model, "s1", "L2", 200);
+    assert(ht_supertabs_recap_put(&model, "s1", "L2", "", "Shipped.", 3, false) && !model.recap.chat_id[0]);
+    // Opening the Lead already on the face keeps its recap until a new one arrives; one still on its way is asked anew.
+    ht_supertabs_recap_open(&model, "s1", "L0", 250);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    ht_supertabs_recap_open(&model, "s1", "L0", 260);
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Tests green.") && model.recap.asked_ms == 260);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Deployed.", 4, false) && !strcmp(model.recap.text, "Deployed."));
+    ht_supertabs_recap_open(&model, "s1", "L2", 270); ht_supertabs_recap_open(&model, "s1", "L2", 280);
+    assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 280);
+    // The face's chat moved on: what it holds is another chat's, and is not kept.
+    ht_supertabs_recap_open(&model, "s1", "L0", 290);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    t.leads[0].chat_id[0] = 'h'; ht_supertabs_put(&model, &t, 0, NULL, 0);
+    ht_supertabs_recap_open(&model, "s1", "L0", 295);
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0] && !model.recap.chat_id[0]);
+    // Opening another Lead forgets the chat the last recap was for.
+    ht_supertabs_recap_open(&model, "s1", "L1", 300);
+    assert(!model.recap.chat_id[0]);
+    puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat, the face's own reopen keeps it PASS");
+}
+
+// The reader's own Buddy in each project (spec 2026-10-29-round-dial-pm-buddy): `buddies` while the Swarm has them on,
+// the Buddy block with its avatar's 15 half bits and colour, and a face that may be its chat.
+static void buddies(void)
+{
+    static ht_supertab_t t;
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 3));
+    ht_lead_in_t b = lead("L0", "done", 0); b.chat = "buddy"; b.chat_id = "b1"; b.chat_name = "diego's Buddy"; b.buddies = true;
+    b.buddy = (ht_buddy_in_t){.present = true, .chat_id = "b1", .name = "diego's Buddy", .engine = "codex", .color = "#d6a79a",
+                                .cells = 25513, .live = true};
+    // Buddies on, no Buddy in this project; and an older daemon, which sends neither.
+    ht_lead_in_t none = lead("L1", "done", 1); none.buddies = true;
+    ht_lead_in_t old = lead("L2", "done", 2);
+    assert(ht_supertab_lead_add(&t, &b) && ht_supertab_lead_add(&t, &none) && ht_supertab_lead_add(&t, &old));
+    const ht_lead_t *l = &t.leads[0];
+    assert(l->buddies && l->buddy.has && l->buddy.live && l->buddy.cells == 25513 && l->buddy.color == 0xd6a79a);
+    assert(!strcmp(l->buddy.chat_id, "b1") && !strcmp(l->buddy.name, "diego's Buddy") && !strcmp(l->buddy.engine, "codex"));
+    assert(l->chat == HT_CHAT_BUDDY && !strcmp(l->chat_id, "b1") && !strcmp(l->chat_name, "diego's Buddy"));
+    assert(t.leads[1].buddies && !t.leads[1].buddy.has);
+    assert(!t.leads[2].buddies && !t.leads[2].buddy.has && t.leads[2].chat == HT_CHAT_LEAD);
+    // A down Buddy is still drawn, not live.
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 1));
+    b.buddy.live = false; assert(ht_supertab_lead_add(&t, &b) && t.leads[0].buddy.has && !t.leads[0].buddy.live);
+    // A block this dial cannot draw is dropped and the Lead kept: a colour that is not #rrggbb, cells past 15 bits or
+    // negative, no chat id or one too long to hold. Buddies stay on.
+    char longer[ID_MAX + 1]; memset(longer, 'b', ID_MAX); longer[ID_MAX] = 0;
+    const char *colors[] = {"d6a79a", "#d6a79", "#d6a79a0", "#d6a7zz", "", NULL};
+    for (int i = 0; i < 6; i++) {
+        ht_lead_in_t bad = b; bad.buddy.color = colors[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad));
+        assert(t.leads[0].buddies && !t.leads[0].buddy.has);
+    }
+    const long cells[] = {32768, -1};
+    for (int i = 0; i < 2; i++) {
+        ht_lead_in_t bad = b; bad.buddy.cells = cells[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad) && !t.leads[0].buddy.has);
+    }
+    const char *ids[] = {"", NULL, longer};
+    for (int i = 0; i < 3; i++) {
+        ht_lead_in_t bad = b; bad.buddy.chat_id = ids[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad) && !t.leads[0].buddy.has);
+    }
+    // The upper case and the edges hold: 0 and 32767 cells, #FFFFFF.
+    ht_lead_in_t edge = b; edge.buddy.color = "#FFFFFF"; edge.buddy.cells = 32767;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &edge));
+    assert(t.leads[0].buddy.has && t.leads[0].buddy.color == 0xffffff && t.leads[0].buddy.cells == 32767);
+    edge.buddy.cells = 0;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &edge) && t.leads[0].buddy.has && !t.leads[0].buddy.cells);
+    // A Buddy block without `buddies` (never from the daemon) is not drawn.
+    ht_lead_in_t off = b; off.buddies = false;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &off) && !t.leads[0].buddy.has);
+    // A Buddy face whose chat id cannot be held is the Lead chat, as any other.
+    ht_lead_in_t wide = b; wide.chat_id = longer;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &wide) && t.leads[0].chat == HT_CHAT_LEAD);
+    puts("supertab: Buddies on, the Buddy block and its avatar, a Buddy face, bad blocks dropped with the Lead kept PASS");
 }
 
 int main(void)
@@ -198,5 +316,7 @@ int main(void)
     order_and_limits();
     transitions();
     lookups_and_recap();
+    chats();
+    buddies();
     return 0;
 }

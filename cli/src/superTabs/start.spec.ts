@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
+vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
+vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -244,6 +250,118 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy skill, talking in its owner\'s chat and waiting for no assignment', async engine => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('buddy')
+  expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+it('starts no Buddy with full permissions or the GitHub App\'s token: Claude refusing what its guard does not allow, Codex in its read-only sandbox asking', async () => {
+  for (const [engine, mode, bypass] of [['claude', 'buddy', false], ['codex', 'readOnlyAsk', false]] as const) {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,
+      f.scoped, where, f.open)
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, mode, bypass, undefined])
+    expect(payload.prompt).not.toContain('GitHub')
+  }
+})
+
+it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'lead-prompt', request: f.start.request, hostDispatch: true, github: { requester: 'owner' } } as never,
+    f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('lead')
+  expect(payload.swarmGitHub).toBe(true)
+  expect(payload.prompt).toContain('swarm-lead skill')
+  expect(payload.prompt).toContain(`You are the Product Manager of the project whose conversation is ${f.start.request.conversationId}, started by the Swarm`)
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('Your lead will assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+// Security re-check 2 of #2089 (the Lead's option A): a Codex Product Manager in a Team account runs in an engine home of
+// its own, deleted whole when the Swarm ends it; a Claude Code one in the shared home, scrubbed then (inCore/teamApps.ts).
+it('starts a Codex Product Manager on a Team daemon in an engine home of its own, and no other agent or daemon so', async () => {
+  const launch = async (engine: string, lead: boolean, team: boolean) => {
+    teamDaemon.value = team
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, ...(lead ? { leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } : {}) } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `home-${engine}-${lead}-${team}`, request: f.start.request }, f.scoped, where, f.open)
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.codexHome
+  }
+  expect(await launch('codex', true, true)).toBe(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))
+  // Made before the launch: Codex refuses a CODEX_HOME that is not there.
+  expect(existsSync(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))).toBe(true)
+  expect(await launch('claude', true, true)).toBeUndefined()
+  expect(await launch('codex', false, true)).toBeUndefined()
+  expect(await launch('codex', true, false)).toBeUndefined()
+  teamDaemon.value = false
+})
+
+// Security re-check 3 of #2089: a Codex Product Manager in a Team account starts signed in on the owner's relay, or is
+// refused with why. Its own engine home holds no sign-in, so with no relay it started signed out.
+it('refuses a Codex Product Manager on a Team daemon with no owner relay before anything launches, saying why', async () => {
+  teamDaemon.value = true
+  teamDaemon.relayed = false
+  try {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
+    const reason = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
+    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
+    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
+    expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
+    // A Claude Code one, and a Codex worker, are not this check's.
+    for (const request of [{ engine: 'claude', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex' }]) {
+      const g = fixture()
+      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `other-${request.engine}`, request: g.start.request }, g.scoped, where, g.open)
+      expect(g.request.mock.calls.map(call => call[0])).toContain('agent_create')
+    }
+  } finally { teamDaemon.value = false; teamDaemon.relayed = true }
+})
+
+// Mac Auto, 2026-10-29: a Codex start for gpt-6.1-sol, which its owner's ChatGPT account does not offer, launched and then
+// failed every request. In a Team account on the relay such a start is refused before anything launches, with what is offered.
+it('refuses a Codex start in a Team account for a model its owner is not offered, naming what is', async () => {
+  teamDaemon.value = true
+  teamDaemon.offered = { slugs: ['gpt-6-luna', 'gpt-reserve', 'gpt-5.6-terra'], listed: ['gpt-6-luna', 'gpt-5.6-terra'] }
+  try {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } as typeof f.start.request
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'not-offered', request: f.start.request }, f.scoped, where, f.open)
+    const reason = 'This machine\'s ChatGPT account (its owner\'s subscription, used through the owner\'s relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra.'
+    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
+    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
+    expect(f.start.error).toBe(reason)
+    // An offered model, the default, a list that cannot be read, Claude Code and a Mac's own daemon all start as before.
+    const starts = async (request: Record<string, unknown>, offered: { slugs: string[]; listed: string[] } | null, team = true) => {
+      teamDaemon.offered = offered
+      teamDaemon.value = team
+      const g = fixture()
+      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `ok-${String(request.model)}`, request: g.start.request }, g.scoped, where, g.open)
+      return g.request.mock.calls.map(call => call[0]).includes('agent_create')
+    }
+    const list = { slugs: ['gpt-6-luna'], listed: ['gpt-6-luna'] }
+    expect(await starts({ engine: 'codex', model: 'gpt-6-luna', effort: 'medium' }, list)).toBe(true)
+    expect(await starts({ engine: 'codex', model: 'default', effort: 'default' }, list)).toBe(true)
+    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, null)).toBe(true)
+    expect(await starts({ engine: 'claude', model: 'sonnet', effort: 'medium' }, list)).toBe(true)
+    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, list, false)).toBe(true)
+  } finally { teamDaemon.value = false; teamDaemon.offered = null }
+})
+
 describe('the skills of the project the agent joins', () => {
   const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
     projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })
@@ -271,6 +389,30 @@ describe('the skills of the project the agent joins', () => {
     ['a state it cannot read', new Error('offline')],
   ])('reads %s as Harness orchestration', async (_name, state) => {
     expect(await started(state)).toMatchObject({ swarmSkillMode: 'orchestration' })
+  })
+
+  // Prod logs 2026-10-28: a contributed machine's host asked for a Swarm read it may not make (a 400 at every start) and
+  // launched every agent on Harness orchestration. Its start read names the project's skills instead.
+  const hosted = async (skillMode?: string) => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { poolGeneration: 'pool-1', ...(skillMode ? { skillMode } : {}) })
+    expect(await startAgent({ tabId: 'tab', startId: 'start', hostDispatch: true }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.scoped.mock.calls.map(c => c[0].action)).not.toContain('status')
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  }
+  it('starts a contributed machine\'s agent with the skills its start read names, without reading the Swarm', async () => {
+    const payload = await hosted('default')
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default' })
+    expect(payload.prompt).toContain('Use the swarm-dev skill for this session: the team process; otherwise work your usual way.')
+  })
+  it('starts a contributed machine\'s agent on Harness orchestration when an older backend\'s start read names no skills', async () => {
+    expect(await hosted()).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'orchestration' })
+  })
+  it('takes the start read\'s skills for a Lead\'s own start too', async () => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { skillMode: 'default' })
+    await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]).toMatchObject({ swarmSkillMode: 'default' })
   })
 })
 
@@ -855,7 +997,9 @@ it('records the original launch identity and retries without it only for an olde
 
 it('waits for the initial engine binding before recording a timed launch identity', async () => {
   const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' } })
-  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING' })
+  // It names the agent it launched, which its host stops should the Swarm fail this start meanwhile (machines.ts `abandoned`).
+  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open))
+    .toMatchObject({ error: 'START_PENDING', creationId: expect.any(String), harnessId: expect.any(String) })
   expect(f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).some(c => c?.type === 'agent.started')).toBe(false)
 })
 
@@ -1060,13 +1204,13 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.commands.slice(before).map(c => c.operationId)).toEqual(b.commands.slice(before - 2, before).map(c => c.operationId))
   })
 
-  it('with no other machine, tells the group and its requester that the task has no worker, without the raw error', async () => {
+  it('with no other machine, tells the group, and its requester only if the task still has no worker, without the raw error', async () => {
     const b = backend({ candidates: [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member')] })
     const result = await b.lead(b.first)
     expect(b.of('agent.start')).toHaveLength(1)
     const [notice] = b.of('message.send')
-    expect(notice).toMatchObject({ conversationId: 'group', mentions: ['person-1'], recipientIds: [],
-      text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker until that machine is fixed or another one is added.' })
+    expect(notice).toMatchObject({ conversationId: 'group', mentions: ['person-1'], mentionsIfNoWorker: true, recipientIds: [],
+      text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker. Fix that machine or add another one, then ask the Lead to start it again.' })
     expect(String(notice!.text)).not.toContain('token')
     expect(result).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
   })
@@ -1077,7 +1221,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     const b = backend({ candidates: [candidate('c0', 'mac-one')], error: reason })
     expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', detail: expect.stringContaining(reason) })
     expect(b.of('message.send')).toMatchObject([{ text: 'Builder could not start on Mac One: not enough free memory (1.8 GiB free, 2 GiB needed), '
-      + 'and no other machine allowed for this task could take it. This task has no worker until memory frees up on that machine or another one is added.' }])
+      + 'and no other machine allowed for this task could take it. This task has no worker. Free up memory on that machine or add another one, then ask the Lead to start it again.' }])
   })
 
   it('reports instead of trying a third machine when the retry fails as well', async () => {
@@ -1102,15 +1246,15 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.of('agent.start')).toHaveLength(1)
   })
 
-  const STAYS = 'Builder could not start. This task needs a particular machine or device, so it was not moved to another machine. It has no worker until a machine that has what it needs can start it.'
-  it('keeps a task that requires its machine or device where it is, and tells the group and its requester', async () => {
+  const STAYS = 'Builder could not start. This task needs a particular machine or device, so it was not moved to another machine. It has no worker. Make a machine that has what it needs available, then ask the Lead to start it again.'
+  it('keeps a task that requires its machine or device where it is, and tells the group, and its requester only if it still has no worker', async () => {
     // As each Lead reads it: a machine it sees, one it does not (only counted), a device.
     for (const requires of [{ machines: ['mac-one'] }, { machines: [], unseenMachines: 1 }, { devices: ['/dev/cu.round'] }]) {
       const b = backend({ requires })
       expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
       expect(b.of('route.record')).toEqual([])
       expect(b.of('agent.start')).toHaveLength(1)
-      expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], recipientIds: [], text: STAYS }])
+      expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], mentionsIfNoWorker: true, recipientIds: [], text: STAYS }])
       // A group reader may not see the machine (backend model.ts withSeenRequirement): the post names none, nor the raw error.
       for (const hidden of ['mac-one', 'Mac One', TOKEN, 'token']) expect(String(b.of('message.send')[0]!.text)).not.toContain(hidden)
     }

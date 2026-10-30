@@ -49,7 +49,8 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { revokeHarnessRefresh } from './team/handoff.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -174,12 +175,14 @@ Machine:
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
-                               new, ps, show, wait, watch, tell, reply and close take --machine <name> for another of your
+  harness route [--send] -- <w>  which harness words belong to, or new work; --send types them into an idle one (programs-reply)
+                               new, ps, show, wait, watch, tell, reply, route and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
+  harness computer-use [on|off]  Harness OS: browser (Playwright) and desktop tools for agents to try what they build; off until you turn them on
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness machines engines <machine> [--engine E]… [--json]
                                ask another of your machines now which engines it has: installed, signed in, first prompt
@@ -350,9 +353,13 @@ async function authStatusCommand(json: boolean): Promise<void> {
   }
   let loggedIn = true
   let offline = false
+  let signInAgain = false
   try {
     await auth.accessToken()
   } catch (err) {
+    // SSO has not confirmed this sign-in for its whole grace (backend lib/ssoSession.ts): kept, and the person asked to
+    // sign in again.
+    if (err instanceof AuthSessionError && err.code === 'SIGN_IN_AGAIN') signInAgain = true
     // Only a session the SSO service will never renew (or none at all) is "not signed in". A refresh
     // that could not be SERVED right now — no network, service down — is a signed-in computer that is
     // offline, and says so; it used to read as signed out and send the desktop app to a login screen
@@ -363,7 +370,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   const latest = readAuthSession()
   const signedIn = loggedIn && latest !== null
   const fingerprintNow = thisDeviceFingerprint(false)
-  const waiting = signedIn ? null : signedOutWaiting()
+  const waiting = signedIn ? null : signInAgain ? 'sign-in-again' : signedOutWaiting()
   const payload = {
     loggedIn: signedIn,
     ...(waiting ? { signedOut: waiting } : {}),
@@ -379,7 +386,9 @@ async function authStatusCommand(json: boolean): Promise<void> {
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
-  else {
+  else if (signInAgain) {
+    console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
+  } else {
     console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
@@ -538,20 +547,28 @@ async function loginCommand(
     // `/api/machines/resolve-computer` reached `onError`, which is JSON-unaware — so the ONE mode a
     // client drives answered a stack trace and NO result line at all, on the commonest path there
     // is (a computer that is already signed in).
+    let stuck = false
     try {
       await resolveComputerMachine()
     } catch (err) {
-      // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
-      // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
-      // person should be sent to. `harness login` is unaffected — it never caught this before either.
-      if (json && !(err instanceof AuthSessionError)) {
-        emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
-        process.exitCode = 1
-        return { signedIn: false }
+      // A sign-in SSO has not confirmed for 7 days ("sign in again", backend lib/ssoSession.ts) is kept, but cannot be
+      // renewed: signing in is what that message asks for, so this goes on to a fresh sign-in that replaces it, as
+      // --force would. Without this, `harness login` retried the same refused renewal and never opened a sign-in.
+      if (!(err instanceof AuthSessionError && err.code === 'SIGN_IN_AGAIN')) {
+        // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
+        // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
+        // person should be sent to. `harness login` is unaffected — it never caught this before either.
+        if (json && !(err instanceof AuthSessionError)) {
+          emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
+          process.exitCode = 1
+          return { signedIn: false }
+        }
+        throw err
       }
-      throw err
+      stuck = true
     }
-    return await succeed(true)
+    if (!stuck) return await succeed(true)
+    force = true
   }
   if (opts.method === 'ask') {
     const picked = await askSignInMethod()
@@ -590,7 +607,10 @@ async function loginCommand(
         return { signedIn: false }
       }
       const stopped = stop !== null && stop.pid !== null
+      const replaced = readAuthSession()?.refreshToken
       const outcome = await signIn()
+      // The sign-in this one replaced ends on the server too, as `harness team on` ends the one it replaces.
+      if (outcome.signedIn && replaced && readAuthSession()?.refreshToken !== replaced) await endSignInOnServer(replaced, 'the previous sign-in')
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
     }, {
@@ -834,6 +854,8 @@ async function browserSignIn(
         tx: start.tx,
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
+        // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
+        harnessSession: harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -1327,6 +1349,20 @@ async function updateCommand(force: boolean): Promise<void> {
  * It runs BEFORE the harness session is cleared, because `grid logout` tears down every serve child
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
+/** How long signing out waits for the server to end a Harness session. */
+const SIGN_OUT_REVOKE_TIMEOUT_MS = 5_000
+
+/**
+ * End a Harness session ([refreshToken]) on the server: signing out, `reset`, and a `login --force` that replaced it.
+ * An SSO sign-in is not ours to end. Best effort and bounded — never waits on, or fails over, the network — and says
+ * so when the server could not be reached.
+ */
+async function endSignInOnServer(refreshToken: string | undefined, which = 'this sign-in'): Promise<void> {
+  if (!/^(hnr|htr)_/.test(refreshToken ?? '')) return
+  const ended = await revokeHarnessRefresh((path, body) => postJson(path, body, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)), refreshToken)
+  if (!ended) console.log(`Could not end ${which} on the server; it can no longer be used from here, and ends on its own after 90 days unused.`)
+}
+
 async function logout(): Promise<void> {
   const chain = ancestorsOnce()
   const asked = personAsked('logout', chain)
@@ -1336,7 +1372,10 @@ async function logout(): Promise<void> {
   // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
+  const refreshToken = readAuthSession()?.refreshToken
+  const endOnServer = endSignInOnServer(refreshToken)
   removeSignIn('logout', asked, chain)
+  await endOnServer
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
@@ -1773,10 +1812,12 @@ async function resetCommand(): Promise<void> {
   const asked = personAsked('reset', chain)
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()
+  const refreshToken = readAuthSession()?.refreshToken
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
   removeSignIn('reset', asked, chain)
+  await endSignInOnServer(refreshToken)
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.
@@ -2673,12 +2714,13 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
+import { computerUseCommand } from './agentClient/computerUse.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2712,13 +2754,22 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
+/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
+const swarmCommands = () => import('./superTabs/command.js')
+
+/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
+ *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
+function unlessBuddy(run: () => Promise<number>): Promise<number> {
+  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
+    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
+}
 
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2740,6 +2791,12 @@ switch (cmd) {
     process.exitCode = mcpServersCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
+  case 'computer-use': {
+    // Machine MCP servers too, refused in a Harness pane alike.
+    const pane = sendPane(process.env)
+    process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
+    break
+  }
   case 'mcp': {
     const pane = process.env.TMUX_PANE
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
@@ -2751,8 +2808,11 @@ switch (cmd) {
   case 'reply':
     replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'route':
+    routeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'tell':
-    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2761,7 +2821,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2769,7 +2829,7 @@ switch (cmd) {
   // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
   // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
-    import('./superTabs/command.js').then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
@@ -2878,7 +2938,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    newCommand({
+    unlessBuddy(() => newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -2890,7 +2950,7 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    }).then((code) => { process.exitCode = code }).catch(onError)
+    })).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)

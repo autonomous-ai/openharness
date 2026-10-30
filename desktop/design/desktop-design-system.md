@@ -31,7 +31,7 @@ complexity" is to design these relationships before their decoration. It is not
 a prediction of what he or his team would make. See the
 [research and comparison record](macos-design-research.md) for primary sources.
 
-Five decisions give this system its character:
+Six decisions give this system its character:
 
 1. **One focal point per surface.** The task in Cmd-N, the query and selected
    result in Cmd-P, the name in Rename. Configuration stays visible but quiet.
@@ -51,6 +51,10 @@ Five decisions give this system its character:
    Search scopes preserve the query. Menus open at the expected edge, dismiss
    one level at a time and return focus. Drafts survive dismissal. Immediate
    feedback takes priority over a decorative transition.
+6. **People are celebrated.** The terminal is calm; the team is warm. When
+   someone ships, unblocks a teammate or takes #1, Harness notices once,
+   specifically, and with a smile. Celebration is earned, brief, and never in
+   the way of work. See [Team and celebration](#team-and-celebration).
 
 The benchmark is the relationship between surfaces, not a collection of good
 looking individual dialogs. Rename and Move Pane have different content but
@@ -227,6 +231,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Dialog outer radius | 20 |
 | Popover outer radius | 16 |
 | Field / inset row / pane radius | 10 |
+| Sidebar row gap (`listRowGap`) | 2 |
+| Count badge: capsule, text inset from its ends (`badgeInset`) | 5 |
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
 | Tab close target (square) | 28 |
@@ -255,6 +261,152 @@ context, then a checkmark, shortcut or disclosure at right. Text baselines and
 accessory columns align. Specialized harness names need no marketing second
 line. Machine menus align to the project popover's top edge with an 8-point gap,
 then flip or constrain when the window has insufficient room.
+
+## Numbers and rankings
+
+A ranking, a score or a count is read by comparing rows, so its figures line
+up and only one of them speaks. Leaderboards, team summaries, usage tables and
+any later list of people or numbers use this recipe and the existing roles;
+there is no number style or ranking palette of its own. Marks that celebrate a
+place, such as the #1 crown, follow [Team and celebration](#team-and-celebration).
+
+| Part | Role | Rule |
+| --- | --- | --- |
+| Rank | `AppType.label`, `FontWeight.w700`, `AppPalette.textSecondary` | A bold numeral in a fixed leading column. First place differs from tenth only by its number. |
+| Emphasized number (points) | `AppType.label`, `FontWeight.w600`, `AppPalette.textPrimary` | One per row, at the trailing edge. Shown even when it is 0, so the column holds. |
+| Secondary metrics | `AppType.caption`, `AppPalette.textSecondary` | Plain words beneath the name, joined by a spaced middle dot: `3 shipped · 2 unblocked`. A metric at 0 is left out; a row with none has no second line. |
+| Trend | `AppIcons.arrowUp` / `AppIcons.arrowDown` at 14 points, with a caption-size number | Shape and color together: up in `AppPalette.online`, down in the theme's semantic error ink. No change shows nothing. |
+| Current person | `AppSurface.selectedFill` | The sidebar's selected-row fill, not the blue keyboard selection (`AppDesktop.selection`). Text stays in ordinary ink. |
+
+Every figure that sits in a column (rank, points, counts, percentages and
+trend values) passes `fontFeatures: [FontFeature.tabularFigures()]` to its
+existing `AppType` style, so digits keep one width and a column does not
+shimmer as values change. Numeric columns are right-aligned at a fixed width
+sized for the widest expected value; names take the remaining width and
+truncate first. Row anatomy is the list rule above: rank, identity, name with
+its metadata, then trend and the emphasized number at the right.
+
+The left pane's People and Agents have no rank number (Dee, 2026-10-29):
+people sort by name with their points at the right, and the crown sits after
+the week's top person's name.
+
+A place is its numeral; a celebration mark sits beside it and never replaces
+it, as [Team and celebration](#team-and-celebration) describes. Color never
+carries a trend, a rank or a threshold on its own: the arrow's direction, the
+number and the accessible label ("up 3 from last week") say the same thing.
+Hover and keyboard focus keep their ordinary treatment over the current
+person's fill, so focus stays visible on that row.
+
+## Team and celebration
+
+Harness is used by teams, and the work is done by people. The design gives
+them their due without disturbing the work.
+
+**Two registers.** Instrument surfaces (terminals, panes, tabs, pickers,
+dialogs, the footer, Settings) stay calm: everything above applies unchanged
+and nothing there celebrates. Harness's own UI uses no emoji on instrument
+surfaces; what people and programs write shows as written. Team surfaces (the
+leaderboard, profiles and the project chat) are where people appear, and they
+may be warm: they may name a moment, carry a mark and smile in their words.
+
+**Earned, not ambient.** One real event earns one moment: a person ships,
+unblocks a teammate or takes #1. Harness notices it once, where the team
+already looks, and then it becomes history. No looping confetti, no modal, no
+sound unless the person turned sounds on, and nothing that takes focus or
+blocks the next action. A celebration is optional motion, so Reduce Motion
+removes its movement and keeps its words.
+
+**Specific.** Name the person and the thing: "Mai shipped the machine
+picker", "Lan unblocked Bao on the phone build", "Mai is #1 this week".
+Never "Great job!", "Awesome!" or praise that would fit anyone. The words
+follow the [Naming System](../../docs/naming-system.md) like any other copy.
+
+**Ranks still line up.** The #1 crown sits beside #1's name, after the rank
+numeral where a list has one (the left pane's People has none); it never
+replaces the numeral and never moves the columns. Rank,
+points and counts keep [Numbers and rankings](#numbers-and-rankings): tabular
+figures, fixed columns, one emphasized number. A row with a crown is exactly
+as tall as a row without one.
+
+**Badges are content artwork**, like agent marks: each has its own colors, a
+name and one line saying how it was earned ("First pull request merged"). They
+are not app icons and do not join the `AppIcons` vocabulary. A person's badges
+live on their profile sheet; a new badge is announced once in the project
+chat, naming the person and the badge, and is not repeated.
+
+**Every mark has words.** The crown, a badge or a celebration message carries
+an accessible label that says what it means ("Number one this week", "Badge:
+First pull request merged"), and color or artwork never carries that meaning
+alone.
+
+## People and conversations in lists
+
+Lists of projects, groups and people (the sidebar, the project chat, the
+leaderboard) share four rules.
+
+- **Unread.** Goal: see what changed without a second signal to decode. An
+  unread project or group shows its name in bold, with no dot beside it.
+- **Mentions.** Goal: tell "something changed" apart from "someone needs
+  you". A conversation that mentions you is bold and adds an `@N` count of
+  those mentions at its trailing edge, just before the status column.
+- **Status column.** Goal: compare status down the list at a glance. Status
+  marks use the shared activity vocabulary (see the
+  [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
+  in a fixed trailing column, last on rows that show status (agents,
+  conversations); a mention's `@N` sits just before it. Ranking rows have no
+  status mark and keep the points number last. Names and marks keep their
+  positions as status changes.
+- **Names.** Goal: recognize teammates the way they know each other. People
+  show as usernames, by default the prefix of their email address
+  (`mai@example.com` shows as `mai`); full identity stays available to
+  tooltips and accessibility.
+
+## Phone
+
+The phone app speaks the same language at a thumb's scale. It uses the same
+role names in `mobile/lib/shared/theme` (`AppType`, `AppPalette`, `AppSurface`,
+`AppControl`, `AppMenu`, `AppCard`) with the sizes below. A role keeps its
+meaning, color and weight on both; only the size changes, and only where this
+section says so. Every other rule in this document holds on the phone.
+
+| Role | Desktop | Phone |
+| --- | --- | --- |
+| Display (`AppType.display`) | 28, semibold | 34, semibold |
+| Page title (`AppType.title`) | 20, semibold | 22, semibold |
+| Heading (`AppType.heading`) | 17, semibold | 17, semibold |
+| Body and control (`AppType.body`, `AppType.label`) | 13 | 17 |
+| Metadata (`AppType.caption`) | 12 | 13 |
+| Code (`AppType.mono`, `monoLabel`, `monoMeta`) | 13 / 12 / 11 | 13 / 12 / 11 |
+| Touch target | 32 icon, 28 compact | 44 (`minTouchTarget`) |
+| Icon beside text / standalone | 16 / 20 | 20 / 24 |
+| Screen side inset | 24 (dialog content) | 16 |
+| Spacing scale | 4, 8, 12, 16, 24 | 4, 8, 12, 16, 24 |
+| Field / row / pane radius | 10 | 10 |
+| Card / inset tile radius | 12 / 8 | 12 / 8 |
+| Popover and menu radius | 16 | 16 |
+| Dialog radius | 20 | 20 |
+| Action buttons | capsule | capsule |
+
+Every independently tappable control reaches 44 points. A control drawn
+smaller, such as a 32-point icon button in a header, keeps its drawn size and
+extends its hit area with `TouchTarget` rather than growing the row around it.
+Themed buttons and icon buttons reach 44 on their own: they are drawn at their
+usual size, but their layout box is 44 tall, so a row holding one is at least 44.
+A screen's own primary action is drawn 44 points tall.
+
+Deliberate differences from Desktop, and only these:
+
+- Type, touch target, icon and side-inset sizes, as in the table.
+- No hover state and no hand cursor. Press feedback replaces hover; focus
+  outlines appear only with a hardware keyboard.
+- Swarm screens set their top-bar titles in the terminal face, as the approved
+  phone prototype does. Everything else on them uses the system face.
+- The terminal keeps its own font, size and palette, as on Desktop.
+- Bottom sheets, which Desktop does not have, round their top corners at the
+  card radius (12).
+
+The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
+with the same rules as Desktop's Swarm code and an allowlist of its own.
 
 ## Surface families
 
@@ -483,6 +635,38 @@ Increase Contrast. Exercise mouse, keyboard, nested dismissal, drafts and
 composition. Use synthetic review data, not real agent launches or permissions.
 Inspect the rebuilt app; widget tests alone do not prove native VoiceOver or
 physical IME behavior. Record evidence and limitations in the migration ledger.
+
+## UI checklist
+
+Every pull request that changes UI pastes this into its description and ticks
+what it checked, or says why an item does not apply:
+
+```text
+UI checklist (desktop/design/desktop-design-system.md)
+- [ ] ASCII mockup confirmed by the requester before visuals were built
+- [ ] Named roles only (AppType, AppPalette/AppSurface, AppDesktop/AppControl,
+      AppIcons); scripts/check-ui-style.py passes and its allowlist only shrank
+- [ ] Numbers follow Numbers and rankings: tabular, right-aligned, one
+      emphasized number, zeros hidden, a place is its numeral
+- [ ] Celebration follows Team and celebration: team surfaces only, no emoji
+      on instrument surfaces, one real event, named person and thing, marks
+      with accessible words
+- [ ] Color is never the only signal; a trend or state also has a shape or words
+- [ ] Light and dark, 160–200% text, long and missing names, empty, loading and
+      error states, with screenshots
+- [ ] Phone: Phone table sizes, 44-point targets, differences from Desktop listed
+- [ ] Copy follows the Naming System
+- [ ] Keyboard, focus return and hand cursor (Desktop)
+```
+
+`scripts/check-ui-style.py` runs in CI for `desktop/lib/super_tabs` and
+`mobile/lib/swarm`. It fails on a new `Color(0x…)`, Material `Colors.*` other
+than transparent, numeric `fontSize`, `EdgeInsets` with a number, or numeric
+`BorderRadius.circular` outside theme folders. Fix the call site with a role;
+when a count falls, run `python3 scripts/check-ui-style.py --update` and commit
+the smaller allowlist. Each area keeps its list in
+`scripts/ui-style-allowlist/<area>.json`. The update never raises a count, and a
+pull request whose allowlist records more than its base branch fails.
 
 ## Standard of finish
 

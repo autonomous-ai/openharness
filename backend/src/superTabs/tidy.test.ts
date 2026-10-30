@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Agent, Assignment, Conversation, SuperTabState } from './model.js'
+import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, stopIdleWorkers } from './tidy.js'
 
 const MINUTE = 60_000
@@ -32,16 +32,26 @@ const at = START + IDLE_STOP_MS
 const target = (state: SuperTabState, id = 'w') => state.agents.find(a => a.id === id)!
 
 describe('stopping idle workers', () => {
-  it('stops a Swarm-started Builder 15 minutes after its last activity, with one quiet line in its last group', () => {
+  it('stops a Swarm-started Builder 15 minutes after its last activity, with one line in its last group for the Lead', () => {
     const state = swarm()
     const rows = stopIdleWorkers(state, 'lead', at, new Set())
     expect(target(state)).toMatchObject({ workDecision: 'stop' })
     expect(target(state).releaseId).toEqual(expect.any(String))
     // Marked as the idle check's, so its host may withdraw it if its folder changed since (agent.stopRefused).
     expect(target(state).idleStop).toEqual({ previous: null })
-    expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: [], replyTo: null,
+    // Ken, 2026-10-29: the Lead's to handle, delivered to it; people do not read it (model.ts agentOnly).
+    expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: ['L'], replyTo: null,
       author: expect.objectContaining({ kind: 'agent', id: 'L' }), text: 'Rowan stopped: no work for 15 minutes.',
       source: { kind: 'idle-stop', agentId: 'w' } })])
+    expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true])
+  })
+
+  it('tells a Lead outside the worker\'s last group in its own chat, and hides the copy left in that group for no one', () => {
+    const state = swarm({ groups: [group({ agentIds: ['w'] })] })
+    const rows = stopIdleWorkers(state, 'lead', at, new Set())
+    expect(rows.map(row => [row.conversationId, row.recipients])).toEqual([['g1', []], ['lead', ['L']]])
+    expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true, true])
+    expect(rows.map(row => row.source?.agentId)).toEqual(['w', 'w'])
   })
 
   it('waits until a full 15 minutes have passed since its group last spoke', () => {
@@ -65,8 +75,22 @@ describe('stopping idle workers', () => {
 
   it('stops a worker that never got a task, saying so in the Lead conversation when it sits in no group', () => {
     const state = swarm({ groups: [] })
-    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ conversationId: 'lead' })])
+    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: ['L'] })])
     expect(target(state).workDecision).toBe('stop')
+  })
+
+  // Swarm autonomous-harness, 2026-10-29: a Builder started by hand in a busy task's group never got that task, and every
+  // message there kept it up, idle, for 18+ minutes.
+  it('stops a worker that never had a task 15 minutes after its start, however busy a group it only sits in is', () => {
+    const busyGroup = group({ assignment: { ...done(), agentId: 'other', status: 'working' }, agentIds: ['L', 'other', 'w'], lastActivityAt: iso(at - MINUTE) })
+    const state = swarm({ groups: [busyGroup] })
+    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ source: { kind: 'idle-stop', agentId: 'w' } })])
+    // A Reviewer is never assigned work: a group's messages are its work, so they keep it as before.
+    const reviewer = swarm({ agents: [worker({ role: 'reviewer' } as Partial<Agent>)], groups: [busyGroup] })
+    expect(stopIdleWorkers(reviewer, 'lead', at, new Set())).toEqual([])
+    // Nor is one that had a task of its own and finished it: its group's last message still counts.
+    const finished = swarm({ groups: [group({ lastActivityAt: iso(at - MINUTE) })] })
+    expect(stopIdleWorkers(finished, 'lead', at, new Set())).toEqual([])
   })
 
   it('never stops a worker with active work, a queued delivery, or uncommitted changes', () => {
@@ -116,6 +140,18 @@ describe('stopping idle workers', () => {
     expect(stopIdleWorkers(finished, 'lead', at, new Set())).toHaveLength(1)
   })
 
+  it('says so in a group the poll loaded, never in an asleep one, which would refuse the line (review of #2073)', () => {
+    const reviewer = () => worker({ role: 'reviewer' })
+    const asleep = group({ id: 'r2', reviewOf: 'g1', assignment: done({ id: 'a3' }), lastActivityAt: iso(START) })
+    const older = group({ id: 'r1', reviewOf: 'g1', assignment: done({ id: 'a2' }), lastActivityAt: iso(START - 5 * MINUTE) })
+    const finished = group({ agentIds: ['L', 'b'], assignment: done({ agentId: 'b' }) })
+    const loaded = swarm({ agents: [reviewer()], groups: [finished, older] })
+    expect(stopIdleWorkers(loaded, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'r1' })])
+    const alone = swarm({ agents: [reviewer()], groups: [finished] })
+    expect(stopIdleWorkers(alone, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'lead' })])
+    expect(target(alone).workDecision).toBe('stop')
+  })
+
   it('does nothing once the owner turned tidying off, or for another project\'s workers', () => {
     const off = swarm()
     off.tidy = false
@@ -139,6 +175,20 @@ describe('which finished groups archive', () => {
       const state = swarm({ groups: [group({ assignment })] })
       expect(archivable(state, state.conversations[1]!, quiet)).toBe(false)
     }
+  })
+
+  it('is never a review whose Reviewer gave no verdict while the work it reviews is going, unless it was cancelled', () => {
+    const verdict = { id: 'v', description: 'Verdict with the reviewed revision', independent: false }
+    const review = (patch: Partial<Conversation>) => group({ id: 'r1', reviewOf: 'g1', ...patch })
+    // Stored as done with no verdict, as no command allows: the rule still holds.
+    const state = swarm({ groups: [group({ assignment: done({ status: 'review' }) }),
+      review({ checks: [{ ...verdict, evidence: null, passedBy: null }] }),
+      review({ id: 'r2', checks: [{ ...verdict, evidence: 'Ready: yes — revision abc', passedBy: 'agent:w' }] }),
+      review({ id: 'r3', checks: [{ ...verdict, evidence: null, passedBy: null }], assignment: done({ status: 'cancelled' }) })] })
+    expect(state.conversations.slice(2).map(g => archivable(state, g, quiet))).toEqual([false, true, true])
+    // Once the reviewed work is done, its review is moot.
+    state.conversations[1]!.assignment = done()
+    expect(archivable(state, state.conversations[2]!, quiet)).toBe(true)
   })
 
   it('is never a Lead conversation, a private chat, the Leads conversation, an archived group, or any once tidying is off', () => {

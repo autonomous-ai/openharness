@@ -23,9 +23,17 @@ import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } fro
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
+import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
+import { useSharedRateCounter } from './lib/rateLimit.js'
+import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
+import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { startRelayUsageFlush } from './lib/productUsage.js'
+import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
+import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
 // sockets, one DB/Redis hiccup inside a fire-and-forget promise would then drop every one of them and
@@ -61,7 +69,11 @@ const app = Fastify({
       // data. Nothing in this codebase called setNoDelay() before, so every socket here defaulted to
       // Nagle-enabled.
       if (socket instanceof net.Socket) socket.setNoDelay(true)
+      const path = (req.url ?? '').split('?')[0]
+      // Counted apart from real connects (lib/wsAttribution.ts): a socket that closes before it is tracked was refused.
+      const endpoint = endpointOf(path)
       if (pendingUpgrades >= MAX_PENDING_UPGRADES) {
+        if (endpoint) refusedUpgrade(endpoint)
         try { socket.write('HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
         return
@@ -81,7 +93,7 @@ const app = Fastify({
       // A handshake that never completes (auth call hung, peer went silent) must not hold the socket.
       // `ws` resets the timeout to 0 once it completes the upgrade, so this only ever fires pre-upgrade.
       if (socket instanceof net.Socket) socket.setTimeout(UPGRADE_HANDSHAKE_TIMEOUT_MS, () => socket.destroy())
-      const path = (req.url ?? '').split('?')[0]
+      if (endpoint) watchUpgrade(endpoint, socket)
       if (path === '/api/observer-ws') {
         handleObserverUpgrade(req, socket, head)
         return
@@ -123,8 +135,13 @@ const app = Fastify({
 async function start(): Promise<void> {
   // Mint the Cloudflare TURN credential before the first socket lands; no-op when TURN is unconfigured.
   startTurnCredentialRefresh()
+  // Every request is named by its route pattern before any hook reads the database, so its queries count for it.
+  registerWorkContext(app)
   // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
   selfProfileFromEnv(app)
+  // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
+  const stopQueryStats = startQueryStats()
+  const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
 
   app.setErrorHandler(errorHandler)
 
@@ -144,10 +161,25 @@ async function start(): Promise<void> {
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
   useSharedSsoProfileStore(redisSsoProfileStore)
+  // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
+  useSharedRateCounter(redisWindowCounter(pub))
+  // Each pod's socket counts once a minute: open, connects by client, short-lived, refused (WebSocket roadmap Phase 0).
+  startWsCounterLog()
   configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
+  // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
+  watchGroupIndexes(prisma)
 
-  // SSO access-token gate for the control API (data-plane auth happens before Fastify).
+  // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
+  // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
+  // answered before it costs a sign-in.
+  const routeLimit = createRouteRateLimit({
+    perPersonPerMinute: env.ROUTE_RATE_LIMIT_PER_PERSON_MINUTE,
+    perCallerPerSecond: env.ROUTE_RATE_LIMIT_PER_CALLER_SECOND,
+    perPersonPerSecond: env.ROUTE_RATE_LIMIT_PER_PERSON_SECOND,
+  })
+  app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)
+  app.addHook('onRequest', routeLimit.afterSignIn)
 
   // Mongo always; Redis where one is configured. Each answers within 1 s or counts as down (lib/readiness.ts).
   const readiness = createReadiness(backendReadinessChecks(process.env, {
@@ -162,6 +194,8 @@ async function start(): Promise<void> {
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
 
+  // Connect counts are kept in memory and written once a minute; shutdown writes what is left (lib/productUsageRelay.ts).
+  const stopRelayUsage = startRelayUsageFlush()
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
@@ -186,6 +220,11 @@ async function start(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 250))
       // Bounded wait for Fastify to finish its onClose hooks; never block shutdown on it.
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
+      // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
+      await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
+      // The last partial minute of both logs, once the drain and the usage flush have run their queries.
+      stopQueryStats()
+      stopRouteLatency()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

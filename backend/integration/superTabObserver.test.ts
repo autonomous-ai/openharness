@@ -18,6 +18,7 @@ vi.mock('../src/lib/bus.js', async original => {
   return { ...await original<typeof import('../src/lib/bus.js')>(),
     publishDown: async () => 1, subscribeUp: async () => () => {},
     subscribeShareChanged: (id: string, callback: () => void) => listen(`share:${id}`, callback),
+    publishShareChanged: async (id: string) => { shared.channels.emit(`share:${id}`); return 1 },
     subscribeSwarmAccessChanged: (tabId: string, callback: () => void) => listen(`swarm:${tabId}`, callback),
     publishSwarmAccessChanged: async (tabId: string) => { shared.channels.emit(`swarm:${tabId}`); return 1 } }
 })
@@ -25,6 +26,7 @@ vi.mock('../src/lib/hub.js', () => ({ trackSocketLiveness: () => () => {} }))
 const { SuperTabStore } = await import('../src/superTabs/store.js')
 const { attachObserver } = await import('../src/lib/observerWs.js')
 const { publishSwarmAccessChanged } = await import('../src/lib/bus.js')
+const { tellSessionViewers } = await import('../src/routes/harnessLinks.js')
 
 let database: LocalDatabase
 let store: InstanceType<typeof SuperTabStore>
@@ -50,8 +52,10 @@ const until = async (condition: () => boolean, ms: number) => {
 beforeAll(async () => {
   database = await localDatabase()
   shared.db = database.db
-  // The routes' wiring (routes/superTabs.ts): a narrowing of who may watch is told after its commit.
-  store = new SuperTabStore(database.db, Date.now, null, { accessChanged: tabId => { void publishSwarmAccessChanged(tabId) } })
+  // The routes' wiring (routes/superTabs.ts): a narrowing of who may watch, and a session turning confidential, are told after
+  // their commit.
+  store = new SuperTabStore(database.db, Date.now, null, { accessChanged: tabId => { void publishSwarmAccessChanged(tabId) },
+    sessionsConfidential: sessions => { void tellSessionViewers(sessions) } })
   for (const user of [owner, peer, host]) await database.db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
   await database.db.machine.create({ data: { machineId: 'test-host', userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture',
@@ -79,7 +83,7 @@ describe('a terminal observer of a Swarm agent', () => {
     const ws = new Socket()
     await attachObserver(ws as never, peer, share)
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'observer_connected' }))
-    return { tab, ws, builder }
+    return { tab, ws, builder, harnessId }
   }
 
   it('closes within a second of its viewer being removed from the Swarm', async () => {
@@ -96,17 +100,30 @@ describe('a terminal observer of a Swarm agent', () => {
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
   })
 
-  it('closes within a second of the watched session turning confidential, here by becoming its project’s Lead', async () => {
-    const { tab, ws, builder } = await watching(false)
+  it('closes a link\'s viewer within a second of the watched session turning confidential, here by becoming its project’s Lead', async () => {
+    const { tab, builder, harnessId } = await watching(false)
+    const link = await database.db.harnessLink.create({ data: { id: randomUUID(), ownerId: host.sub, machineId: 'test-host', agentId: harnessId,
+      autonomousEnv: 'prod', name: 'Builder', engine: null, ownerPublicKey: 'fixture-key', visibility: 'public', revokedAt: null } })
+    const viewers = [new Socket(), new Socket()]
+    // A public link opens for anyone, signed in or not.
+    await attachObserver(viewers[0] as never, peer, link, 'prod')
+    await attachObserver(viewers[1] as never, null, link, 'prod')
+    for (const ws of viewers) expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'observer_connected' }))
     await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
-    expect(await until(() => ws.close.mock.calls.length > 0, 1_000)).toBe(true)
-    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
+    for (const ws of viewers) {
+      expect(await until(() => ws.close.mock.calls.length > 0, 1_000)).toBe(true)
+      expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
+    }
   })
 
-  it('stays open through a change that leaves its viewer allowed', async () => {
-    const { tab, ws } = await watching()
+  it('stays open through a change that leaves its viewer allowed, the watched agent becoming its project’s Lead included', async () => {
+    const { tab, ws, builder } = await watching(false)
     await run(tab, { type: 'conversation.create', title: 'Another task', brief: '', checks: [] })
     await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [host.sub, peer.sub] })
+    // Every member watches the current Lead, view only (Ken, 2026-10-28).
+    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    // Told to check again, it checks the Lead and stays.
+    await publishSwarmAccessChanged(tab)
     expect(await until(() => ws.close.mock.calls.length > 0, 500)).toBe(false)
   })
 })

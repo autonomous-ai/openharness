@@ -8,12 +8,18 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
+import { cursorFor } from '../src/superTabs/read/cursor.js'
+import { lastChangedAt } from '../src/superTabs/parts/index.js'
+import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -38,6 +44,7 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: 'prod' } })
   store = new SuperTabStore(db, () => clock)
+  await listGroupIndexes(db)
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -46,9 +53,9 @@ afterAll(async () => {
 
 /** A Swarm on two machines of the owner's: a Lead, and on the other a worker with running work, finished work, and OTHERS quiet conversations,
  *  closed deliveries of other messages to other agents, and open decisions in other conversations. */
-async function scene() {
-  const [machineId, leadMachine] = [`m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
-  for (const id of [machineId, leadMachine]) {
+async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (s: ReturnType<typeof swarm>) => void } = {}) {
+  const [machineId, leadMachine] = [sharedMachine ?? `m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
+  for (const id of sharedMachine ? [leadMachine] : [machineId, leadMachine]) {
     await db.machine.create({ data: { machineId: id, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   }
   const s = swarm(MIGRATED)
@@ -60,6 +67,7 @@ async function scene() {
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const done = s.group('Done work')
   const quiet = Array.from({ length: OTHERS }, (_, i) => s.group(`Quiet ${i}`))
+  edit?.(s)
   s.edit(state => {
     state.conversations.find(c => c.id === done)!.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
@@ -90,7 +98,8 @@ async function profiled(run: () => Promise<unknown>): Promise<ProfileEntry[]> {
   } finally {
     await db.$runCommandRaw({ profile: 0 })
   }
-  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: PROFILE_STAGES, cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
+  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [
+    { $project: { ...PROFILE_STAGES[0]!.$project, 'command.hint': 1 } }], cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
   return reply.cursor.firstBatch.map(profileEntry)
 }
 
@@ -105,6 +114,91 @@ function reads(entries: ProfileEntry[], collection: string, fields: string[], no
   })
 }
 const plan = (rows: ProfileEntry[]) => rows.map(r => ({ plan: r.planSummary, docsExamined: r.docsExamined, keysExamined: r.keysExamined, returned: r.nreturned }))
+
+/** Timestamp scans match only tabId; the indexed wake query also bounds changedAt and hostMachineIds. */
+function timestampScans(entries: ProfileEntry[]) {
+  return entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
+    .flatMap(e => {
+      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: string[] } } }>)?.[0]?.$match
+      return match?.tabId?.$in && Object.keys(match).length === 1 ? [{ collection: e.command!.aggregate, ids: match.tabId.$in }] : []
+    })
+}
+
+it('batches cold host timestamp misses across Swarms and leaves warm timestamps out of the batch', async () => {
+  const a = await scene(), b = await scene({ sharedMachine: a.machineId })
+  for (const s of [a, b]) swarmReadCache()!.drop(s.tabId)
+  const hosts = new HostReads(store, { now: () => Date.now() })
+  const expected = await lastChangedAt(db, [a.tabId, b.tabId])
+  const cold = await profiled(async () => {
+    const concurrent = await Promise.all([hosts.changes(owner, a.machineId, { full: true }), hosts.changes(owner, a.machineId, { full: true })])
+    for (const result of concurrent) expect(new Map(result.tabs.map(t => [t.tabId, t.lastChangedAt]))).toEqual(expected)
+  })
+  expect(timestampScans(cold)).toHaveLength(7)
+  for (const scan of timestampScans(cold)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId]))
+  expect(timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))).toEqual([])
+
+  const c = await scene({ sharedMachine: a.machineId })
+  swarmReadCache()!.drop(c.tabId)
+  const mixed = timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))
+  expect(mixed).toHaveLength(7)
+  for (const scan of mixed) expect(scan.ids).toEqual([c.tabId])
+
+  const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
+  const uncached = await profiled(async () => {
+    expect((await direct.changes(owner, a.machineId, { full: true })).tabs)
+      .toEqual((await hosts.changes(owner, a.machineId, { full: true })).tabs)
+  })
+  expect(timestampScans(uncached)).toHaveLength(7)
+  for (const scan of timestampScans(uncached)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId, c.tabId]))
+})
+
+it('reuses the host timestamp at the same stamp, including a repeated wake with a held etag', async () => {
+  const s = await scene()
+  const hosts = new HostReads(store, { now: () => Date.now() })
+  const first = await hosts.changes(owner, s.machineId, { full: true })
+  const held = Object.fromEntries(first.tabs.map(tab => [tab.tabId, tab.etag]))
+  // An older cursor wakes this Swarm again without another write or stamp bump.
+  const entries = await profiled(async () => {
+    const second = await hosts.changes(owner, s.machineId, { cursor: cursorFor(MIGRATED - 1, 0), held })
+    expect(second.tabs).toEqual(first.tabs.map(tab => ({ tabId: tab.tabId, etag: tab.etag,
+      lastChangedAt: tab.lastChangedAt, unchanged: true })))
+  })
+  expect(timestampScans(entries)).toEqual([])
+
+  // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
+  clock = Date.now()
+  await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: s.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+  const changed = await hosts.changes(owner, s.machineId, { full: true })
+  const newest = (await lastChangedAt(db, [s.tabId])).get(s.tabId)
+  expect(newest).toBeGreaterThan(first.tabs[0]!.lastChangedAt!)
+  expect(changed.tabs[0]!.lastChangedAt).toBe(newest)
+  const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
+  expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
+})
+
+describe('delivery authority reads', () => {
+  it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
+    const s = await scene()
+    // Keep unrelated conversations active: dormant rows already escape loadActive.
+    await db.swarmGroup.updateMany({ where: { tabId: s.tabId }, data: { dormant: false } })
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
+      conversationId: s.web, text: 'Please continue.', recipientIds: [s.worker], replyTo: null } }, sender === 'agent' ? s.lead : undefined)
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: s.tabId, agentId: s.worker, status: 'queued' } })
+    for (const action of [{ type: 'claim', claimId: 'bounded' },
+      { type: 'hold', claimId: 'bounded', reason: 'team_waiting_idle' },
+      { type: 'ack', claimId: 'bounded', receipt: 'typed', uncertain: false }] as const) {
+      const entries = await profiled(() => store.delivery(owner, s.tabId, s.worker, delivery.id, action))
+      const groups = entries.filter(e => e.ns.endsWith('.SwarmGroup') && e.op !== 'update')
+      const returned = groups.reduce((sum, e) => sum + (e.nreturned ?? 0), 0)
+      console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
+      // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
+      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      expect(groups.every(e => !!e.command?.hint), 'delivery reads use the installed group indexes').toBe(true)
+      expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
+    }
+  })
+})
 
 describe('hot reads read only what they return (roadmap 2.7)', () => {
   let entries: ProfileEntry[]
@@ -168,5 +262,127 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   it('no read of these scans a whole collection', () => {
     const scans = entries.filter(e => e.planSummary === 'COLLSCAN' && !e.ns.includes('.system.'))
     expect(scans.map(e => `${e.ns.slice(e.ns.indexOf('.') + 1)} ${queryShape((e.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? e.command?.filter ?? e.command?.q)}`)).toEqual([])
+  })
+})
+
+// Diego's backend review, item 5 (2026-10-28): which machines are signed in as a team account is the same answer for every
+// reader, and machines report every 15 s, so the read API asks for it at most once per 15 s per Swarm and machine list.
+describe('which machines take teammates\' work is read once per 15 s per Swarm', () => {
+  it('two polls within 15 s read the team machines once; a machine turning team shows 15 s after the read', async () => {
+    const s = await scene()
+    const swarmReads = new SwarmReads(store, { now: () => clock })
+    // The one machine-row read (store.ts machineFacts): the Swarm's machines by id, alive, in its environment. Since #2196 it
+    // takes the account kind and CLI version from the rows it returns, not from its filter.
+    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'autonomousEnv', 'deletedAt'])
+    const teamWork = (read: { derived: { machines: Record<string, { teamWork: unknown }> } }) => read.derived.machines[s.machineId]!.teamWork
+    clock = Date.now()
+    const readAt = clock
+    let cursor = ''
+    const within = await profiled(async () => {
+      const first = await swarmReads.firstLoad(owner, s.tabId)
+      expect(teamWork(first)).toEqual({ allowed: true })
+      clock += 3_000
+      cursor = (await swarmReads.changes(owner, s.tabId, first.cursor)).cursor
+      // The machine's account turns team: a team machine that never reported is offline for teammates' work.
+      await db.machine.update({ where: { machineId: s.machineId }, data: { sessionKind: 'team' } })
+      clock += 3_000
+      const polled = await swarmReads.changes(owner, s.tabId, cursor)
+      expect(teamWork(polled)).toEqual({ allowed: true })
+      cursor = polled.cursor
+    })
+    expect(teamReads(within)).toHaveLength(1)
+    clock = readAt + 15_000
+    const later = await profiled(async () => {
+      expect(teamWork(await swarmReads.changes(owner, s.tabId, cursor))).toMatchObject({ allowed: false, code: 'MACHINE_OFFLINE' })
+    })
+    expect(teamReads(later)).toHaveLength(1)
+  })
+})
+
+describe('the owner\'s grid poll', () => {
+  it('reads each Swarm\'s head and only the people of those with Local models, never their groups, agents, machines or starts', async () => {
+    const off = await scene({ edit: s => s.edit(state => { delete state.localModels }) })
+    const on = await scene({ edit: s => s.join(peer) })
+    let grids: Awaited<ReturnType<SuperTabStore['hostGrids']>> = []
+    const entries = await profiled(async () => { grids = await store.hostGrids(owner) })
+    expect(grids.filter(g => g.tabId === off.tabId)).toEqual([])
+    const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: on.tabId } })
+    expect(grids.filter(g => g.tabId === on.tabId)).toEqual([{ tabId: on.tabId, grid: (head.data as { localModels: { grid: string } }).localModels.grid,
+      enabled: true, ready: null, members: [peer.email] }])
+    const heavy = entries.filter(e => /\.Swarm(Group|Agent|Machine|Start|Progress)$/.test(e.ns))
+    expect(heavy.map(e => e.ns.slice(e.ns.indexOf('.') + 1))).toEqual([])
+    // The people read asks for the Swarms with Local models only.
+    const people = entries.filter(e => e.ns.endsWith('.SwarmMember'))
+    expect(people.length).toBeGreaterThan(0)
+    expect(JSON.stringify(people.map(e => e.command))).not.toContain(off.tabId)
+  })
+
+  it('leaves out someone removed from a Swarm with Local models', async () => {
+    const s = await scene({ edit: s => { s.join(peer); s.join(outsider) } })
+    clock = Date.now()
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: outsider.userId } })
+    expect(await db.swarmMember.findFirst({ where: { tabId: s.tabId, key: outsider.userId }, select: { deleted: true } })).toEqual({ deleted: true })
+    expect((await store.hostGrids(owner)).find(g => g.tabId === s.tabId)!.members).toEqual([peer.email])
+  })
+})
+
+// Roadmap Phase 3.1: the host poll's Swarm lookup, once a second per host. Prisma sent `machineIds has` OR `cleanupMachineIds has`
+// as $expr, sorted by updatedAt, which no index held: the slow log showed 17 Swarms examined per one returned.
+describe('the host poll\'s Swarm lookup', () => {
+  it('reads only the Swarms that list this machine, newest first, by the machine indexes', async () => {
+    // Swarms of other machines: a lookup the machine does not bound examines these too.
+    for (let i = 0; i < 6; i++) await scene()
+    const s = await scene(), also = await scene({ sharedMachine: s.machineId })
+    // A Swarm that removed this machine still lists it for cleanup until its host has cleaned up.
+    const cleanup = await scene()
+    const at = Date.now()
+    await db.superTab.update({ where: { id: cleanup.tabId }, data: { machineIds: { set: [cleanup.machineId] }, cleanupMachineIds: { set: [s.machineId] },
+      updatedAt: new Date(at + 30_000) } })
+    await db.superTab.update({ where: { id: also.tabId }, data: { updatedAt: new Date(at + 60_000) } })
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
+    const hosts = new HostReads(store, { now: () => Date.now() })
+    let tabs: string[] = []
+    const entries = await profiled(async () => { tabs = (await hosts.changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId) })
+    // Newest write first, across both indexes: the cleanup Swarm sits between the two that list it as a machine.
+    expect(tabs).toEqual([also.tabId, cleanup.tabId, s.tabId])
+    const lookups = entries.filter(e => e.ns.endsWith('.SuperTab')).filter(e => /machineIds|cleanupMachineIds/.test(JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})))
+    expect(lookups.length, JSON.stringify(plan(lookups))).toBe(2)
+    for (const lookup of lookups) {
+      expect(lookup.docsExamined, JSON.stringify(plan(lookups))).toBeLessThanOrEqual(lookup.nreturned!)
+      expect(lookup.command?.hint, `the lookup names its index: ${JSON.stringify(plan(lookups))}`).toBeTruthy()
+    }
+  })
+
+  it('lists a Swarm found by both indexes once, and caps the merged list at the newest', async () => {
+    const s = await scene(), both = await scene({ sharedMachine: s.machineId }), cleanupOnly = await scene()
+    const at = Date.now()
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
+    // Listed as a machine and for cleanup at once: found by both reads, returned once.
+    await db.superTab.update({ where: { id: both.tabId }, data: { cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 20_000) } })
+    await db.superTab.update({ where: { id: cleanupOnly.tabId }, data: { machineIds: { set: [cleanupOnly.machineId] },
+      cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 30_000) } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([cleanupOnly.tabId, both.tabId, s.tabId])
+    // Capped after merging: the newest two of the three, though each read alone returns up to two.
+    expect(await machineSwarms(db, 'prod', s.machineId, 2)).toEqual([cleanupOnly.tabId, both.tabId])
+    expect(await machineSwarms(db, 'prod', s.machineId, 1)).toEqual([cleanupOnly.tabId])
+  })
+
+  it('never returns a Swarm of another environment, one that dropped the machine, or one not yet in parts', async () => {
+    const s = await scene()
+    // The same machine id listed by a Swarm of another environment, as a machine and for cleanup.
+    const dev = await scene({ sharedMachine: s.machineId }), devCleanup = await scene()
+    await db.superTab.update({ where: { id: dev.tabId }, data: { autonomousEnv: 'dev' } })
+    await db.superTab.update({ where: { id: devCleanup.tabId }, data: { autonomousEnv: 'dev', cleanupMachineIds: { set: [s.machineId] } } })
+    // A Swarm whose host cleaned up after the machine left: it lists the machine nowhere.
+    const dropped = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: dropped.tabId }, data: { machineIds: { set: [] }, cleanupMachineIds: { set: [] } } })
+    // A Swarm still in one row (format 1) is left for its migration.
+    const legacy = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: legacy.tabId }, data: { format: 1 } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([s.tabId])
+    expect((await new HostReads(store, { now: () => Date.now() }).changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId)).toEqual([s.tabId])
+    // The removed Swarms' check keeps only this environment's ids, whatever ids it is handed.
+    expect(await swarmsIn(db, 'prod', [s.tabId, dev.tabId, devCleanup.tabId, 'no-such-swarm'])).toEqual([s.tabId])
+    expect(await swarmsIn(db, 'prod', [])).toEqual([])
   })
 })

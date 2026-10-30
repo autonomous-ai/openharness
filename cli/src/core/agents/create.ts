@@ -97,7 +97,8 @@ export interface CreateAgentDeps {
   dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
   /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
    *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
-  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
+  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
+  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
   /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: SwarmLaunch
 }
@@ -291,7 +292,10 @@ export function createAgentCreator({
     }
     // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
     // owner's relay (team/relay.ts), where a grid would otherwise sit: a grid launch is its own provider.
-    const relay = !grid && ownerRelay ? await ownerRelay(engine) : null
+    const offered = !grid && ownerRelay ? await (engine === 'codex' && codexHome ? ownerRelay(engine, codexHome) : ownerRelay(engine)) : null
+    // A Codex home of its own the relay cannot sign in: refused with why, never launched signed out (team/relay.ts).
+    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', detail: offered.refused }
+    const relay = offered
     if (!current()) return stale()
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
@@ -369,9 +373,10 @@ export function createAgentCreator({
     }
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
-    // as every relaunch reads them again (`buildLaunchOverrides`).
-    const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
+    // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
+    // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
+    const machineMcp = input.swarmRole === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt

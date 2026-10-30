@@ -433,13 +433,95 @@ void main() {
     final remove = find.widgetWithText(TextButton, 'Remove');
     expect(remove, findsOneWidget);
     expect(tester.widget<TextButton>(remove).onPressed, isNull);
+    // Why, where it matters: on the unavailable Remove, not as a sentence in the list (Ken, 2026-10-28).
+    const why =
+        'Quinn is the Product Manager of project Pilot. Delete the project first.';
+    expect(find.text(why), findsNothing);
+    expect(find.byTooltip(why), findsOneWidget);
+    // A quiet control, not a heavy pill on every row.
     expect(
-      find.text(
-        'Quinn is the Product Manager of project Pilot. Delete the project first.',
-      ),
-      findsOneWidget,
+      tester.widget<TextButton>(remove).style?.backgroundColor?.resolve({}),
+      Colors.transparent,
     );
     expect(server.posts, isEmpty);
+  });
+
+  testWidgets(
+    'the owner\'s row says only Owner, even when an agent of theirs is a Product Manager',
+    (tester) async {
+      final server = SwarmSharingServer();
+      server.state['agents'] = [
+        {
+          'id': 'pm',
+          'name': 'River',
+          'machineId': 'm',
+          'harnessId': 'native-pm',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+      ];
+      (server.state['conversations'] as List)[0]['leadId'] = 'pm';
+      await _open(tester, server);
+      await tester.tap(find.byKey(const Key('swarm-sharing-people')));
+      await tester.pumpAndSettle();
+      expect(find.text('Owner'), findsOneWidget);
+      expect(find.textContaining('Product Manager'), findsNothing);
+      expect(
+        find.byTooltip(
+          'River is the Product Manager of project Pilot. Delete the project first.',
+        ),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'one primary action at a time: Save, not Invite as well, once general access changes',
+    (tester) async {
+      final server = SwarmSharingServer();
+      await _open(tester, server);
+      await tester.enterText(
+        find.byKey(const Key('swarm-invite-email')),
+        'peer@example.com',
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byType(FilledButton),
+        findsOneWidget,
+        reason: 'Invite, while nothing else changed',
+      );
+      await _choose(tester, 'swarm-general-access', 'Anyone with the link');
+      expect(find.byType(FilledButton), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      // Invite still works, as a secondary action.
+      final invite = tester.widget<ButtonStyleButton>(
+        find.byKey(const Key('swarm-invite-send')),
+      );
+      expect(invite.onPressed, isNotNull);
+    },
+  );
+
+  testWidgets('the email, its access and Invite sit on one line', (
+    tester,
+  ) async {
+    final server = SwarmSharingServer();
+    await _open(tester, server);
+    double middle(Finder f) => tester.getCenter(f).dy;
+    final email = middle(find.byKey(const Key('swarm-invite-email')));
+    expect(
+      middle(find.byKey(const Key('swarm-invite-role'))),
+      closeTo(email, 1),
+    );
+    expect(
+      middle(find.byKey(const Key('swarm-invite-send'))),
+      closeTo(email, 1),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('swarm-invite-role'))).dx,
+      greaterThan(
+        tester.getTopRight(find.byKey(const Key('swarm-invite-email'))).dx,
+      ),
+    );
   });
 
   testWidgets('member removal shows a backend Product Manager refusal', (
@@ -639,5 +721,76 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
     expect(find.text('private server text'), findsNothing);
     expect(opened, false);
+  });
+
+  // Scholes, 2026-10-29: joining adds this computer, so only a join that made
+  // the person a member says so, with the role; someone already in it, never.
+  testWidgets('tells only a new member\'s join, with its role', (tester) async {
+    Future<List<String>> join(
+      Map<String, dynamic> preview, {
+      Map<String, dynamic>? joined,
+    }) async {
+      final told = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => SwarmJoinDialog(
+                    link: _link,
+                    accountEmail: 'leo@example.com',
+                    isCurrent: () => true,
+                    onJoined: (_, _) {},
+                    onNewMember: (id, role) => told.add('$id:$role'),
+                    request: (_, path, {body}) async =>
+                        path.endsWith('/preview')
+                        ? {'id': _link.tabId, 'name': 'Pilot', ...preview}
+                        : {'id': _link.tabId, ...?joined},
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('swarm-join-confirm')));
+      await tester.pumpAndSettle();
+      return told;
+    }
+
+    expect(
+      await join(
+        {'role': 'collaborator'},
+        joined: {'role': 'collaborator', 'alreadyMember': false},
+      ),
+      ['${_link.tabId}:collaborator'],
+    );
+    expect(
+      await join(
+        {'role': 'viewer'},
+        joined: {'role': 'viewer', 'alreadyMember': false},
+      ),
+      ['${_link.tabId}:viewer'],
+    );
+    expect(
+      await join({'role': 'collaborator', 'alreadyMember': true}),
+      isEmpty,
+    );
+    // Review of #2188: the preview said not a member, but the person joined on
+    // another device while it was open. The join's own answer decides.
+    expect(
+      await join(
+        {'role': 'collaborator'},
+        joined: {'role': 'collaborator', 'alreadyMember': true},
+      ),
+      isEmpty,
+    );
+    // A server that does not say: nothing is added.
+    expect(await join({'role': 'collaborator'}), isEmpty);
   });
 }

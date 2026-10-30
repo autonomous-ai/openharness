@@ -52,6 +52,24 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'agent', f.lead)).toBe(false)
   })
 
+  it('makes two reviews the Swarm opens at once meet on the Reviewer both would take, and on the head that numbers them', () => {
+    const f = swarm(), a = f.group('A')
+    // On another engine than the Engineer's: a review never runs on the reviewed Builder's own (rules.ts reviewRefusal).
+    const reviewer = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'Reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' }, lead: false },
+      owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).effects.result.agentId as string
+    f.state.agents.find(x => x.id === reviewer)!.role = 'reviewer'
+    f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+    const ready = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'review',
+      result: 'Ready. https://github.com/example/project/pull/7' }, f.agentActor(a.worker))
+    expect(ready.effects.state.conversations.find(c => c.reviewOf === a.id)!.assignment!.agentId).toBe(reviewer)
+    expect(has(ready.touches, 'agent', reviewer)).toBe(true)
+    expect(has(ready.touches, 'head', 'head')).toBe(true)
+    expect(has(ready.touches, 'group', 'lead')).toBe(true)
+    // A Ready for review that opens nothing touches none of them.
+    const again = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'review', result: 'Ready, head 2.' }, f.agentActor(a.worker))
+    expect(has(again.touches, 'agent', reviewer) || has(again.touches, 'head', 'head')).toBe(false)
+  })
+
   it('makes finishing work and the Lead\'s next start or assignment meet on the project\'s progress part', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'work.check', conversationId: a.id, assignmentId: a.assignmentId, checkId: f.state.conversations.find(c => c.id === a.id)!.checks[0]!.id,

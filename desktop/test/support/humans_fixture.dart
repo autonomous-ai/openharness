@@ -123,3 +123,135 @@ void addNumberedWorkgroups(ConversationServer server, int count) {
     });
   }
 }
+
+/// The Pilot project's PM River (212 points), a Builder Luna the board does
+/// not score, and Dee's Buddy Sparky; another project's Buddy is named Luna.
+ConversationServer membersSwarm() {
+  final server = humansSwarm();
+  final agents = server.state['agents'] as List;
+  final lead = (agents.first as Map).cast<String, dynamic>()
+    ..['machineId'] = 'studio';
+  server.state['agents'] = <Object>[
+    lead,
+    {
+      ...lead,
+      'id': 'luna',
+      'harnessId': 'h-luna',
+      'name': 'Luna',
+      'displayName': 'Luna',
+      'projectId': 'lead',
+    },
+    {
+      ...lead,
+      'id': 'sparky',
+      'harnessId': 'h-sparky',
+      'name': 'Sparky',
+      'displayName': 'Sparky',
+      'buddyOf': {'personId': 'peer', 'generation': 'g'},
+    },
+  ];
+  server.leaderboard!['agents'] = [
+    {
+      'agentId': 'lead-agent',
+      'displayName': 'River',
+      'kind': 'pm',
+      'personId': null,
+      'machineId': 'studio',
+      'points': 212,
+      'rank': 1,
+      'shipped': 70,
+    },
+    {
+      'agentId': 'sparky',
+      'displayName': 'Sparky',
+      'kind': 'buddy',
+      'personId': 'peer',
+      'machineId': 'studio',
+      'points': 12,
+      'rank': 2,
+      'shipped': 4,
+    },
+    // Another agent named like one in the list is never taken for it.
+    {
+      'agentId': 'elsewhere',
+      'displayName': 'Luna',
+      'kind': 'buddy',
+      'personId': 'owner',
+      'machineId': 'studio',
+      'points': 88,
+      'rank': 3,
+      'shipped': 3,
+    },
+  ];
+  return server;
+}
+
+/// One model's week on the board: the tasks it ran, its first reviews and
+/// how many passed. A board from a server before task counts has no
+/// `attempts` ([attempts] null).
+Map<String, dynamic> modelScore(
+  String engine,
+  String? model,
+  String? effort, {
+  required int? attempts,
+  int reviewed = 0,
+  int passed = 0,
+  int reviews = 0,
+}) => {
+  'engine': engine,
+  'model': model,
+  'effort': effort,
+  'grid': false,
+  'points': 0,
+  'rank': 1,
+  'attempts': ?attempts,
+  'shipped': {'count': 0, 'medianAttemptMs': null, 'medianRequestMs': null},
+  'firstReview': {'reviewed': reviewed, 'passed': passed},
+  'reviews': reviews,
+};
+
+/// The week's models (Dee, 2026-10-29): 32 tasks, Opus at two efforts 14 of
+/// them together.
+ConversationServer modelsSwarm([ConversationServer? base]) {
+  final server = base ?? humansSwarm();
+  server.leaderboard!['byModel'] = [
+    // One model at two efforts is one row: 14 tasks, 11 of 12 passed.
+    modelScore(
+      'claude',
+      'claude-opus-5-5',
+      'high',
+      attempts: 12,
+      reviewed: 10,
+      passed: 9,
+    ),
+    modelScore(
+      'claude',
+      'claude-opus-5-5',
+      'xhigh',
+      attempts: 2,
+      reviewed: 2,
+      passed: 2,
+    ),
+    modelScore(
+      'codex',
+      'gpt-6.1-sol',
+      null,
+      attempts: 9,
+      reviewed: 8,
+      passed: 6,
+    ),
+    modelScore(
+      'claude',
+      'claude-sonnet-5-5',
+      'medium',
+      attempts: 6,
+      reviewed: 5,
+      passed: 4,
+    ),
+    // Fourth, and no first review yet.
+    modelScore('claude', 'claude-haiku-5-5', 'low', attempts: 3),
+    // Only reviewed others' work: no task of its own.
+    modelScore('codex', 'gpt-6.1-luna', null, attempts: 0, reviews: 5),
+  ];
+  return server;
+}

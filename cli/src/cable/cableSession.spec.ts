@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
-import type { SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import type { SaidOnCard, SwarmCard, SwarmLead } from '../superTabs/cards.js'
 import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
@@ -798,7 +798,7 @@ describe('cable session', () => {
   })
 
   it('posts words spoken to a Swarm Lead in its Swarm chat, and types them for any other harness', async () => {
-    const swarmSay = vi.fn(async (id: string) => id === 'a1')
+    const swarmSay = vi.fn(async (id: string) => ({ said: id === 'a1' }))
     const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
     const { session, port } = await connect(host)
     try {
@@ -1066,6 +1066,33 @@ describe('cable session', () => {
 
     expect(firmwareFor).toHaveBeenCalledWith('0.0.1', 'commander')
     expect(port.types().filter((t) => t === 'fw.offer')).toHaveLength(1)
+    await session.stop()
+  })
+
+  it('asks for a fresh release on a new dial, image or connection, and lets keepalives reuse one', async () => {
+    const firmwareFor = vi.fn(async (_v: string, _key: string, _keepalive?: boolean) => null)
+    const ports: LoopbackPort[] = []
+    const session = new CableSession(makeHost({ firmwareFor }), tmpLog(), async (onData, onClosed) => {
+      const p = new LoopbackPort(onData, onClosed)
+      ports.push(p)
+      return p
+    })
+    session.start()
+    await vi.waitFor(() => expect(ports).toHaveLength(1))
+    const hi = { t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' }
+    for (const hello of [hi, hi, hi, { ...hi, fw: '0.0.2' }, { ...hi, fw: '0.0.2' }, { ...hi, fw: '0.0.2', mac: 'cc:dd' }]) {
+      ports[0].say(hello)
+      await settle()
+    }
+    await ports[0].close('unplugged')
+    await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+    ports[1].say({ ...hi, fw: '0.0.2', mac: 'cc:dd' })
+    await settle()
+    expect(firmwareFor.mock.calls).toEqual([
+      ['0.0.1', 'commander'], ['0.0.1', 'commander', true], ['0.0.1', 'commander', true],
+      ['0.0.2', 'commander'], ['0.0.2', 'commander', true], ['0.0.2', 'commander'],
+      ['0.0.2', 'commander'],
+    ])
     await session.stop()
   })
 
@@ -3698,7 +3725,7 @@ describe('swarm cards', () => {
     swarms: rows.map((r) => ({ name: r.id, agents: 0, agentIds: [] as string[], panes: 0, ...r })) })
 
   /** A host whose cards, desk tab and window project the test moves. */
-  function cardHost(state: { cards: SwarmCard[]; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
+  function cardHost(state: { cards: SwarmCard[] | null; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
     return makeHost({
       swarmCards: () => state.cards,
       listSwarms: () => state.desk ?? desk(),
@@ -3754,6 +3781,58 @@ describe('swarm cards', () => {
       expect(host.swarmCardsWanted).toHaveBeenLastCalledWith(false)
       expect(host.swarmCardsWanted).toHaveBeenCalledTimes(2)
     } finally { await session.stop() }
+  })
+
+  it('on attach before the cards were read: no supertabs at all, then the real list once it comes; an empty one read is sent', async () => {
+    // A daemon that had just started told the dial "no Swarms" before the core had read them, and the dial left the Swarm
+    // on its face for TABS; the list came 2 s later (Diego, 2026-10-29).
+    const state = { cards: null as SwarmCard[] | null }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(host.swarmCardsWanted).toHaveBeenCalledWith(true))
+      await settle(); await settle()
+      expect(ofType(port, 'supertabs')).toEqual([])
+      expect(ofType(port, 'supertab')).toEqual([])
+      state.cards = [card('st1'), card('st2')]
+      await session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1', 'st2'] }])
+      // Read and empty: there are no Swarms, and the dial is told so.
+      state.cards = []
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertabs').at(-1)).toEqual({ t: 'supertabs', ids: [] })
+    } finally { await session.stop() }
+  })
+
+  it('cards still not read 10 s after attach: the dial is told no Swarms rather than keep a list nobody vouches for', async () => {
+    // A daemon that came back signed out never reads them, and a dial that kept its link would show the old Swarms on.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const state = { cards: null as SwarmCard[] | null }
+      const { session, port } = await connect(cardHost(state))
+      port.say(PRO)
+      await vi.advanceTimersByTimeAsync(9_000)
+      expect(ofType(port, 'supertabs')).toEqual([])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: [] }])
+      // Read later: the real list follows.
+      state.cards = [card('st1')]
+      await session.syncSwarmCards()
+      await vi.advanceTimersByTimeAsync(300)
+      expect(ofType(port, 'supertabs').at(-1)).toEqual({ t: 'supertabs', ids: ['st1'] })
+      // Read in time: no empty list at all.
+      const fresh = { cards: null as SwarmCard[] | null }
+      const second = await connect(cardHost(fresh))
+      second.port.say(PRO)
+      await vi.advanceTimersByTimeAsync(2_000)
+      fresh.cards = [card('st1')]
+      await second.session.syncSwarmCards()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ofType(second.port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1'] }])
+      await session.stop(); await second.session.stop()
+    } finally { vi.useRealTimers() }
   })
 
   it('still sends the cards, with no tab link, when the desktop is closed', async () => {
@@ -4040,6 +4119,22 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('logs a focus sent again after the dial came back on new firmware, though the line is the same', async () => {
+    const lines: string[] = []
+    const state = { cards: [card('st1')], open: { superTabId: 'st1', projectId: 'proj2', fromDevice: false } as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state, { log: (l) => lines.push(l) }))
+    const sent = () => lines.filter((l) => l === 'cable: swarm focus st1/proj2 → lead2')
+    try {
+      port.say({ ...PRO, fw: '0.0.93' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1))
+      expect(sent()).toHaveLength(1)
+      // Diego's dial, 2026-10-28: the update rebooted it and it greeted again on 0.0.94. The focus went again, unlogged.
+      port.say({ ...PRO, fw: '0.0.94' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(2))
+      expect(sent()).toHaveLength(2)
+    } finally { await session.stop() }
+  })
+
   it('a project the list does not hold yet is followed when the list arrives', async () => {
     const state = { cards: [] as SwarmCard[], open: { superTabId: 'st1', projectId: 'proj1', fromDevice: false } }
     const { session, port } = await connect(cardHost(state))
@@ -4132,7 +4227,7 @@ describe('swarm cards', () => {
     } finally { await one.session.stop(); await two.session.stop() }
   })
 
-  it('ignores a repeat of the same recap request inside a second', async () => {
+  it('answers a repeat of the same recap request inside a second from the first read, not a second one', async () => {
     const host = cardHost({ cards: [card('st1')] })
     const { session, port } = await connect(host)
     const now = vi.spyOn(Date, 'now')
@@ -4141,13 +4236,61 @@ describe('swarm cards', () => {
       port.say(PRO)
       await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
       port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      // Dropping it left a dial that had emptied its face waiting 5 s for its own retry (Diego, 2026-10-29).
+      now.mockReturnValue(5_000_200)
       port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
       expect(host.swarmCardRecap).toHaveBeenCalledTimes(1)
+      expect(ofType(port, 'supertab.recap').map((f) => [f.tab, f.lead])).toEqual([['st1', 'lead1'], ['st1', 'lead1']])
       port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead2' }); await settle(); await settle()
       expect(host.swarmCardRecap).toHaveBeenCalledTimes(2)
       now.mockReturnValue(5_001_100)
       port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
       expect(host.swarmCardRecap).toHaveBeenCalledTimes(3)
+    } finally { now.mockRestore(); await session.stop() }
+  })
+
+  it('a repeat after a pushed recap is read again, never answered with the older read', async () => {
+    const recaps = vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'A', at: 1, none: false }))
+    const host = cardHost({ cards: [card('st1')] }, { swarmCardRecap: recaps })
+    const { session, port } = await connect(host)
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(5_000_000)
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'B', at: 2, none: false })
+      recaps.mockResolvedValueOnce({ tabId: 'st1', leadId: 'lead1', text: 'B', at: 2, none: false })
+      now.mockReturnValue(5_000_200)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      expect(recaps).toHaveBeenCalledTimes(2)
+      expect(ofType(port, 'supertab.recap').map((f) => f.text)).toEqual(['A', 'B', 'B'])
+    } finally { now.mockRestore(); await session.stop() }
+  })
+
+  it('reads a repeat again once the Lead left the cards, and a read that throws answers nothing', async () => {
+    const state = { cards: [card('st1')] }
+    const recaps = vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped it.', at: 1792560000, none: false }))
+    const host = cardHost(state, { swarmCardRecap: recaps })
+    const { session, port } = await connect(host)
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(5_000_000)
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      // Access went inside the second: the first answer is not handed out again, the host is asked and refuses.
+      state.cards = []
+      recaps.mockResolvedValueOnce(null as never)
+      now.mockReturnValue(5_000_200)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      expect(recaps).toHaveBeenCalledTimes(2)
+      expect(ofType(port, 'supertab.recap')).toHaveLength(1)
+      recaps.mockImplementationOnce(() => { throw new Error('boom') })
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead2' }); await settle(); await settle()
+      expect(ofType(port, 'supertab.recap')).toHaveLength(1)
+      expect(port.isOpen).toBe(true)
     } finally { now.mockRestore(); await session.stop() }
   })
 
@@ -4189,5 +4332,684 @@ describe('swarm cards', () => {
       await settle(); await settle()
       expect(ofType(port, 'supertab.recap')).toEqual([])
     } finally { await session.stop() }
+  })
+
+  // ── swarmChat: 'v1' (a round dial that follows the chat, design 2026-10-28-round-dial-swarm-chat) ─────────────
+  describe('swarmChat', () => {
+    const ROUND = { t: 'hello', product: 'harness', mac: 'cc:dd', swarmCard: 'v1', superTab: 'wait-v1', swarmChat: 'v1' }
+    const pmChat = { kind: 'pm' as const, id: 'pm1', name: 'PM', working: false }
+    const group = { kind: 'group' as const, id: 'g1', name: 'Fix login', working: true, since: 9 }
+    const notice = (id = 'n1', over: Record<string, unknown> = {}) => ({ chat: 'pm' as const, chatId: 'pm1', id, text: `From the PM ${id}`, at: 1792560000, ...over })
+    const noticeFrame = (id = 'n1') => ({ t: 'supertab.notice', tab: 'st1', lead: 'lead1', chat: 'pm', chatId: 'pm1', id, text: `From the PM ${id}`, at: 1792560000 })
+    const voice = (port: LoopbackPort, agentId: string) => {
+      port.say({ t: 'voice.begin', uploadId: `u-${agentId}`, agentId })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+    }
+
+    it('a device without swarmChat gets today\'s frames', async () => {
+      for (const hello of [PRO, { ...ROUND, swarmChat: undefined }]) {
+        const cards = [card('st1', [lead(1, { state: 'ask', chat: pmChat, notice: notice() }), lead(2, { chat: group })])]
+        const swarmSay = vi.fn(async () => ({ said: true as const }))
+        const host = cardHost({ cards }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          expect(ofType(port, 'supertab')[0].leads).toEqual([
+            { id: 'lead1', projectId: 'proj1', project: 'Project 1', engine: 'claude', owner: '', local: '', state: 'ask', order: 1, since: 134 },
+            { id: 'lead2', projectId: 'proj2', project: 'Project 2', engine: 'claude', owner: '', local: '', state: 'work', order: 2, since: 134 }])
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(port.types().filter((t) => t.startsWith('supertab.notice'))).toEqual([])
+          // The recap and the open are asked as today, and the talk goes to the Lead's conversation.
+          port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+          port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
+          await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toHaveLength(1))
+          expect(vi.mocked(host.swarmCardRecap!).mock.calls).toEqual([['st1', 'lead1']])
+          expect(vi.mocked(host.swarmCardOpen!).mock.calls.at(-1)).toEqual([expect.stringMatching(/^c\d+$/), 'st1', 'lead1'])
+          expect(ofType(port, 'supertab.recap')[0]).toEqual({ t: 'supertab.recap', tab: 'st1', lead: 'lead1', text: 'Shipped it.', at: 1792560000, none: false })
+          // A chat's recap is not this device's.
+          await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'the chat', at: 5, none: false, chatId: 'pm1' })
+          expect(ofType(port, 'supertab.recap')).toHaveLength(1)
+          voice(port, 'a1')
+          await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+          expect(swarmSay.mock.calls[0]).toEqual(['a1', 'ship it'])
+        } finally { await session.stop() }
+      }
+    })
+
+    it('a swarmChat device gets chat, chatId, chatName and work only for a working group', async () => {
+      const cards = [card('st1', [
+        lead(1, { state: 'ask', chat: pmChat }),
+        lead(2, { chat: group }),
+        lead(3, { chat: { kind: 'lead', id: 'lead-c3', name: 'Lead', working: false } }),
+        lead(4, { state: 'stuck', chat: { ...group, id: 'g4', working: false, since: undefined } }),
+        lead(5, { state: 'stuck' }),
+      ])]
+      const { session, port } = await connect(cardHost({ cards }))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        const base = (n: number) => ({ id: `lead${n}`, projectId: `proj${n}`, project: `Project ${n}`, engine: 'claude', owner: '', local: '', order: n })
+        expect(ofType(port, 'supertab')[0].leads).toEqual([
+          { ...base(1), state: 'done', chat: 'pm', chatId: 'pm1', chatName: 'PM' },
+          { ...base(2), state: 'work', since: 9, chat: 'group', chatId: 'g1', chatName: 'Fix login' },
+          { ...base(3), state: 'done', chat: 'lead', chatId: 'lead-c3', chatName: 'Lead' },
+          { ...base(4), state: 'done', chat: 'group', chatId: 'g4', chatName: 'Fix login' },
+          // A Lead whose chat did not come through reads as its Lead chat, and never as ask or stuck.
+          { ...base(5), state: 'done' },
+        ])
+      } finally { await session.stop() }
+    })
+
+    it('sends a notice once per id', async () => {
+      const state = { cards: [card('st1', [lead(1, { chat: pmChat })])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n1') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([noticeFrame('n1')]))
+        // The Lead goes first: the dial has it before the alert that names it.
+        expect(port.types().lastIndexOf('supertab')).toBeLessThan(port.types().indexOf('supertab.notice'))
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        expect(ofType(port, 'supertab.notice')).toHaveLength(1)
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n2') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([noticeFrame('n1'), noticeFrame('n2')]))
+      } finally { await session.stop() }
+    })
+
+    it('replays a held notice without sending it', async () => {
+      const state = { cards: [card('st1', [lead(1, { chat: pmChat, notice: notice('n1') })])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        await settle(); await settle()
+        port.say({ t: 'resync' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+        await session.syncSwarmCards(true)
+        await settle(); await settle()
+        expect(ofType(port, 'supertab.notice')).toEqual([])
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n2') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([noticeFrame('n2')]))
+      } finally { await session.stop() }
+    })
+
+    it('a dial that attaches before the cards arrive is not sent the notices they already hold', async () => {
+      // The devices' process started again: the dial attaches to an empty list, then the core replays the last one.
+      const state: Parameters<typeof cardHost>[0] = { cards: [] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertabs')).toHaveLength(1))
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n1') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        await new Promise((r) => setTimeout(r, 350))
+        expect(ofType(port, 'supertab.notice')).toEqual([])
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n2') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([noticeFrame('n2')]))
+      } finally { await session.stop() }
+    })
+
+    it('does not send a notice for the chat the desktop has open', async () => {
+      const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false } }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n1') })])]
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        // The person read it on the desktop: leaving that chat later does not alert it either.
+        state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'lead-c1', fromDevice: false }
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        expect(port.types().filter((t) => t.startsWith('supertab.notice'))).toEqual([])
+        // The same chat id in another Swarm is another chat.
+        state.open = { superTabId: 'st2', projectId: 'proj1', conversationId: 'pm1', fromDevice: false }
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n2') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([noticeFrame('n2')]))
+      } finally { await session.stop() }
+    })
+
+    it('sends notice.read when the desktop opens a chat with a sent notice', async () => {
+      const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n1') })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toHaveLength(1))
+        // Another chat open: still unread.
+        state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'g1', fromDevice: false }
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        expect(ofType(port, 'supertab.notice.read')).toEqual([])
+        state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false }
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice.read')).toEqual([{ t: 'supertab.notice.read', tab: 'st1', lead: 'lead1', chatId: 'pm1' }]))
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        expect(ofType(port, 'supertab.notice.read')).toHaveLength(1)
+      } finally { await session.stop() }
+    })
+
+    it('asks recaps and talks with chat, and passes chatId on the recap', async () => {
+      const swarmSay = vi.fn(async () => ({ said: true as const }))
+      const host = cardHost({ cards: [card('st1', [lead(1, { chat: group })])] }, {
+        transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay,
+        swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'From the group', at: 7, none: false, chatId: 'g1' })),
+      })
+      const { session, port } = await connect(host)
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toEqual([
+          { t: 'supertab.recap', tab: 'st1', lead: 'lead1', text: 'From the group', at: 7, none: false, chatId: 'g1' }]))
+        expect(vi.mocked(host.swarmCardRecap!).mock.calls).toEqual([['st1', 'lead1', true]])
+        port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+        expect(vi.mocked(host.swarmCardOpen!).mock.calls.at(-1)).toEqual([expect.stringMatching(/^c\d+$/), 'st1', 'lead1', true])
+        // A pushed recap reaches this dial only as the chat's: the Pro's Lead recap of the same Lead is not its.
+        await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'the Lead', at: 8, none: false })
+        await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'the group again', at: 9, none: false, chatId: 'g1' })
+        expect(ofType(port, 'supertab.recap').map((r) => r.text)).toEqual(['From the group', 'the group again'])
+        port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+        expect(vi.mocked(host.swarmCardOpen!).mock.calls.at(-1)).toEqual([expect.stringMatching(/^c\d+$/), 'st1', null, true])
+        voice(port, 'a1')
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+        expect(swarmSay.mock.calls[0]).toEqual(['a1', 'ship it', true])
+      } finally { await session.stop() }
+    })
+
+    it('12 Leads with chats stay under the device\'s 512-token guard', async () => {
+      const wide = 'é'.repeat(24)   // 48 bytes
+      const cards = [card('st1', Array.from({ length: 13 }, (_, l) => lead(l, {
+        project: wide, owner: wide, local: 'a'.repeat(47), engine: 'codex', id: `l${'x'.repeat(40)}${l}`, projectId: `p${'y'.repeat(40)}${l}`, order: 100 + l,
+        chat: { kind: 'group', id: `g${'z'.repeat(40)}${l}`, name: wide, working: true, since: 4000 }, notice: notice(`n${l}`) })), { name: wide, count: 40 })]
+      const { session, port } = await connect(cardHost({ cards }))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        const [frame] = ofType(port, 'supertab')
+        expect(frame.leads).toHaveLength(12)
+        expect(tokens(frame)).toBeLessThan(512)
+      } finally { await session.stop() }
+    })
+  })
+
+  // ── swarmBuddy: 'v1' (the round dial's PM and Buddy screens, spec 2026-10-29-round-dial-pm-buddy) ─────────────
+  describe('swarmBuddy', () => {
+    const ROUND = { t: 'hello', product: 'harness', mac: 'cc:dd', swarmCard: 'v1', superTab: 'wait-v1', swarmChat: 'v1' }
+    const BUDDY = { ...ROUND, swarmBuddy: 'v1' }
+    const pmChat = { kind: 'pm' as const, id: 'pm1', name: 'PM', working: false }
+    const buddyChat = { kind: 'buddy' as const, id: 'pm1', name: "diego's Buddy", working: false }
+    const buddy = { chatId: 'pm1', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true }
+    const pmNotice = (id: string) => ({ chat: 'pm' as const, chatId: 'pm1', id, text: `From the PM ${id}`, at: 1792560000 })
+    const buddyNotice = (id: string) => ({ chat: 'buddy' as const, chatId: 'pm1', id, text: `From the Buddy ${id}`, at: 1792560000 })
+    /** Lead 1 as the cards say it with Buddies on: today's face (`chat`) beside the swarmBuddy dial's (`sideChat`). */
+    const withBuddy = (over: Partial<SwarmLead> = {}) => lead(1, { chat: pmChat, sideChat: buddyChat, buddies: true, buddy, ...over })
+    const voice = (port: LoopbackPort, agentId: string) => {
+      port.say({ t: 'voice.begin', uploadId: `u-${agentId}`, agentId })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+    }
+    /** The raw bytes of every `supertab…` frame written, in order. */
+    const supertabBytes = (port: LoopbackPort): Buffer[] => port.frames.map((f) => Buffer.from(f)).filter((f) => {
+      let isSupertab = false
+      new CableDecoder().feed(f, (frame) => {
+        if (frame.type === CableType.Json) isSupertab = String(JSON.parse(Buffer.from(frame.payload).toString('utf8')).t).startsWith('supertab')
+      })
+      return isSupertab
+    })
+
+    it('a swarmBuddy dial gets each Lead\'s buddy block and buddies flag', async () => {
+      const cards = [card('st1', [withBuddy(), lead(2, { chat: pmChat, sideChat: { kind: 'lead', id: 'lead-c2', name: 'Lead', working: false }, buddies: true }), lead(3)])]
+      const { session, port } = await connect(cardHost({ cards }))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        const base = (n: number) => ({ id: `lead${n}`, projectId: `proj${n}`, project: `Project ${n}`, engine: 'claude', owner: '', local: '', state: 'done', order: n })
+        expect(ofType(port, 'supertab')[0].leads).toEqual([
+          { ...base(1), chat: 'buddy', chatId: 'pm1', chatName: "diego's Buddy", buddies: true, buddy },
+          // No Buddy in this project: the flag alone, and the face the side shows.
+          { ...base(2), chat: 'lead', chatId: 'lead-c2', chatName: 'Lead', buddies: true },
+          // Buddies off: exactly a swarmChat dial's Lead.
+          { ...base(3) },
+        ])
+        // The Swarm's side, which the dial follows as the daemon's: 'pm' unless the cards keep the Buddy side.
+        expect(ofType(port, 'supertab')[0].side).toBe('pm')
+      } finally { await session.stop() }
+    })
+
+    it('a swarmBuddy dial hears the Swarm\'s Buddy side; a swarmChat dial never hears a side', async () => {
+      for (const [hello, side] of [[BUDDY, 'buddy'], [ROUND, undefined]] as const) {
+        const { session, port } = await connect(cardHost({ cards: [card('st1', [withBuddy()], { side: 'buddy' })] }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          expect(ofType(port, 'supertab')[0].side).toBe(side)
+        } finally { await session.stop() }
+      }
+    })
+
+    it('a swarmChat dial without swarmBuddy gets today\'s frame, byte for byte, whatever the Buddy fields', async () => {
+      const run = async (leads: () => SwarmLead[]) => {
+        const state = { cards: [card('st1', leads())] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(ROUND)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', leads().map((l) => ({ ...l, notice: pmNotice('n2') })))]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toHaveLength(2))
+          port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+          await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toHaveLength(1))
+          return supertabBytes(port)
+        } finally { await session.stop() }
+      }
+      const today = await run(() => [lead(1, { chat: pmChat }), lead(2, { chat: pmChat })])
+      const buddies = await run(() => [withBuddy({ buddyNotice: buddyNotice('b1') }), lead(2, { chat: pmChat, sideChat: buddyChat, buddies: true })])
+      expect(today.length).toBeGreaterThan(2)
+      expect(buddies).toEqual(today)
+    })
+
+    it('supertab.side reaches the cards as cardSide, and only from a swarmBuddy dial', async () => {
+      for (const hello of [BUDDY, ROUND, PRO]) {
+        const swarmCardSide = vi.fn()
+        const { session, port } = await connect(cardHost({ cards: [card('st1', [withBuddy()])] }, { swarmCardSide }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy' })
+          port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' })
+          for (const bad of [{ tab: 'bad id', side: 'pm' }, { tab: 'x'.repeat(48), side: 'pm' }, { tab: 'st1', side: 'up' }, { tab: 'st1' }, { side: 'pm' }]) port.say({ t: 'supertab.side', ...bad })
+          await settle(); await settle()
+          expect(swarmCardSide.mock.calls).toEqual(hello === BUDDY ? [['st1', 'buddy'], ['st1', 'pm']] : [])
+        } finally { await session.stop() }
+      }
+    })
+
+    it('a buddy notice reaches only a swarmBuddy dial, apart from the Lead\'s', async () => {
+      for (const hello of [BUDDY, ROUND]) {
+        const state = { cards: [card('st1', [withBuddy()])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', [withBuddy({ notice: pmNotice('n1'), buddyNotice: buddyNotice('b1') })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice').length).toBeGreaterThan(0))
+          await new Promise((r) => setTimeout(r, 350))
+          const pm = { t: 'supertab.notice', tab: 'st1', lead: 'lead1', chat: 'pm', chatId: 'pm1', id: 'n1', text: 'From the PM n1', at: 1792560000 }
+          const quiet = { t: 'supertab.notice', tab: 'st1', lead: 'lead1', chat: 'buddy', chatId: 'pm1', id: 'b1', text: 'From the Buddy b1', at: 1792560000 }
+          expect(ofType(port, 'supertab.notice')).toEqual(hello === BUDDY ? [pm, quiet] : [pm])
+          // The Buddy's next word is sent once more; the Lead's held notice is not sent again.
+          state.cards = [card('st1', [withBuddy({ notice: pmNotice('n1'), buddyNotice: buddyNotice('b2') })])]
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice').map((n) => n.id)).toEqual(hello === BUDDY ? ['n1', 'b1', 'b2'] : ['n1'])
+        } finally { await session.stop() }
+      }
+    })
+
+    it('asks recaps, opens and talks for the face on its side, and takes only the recaps of that face', async () => {
+      const swarmSay = vi.fn(async () => ({ said: true as const }))
+      const host = cardHost({ cards: [card('st1', [withBuddy()])] }, {
+        transcribe: vi.fn(async () => 'an idea'), route: vi.fn(), swarmSay,
+        swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'From the Buddy', at: 7, none: false, chatId: 'pm1', buddy: true as const })),
+      })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toEqual([
+          { t: 'supertab.recap', tab: 'st1', lead: 'lead1', text: 'From the Buddy', at: 7, none: false, chatId: 'pm1' }]))
+        expect(vi.mocked(host.swarmCardRecap!).mock.calls).toEqual([['st1', 'lead1', 'buddy']])
+        port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+        expect(vi.mocked(host.swarmCardOpen!).mock.calls.at(-1)).toEqual([expect.stringMatching(/^c\d+$/), 'st1', 'lead1', 'buddy'])
+        // An older dial's recap of the same chat is not this dial's.
+        await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'the PM', at: 8, none: false, chatId: 'pm1' })
+        await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'the Buddy again', at: 9, none: false, chatId: 'pm1', buddy: true })
+        expect(ofType(port, 'supertab.recap').map((r) => r.text)).toEqual(['From the Buddy', 'the Buddy again'])
+        voice(port, 'a1')
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+        expect(swarmSay.mock.calls[0]).toEqual(['a1', 'an idea', 'buddy'])
+      } finally { await session.stop() }
+    })
+
+    // Review Focus 5: a post the backend refuses (a read-only Chat with PM, Buddies off, a Buddy chat not the reader's) was
+    // typed into the Lead's terminal instead.
+    const spoken = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay']) => {
+      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(hello); await settle()
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' || m.t === 'voice.transcript') || vi.mocked(host.sendTurn).mock.calls.length > 0).toBe(true))
+        await settle()
+        return { errors: ofType(port, 'voice.error').map((m) => m.message), turns: vi.mocked(host.sendTurn).mock.calls }
+      } finally { await session.stop() }
+    }
+    const refused = { said: false as const, refused: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } }
+
+    it('a refused voice post shows voice.error and types nothing', async () => {
+      for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb' }, PRO, ROUND, BUDDY]) {
+        const swarmSay = vi.fn(async () => refused)
+        expect(await spoken(hello, [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })], swarmSay))
+          .toEqual({ errors: ['Chat with PM is read-only.'], turns: [] })
+        expect(swarmSay).toHaveBeenCalledOnce()
+      }
+    })
+
+    it('on the Buddy face an unreachable post shows voice.error and types nothing', async () => {
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+      // Nor when the Swarm no longer lists that Lead as one: the Buddy face never falls back to a terminal.
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1' })], vi.fn(async () => ({ said: false as const })))).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+    })
+
+    it('on the PM face an unreachable post still falls back to the turn', async () => {
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const leadFace = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1', sideChat: leadFace })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+      // An older dial's face is today's, whatever a newer dial's side says.
+      expect(await spoken(ROUND, [withBuddy({ local: 'h1', chat: leadFace })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+    })
+
+    it('an older dial\'s words for the Buddy chat (its PM face) never fall back to the Lead\'s terminal either', async () => {
+      // The PM cannot read the reader's Buddy chat: typing what was said there into the PM's terminal would show it.
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach the Swarm. Try again.'], turns: [] })
+    })
+
+    it('a Buddy utterance never falls back after desktop focus changes during its post', async () => {
+      const state = { cards: [card('st1', [withBuddy({ local: 'h1' })])] }
+      let rejectPost!: (error: Error) => void
+      const pending = new Promise<SaidOnCard>((_resolve, reject) => { rejectPost = reject })
+      const swarmSay = vi.fn(() => pending)
+      const host = cardHost(state, { transcribe: vi.fn(async () => 'private Buddy idea'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalledOnce())
+        // The window opens the Lead while the private post is on its way.
+        state.cards = [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })])]
+        await session.syncSwarmCards()
+        rejectPost(new Error('backend unreachable'))
+        await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.error' || m.t === 'voice.transcript')).toBe(true))
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        expect(ofType(port, 'voice.error').map(m => m.message)).toEqual(['Could not reach your Buddy. Try again.'])
+      } finally { await session.stop() }
+    })
+
+    it('posts the words into the chat on the face when they were spoken, whatever the face shows by the time they are sent', async () => {
+      const state = { cards: [card('st1', [withBuddy({ local: 'h1' })])] }
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const host = cardHost(state, { transcribe: vi.fn(async () => 'private Buddy idea'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+        // The window opens the Lead while the person is still speaking.
+        state.cards = [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })])]
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalledOnce())
+        expect(swarmSay.mock.calls[0]).toEqual(['h1', 'private Buddy idea', 'buddy', 'pm1'])
+      } finally { await session.stop() }
+    })
+
+    // ── Review before posting (device voice in the Swarm chat): words for a chat everyone in the Swarm reads are shown with
+    // the chat's name, then Send or Discard. Without this, a held recording on a Swarm face was a draft typed into the
+    // Lead's terminal.
+    const reviewed = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay'], op: 'send' | 'discard',
+      over: Partial<CableHost> = {}) => {
+      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay, ...over })
+      const { session, port } = await connect(host)
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-h1', review: true })
+        await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' || m.t === 'voice.error')).toBe(true))
+        const draft = ofType(port, 'voice.draft')[0]
+        const calledBefore = swarmSay ? vi.mocked(swarmSay).mock.calls.length : 0
+        if (draft) port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op })
+        if (draft) await vi.waitFor(() => expect(port.sent.some(m => m.t === 'draft.state' && m.requestId === 'r1')).toBe(true))
+        return { draft, calledBefore, state: ofType(port, 'draft.state')[0], turns: vi.mocked(host.sendTurn).mock.calls }
+      } finally { await session.stop() }
+    }
+
+    it('words reviewed on a Swarm face are a draft named for that chat, posted there by Send and never typed into a terminal', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], swarmSay, 'send')
+      expect(r.draft).toMatchObject({ t: 'voice.draft', active: true, name: "Project 1 · diego's Buddy", context: 'Swarm chat', text: 'ship it' })
+      expect(r.calledBefore).toBe(0)
+      // Reviewed: the chat it was reviewed for, even if the window moved since (SwarmCards.say checks it is still the Lead's).
+      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1', true]])
+      expect(r.state).toMatchObject({ ok: true, sent: true })
+      expect(r.turns).toEqual([])
+    })
+
+    it('a pane focused in the window at capture does not take Swarm-face words: they are reviewed for the face\'s chat', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], swarmSay, 'send', { appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      expect(r.draft).toMatchObject({ name: "Project 1 · diego's Buddy", agentId: 'h1' })
+      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1', true]])
+      expect(r.turns).toEqual([])
+    })
+
+    it('reviewed Swarm-face words with no way to post them in a Swarm are refused, never drafted for a terminal', async () => {
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], undefined, 'send')
+      expect(r.draft).toBeUndefined()
+      expect(r.turns).toEqual([])
+    })
+
+    it('Discard posts nothing', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const lead = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      const r = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], swarmSay, 'discard')
+      expect(r.draft).toMatchObject({ name: 'Project 1 · Lead' })
+      expect(r.state).toMatchObject({ ok: true, active: false })
+      expect(swarmSay).not.toHaveBeenCalled()
+      expect(r.turns).toEqual([])
+    })
+
+    it('a reviewed post the Swarm refuses or cannot take stays a draft with the reason, and nothing is typed', async () => {
+      const lead = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      const refusing = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], vi.fn(async () => refused), 'send')
+      expect(refusing.state).toMatchObject({ ok: false, active: true, error: 'Chat with PM is read-only.' })
+      expect(refusing.turns).toEqual([])
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const unreachable = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], offline, 'send')
+      expect(unreachable.state).toMatchObject({ ok: false, active: true, error: 'Could not reach the Swarm. Try again.' })
+      expect(unreachable.turns).toEqual([])
+    })
+
+    it('says it reviews Swarm chat words, and refuses unreviewed ones from a dial that promised to review them', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const transcribe = vi.fn(async () => 'ship it')
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe, route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ ...BUDDY, swarmReview: 'v1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        expect(ofType(port, 'welcome')[0].features).toContain('swarm.review')
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+        expect(ofType(port, 'voice.error')[0].message).toBe('Review the words before they are posted.')
+        expect(transcribe).not.toHaveBeenCalled(); expect(swarmSay).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    // Diego's dial, 2026-10-29: the openharness Lead runs on another Mac, so its card had no local harness and a tap on its
+    // face did nothing. Such a Lead is spoken to by its Swarm id, and its words still go only to its chat.
+    it('a Lead on another machine is spoken to by its Swarm id: reviewed words post in its chat and nothing is typed', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: '', id: 'lead1' })])] },
+        { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay, appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ ...BUDDY, swarmReview: 'v1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        expect(ofType(port, 'welcome')[0].features).toContain('swarm.remote')
+        port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: 'lead1' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-l1', review: true })
+        await vi.waitFor(() => expect(ofType(port, 'voice.draft')).toHaveLength(1))
+        const draft = ofType(port, 'voice.draft')[0]
+        expect(draft).toMatchObject({ name: "Project 1 · diego's Buddy", context: 'Swarm chat', agentId: 'lead1' })
+        port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+        await vi.waitFor(() => expect(ofType(port, 'draft.state')).toHaveLength(1))
+        expect(swarmSay.mock.calls).toEqual([['lead1', 'ship it', 'buddy', 'pm1', true]])
+        expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    // Review of #2232: a dial still on a remote Lead's face names its Swarm id to a daemon whose cards are not read yet (the
+    // devices process just restarted) or no longer hold it. The window's focused pane must not take the words.
+    it('a Swarm id with no card here is an error, never the focused pane\'s turn', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))
+      const host = cardHost({ cards: [] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay,
+        appFocus: () => ({ machineId: 'm1', agentId: 'a2' }) })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY); await settle()
+        port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+        expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        // Held to review, the same: no draft whose Send would say sent while the words went nowhere.
+        port.say({ t: 'voice.begin', uploadId: 'u-l2', agentId: '0123456789abcdef01234567' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-l2', review: true })
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(2))
+        expect(ofType(port, 'voice.error')[1].message).toBe('Could not reach the Swarm. Try again.')
+        expect(ofType(port, 'voice.draft')).toEqual([])
+      } finally { await session.stop() }
+    })
+
+    it('words for a Lead on another machine that the Swarm cannot take are an error, never a terminal turn', async () => {
+      const chat = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      for (const swarmSay of [vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') }), vi.fn(async (): Promise<SaidOnCard> => ({ said: false }))]) {
+        const host = cardHost({ cards: [card('st1', [withBuddy({ local: '', id: 'lead1', chat })])] },
+          { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(ROUND)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          port.say({ t: 'voice.begin', uploadId: 'u-l1', agentId: 'lead1' })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+          expect(ofType(port, 'voice.error')[0].message).toBe('Could not reach the Swarm. Try again.')
+          expect(swarmSay).toHaveBeenCalledWith('lead1', 'ship it', true, 'lead-c1')
+          expect(host.sendTurn).not.toHaveBeenCalled()
+        } finally { await session.stop() }
+      }
+    })
+
+    /** 13 Leads (12 are sent), every name at its 48-byte cut, each working in a group with a Buddy; `id(kind, l)` names the ids. */
+    const fullCards = (id: (kind: string, l: number) => string) => {
+      const wide = 'é'.repeat(24)   // 48 bytes
+      return [card('st1', Array.from({ length: 13 }, (_, l) => lead(l, {
+        project: wide, owner: wide, local: id('h', l), engine: 'codex', id: id('l', l), projectId: id('p', l), order: 100 + l,
+        chat: { kind: 'group', id: id('g', l), name: wide, working: true, since: 4000 },
+        sideChat: { kind: 'group', id: id('g', l), name: wide, working: true, since: 4000 }, buddies: true,
+        buddy: { chatId: id('b', l), name: wide, engine: 'codex', cells: 32767, color: '#d6a79a', live: false } })), { name: wide, count: 40 })]
+    }
+    const sent = async (cards: SwarmCard[]) => {
+      const { session, port } = await connect(cardHost({ cards }))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        expect(port.isOpen).toBe(true)
+        return ofType(port, 'supertab')[0] as { leads: Array<{ buddy: { name: string } }> }
+      } finally { await session.stop() }
+    }
+
+    it('the supertab frame with 12 Leads, 48-byte names and a Buddy each stays under 8192 bytes', async () => {
+      // The backend's ids: 24 hex characters, a harness's a UUID.
+      const frame = await sent(fullCards((kind, l) => kind === 'h' ? `${'0'.repeat(28)}-${String(l).padStart(7, '0')}` : `${kind}${'0'.repeat(21)}${String(l).padStart(2, '0')}`))
+      expect(frame.leads).toHaveLength(12)
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
+      // And under the dial's JSON guard (cable_json_guard.h, 512 tokens), which today's firmware applies to every frame.
+      expect(tokens(frame)).toBeLessThan(512)
+      expect(frame.leads.map((l) => l.buddy.name)).toEqual(Array(12).fill('é'.repeat(24)))
+    })
+
+    it('shortens the Buddies\' names, on a character, rather than send a frame the cable cannot carry', async () => {
+      // Every id at the 47 characters a dial holds: 8,211 bytes with whole names, and a frame over the cap closes the link.
+      const frame = await sent(fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`))
+      expect(frame.leads).toHaveLength(12)
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
+      expect(tokens(frame)).toBeLessThan(512)
+      // The Buddies' names go first: the avatar still tells them apart, and every other name is whole.
+      for (const l of frame.leads as unknown as Array<{ buddy: { name: string }; project: string; chatName: string }>) {
+        expect([l.buddy.name, l.project, l.chatName]).toEqual(['é'.repeat(12), 'é'.repeat(24), 'é'.repeat(24)])
+      }
+    })
+
+    it('12 Leads with 48-byte JSON-escaped names fit without dropping the dial', async () => {
+      const cards = fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`)
+      const wide = '"'.repeat(48)
+      for (const c of cards) {
+        c.name = wide
+        for (const l of c.leads) {
+          l.project = l.owner = wide
+          l.chat!.name = l.sideChat!.name = l.buddy!.name = wide
+        }
+      }
+      // These same valid names fit the existing legacy frame.
+      for (const hello of [ROUND, BUDDY]) {
+        const { session, port } = await connect(cardHost({ cards }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab').length > 0 || !port.isOpen).toBe(true))
+          expect(port.isOpen, hello === BUDDY ? 'new dial must stay connected' : 'legacy baseline must fit').toBe(true)
+          expect(Buffer.byteLength(JSON.stringify(ofType(port, 'supertab')[0]))).toBeLessThan(8192)
+        } finally { await session.stop() }
+      }
+    })
+
+    it('fits the fullest frame a dial can be sent: every id at 47 characters, every name and engine escaping at its cut', async () => {
+      const cards = fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`)
+      const wide = '"'.repeat(48), engine = '\u0001'.repeat(16)
+      for (const c of cards) {
+        c.name = wide
+        for (const l of c.leads) {
+          l.project = l.owner = wide
+          l.engine = l.buddy!.engine = engine
+          l.chat!.name = l.sideChat!.name = l.buddy!.name = wide
+        }
+      }
+      for (const hello of [ROUND, BUDDY]) {
+        const { session, port } = await connect(cardHost({ cards }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab').length > 0 || !port.isOpen).toBe(true))
+          expect(port.isOpen).toBe(true)
+          const [frame] = ofType(port, 'supertab') as Array<{ leads: Array<{ id: string; projectId: string; chatId: string; engine: string }> }>
+          expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
+          // Every id and engine still names what it names; the Buddies of the least urgent Leads went last, the rest kept theirs.
+          expect(frame.leads.map((l) => [l.id, l.projectId, l.chatId, l.engine])).toEqual(cards[0].leads.slice(0, 12).map((l) => [l.id, l.projectId, l.chat!.id, engine]))
+          const kept = frame.leads.map((l) => 'buddy' in l)
+          if (hello === BUDDY) expect(kept.slice(0, 6)).toEqual(Array(6).fill(true))
+          expect(kept.indexOf(false) === -1 || kept.slice(kept.indexOf(false)).every((k) => !k)).toBe(true)
+        } finally { await session.stop() }
+      }
+    })
   })
 })

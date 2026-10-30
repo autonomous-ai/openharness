@@ -6,10 +6,13 @@
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
  */
+import { readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs'
+import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
-import { swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
+import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
+import type { HostRead } from './hostFeed.js'
 
 type Json = Record<string, unknown>
 type Session = NonNullable<ReturnType<CoreApi['agents']['byAgent']>>
@@ -74,6 +77,9 @@ export async function githubToken(core: CoreApi, harnessId: string, sources: Swa
 /** How often the daemon looks at its sessions' tasks. A token is renewed once it has this much left or less. */
 export const REFRESH_INTERVAL_MS = 60_000
 export const RENEW_BELOW_MS = 10 * 60_000
+/** How long a session's folder with no session registered for it stays: longer than any start waits to launch, since a
+ *  start writes the folder before its session is registered (core/agents/create.ts; review of #1998). */
+export const UNREGISTERED_FOLDER_MS = 15 * 60_000
 
 /**
  * Keeps each local session started to use the app holding a token for its task while the task lasts: renewed before it
@@ -85,6 +91,9 @@ export class GitHubTokenRefresher {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly primed = new Map<string, { assignmentId: string; expiresAt: number }>()
+  /** The assignment each session was last looked at for as soon as it arrived ([assigned]): one look per task, however
+   *  often the host reads, even while its token cannot be had. */
+  private readonly asked = new Map<string, string>()
   private readonly now: () => number
   private readonly intervalMs: number
 
@@ -104,6 +113,27 @@ export class GitHubTokenRefresher {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.primed.clear()
+    this.asked.clear()
+  }
+
+  /**
+   * The host read its Swarms' rows: a session started to use the app that has a task it holds no token for is looked at
+   * now, not at the next minute's pass. Its gh login was empty for up to a minute after the task arrived, so a Builder's
+   * first `gh auth status` said "You are not logged into any GitHub hosts" and it stopped (Mac Auto, 2026-10-29). Once per
+   * task: a token that cannot be had is asked for again at the minute's pass, as before. Only while the refresher runs.
+   */
+  assigned(read: HostRead): void {
+    if (!this.timer) return
+    let due = false
+    for (const session of this.core.agents.live()) {
+      const id = session.agentId
+      const task = read.assignments.find(row => row.harnessId === id && identifier(row.assignmentId))
+      if (!task || this.primed.get(id)?.assignmentId === task.assignmentId || this.asked.get(id) === task.assignmentId) continue
+      if (!githubDir(this.core, session)) continue
+      this.asked.set(id, String(task.assignmentId))
+      due = true
+    }
+    if (due) void this.tick()
   }
 
   /** One look; a look still running is not started twice. */
@@ -114,12 +144,54 @@ export class GitHubTokenRefresher {
     return this.running
   }
 
+  /**
+   * A session that stopped takes its token with it: its folder's gh login is emptied. A task ended as its agent stopped left
+   * the last token there, since only running sessions are looked at (local Team account run, 2026-10-28); so did a session
+   * that stopped while no daemon ran. Looked at on every pass, not once: a token fetch still in flight as its session stopped
+   * writes the token after the folder was emptied (security review of #1978). One small read per stopped session's folder a
+   * minute, while the refresher runs. Anything that is not a session's folder is skipped, and one that cannot be read or
+   * written is logged and passed over, so no folder stops the renewals below. A folder whose session is gone from this
+   * machine is removed, so passes do not grow with every session ever run (security review of #1978); one whose session
+   * stopped but may run again ([known]) keeps its commit identity and trailers for then. Removed only once untouched for
+   * UNREGISTERED_FOLDER_MS: a session still starting has its folder before its record, and a record may not be read just
+   * now (review of #1998).
+   */
+  private emptyStopped(running: ReadonlySet<string>, known: ReadonlySet<string>): void {
+    const sessions = join(swarmGitHubRoot(this.core.dataDir), 'sessions')
+    let entries: Dirent[]
+    try { entries = readdirSync(sessions, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const dir = swarmGitHubSessionDir(this.core.dataDir, entry.name)
+      if (!dir || running.has(dir)) continue
+      try {
+        if (!known.has(dir) && this.now() - this.touched(dir) >= UNREGISTERED_FOLDER_MS) { rmSync(dir, { recursive: true, force: true }); continue }
+        let hosts: string
+        try { hosts = readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8') } catch { continue }
+        if (hosts !== '{}\n') writeSessionGitHub(dir, null)
+      } catch (error) {
+        console.warn(`[super-tab] could not empty a stopped session's gh login · ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  /** When anything in a session's folder last changed. */
+  private touched(dir: string): number {
+    let newest = 0
+    for (const path of [dir, join(dir, 'gh'), join(dir, 'gh', 'hosts.yml'), join(dir, 'gh', 'config.yml'), join(dir, 'gitconfig'), join(dir, 'trailers')]) {
+      try { newest = Math.max(newest, statSync(path).mtimeMs) } catch { /* not there */ }
+    }
+    return newest
+  }
+
   private async look(): Promise<void> {
     const sessions = this.core.agents.live().flatMap(session => {
       const dir = githubDir(this.core, session)
       return dir ? [{ session, dir }] : []
     })
     for (const id of this.primed.keys()) if (!sessions.some(s => s.session.agentId === id)) this.primed.delete(id)
+    this.emptyStopped(new Set(sessions.map(s => s.dir)),
+      new Set(this.core.agents.all().flatMap(session => githubDir(this.core, session) ?? [])))
     if (!sessions.length) return
     const machineId = this.core.daemon.machineId()
     if (!identifier(machineId)) return

@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process'
+import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -10,14 +10,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // src/lib/db or dist/lib/db → package root
 const root = join(__dirname, '..', '..', '..')
 
+/** Where the schema step pushes from and to: the package's schema and the process's database unless a test names others. */
+export interface SchemaTarget { schema?: string; databaseUrl?: string }
+
+/** The Prisma CLI as a child process, its output on ours. Async, so a caller's event loop keeps serving while it runs. */
+function runPrisma(prismaCli: string, args: string[], databaseUrl: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [prismaCli, ...args], { stdio: 'inherit', env: { ...process.env, DATABASE_URL: databaseUrl } })
+    child.once('error', reject)
+    child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`prisma ${args.join(' ')} exited with ${signal ?? code}`)))
+  })
+}
+
 /**
  * Push the Prisma schema to MongoDB before serving. No migration files — `prisma db
  * push` creates the `users` + `agent_bindings` collections + indexes; idempotent. It
  * does NOT touch the manager-owned `agent_nodes`/`managers` collections (they aren't in
  * this schema), so the shared DB is safe.
  */
-export function ensureSchema(): void {
-  process.env.DATABASE_URL ??= env.DATABASE_URL
+export async function ensureSchema(target: SchemaTarget = {}): Promise<void> {
+  const databaseUrl = target.databaseUrl ?? env.DATABASE_URL
 
   const prismaCli = join(root, 'node_modules', 'prisma', 'build', 'index.js')
   if (!existsSync(prismaCli)) {
@@ -25,12 +37,9 @@ export function ensureSchema(): void {
     return
   }
 
-  const schema = join(root, 'prisma', 'schema.prisma')
+  const schema = target.schema ?? join(root, 'prisma', 'schema.prisma')
   try {
-    execFileSync(process.execPath, [prismaCli, 'db', 'push', '--schema', schema, '--skip-generate'], {
-      stdio: 'inherit',
-      env: process.env,
-    })
+    await runPrisma(prismaCli, ['db', 'push', '--schema', schema, '--skip-generate'], databaseUrl)
     logger.info('Prisma db push ok (backend schema)')
   } catch (err) {
     logger.error('Prisma db push failed — continuing (collections may already exist)', err)

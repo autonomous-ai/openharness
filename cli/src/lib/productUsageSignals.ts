@@ -1,7 +1,7 @@
 import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, RESUME_PREPARATION_KINDS, type HealthSource, type ResumeReason } from './productHealthContract.js'
 import type { MessageOutcome, MessageReceipt } from './sessionInput.js'
-import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS,
-  type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric } from './productUsageContract.js'
+import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS, STORE_ERROR_CODES,
+  type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric, type StoreErrorCode } from './productUsageContract.js'
 
 const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart: 'restart',
   agent_retarget: 'model_change', agent_recent: 'history',
@@ -18,8 +18,21 @@ const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD
 const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
   'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
+// A history page read for no session, or one this computer's index does not hold (services/search.ts): until
+// 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
 const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
-  'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY'])
+  'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
+  'BAD_SESSION', 'NOT_INDEXED'])
+/** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
+ * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
+ * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */
+const storeFailures = new Map<string, Failure>([
+  ['SETUP_FAILED', 'setup'], ['DOCTOR_FAILED', 'setup'], ['GIT_UNAVAILABLE', 'setup'], ['SHELL_UNAVAILABLE', 'setup'],
+  ['CLONE_FAILED', 'unavailable'], ['VIEWER_UNAVAILABLE', 'unavailable'],
+  ['INVALID_MANIFEST', 'invalid'], ['INVALID_SOURCE', 'invalid'], ['SOURCE_NOT_FOUND', 'invalid'],
+  ['PACKAGE_ID_MISMATCH', 'invalid'], ['PACKAGE_KIND_MISMATCH', 'invalid'], ['LINKED_INSTALL', 'invalid'],
+  ['BUNDLED_PACKAGE', 'invalid'],
+])
 const resumeReasons = new Map<string, ResumeReason>([
   ['TMUX_UNAVAILABLE', 'runtime_unavailable'], ['NATIVE_LAUNCH_HELD', 'runtime_unavailable'],
   ['ENGINE_UNAVAILABLE', 'runtime_unavailable'],
@@ -50,6 +63,14 @@ export function launchErrorCode(error: unknown): LaunchErrorCode {
   if (typeof error !== 'string') return 'none'
   const code = error.length <= 64 ? error.toLowerCase() : ''
   return listedCodes.has(code) ? code as LaunchErrorCode : 'unlisted'
+}
+const storeCodes = new Set<string>(STORE_ERROR_CODES.filter(code => code !== 'unlisted' && code !== 'none'))
+/** Which listed code a Store install's or update's refusal had (`STORE_ERROR_CODES`), as `launchErrorCode` names a
+ * launch's: the code lower-cased, `unlisted` for any other string and `none` for no code. Nothing else leaves here. */
+export function storeErrorCode(error: unknown): StoreErrorCode {
+  if (typeof error !== 'string') return 'none'
+  const code = error.length <= 64 ? error.toLowerCase() : ''
+  return storeCodes.has(code) ? code as StoreErrorCode : 'unlisted'
 }
 /** The engine a launch asked for, as one of the fixed names. */
 export function launchEngine(engine: unknown): ProductUsageLaunchEngine {
@@ -170,7 +191,8 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       count('unknown'); detail(error === 'AGENT_CHANGED' ? 'cancelled' : 'unknown')
     } else if (error != null || state === 'failed' || ok === false) {
       count('failed'); detail('failed')
-      const kind = failureKind(error)
+      const store = action === 'store_install' || action === 'store_update'
+      const kind = (store && typeof error === 'string' ? storeFailures.get(error) : undefined) ?? failureKind(error)
       count(`error_${kind}`)
       // Which code an `other` refusal of a create or a resume had: 22 creates and 9 resumes were `other` on
       // 2026-10-16 (production counters), with nothing to say why. A fixed name from the list, or unlisted.
@@ -193,7 +215,10 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
           try { emit(`phone_${action}_error_code_${launchErrorCode(error)}` as ProductUsageMetric) } catch { /* Optional measurement. */ }
         }
       }
-      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY'].includes(error) ? 'conflict' : failureKind(error)}`)
+      // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
+      // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
+      if (store) count(`error_code_${storeErrorCode(error)}`)
+      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED', 'NOT_INDEXED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
     else if (!['create', 'resume', 'restart', 'fork'].includes(action) || hasAgent || state === 'created') { count('ok'); detail('ok') }

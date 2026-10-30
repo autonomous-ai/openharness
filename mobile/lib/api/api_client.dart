@@ -6,6 +6,7 @@ import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/http_log.dart';
+import '../swarm/swarm_request.dart' show SuperTabFailure;
 import '../viewer/device_ack.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_log_sync.dart'
@@ -337,6 +338,91 @@ class ApiClient {
     );
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
     return (data['transcript'] as String? ?? '').trim();
+  }
+  // -- Swarm chat files (backend only: the viewer's own SSO session signs it) --
+
+  /// Sends one file for a message in [conversationId] of Swarm [tabId] and
+  /// answers the backend's `{attachment: {...}}` — `POST
+  /// /api/super-tabs/:tabId/attachments`, the form Desktop sends.
+  ///
+  /// Straight to the backend with the token this viewer holds, unlike every
+  /// other Swarm call, which one of the account's machines forwards
+  /// (`AppNotifier.swarmRequest`): the backend takes a chat file only from the
+  /// client itself, and a machine forwards only JSON. [onProgress] is told the
+  /// part sent, from 0 to 1. A refusal throws a [SuperTabFailure] carrying the
+  /// backend's code, worded as Desktop's `superTabUploadRefusal`.
+  Future<Map<String, dynamic>> uploadSwarmAttachment({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    final body = multipartFileBody(
+      fields: {'conversationId': conversationId},
+      field: 'file',
+      filename: name,
+      fileContentType: mime,
+      file: bytes,
+      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final res = await _dio.post(
+      '/api/super-tabs/${Uri.encodeComponent(tabId)}/attachments',
+      data: body.bytes,
+      cancelToken: cancel,
+      onSendProgress: (sent, total) {
+        if (total > 0) onProgress(sent / total);
+      },
+      options: Options(
+        contentType: body.contentType,
+        // Ten megabytes on a phone connection; the chat's own watchdog gives
+        // up on an upload that stops moving.
+        sendTimeout: const Duration(minutes: 5),
+        receiveTimeout: const Duration(minutes: 1),
+      ),
+    );
+    final data = res.data;
+    if (res.statusCode == 200 && data is Map && data['success'] == true) {
+      return Map<String, dynamic>.from(data['data'] as Map);
+    }
+    final error = data is Map ? data['error'] : null;
+    final code = error is Map ? error['code'] as String? : null;
+    final message = error is Map ? error['message'] as String? : null;
+    throw SuperTabFailure(
+      code ?? 'UPLOAD_FAILED',
+      message ??
+          switch (code) {
+            'FORBIDDEN' => 'You can’t send files in this conversation.',
+            'ATTACHMENT_TOO_LARGE' => 'That file is over 10 MB.',
+            _ => 'Could not upload the file. Try again.',
+          },
+      statusCode: res.statusCode ?? 0,
+    );
+  }
+
+  // -- Swarm avatars (backend only: the computer a Swarm call goes through carries text) --
+
+  /// Uploads [png] as an avatar picture of the Swarm [tabId] and answers the
+  /// upload's id — `POST /api/super-tabs/:tabId/avatars` (backend
+  /// superTabs/profile.ts); a `member.avatar` command then makes it the
+  /// person's.
+  Future<String> uploadSwarmAvatar(String tabId, Uint8List png) async {
+    final body = multipartFileBody(
+      field: 'file',
+      filename: 'avatar.png',
+      fileContentType: 'image/png',
+      file: png,
+      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final res = await _dio.post(
+      '/api/super-tabs/${Uri.encodeComponent(tabId)}/avatars',
+      data: body.bytes,
+      options: Options(contentType: body.contentType),
+    );
+    final data = unwrapApiResponse(res) as Map<String, dynamic>;
+    return (data['avatar'] as Map<String, dynamic>)['id'] as String;
   }
 }
 

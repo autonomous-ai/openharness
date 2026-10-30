@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,10 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
+import 'machine_status.dart' show superTabAgo;
+import 'message_link.dart';
+import 'message_link_preview.dart';
+import 'message_more_menu.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
@@ -21,6 +27,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.message,
     required this.author,
     required this.onReturnToComposer,
+    this.card,
     required this.receipts,
     this.agent,
     this.person,
@@ -38,9 +45,34 @@ class SuperTabMessageRow extends StatefulWidget {
     this.readerId = '',
     this.reactorName,
     this.onReact,
+    this.proposalOwner,
+    this.headerStatus,
+    this.dimmed = false,
+    this.thread,
+    this.threadUnread = false,
+    this.onOpenThread,
+    this.link,
+    this.linkTarget,
+    this.onOpenLink,
   });
 
   final SuperTabMessage message;
+
+  /// The live card [message] is (live_card.dart), drawn in place of its pull
+  /// request links; null for a plain message.
+  final Widget? card;
+
+  /// The thread [message] is the root of, once it has a reply.
+  final SuperTabThread? thread;
+  final bool threadUnread;
+
+  /// Opens [message]'s thread: from its reply line, or from an also-sent
+  /// reply's mark.
+  final VoidCallback? onOpenThread;
+
+  /// The person a Buddy's proposal speaks for, by name, from the server's tag
+  /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
+  final String? proposalOwner;
 
   /// The names of the people [message] tags.
   final List<String> mentions;
@@ -65,12 +97,25 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+  final Widget? headerStatus;
+
+  /// Its text and files are faint while it sends; its status line is not.
+  final bool dimmed;
 
   /// The reader, whose own reactions are marked; [reactorName] names the
   /// others. Without [onReact] the counts only show.
   final String readerId;
   final SuperTabReactorName? reactorName;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+
+  /// This message's link, for the More menu's Copy link to message. Without
+  /// it the menu is not offered.
+  final SwarmMessageLink? link;
+
+  /// What a message link in the text points at for the reader, and how to
+  /// open it. Without them a link stays plain text.
+  final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
+  final ValueChanged<SwarmMessageLink>? onOpenLink;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -144,6 +189,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(
         content: Text('Message copied'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _copyLink(SwarmMessageLink link) async {
+    await Clipboard.setData(ClipboardData(text: link.url));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Link copied'),
         duration: Duration(seconds: 2),
       ),
     );
@@ -303,7 +359,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             size: 14,
                                           ),
                                         ),
-                                      if (message.createdAt case final time?)
+                                      if (widget.headerStatus
+                                          case final status?)
+                                        status
+                                      else if (message.createdAt
+                                          case final time?)
                                         Tooltip(
                                           message: MaterialLocalizations.of(
                                             context,
@@ -320,7 +380,28 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                                 const SizedBox(height: 4),
                               ],
-                              if (message.replyTo != null)
+                              if (message.threadReply &&
+                                  widget.onOpenThread != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: SuperTabLink(
+                                    key: ValueKey(
+                                      'super-thread-also-${message.id}',
+                                    ),
+                                    label: 'Replied in thread, open thread',
+                                    onTap: widget.onOpenThread!,
+                                    child: Text(
+                                      'Replied in thread',
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
+                              // A thread reply sits under its root, so it
+                              // quotes nothing; an older reply keeps its quote.
+                              if (message.replyTo != null &&
+                                  !message.threadReply)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 8),
                                   child: SuperTabReplyPreview(
@@ -338,6 +419,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         : () => widget.onOpenReply!(context),
                                   ),
                                 ),
+                              if (widget.proposalOwner case final owner?)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: Container(
+                                    key: const ValueKey('super-proposal-label'),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: grid.AppDesktop.controlGap,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: DesktopChrome.rim,
+                                      ),
+                                      borderRadius: BorderRadius.circular(
+                                        DesktopChrome.rowRadius,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      "Proposal · on $owner's behalf",
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
                               if (message.terminalNote case final note?)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 6),
@@ -347,33 +452,59 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               if (message.text.isNotEmpty)
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 960,
-                                  ),
-                                  child: SuperTabMessageText(
-                                    message.text,
-                                    references: widget.references,
-                                    onOpenGroup: widget.onOpenGroup,
-                                    mentions: widget.mentions,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 960,
+                                    ),
+                                    child: SuperTabMessageText(
+                                      message.text,
+                                      references: widget.references,
+                                      onOpenGroup: widget.onOpenGroup,
+                                      mentions: widget.mentions,
+                                    ),
                                   ),
                                 ),
                               if (message.attachments.isNotEmpty)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    top: message.text.isEmpty ? 0 : 8,
-                                  ),
-                                  child: SuperTabAttachmentChips(
-                                    message.attachments,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      top: message.text.isEmpty ? 0 : 8,
+                                    ),
+                                    child: SuperTabAttachments(
+                                      message.attachments,
+                                    ),
                                   ),
                                 ),
-                              SuperTabPullRequestLinks(message.text),
+                              widget.card ??
+                                  SuperTabPullRequestLinks(message.text),
+                              if (widget.linkTarget case final resolve?)
+                                if (widget.onOpenLink case final open?)
+                                  SuperTabMessageLinkPreviews(
+                                    message.text,
+                                    resolve: resolve,
+                                    onOpen: open,
+                                  ),
                               SuperTabReactionBar(
                                 message: message,
                                 readerId: widget.readerId,
                                 nameOf: widget.reactorName ?? (_, id) => id,
                                 onReact: widget.onReact,
                               ),
+                              if ((widget.thread, widget.onOpenThread) case (
+                                final thread?,
+                                final open?,
+                              ))
+                                SuperTabThreadLine(
+                                  key: ValueKey(
+                                    'super-thread-line-${message.id}',
+                                  ),
+                                  thread: thread,
+                                  unread: widget.threadUnread,
+                                  onOpen: open,
+                                ),
                               ...widget.receipts,
                             ],
                           ),
@@ -418,6 +549,23 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 onPressed: _copy,
                               ),
                             ),
+                            if (widget.link case final link?)
+                              fingerTarget(
+                                enabled: phone,
+                                SuperTabMessageMoreMenu(
+                                  key: ValueKey(
+                                    'super-message-more-${message.id}',
+                                  ),
+                                  actions: [
+                                    (
+                                      label: 'Copy link to message',
+                                      icon: AppIcons.link2,
+                                      onPressed: () =>
+                                          unawaited(_copyLink(link)),
+                                    ),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -498,6 +646,120 @@ class SuperTabMessageHighlight extends StatelessWidget {
       duration: const Duration(milliseconds: 400),
       color: on ? DesktopChrome.selection : Colors.transparent,
       child: child,
+    );
+  }
+}
+
+/// A quiet link in a message: a hand cursor, reached by Tab and pressed with
+/// Enter or Space, and a button with [label] to assistive technology. Focus
+/// draws the shared rim, reserved at rest so it never moves the words.
+class SuperTabLink extends StatefulWidget {
+  const SuperTabLink({
+    super.key,
+    required this.onTap,
+    required this.label,
+    required this.child,
+  });
+
+  final VoidCallback onTap;
+  final String label;
+  final Widget child;
+
+  @override
+  State<SuperTabLink> createState() => _SuperTabLinkState();
+}
+
+class _SuperTabLinkState extends State<SuperTabLink> {
+  var _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final radius = BorderRadius.circular(DesktopChrome.controlRadius);
+    return Semantics(
+      button: true,
+      label: widget.label,
+      child: InkWell(
+        onTap: widget.onTap,
+        onFocusChange: (focused) => setState(() => _focused = focused),
+        mouseCursor: SystemMouseCursors.click,
+        borderRadius: radius,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        splashFactory: NoSplash.splashFactory,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            border: Border.all(
+              color: _focused ? DesktopChrome.focusRing : Colors.transparent,
+              width: grid.AppDesktop.focusWidth,
+            ),
+          ),
+          child: ExcludeSemantics(child: widget.child),
+        ),
+      ),
+    );
+  }
+}
+
+/// The line under a thread's root: who replied, how many replies, and when
+/// the last came. Bold while the thread has a reply the reader has not seen.
+class SuperTabThreadLine extends StatelessWidget {
+  const SuperTabThreadLine({
+    super.key,
+    required this.thread,
+    required this.unread,
+    required this.onOpen,
+  });
+
+  final SuperTabThread thread;
+  final bool unread;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
+    final last = thread.lastAt;
+    return Padding(
+      padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+      child: SuperTabLink(
+        label: unread ? '$count, unread' : count,
+        onTap: onOpen,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final author in thread.authors) ...[
+              SuperTabAvatar(
+                identity: '${author['kind']}:${author['id']}',
+                name: author['kind'] == 'agent'
+                    ? (author['displayName'] ?? author['name'] ?? 'Agent')
+                          as String
+                    : superTabPersonName(author['name'] as String? ?? ''),
+                size: grid.AppDesktop.iconSize,
+                pattern: author['kind'] == 'agent',
+              ),
+              const SizedBox(width: grid.AppDesktop.menuInset),
+            ],
+            Text(
+              count,
+              key: ValueKey('super-thread-count-${thread.id}'),
+              style: DesktopChrome.control(color: DesktopChrome.accent)
+                  .copyWith(
+                    fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                  ),
+            ),
+            if (last != null) ...[
+              const SizedBox(width: grid.AppDesktop.controlGap),
+              Text(
+                'Last reply ${superTabAgo(DateTime.now().difference(last))}',
+                style: DesktopChrome.metadata(),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

@@ -560,9 +560,20 @@ class SystemNotifications {
   /// in the Swift code; [postNotice] puts the device's key in the `agentId` slot.
   static const deviceNoticeMachine = '@device';
 
-  /// News about the ACCOUNT rather than an agent — a device joined it. The same switch and the same
-  /// rules as [post]; a click on it opens that device ([devicePub]) when given, else nothing.
-  void postNotice({required String id, required String title, required String body, String? devicePub}) {
+  /// What a Swarm tag's notice puts in the `machineId` slot; the `agentId` slot holds
+  /// `<swarm tab id>/<tag id>` ([mention]), which the click opens (swarm_screen.dart).
+  static const mentionNoticeMachine = '@mention';
+
+  /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged. The same
+  /// switch and the same rules as [post]; a click on it opens that device ([devicePub]) or that tag
+  /// in its Swarm ([mention]) when given, else nothing.
+  void postNotice({
+    required String id,
+    required String title,
+    required String body,
+    String? devicePub,
+    ({String tabId, String mentionId})? mention,
+  }) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
     _ordered(
@@ -572,8 +583,14 @@ class SystemNotifications {
             id: id,
             title: title,
             body: body,
-            machineId: devicePub == null ? '' : deviceNoticeMachine,
-            agentId: devicePub ?? '',
+            machineId: mention != null
+                ? mentionNoticeMachine
+                : devicePub == null
+                ? ''
+                : deviceNoticeMachine,
+            agentId: mention != null
+                ? '${mention.tabId}/${mention.mentionId}'
+                : devicePub ?? '',
           )
           .then((answer) {
             if (answer != NotificationPermission.unknown) {

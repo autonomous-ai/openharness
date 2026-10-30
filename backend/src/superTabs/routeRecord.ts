@@ -1,5 +1,7 @@
 /** What `harness super-tab route` records (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
 import { z } from 'zod'
+import type { RouteRun } from './costs/attempts.js'
+import { JOB_KINDS } from './evidence/jobKind.js'
 
 const level = z.enum(['low', 'medium', 'high'])
 const candidateId = z.string().regex(/^c\d{1,2}$/)
@@ -37,7 +39,9 @@ export const routeCandidateSchema = z.object({
 }).strict().refine(c => (c.kind === 'member') === !!c.agentId, 'Members name their agent; new agents do not.')
 export const routeRecordSchema = z.object({
   assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300),
-    size: z.enum(['small', 'medium', 'large']).optional() }).strict(),
+    size: z.enum(['small', 'medium', 'large']).optional(),
+    /** The job's kind the Lead gave (`ui`, `docs`; `review` for a review), what attempts are compared by (costs/read.ts). */
+    kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional() }).strict(),
   candidates: z.array(routeCandidateSchema).min(1).max(12),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),
@@ -52,6 +56,12 @@ export const routeRecordSchema = z.object({
   why: z.string().trim().min(1).max(300),
   /** How much context Jev was given and which sources could not be read, so pick quality can later be compared with completeness. */
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
+  /** The step up this attempt is (stepUp.ts), written by the server from its group, never taken from the route. */
+  stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
+  /** Why a review runs on its Builder's own engine (rules.ts sameEngineReview), written by the server, never taken from the route. */
+  sameEngine: z.string().min(1).max(300).optional(),
+  /** The job's kind from the fixed list (evidence/jobKind.ts), written by the server from its group, never taken from the route. */
+  jobKind: z.enum(JOB_KINDS).optional(),
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
@@ -80,6 +90,8 @@ export interface RouteOverride { by: 'lead' | 'person'; actorKey: string; candid
 export interface RouteDecision {
   id: string; conversationId: string; record: RouteRecord
   final: RouteFinal | null; override: RouteOverride | null; assignmentId: string | null; outcome: string | null
+  /** Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (costs/attempts.ts). */
+  run: RouteRun | null
 }
 export type RouteDecisionEffect =
   | { op: 'create'; id: string; conversationId: string; record: RouteRecord }

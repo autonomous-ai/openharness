@@ -18,37 +18,100 @@ class SuperTabLeaderboard {
   SuperTabLeaderboard.fromJson(Map<String, dynamic> json)
     : projectId = json['projectId'] as String? ?? '',
       week = _int(json['week']),
-      goal = SuperTabTeamGoal.fromJson(_map(json['goal'])),
       people = _list(json['people']).map(SuperTabPersonScore.fromJson).toList(),
-      waiting = SuperTabWaiting.fromJson(_map(json['waiting']));
+      waiting = SuperTabWaiting.fromJson(_map(json['waiting'])),
+      agents = _list(json['agents']).map(SuperTabAgentScore.fromJson).toList(),
+      byModel = _list(json['byModel'])
+          .map(SuperTabModelScore.fromJson)
+          .toList();
 
   final String projectId;
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
-  final SuperTabTeamGoal goal;
 
   /// Most points first.
   final List<SuperTabPersonScore> people;
   final SuperTabWaiting waiting;
+
+  /// The project's PM and Buddies, most points first; empty from a server
+  /// before them.
+  final List<SuperTabAgentScore> agents;
+
+  /// Every model that worked the week, most points first; empty from a
+  /// server before them.
+  final List<SuperTabModelScore> byModel;
 }
 
-class SuperTabWeekGoal {
-  SuperTabWeekGoal.fromJson(Map<String, dynamic> json)
-    : shipped = _int(json['shipped']),
+/// A permanent agent, the PM or a Buddy, scored by name like a person
+/// (Dee, 2026-10-29).
+class SuperTabAgentScore {
+  SuperTabAgentScore.fromJson(Map<String, dynamic> json)
+    : agentId = json['agentId'] as String? ?? '',
+      displayName = json['displayName'] as String? ?? '',
+      buddy = json['kind'] == 'buddy',
+      personId = _text(json['personId']),
+      machineId = json['machineId'] as String? ?? '',
       points = _int(json['points']),
-      medianAskToShipMs = _optional(json['medianAskToShipMs']);
-  final int shipped, points;
-  final int? medianAskToShipMs;
+      rank = _int(json['rank']),
+      shipped = _int(json['shipped']);
+
+  final String agentId, displayName, machineId;
+
+  /// A Buddy, else the project's PM.
+  final bool buddy;
+
+  /// A Buddy's person; null for the PM.
+  final String? personId;
+
+  /// The PM's: requests of the groups it led that shipped; a Buddy's: groups
+  /// opened from its proposals that shipped.
+  final int points, rank, shipped;
 }
 
-class SuperTabTeamGoal {
-  SuperTabTeamGoal.fromJson(Map<String, dynamic> json)
-    : openRequests = _int(json['openRequests']),
-      thisWeek = SuperTabWeekGoal.fromJson(_map(json['thisWeek'])),
-      lastWeek = SuperTabWeekGoal.fromJson(_map(json['lastWeek']));
-  final int openRequests;
-  final SuperTabWeekGoal thisWeek, lastWeek;
+/// The temporary workers by what they ran on, never by agent (Dee,
+/// 2026-10-29).
+class SuperTabModelScore {
+  SuperTabModelScore.fromJson(Map<String, dynamic> json)
+    : engine = json['engine'] as String? ?? '',
+      model = _text(json['model']),
+      effort = _text(json['effort']),
+      grid = json['grid'] == true,
+      points = _int(json['points']),
+      rank = _int(json['rank']),
+      attempts = _int(json['attempts']),
+      shipped = _int(_map(json['shipped'])['count']),
+      medianAttemptMs = _optional(_map(json['shipped'])['medianAttemptMs']),
+      medianRequestMs = _optional(_map(json['shipped'])['medianRequestMs']),
+      reviewed = _int(_map(json['firstReview'])['reviewed']),
+      passed = _int(_map(json['firstReview'])['passed']),
+      reviews = _int(json['reviews']);
+
+  final String engine;
+
+  /// Null when the engine reported none; [effort] null for attempts recorded
+  /// before efforts were.
+  final String? model, effort;
+
+  /// Served on the Swarm's grid.
+  final bool grid;
+  final int points, rank, shipped;
+
+  /// This week's tasks it ran, never reviews; 0 from a server before them.
+  final int attempts;
+
+  /// Median time to ship from the shipping attempt's assignment, and from the
+  /// request's first assignment.
+  final int? medianAttemptMs, medianRequestMs;
+
+  /// This week's attempts with a first review on record, and how many passed.
+  final int reviewed, passed;
+
+  /// Review verdicts it gave.
+  final int reviews;
+
+  /// One key per row: engine, model and effort.
+  String get key => 'model-$engine-${model ?? ''}-${effort ?? ''}';
 }
 
 class SuperTabPersonScore {

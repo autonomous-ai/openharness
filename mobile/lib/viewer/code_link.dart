@@ -37,8 +37,10 @@ Future<PasswordLinkResult> linkWithCode({
   RelaySocketFactory socket = defaultRelaySocket,
   Duration timeout = const Duration(seconds: 50),
 }) async {
-  final uri = Uri.parse('$wsBaseUrl/api/web-ws')
-      .replace(queryParameters: {'autonomousEnv': autonomousEnv});
+  // It says what it is (`?client=`; backend lib/wsAttribution.ts, WebSocket roadmap Phase 0).
+  final uri = Uri.parse('$wsBaseUrl/api/web-ws').replace(
+    queryParameters: {'autonomousEnv': autonomousEnv, 'client': 'link'},
+  );
   final channel = socket(uri, [accessToken]);
   final run = CodeLinkRun(
     machineId: machineId,

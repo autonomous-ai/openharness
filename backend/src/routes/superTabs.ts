@@ -28,6 +28,7 @@ import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -47,9 +48,10 @@ const workspaceTransfer = z.object({ userId: id }).strict()
 const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
 const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
-const listQuery = z.object({ after: id.optional() }).strict()
+const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
+const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional() }).strict()
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
@@ -60,9 +62,16 @@ const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
+// A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
+const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+const noQuery = z.object({}).strict()
+// The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
+const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
-  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional() })
+  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
+  // One thread's root and replies, paged like the conversation.
+  thread: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })
@@ -75,7 +84,7 @@ const projectParams = tabParams.extend({ projectId: id })
 const refreshQuery = z.object({ refresh: z.literal('1').optional() })
 const approveBody = z.object({ scope: z.enum(['project', 'swarm']) }).strict()
 // What GitHub sends back: a sign-in's code and our state, and after an installation its id and action.
-const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(),
+const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(), error: z.string().max(128).optional(),
   installation_id: z.string().max(32).optional(), setup_action: z.string().max(32).optional() })
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -94,7 +103,7 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
 const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
-const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered']) }).strict()
+const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered', 'settled']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
@@ -133,21 +142,29 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js')])
+  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+    import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
+    import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries,
+      // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
+      hostsChanged: announceSwarmHostChanges,
+      // And each person in the Swarm, so their apps read it when told instead of every 3–15 s (WS Phase 2a).
+      swarmChanged: announceSwarmChanges,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
       // Its observer sockets may be on any instance.
-      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) } })
+      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) },
+      sessionsConfidential: sessions => { void tellSessionViewers(sessions) } })
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
@@ -216,7 +233,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, async () => {
       const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
       return projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
-        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository) },
+        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
+        approvedFor: async repository => {
+          const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
+          return project.others.filter(other => ids.includes(other.id)).map(other => other.name)
+        } },
         req.query.refresh === '1')
     }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
@@ -237,6 +258,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
     if (!request) return page('This link has expired', 'Go back to Harness and choose Approve again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
+    // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
+    // (local Team account run, 2026-10-28).
+    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was approved. Go back to Harness and choose Approve to try again.')
     if (!req.query.code || !signIn || !named) {
       return page('Harness is installed', 'Go back to Harness and choose Approve, so this project can use it.')
     }
@@ -246,8 +270,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
     }
     await approvals.approve(request, seen.login)
-    return page(`${named.fullName} approved`, request.scope === 'swarm'
-      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+    // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
+    const where = request.scope === 'swarm' ? 'every project in this Swarm'
+      : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
+    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
@@ -271,7 +297,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get('/api/super-tabs', updateRequired)
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
-    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
+    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after, req.query.mentions === '1')))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
   // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
@@ -433,9 +459,19 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
     (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
+    (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
+  app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof catchUpQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+    { preHandler: [validateParams(messageParams), validateQuery(catchUpQuery)] },
+    (req, reply) => respond(reply, () => store.catchUp(req.user!, req.params.tabId, req.params.conversationId, req.query.after)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
+  // What routed attempts cost and how they went over a period (superTabs/costs/read.ts).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof costsQuery> }>('/api/super-tabs/:tabId/costs',
+    { preHandler: [validateParams(tabParams), validateQuery(costsQuery)] },
+    (req, reply) => respond(reply, () => store.costSummary(req.user!, req.params.tabId, req.query.days, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecisions(req.user!, req.params.tabId, req.query.asAgentId)))

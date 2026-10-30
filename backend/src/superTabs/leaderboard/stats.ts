@@ -6,12 +6,15 @@
  */
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
-import { canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type Unblock } from './record.js'
+import { isBuddy } from '../buddies.js'
+import { agentProjectId, canReadProject, projectOf } from '../projects.js'
+import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { Leaderboard, Medal, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
+import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
+/** A reviewer model's point for each review verdict it gave (Lead, 2026-10-29). */
+export const REVIEW_POINTS = 1
 export const UNBLOCK_POINTS = 1
 const HOUR_MS = 3_600_000
 /** One more point per this many hours an item waited, up to UNBLOCK_MAX_WAIT_POINTS more: an answer is worth a ship at most
@@ -43,7 +46,10 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
   const shared = visible.filter(g => g.id !== project.leadConversationId)
   const requests = shared.filter(g => !g.reviewOf)
-  const landed = requests.filter(g => g.requesterId && g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
+  // of #2097: a group opened from a Buddy's proposal may name no requester).
+  const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  const landed = shippedRequests.filter(g => g.requesterId)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
@@ -92,7 +98,82 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
+    agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
+    byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
   }
+}
+
+/** The project's PM and Buddies with the requests each shipped this week: a PM by the groups it led when they shipped, a
+ *  Buddy by the groups opened from its proposals. One credited this week stays listed after it was removed or replaced,
+ *  as "Former PM" or "Former Buddy" once the Swarm no longer has it (full review of #2097). Builders and Reviewers are
+ *  counted by model instead (modelScores). */
+function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: Conversation[]): AgentScore[] {
+  const pmId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
+  const shipped = new Map<string, { kind: 'pm' | 'buddy'; count: number }>()
+  for (const a of state.agents) {
+    if (a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId)) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
+  }
+  const credit = (agentId: string, kind: 'pm' | 'buddy') => {
+    const entry = shipped.get(agentId) ?? { kind, count: 0 }
+    entry.count++
+    shipped.set(agentId, entry)
+  }
+  for (const g of shippedThisWeek) {
+    // The lead recorded when it shipped; a request shipped before that was recorded, its lead now.
+    const ledBy = g.ledger?.shippedLeadId !== undefined ? g.ledger.shippedLeadId : g.leadId
+    if (ledBy) credit(ledBy, 'pm')
+    if (g.ledger?.proposal) credit(g.ledger.proposal.buddyId, 'buddy')
+  }
+  const scored = [...shipped].map(([agentId, { kind, count }]) => {
+    // Who it is now only while it is this project's: an agent id stays the same when its terminal is added again
+    // elsewhere, and a private project's names and owners are not this board's to show (review of #2128).
+    const a = state.agents.find(agent => agent.id === agentId && agentProjectId(state, agent) === projectId)
+    return { agentId, displayName: a ? a.displayName ?? a.name : kind === 'pm' ? 'Former PM' : 'Former Buddy', kind,
+      personId: a?.buddyOf?.personId ?? null, machineId: a?.machineId ?? '', points: count * SHIPPED_POINTS, shipped: count }
+  }).sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
+  return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
+}
+
+/** Every model that worked this week: its attempts, the requests they shipped, their first reviews, and the review
+ *  verdicts it gave. A request ships on its last attempt before it shipped. */
+function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], inWeek: (at: number) => boolean): ModelScore[] {
+  const rows = new Map<string, ModelScore & { attemptMs: number[]; requestMs: number[] }>()
+  const row = (on: RanOn) => {
+    const key = JSON.stringify([on.engine, on.model, on.effort ?? null])
+    let entry = rows.get(key)
+    if (!entry) rows.set(key, entry = { engine: on.engine, model: on.model, effort: on.effort ?? null, grid: !!on.grid, points: 0, rank: 0,
+      attempts: 0, shipped: { count: 0, medianAttemptMs: null, medianRequestMs: null }, firstReview: { reviewed: 0, passed: 0 }, reviews: 0,
+      attemptMs: [], requestMs: [] })
+    return entry
+  }
+  for (const group of shippedThisWeek) {
+    // The attempt recorded when it shipped; a request shipped before that was recorded, its last attempt by then.
+    const ledger = group.ledger!, shippedAt = ledger.shippedAt!, runs = (ledger.runs ?? []).filter(r => r.at <= shippedAt)
+    const last: RanOn & { at: number } | undefined = ledger.shippedBy ?? runs.at(-1)
+    if (!last) continue
+    const entry = row(last)
+    entry.shipped.count++
+    // Merged before its attempt started: shipped at once, never in negative time (Lead, 2026-10-29).
+    entry.attemptMs.push(Math.max(0, shippedAt - last.at))
+    const first = firstAssignedAt(ledger)
+    if (first != null) entry.requestMs.push(Math.max(0, shippedAt - first))
+  }
+  for (const group of requests) {
+    for (const run of group.ledger?.runs ?? []) {
+      if (!inWeek(run.at)) continue
+      const entry = row(run)
+      entry.attempts++
+      if (run.firstReview === undefined) continue
+      entry.firstReview.reviewed++
+      if (run.firstReview) entry.firstReview.passed++
+    }
+    for (const counted of group.ledger?.reviews ?? []) if (inWeek(counted.week)) row(counted).reviews += counted.count
+  }
+  const scored = [...rows.values()].map(({ attemptMs, requestMs, ...entry }) => ({ ...entry,
+    points: entry.shipped.count * SHIPPED_POINTS + entry.reviews * REVIEW_POINTS,
+    shipped: { ...entry.shipped, medianAttemptMs: median(attemptMs), medianRequestMs: median(requestMs) } }))
+    .sort((a, b) => b.points - a.points || (a.model ?? '').localeCompare(b.model ?? '') || (a.effort ?? '').localeCompare(b.effort ?? ''))
+  return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
 }
 
 /** One point per answer, and more the longer its item waited, capped. */

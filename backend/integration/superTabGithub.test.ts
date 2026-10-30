@@ -56,7 +56,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   const log = { warn: vi.fn() }
   const tokens = new GitHubTokens(fakeApp(key.privateKey, github), new MemoryTokenCache(), { log, secret: randomBytes(32) })
   const releases: Promise<void>[] = []
-  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) } })
+  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) },
+    workStarted: (tab, started) => { releases.push(tokens.resume(tab, started)) } })
   const app: FastifyInstance = Fastify()
   app.setErrorHandler(errorHandler)
   app.addHook('onRequest', async (request, reply) => {
@@ -74,6 +75,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
     approved: async (_env, tabId, projectId, repository) => options.approveAll !== false
       || approved.some(a => a.tabId === tabId && a.repository === repository.toLowerCase() && (a.scope === 'swarm' || a.projectId === projectId)),
     approve: async (request, login) => { approved.push({ ...request, login }) },
+    approvedProjects: async (_env, tabId, repository) => approved
+      .filter(a => a.tabId === tabId && a.repository === repository.toLowerCase() && a.scope === 'project').map(a => a.projectId),
   }
   await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
@@ -225,7 +228,8 @@ describe('the GitHub token endpoint', () => {
 describe('a queued start\'s preparation token', () => {
   /** The host's pool rows, now each Swarm's `pool` in the host form (design 4.10), in the shape the old pools route answered. */
   const hostPools = async (env: Env) => {
-    const response = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/changes?full=1', headers: { authorization: `Bearer ${host.sub}` } })
+    // gh-pool is a Team machine (`queued`): its host reads are its team session's.
+    const response = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/changes?full=1', headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' } })
     const rows = (response.json().data.tabs as Array<{ pool: unknown }>).flatMap(tab => tab.pool ? [tab.pool] : [])
     return { json: () => ({ data: rows }) }
   }
@@ -242,22 +246,31 @@ describe('a queued start\'s preparation token', () => {
       await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, contributor)
     }
     await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
-    const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
-    if (contributor === owner) await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
-    else {
+    if (contributor === owner) {
+      const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
+      await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
+    } else {
       // Another person's project runs only on a Team machine (#1694): this one is used only for agents (`harness team on`).
       const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
       await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
       onTestFinished(async () => { await db.machine.update({ where: { machineId }, data: { computerId: null, sessionKind: null } }) })
       const team: AuthUser = { ...contributor, harnessSessionId: `team-${machineId}`, harnessSessionKind: 'team', harnessComputerId: computerId }
+      // Its host routes take its team session alone (security review 2 of #2089): `prepare` signs in as it.
+      if (!users.some(u => u.sub === team.sub && u.harnessSessionKind === 'team')) {
+        users.push(team)
+        onTestFinished(() => { users.splice(users.indexOf(team), 1) })
+      }
+      const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
   }
-  const prepare = (env: Env, tab: string, startId: string, machineId = 'gh-pool', user = host, payload: Record<string, unknown> = {}) => env.app.inject({ method: 'POST',
-    url: `/api/super-tabs/hosts/${machineId}/starts/${tab}/${startId}/github-token`, headers: { authorization: `Bearer ${user.sub}` }, payload })
+  /** As [user]'s Harness Team account by default on `gh-pool`, the Team machine `queued` makes for another person's start. */
+  const prepare = (env: Env, tab: string, startId: string, machineId = 'gh-pool', user = host, payload: Record<string, unknown> = {},
+    team = user === host && machineId === 'gh-pool') => env.app.inject({ method: 'POST',
+    url: `/api/super-tabs/hosts/${machineId}/starts/${tab}/${startId}/github-token`, headers: { authorization: `Bearer ${user.sub}`, ...(team ? { 'x-test-team': '1' } : {}) }, payload })
 
   it('gives the host of another person\'s start a token that only reads the project\'s repository, and says whom the work is for', async () => {
     const env = await fresh()
@@ -310,6 +323,11 @@ describe('a queued start\'s preparation token', () => {
     const { authorizeUrl, installUrl } = asked.json().data as { authorizeUrl: string; installUrl: string }
     expect(installUrl).toMatch(/\/installations\/new\?state=/)
     const state = new URL(authorizeUrl).searchParams.get('state')!
+    // The state is signed, not sealed, and goes to GitHub in the address: ids and the repository only, never the project's
+    // name (privacy review of #1980).
+    const carried = JSON.parse(Buffer.from(state.split('.')[0]!, 'base64url').toString())
+    expect(Object.keys(carried).sort()).toEqual(['autonomousEnv', 'exp', 'projectId', 'repository', 'scope', 'tabId', 'userId'])
+    expect(decodeURIComponent(authorizeUrl + installUrl)).not.toContain('Pool')
     // Someone who cannot push is told so, and nothing is approved.
     push = false
     const refused = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
@@ -319,6 +337,8 @@ describe('a queued start\'s preparation token', () => {
     const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(done.statusCode).toBe(200)
     expect(done.body).toContain('example/app approved')
+    // The page names the project it was approved for (local Team account run, 2026-10-28: 'This project can now use it').
+    expect(done.body).toContain('Teammates&#39; agents in Pool can now push to it.')
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
     expect((await prepare(env, tab, startId)).statusCode).toBe(200)
     // A forged or missing state, or an installation without a sign-in, approves nothing.
@@ -326,6 +346,79 @@ describe('a queued start\'s preparation token', () => {
     const installed = await env.app.inject({ method: 'GET', url: `/api/github/callback?installation_id=9&setup_action=install&state=${encodeURIComponent(state)}` })
     expect(installed.body).toContain('Harness is installed')
     expect(env.approved).toHaveLength(1)
+  })
+
+  it('says nothing was approved when the person cancels GitHub\'s sign-in', async () => {
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await queued(env)
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+    const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+    // GitHub sends a person who chose Cancel back with an error and no code (its web application flow).
+    const cancelled = await env.app.inject({ method: 'GET',
+      url: `/api/github/callback?error=access_denied&error_description=The+user+has+denied+your+application+access.&state=${encodeURIComponent(state)}` })
+    expect(cancelled.statusCode).toBe(200)
+    expect(cancelled.body).toContain('Sign-in was cancelled')
+    expect(cancelled.body).toContain('Nothing was approved. Go back to Harness and choose Approve to try again.')
+    expect(cancelled.body).not.toContain('Harness is installed')
+    expect(env.approved).toEqual([])
+  })
+
+  // Local Team account run, 2026-10-28: a second project on a repository already approved for another asked again with no hint.
+  it('names the reader\'s other projects the repository is approved for, when it is not approved for this one', async () => {
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await working(env)
+    const invited = await env.run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' } as Command)
+    await env.run(tab, { type: 'invite.accept', inviteId: invited.result.inviteId as string } as Command, host)
+    const project = async (name: string, visibility: 'public' | 'private') => {
+      const made = (await env.run(tab, { type: 'project.create', name, visibility, brief: '' } as Command)).result
+      await env.run(tab, { type: 'agent.add', conversationId: made.conversationId, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+        configuration: config, lead: true, project: { cwd: `/work/${name}`, repositoryUrl: 'https://github.com/example/app.git' } } as Command)
+      return String(made.projectId)
+    }
+    const docs = await project('Docs', 'public'), secret = await project('Secret', 'private')
+    const approve = async (projectId: string) => {
+      const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/${projectId}/github/approve`,
+        headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+      const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+      expect((await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })).statusCode).toBe(200)
+    }
+    await approve('lead')
+    await approve(secret)
+    const read = async (user: AuthUser, projectId: string) => (await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/${projectId}/github`,
+      headers: { authorization: `Bearer ${user.sub}` } })).json().data
+    expect(await read(owner, docs)).toMatchObject({ state: 'not-approved', repository: 'example/app', approvedFor: ['Pilot', 'Secret'] })
+    // A teammate who cannot open Secret reads only Pilot.
+    expect(await read(host, docs)).toMatchObject({ state: 'not-approved', approvedFor: ['Pilot'] })
+    // An approved project says nothing of the others.
+    expect(await read(owner, 'lead')).not.toHaveProperty('approvedFor')
+  })
+
+  // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
+  // so after resuming it was refused GitHub tokens for 70 minutes.
+  it('gives a task resumed after a usage limit a fresh token, while the one from before the loss stays revoked', async () => {
+    const env = await fresh()
+    const { tab, group, worker, assignmentId } = await working(env)
+    const before = await ask(env, tab, worker)
+    expect(before.statusCode, before.body).toBe(200)
+    const resetAt = new Date(Date.now() + 1500).toISOString()
+    await env.run(tab, { type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt } as Command, host, worker)
+    await env.settled()
+    expect(env.github.revoked).toContain(before.json().data.token)
+    const lostAt = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.lost!.at
+    await new Promise(done => setTimeout(done, Date.parse(resetAt) - Date.now() + 50))
+    await env.run(tab, { type: 'work.resume', conversationId: group, assignmentId, lostAt } as Command, host, worker)
+    await env.settled()
+    const after = await ask(env, tab, worker)
+    expect(after.statusCode, after.body).toBe(200)
+    expect(after.json().data.token).not.toBe(before.json().data.token)
+    expect(env.github.issued.has(before.json().data.token)).toBe(false)
   })
 
   it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
@@ -351,7 +444,9 @@ describe('a queued start\'s preparation token', () => {
     expect((await prepare(env, tab, startId, 'gh-host-mini')).statusCode).toBe(403)
     expect((await prepare(env, tab, 'missing-start')).statusCode).toBe(404)
     expect((await prepare(env, tab, startId, 'gh-pool', host, { machineId: 'gh-pool' })).statusCode).toBe(400)
-    const hostRun = (command: Command) => env.store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'gh-pool')
+    // gh-pool is a Team machine (`queued`): its team session hosts it.
+    const team = users.find(u => u.sub === host.sub && u.harnessSessionKind === 'team')!
+    const hostRun = (command: Command) => env.store.execute(team, tab, { operationId: randomUUID(), command }, undefined, 'gh-pool')
     await hostRun({ type: 'agent.startDispatch', startId } as Command)
     await hostRun({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config } as Command)
     const settled = await prepare(env, tab, startId)

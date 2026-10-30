@@ -26,6 +26,7 @@ import 'swarm_state_test.dart' show MemoryStore;
 /// What would have reached the operating system.
 class ShownNotices implements SystemNotifier {
   final shown = <({String title, String body})>[];
+  final routes = <(String, String)>[];
   @override
   bool get supported => true;
   @override
@@ -44,6 +45,7 @@ class ShownNotices implements SystemNotifier {
     required String agentId,
   }) async {
     shown.add((title: title, body: body));
+    routes.add((machineId, agentId));
     return NotificationPermission.granted;
   }
 
@@ -171,15 +173,66 @@ void main() {
     });
   });
 
+  group('a fresh check of one tag', () {
+    Future<(ConversationServer, SuperTabController)> swarm() async {
+      final server = ConversationServer()..tag('message-1');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      return (server, c);
+    }
+
+    test('says yes from a read that lists it, and shows that read', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      expect(tags.waiting, isEmpty);
+      expect(await tags.waitingNow('mention-1'), isTrue);
+      expect(tags.waiting.map((m) => m.id), ['mention-1']);
+      expect(await tags.waitingNow('gone'), isFalse);
+    });
+
+    test('says no when the read fails, whatever was read before', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      await tags.load();
+      expect(tags.waiting.map((m) => m.id), ['mention-1']);
+      server.failMentions = true;
+      expect(await tags.waitingNow('mention-1'), isFalse);
+    });
+
+    test('says no when who may read what changed while it was read', () async {
+      final (server, c) = await swarm();
+      final tags = SuperTabMentions.of(c);
+      await tags.load();
+      server.holdMentions = Completer<void>();
+      final answer = tags.waitingNow('mention-1');
+      await pumpEventQueue();
+      server.parts.epoch++;
+      await c.refresh();
+      server.holdMentions!.complete();
+      server.holdMentions = null;
+      expect(await answer, isFalse);
+    });
+  });
+
   group('notification list', () {
-    /// The reader leaves the private chat their tag is in, and the Lead tags
-    /// them elsewhere: one still waits. Who may read what moved.
+    /// [swarm] with a workgroup the reader is tagged in.
+    ConversationServer taggedInPlans() {
+      final server = swarm();
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('plans', 'Plans'),
+        'projectId': 'lead',
+      });
+      return server..tag('message-1', conversationId: 'plans', text: 'Private');
+    }
+
+    /// The reader loses the workgroup their tag is in, and the Lead tags them
+    /// elsewhere: one still waits. Who may read what moved.
     void leaveChatTaggedElsewhere(ConversationServer server) {
-      final pmChat = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((g) => g['id'] == 'pm-chat');
-      pmChat['audience'] = {'people': <Object>[]};
-      server.mentions.removeWhere((m) => m['conversationId'] == 'pm-chat');
+      (server.state['conversations'] as List).removeWhere(
+        (g) => (g as Map)['id'] == 'plans',
+      );
+      server.mentions.removeWhere((m) => m['conversationId'] == 'plans');
       server.state['mentionsWaiting'] =
           (server.state['mentionsWaiting'] as int) - 1;
       server.tag('message-2', text: 'Here instead');
@@ -188,8 +241,7 @@ void main() {
 
     test('drops the tags of a conversation the reader leaves at once, '
         'while the new list is slow to come', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -213,8 +265,7 @@ void main() {
 
     test('a tag the reader can no longer read stays gone when the new list '
         'fails', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -312,6 +363,83 @@ void main() {
       expect(server.mentionReads - reads, 2);
       expect(mentions.waiting.map((m) => m.text), ['Second', 'First']);
       controller.dispose();
+    });
+
+    test('a Swarm change that leaves the count and digest alone reads no '
+        'tags and tells nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      for (var i = 0; i < 5; i++) {
+        final before = controller.lastChangedAt;
+        server.append('Unrelated $i');
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(controller.lastChangedAt, isNot(before));
+      }
+      expect(server.mentionReads - reads, 0);
+      expect(notified, 0);
+
+      // One answered and another arrived: the count stays, the digest moves.
+      server.mentions.single
+        ..['resolvedAt'] = '2026-10-24T05:10:00Z'
+        ..['resolvedBy'] = 'reply';
+      server.tag('m2', text: 'Second');
+      server.state['mentionsWaiting'] = 1;
+      server.state['mentionsDigest'] = 'digest-2';
+      await controller.refresh();
+      await pumpEventQueue();
+      // Waiting once and Earlier once.
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 1);
+      expect(mentions.waiting.map((m) => m.text), ['Second']);
+      expect(mentions.earlier.map((m) => m.text), ['First']);
+    });
+
+    test('a failed read is tried again on the next Swarm change, digest or '
+        'not', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      server.failMentions = true;
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNotNull);
+      server.failMentions = false;
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNull);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+    });
+
+    test('without a digest, every Swarm change while a tag waits reads the '
+        'lists again, and the same lists tell nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 0);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
     });
 
     test(
@@ -449,6 +577,38 @@ void main() {
       );
     });
 
+    testWidgets('a person’s tag shows their avatar and username', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..append('Ship it?')
+        ..tag('message-1', text: 'Ship it?', leadId: 'dee');
+      server.mentions.last['leadName'] = 'dee';
+      server.state['people'] = [
+        {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+        {
+          'id': 'dee',
+          'email': 'dee@example.com',
+          'role': 'collaborator',
+          'username': 'deedee',
+          'avatar': {'kind': 'preset', 'key': 'fox'},
+        },
+      ];
+      await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-mention-mention-1'));
+      expect(
+        find.descendant(of: row, matching: find.text('🦊')),
+        findsOneWidget,
+      );
+      // The name they go by now, though they were tagged under another.
+      expect(
+        find.descendant(of: row, matching: find.text('deedee')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('mark done moves the tag to Earlier and clears the count', (
       tester,
     ) async {
@@ -470,6 +630,48 @@ void main() {
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
         findsNothing,
       );
+    });
+
+    // A task with no worker is a quiet conversation: the state does not hold it until it is asked for (Dee, 2026-10-29).
+    testWidgets(
+      'a tag in a closed conversation loads it and opens at its message',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['conversations'] = [
+          ...server.state['conversations'] as List,
+          {...conversationFixture('group', 'Release'), 'archived': true},
+        ];
+        server.append('Builder could not start.', conversationId: 'group');
+        server.tag(
+          'message-1',
+          conversationId: 'group',
+          text: 'Builder could not start.',
+        );
+        final c = await showView(tester, server);
+        expect(c.snapshot?.conversation('group'), isNull);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'group');
+        expect(find.text('Builder could not start.'), findsWidgets);
+        // The read mark of the opened conversation saves a moment later.
+        await tester.pump(const Duration(seconds: 1));
+      },
+    );
+
+    testWidgets('a tag in a conversation the reader cannot read says so', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..tag('message-9', conversationId: 'private-chat', text: 'Hidden');
+      final c = await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Message unavailable'), findsOneWidget);
+      expect(c.selectedId, isNot('private-chat'));
     });
 
     testWidgets('a tag too far back says so and stays on the list', (
@@ -497,6 +699,156 @@ void main() {
       expect(find.text('Waiting'), findsOneWidget);
       expect(c.selectedId, isNot('group'));
     });
+
+    testWidgets('a tag newer than what was read earlier opens at its message', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      // Read earlier up to 100, then 100 more arrived while away.
+      await c.loadMessages('group');
+      expect(c.messages('group').last.id, 'message-100');
+      for (var i = 101; i <= 200; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-150', conversationId: 'group', text: 'Note 150');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-150')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a tag among more than a page that arrived since opens too', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      await c.loadMessages('group');
+      // More than a page since: the latest page (151..250) replaces what is
+      // held, and the tag is on the page before it.
+      for (var i = 101; i <= 250; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-120', conversationId: 'group', text: 'Note 120');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-120')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a tag far past a reader scrolled up opens at its message', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      await c.loadMessages('group');
+      // The reader had scrolled up there, then 600 arrived: more than the
+      // pages that join below them.
+      c.readingBack('group', true);
+      for (var i = 101; i <= 700; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-650', conversationId: 'group', text: 'Note 650');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'a tag opened while a poll reads the rows held below a reader scrolled '
+      'up still opens at its message',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['conversations'] = [
+          ...server.state['conversations'] as List,
+          conversationFixture('group', 'Release'),
+        ];
+        for (var i = 1; i <= 100; i++) {
+          server.append('Note $i', conversationId: 'group');
+        }
+        final c = await showView(tester, server);
+        await c.loadMessages('group');
+        c.readingBack('group', true);
+        for (var i = 101; i <= 700; i++) {
+          server.append('Note $i', conversationId: 'group');
+        }
+        // Three pages join below the reader; newer ones wait.
+        for (var poll = 0; poll < 3; poll++) {
+          await c.loadMessages('group');
+        }
+        expect(c.hasNewer('group'), isTrue);
+        server.tag('message-650', conversationId: 'group', text: 'Note 650');
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        // A background poll is reading the rows held when the tag opens.
+        final held = server.holdReads = Completer<void>();
+        final poll = c.loadMessages('group');
+        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.pump();
+        server.holdReads = null;
+        held.complete();
+        await poll;
+        await tester.pumpAndSettle();
+        expect(
+          find.text('This message is no longer in the conversation.'),
+          findsNothing,
+        );
+        expect(c.selectedId, 'group');
+        expect(
+          find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets('opening a tag shows its message with the reply box on it', (
       tester,
@@ -599,11 +951,16 @@ void main() {
       expect(superTabMentionNotice(system, web: true), isNull);
       final server = ConversationServer()..tag('message-1', text: 'Ship it?');
       superTabMentionNotice(system, web: false)!(
+        'tab-1',
         SuperTabMention.fromJson(server.mentions.single),
       );
       await pumpEventQueue();
       expect(notices.shown, [
         (title: 'Wren tagged you', body: 'web-project · Lead: Ship it?'),
+      ]);
+      // A click opens that tag in that Swarm (swarm_screen.dart).
+      expect(notices.routes, [
+        (SystemNotifications.mentionNoticeMachine, 'tab-1/mention-1'),
       ]);
     });
 
@@ -615,7 +972,7 @@ void main() {
         transport: (method, path, {body}) =>
             server.request(method, path, body: body),
         discoveryInterval: Duration.zero,
-        onMention: (mention) => arrived.add(mention.text),
+        onMention: (tab, mention) => arrived.add('$tab: ${mention.text}'),
       );
       addTearDown(client.dispose);
       client.bind('owner');
@@ -625,7 +982,7 @@ void main() {
       server.tag('message-2', text: 'New');
       await c.refresh();
       await pumpEventQueue();
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
     });
 
     test('a Swarm tab not opened yet counts and announces new tags', () async {
@@ -635,7 +992,7 @@ void main() {
       final client = SuperTabClient(
         storage: MemoryStore(),
         transport: (method, path, {body}) async =>
-            path == '/api/super-tabs/list'
+            Uri.parse(path).path == '/api/super-tabs/list'
             ? {
                 'tabs': [
                   {'id': 'tab', 'name': 'Pilot'},
@@ -645,7 +1002,7 @@ void main() {
             : server.request(method, path, body: body),
         discoveryInterval: Duration.zero,
         onTabs: (_, _) {},
-        onMention: (mention) => arrived.add(mention.text),
+        onMention: (tab, mention) => arrived.add('$tab: ${mention.text}'),
         onTagCounts: () => counted++,
       );
       addTearDown(client.dispose);
@@ -657,7 +1014,7 @@ void main() {
       server.tag('message-2', text: 'New');
       await client.refreshTabs();
       expect(client.waitingTags('tab'), 2);
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
       // Opened, the Swarm's own state counts, and nothing is announced twice.
       final c = await client.open('tab');
       await c.refresh();
@@ -666,7 +1023,7 @@ void main() {
       await client.refreshTabs();
       expect(server.mentionReads, reads);
       expect(client.waitingTags('tab'), 2);
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
     });
 
     test(
@@ -677,7 +1034,7 @@ void main() {
         final client = SuperTabClient(
           storage: MemoryStore(),
           transport: (method, path, {body}) async {
-            if (path == '/api/super-tabs/list') {
+            if (Uri.parse(path).path == '/api/super-tabs/list') {
               return {
                 'tabs': [
                   {'id': 'gone', 'name': 'Older'},

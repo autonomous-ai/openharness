@@ -10,6 +10,8 @@ import {
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
 import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
+import { createCircuitBreaker, CircuitOpenError, type CircuitBreaker } from './circuitBreaker.js'
+import { logger } from '../utils/logger.js'
 import { isHarnessAccessToken } from './harnessTokenFormat.js'
 import { scheduleGoogleSubjectFill } from './googleSubject.js'
 import type { SignInAttribution } from './signInAttribution.js'
@@ -39,7 +41,9 @@ export class SsoAuthError extends Error {
   constructor(
     message: string,
     readonly code: 'INVALID_TOKEN' | 'AUTH_SERVICE_UNAVAILABLE' | 'AUTONOMOUS_ENV_MISMATCH' | 'AUTONOMOUS_ENV_NOT_ALLOWED'
-      | 'TEAM_SESSION_LIMITED',
+      | 'TEAM_SESSION_LIMITED'
+      /** A Harness session SSO has not confirmed for longer than its grace (lib/ssoSession.ts): sign in again. */
+      | 'SIGN_IN_AGAIN',
     readonly requiredEnv?: AutonomousEnvironment,
   ) {
     super(message)
@@ -61,7 +65,47 @@ let sharedProfileStore: SharedProfileStore | null = null
 const profileCache = createSsoProfileCache({
   ttlMs: env.SSO_PROFILE_CACHE_TTL_MS,
   shared: () => sharedProfileStore,
+  staleGraceMs: env.SSO_PROFILE_STALE_GRACE_MS,
+  servesStale: (err) => err instanceof SsoAuthError && err.code === 'AUTH_SERVICE_UNAVAILABLE',
 })
+
+// Per account plane: after a few validations in a row that the profile service could not answer, the next ones fail
+// at once for a while instead of each waiting out the timeout (Stability 3.5). A rejected token is an answer.
+const SSO_BREAKER_FAILURES = 5
+const SSO_BREAKER_OPEN_MS = 10_000
+const ssoBreakers = new Map<AutonomousEnvironment, CircuitBreaker>()
+
+function ssoBreaker(autonomousEnv: AutonomousEnvironment): CircuitBreaker {
+  let breaker = ssoBreakers.get(autonomousEnv)
+  if (!breaker) {
+    breaker = createCircuitBreaker({
+      name: `sso-profile:${autonomousEnv}`,
+      failureThreshold: SSO_BREAKER_FAILURES,
+      openMs: SSO_BREAKER_OPEN_MS,
+      isFailure: (err) => !(err instanceof SsoAuthError) || err.code === 'AUTH_SERVICE_UNAVAILABLE',
+      onStateChange: (state) => {
+        if (state === 'open') logger.warn('[sso] profile service unreachable; failing fast', { autonomousEnv })
+        else logger.info('[sso] profile service circuit', { autonomousEnv, state })
+      },
+    })
+    ssoBreakers.set(autonomousEnv, breaker)
+  }
+  return breaker
+}
+
+async function validateWithBreaker(token: string, autonomousEnv: AutonomousEnvironment): Promise<SsoProfile> {
+  try {
+    return await ssoBreaker(autonomousEnv).run(() => fetchSsoProfile(token, autonomousEnv))
+  } catch (err) {
+    if (err instanceof CircuitOpenError) throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
+    throw err
+  }
+}
+
+/** Test seam. */
+export function resetSsoBreakers(): void {
+  ssoBreakers.clear()
+}
 
 export function useSharedSsoProfileStore(store: SharedProfileStore | null): void {
   sharedProfileStore = store
@@ -88,7 +132,10 @@ export async function fetchSsoProfile(
   const autonomousEnv = typeof autonomousEnvOrFetch === 'function' ? 'prod' : autonomousEnvOrFetch
   const fetchImpl = typeof autonomousEnvOrFetch === 'function' ? autonomousEnvOrFetch : (fetchOverride ?? fetch)
   const { ssoProfileUrl, ssoIdentityUrl } = autonomousEnvironmentConfig(autonomousEnv)
+  // One deadline for the whole validation: the profile fallback gets what the identity call left, not a second timeout.
+  const deadline = AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS)
   const ask = async (url: string): Promise<Response> => {
+    if (deadline.aborted) throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
     try {
       return await fetchImpl(url, {
         method: 'GET',
@@ -98,7 +145,7 @@ export async function fetchSsoProfile(
           Location: 'en-US',
           Authorization: `Bearer ${token}`,
         },
-        signal: AbortSignal.timeout(env.SSO_PROFILE_TIMEOUT_MS),
+        signal: deadline,
       })
     } catch {
       throw new SsoAuthError('SSO profile service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
@@ -233,7 +280,7 @@ export async function authenticateAccessToken(
     }
     return user
   }
-  const profile = await profileCache.resolve(token, autonomousEnv, () => fetchSsoProfile(token, autonomousEnv))
+  const profile = await profileCache.resolve(token, autonomousEnv, () => validateWithBreaker(token, autonomousEnv))
   const metadata = accessTokenMetadata(token)
   const email = normalizeUserEmail(profile.email)
   if (!email) throw new SsoAuthError('SSO profile service returned an invalid profile', 'AUTH_SERVICE_UNAVAILABLE')
@@ -262,7 +309,7 @@ export async function authenticateAccessToken(
     autonomousEnv,
     ...metadata,
     ...(signUpAttribution ? { signUpAttribution } : {}),
-  })
+  }, { existing })
   // Learn the account's Google subject while an Autonomous token is in hand, so a computer of the same
   // account signed in by QR can be answered later (lib/googleSubject.ts). Not awaited, never throws.
   // Here and not in the REST hook, because a daemon that only holds a socket authenticates here too.
