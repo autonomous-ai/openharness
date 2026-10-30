@@ -2542,6 +2542,13 @@ void main() {
         seenIdleHere(f);
         await f.show(tester);
         expect(f.activity(tester, 1), HarnessActivity.done);
+        // Its words say so too, as for work in review.
+        expect(f.glanceText(tester, 1), startsWith('In review'));
+        expect(
+          rowTooltip(tester, f, 1),
+          contains('Waiting for review on "Agents list marks"'),
+        );
+        expect(rowTooltip(tester, f, 1), isNot(contains('Assigned')));
         // Once a review finds problems, it is the Engineer's to fix again.
         (handed['assignment'] as Map)['reviewFoundAt'] =
             DateTime.now().millisecondsSinceEpoch;
@@ -2557,6 +2564,15 @@ void main() {
       (tester) async {
         final f = await fixture(tester);
         final server = DateTime.now();
+        // The first report read is only a baseline; the next one, newer,
+        // proves the server's time (review of #2281).
+        reports(f, at: server.subtract(const Duration(seconds: 10)));
+        await f.controller.refresh();
+        await f.show(
+          tester,
+          nativeState: false,
+          now: () => DateTime.now().add(const Duration(minutes: 5)),
+        );
         reports(f, at: server);
         // A minute and a half of its five left by the server's clock.
         (f.server.state['conversations'] as List).add(
@@ -2576,6 +2592,33 @@ void main() {
         );
         expect(f.activity(tester, 1), HarnessActivity.working);
         expect(f.lineText(tester, 1), 'Sidebar rescan fix · 3m');
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'a Swarm whose machines all went silent hours ago is read by this Mac\'s clock, not their last report',
+      (tester) async {
+        final f = await fixture(tester);
+        final now = DateTime.now();
+        reports(
+          f,
+          at: now.subtract(const Duration(hours: 2)),
+          progress: {'a1': Duration.zero},
+        );
+        (f.server.state['conversations'] as List).add(
+          task(
+            't1',
+            'Night digest',
+            'agent-1',
+            'working',
+            ago: const Duration(hours: 2, minutes: 1),
+          ),
+        );
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false);
+        expect(f.activity(tester, 1), isNot(HarnessActivity.working));
+        expect(f.lineText(tester, 1), 'Night digest · 2h');
         await f.close(tester);
       },
     );

@@ -16,8 +16,9 @@ import 'model.dart';
 const _lease = Duration(minutes: 5);
 const _quietRunning = Duration(minutes: 25);
 
-/// A hand-off, as the backend reads one (liveness.ts waitingForReview): a
-/// result saying it is ready for review and naming a revision.
+/// A hand-off, as the backend reads one: a result saying it is ready for
+/// review and naming a revision. A copy of READY_FOR_REVIEW and REVISION in
+/// backend/src/superTabs/liveness.ts (waitingForReview): change both together.
 final _readyForReview = RegExp(r'\bready for review\b', caseSensitive: false);
 final _revision = RegExp(
   r'(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b',
@@ -305,9 +306,10 @@ const _clockWindow = Duration(minutes: 10);
 
 /// [local] by the Swarm's clock, so a Mac whose clock runs fast or slow
 /// reads leases and ages as the Swarm does (review of #2281). Each machine
-/// report is stamped by the server on arrival, every few seconds, so the
-/// newest one is no later than the server's now: each reading is a lower
-/// bound of the offset, and the largest of the last 10 minutes is the best.
+/// report is stamped by the server on arrival, every few seconds, so a report
+/// newer than the last one seen is no later than the server's now: each such
+/// reading is a lower bound of the offset, and the largest of the last 10
+/// minutes is the best. Until one arrives, this Mac's own clock is used.
 DateTime superTabServerNow(SuperTabController c, DateTime local) {
   final clock = _clocks[c] ??= _ServerClock();
   int? newest;
@@ -316,12 +318,19 @@ DateTime superTabServerNow(SuperTabController c, DateTime local) {
       newest = math.max(newest ?? 0, at.toInt());
     }
   }
-  if (newest != null && newest != clock._evidence) {
-    clock._evidence = newest;
-    clock._samples.add((
-      at: local,
-      offset: DateTime.fromMillisecondsSinceEpoch(newest).difference(local),
-    ));
+  // The first report read may be hours old (every machine silent): it is
+  // only a baseline. A newer one arrived since, so it is fresh.
+  if (newest != null) {
+    final before = clock._evidence;
+    if (before == null || newest < before) {
+      clock._evidence = newest;
+    } else if (newest > before) {
+      clock._evidence = newest;
+      clock._samples.add((
+        at: local,
+        offset: DateTime.fromMillisecondsSinceEpoch(newest).difference(local),
+      ));
+    }
   }
   clock._samples.removeWhere(
     (s) => local.difference(s.at) > _clockWindow || s.at.isAfter(local),

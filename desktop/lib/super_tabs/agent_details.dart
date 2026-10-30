@@ -150,6 +150,9 @@ class SuperTabAgentInfo {
         'planned' => 'Assigned to "${group.title}"',
         'blocked' => 'Stuck on "${group.title}"',
         'review' => 'Waiting for review on "${group.title}"',
+        // Handed over with its status still working, as the Swarm reads it.
+        'working' when SuperTabAgentWork(group).handedOver =>
+          'Waiting for review on "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
         // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
         'lost' => 'Lost "${group.title}"',
