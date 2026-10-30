@@ -220,6 +220,26 @@ describe('what the route-decision list gives each reader', () => {
     expect(ids(got['the Secret project\'s worker'])).toHaveLength(100)
   })
 
+  it('checks access on the light groups of quiet conversations too: a closed Chat with PM, a Buddy chat and a private project\'s group, all dormant', async () => {
+    const w = await world(5)
+    // The conversations a reader must be kept out of are quiet, so they come through the light read, not the Swarm's active groups.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId, key: { $in: [w.peerChat, w.buddyChat, w.secretGroup] } },
+      u: { $set: { dormant: true, 'data.dormant': true } }, multi: true }] })
+    // Oldest first: the hidden ones on both sides of 600 secret decisions, so some are in the newest 500 and some only a fallback finds.
+    await decide(w, [[w.web, 3], [w.peerChat, 5], [w.buddyChat, 5], [w.secretGroup, 600], [w.peerChat, 5], [w.buddyChat, 5], [w.web, 3]],
+      [w.peerChat, w.buddyChat])
+    const got = await sameAnswers(w)
+    const seen = (name: string) => new Set((got[name]!.value as Array<{ conversationId: string }>).map(d => d.conversationId))
+    // The answers tell readers apart, or "same as before" proves little: the collaborator reads its Buddy chat and nobody the closed
+    // Chat with PM, which differ only in the kind and the audience the light group keeps.
+    expect(seen('a collaborator').has(w.buddyChat)).toBe(true)
+    for (const name of ['a collaborator', 'the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.peerChat), name).toBe(false)
+    for (const name of ['the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.buddyChat), name).toBe(false)
+    expect(seen('a member outside the private project').has(w.secretGroup)).toBe(false)
+    expect(seen('the owner').has(w.secretGroup)).toBe(true)
+    expect(JSON.stringify(got['a member outside the private project'])).not.toContain('hidden-text-of-')
+  })
+
   it('stops at one window of decisions when the Swarm holds no more than that, even if the reader reads fewer than a hundred of them', async () => {
     const w = await world(5)
     await decide(w, [[w.secretGroup, 60], [w.web, 40]], [w.secretGroup])
