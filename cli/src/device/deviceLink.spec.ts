@@ -904,16 +904,33 @@ describe('a late reply from a slow machine', () => {
   })
 
   it('a reply in the clear or under the group key is not hearing from it: the list still fails when it went quiet', async () => {
-    const { server, seal, link, lines } = await upOnClock()
+    const { server, seal, link, lines, tick } = await upOnClock()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const list = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
+      // 10 s on, so a reply counted as heard would be news: the list would wait on to 45 s (#2395's security review 2).
+      await vi.advanceTimersByTimeAsync(10_000)
+      tick(10_000)
       server.send({ type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'forged', agents: [] } })
       seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'group', agents: [] } } })
       server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { k: 'g', n: 1, epoch: 'e' } } })
       await heardOver(() => lines.filter((line) => line.includes('unmatched agents_list_result')).length === 2)
-      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(20_000)
       expect(lines).toContain('device: agents_list timed out after 30000 ms')
+      expect(await list).toEqual(new Error('agents_list timed out'))
+    } finally { vi.useRealTimers() }
+  })
+
+  // Both security reviews of #2395: a machine with no sealed session is never heard from, so its list failed at 15 s.
+  it('gives a list to a machine with no sealed session (a cloud machine) its full 45 s: it can prove nothing either way', async () => {
+    const { link, lines } = await upOnClock()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const list = link.rpc('agents_list', {}, CLOUD).catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(lines.some((line) => line.includes('agents_list timed out'))).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(lines).toContain('device: agents_list timed out after 45000 ms')
       expect(await list).toEqual(new Error('agents_list timed out'))
     } finally { vi.useRealTimers() }
   })

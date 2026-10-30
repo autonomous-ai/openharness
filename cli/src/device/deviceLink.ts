@@ -56,8 +56,14 @@ const LIST_TIMEOUT_MS = 45_000
  * But not for a machine that has gone quiet: an agent list fails once nothing has been heard from its machine for this
  * long (and never before RPC_TIMEOUT_MS), unless the machine answers something while it waits. #2387's review: B's
  * daemon killed, and nothing tells this lane (the relay's list still says running), so a list to it was the only way to
- * learn it was gone, and at 45 s a turn sent meanwhile was lost instead of refused. Diego's slow Mac answered 5 to 25 s
- * late, so it is never quiet this long; a dead machine's last answer was the list before, a few seconds before it died.
+ * learn it was gone, and at 45 s a turn sent meanwhile was lost instead of refused. A dead machine's last answer was the
+ * list before, a few seconds before it died. Diego's slow Mac answered 5 to 25 s after the 15 s its requests then waited,
+ * so 20 to 40 s after each was sent (#2381's log gives no spread beyond that): one answering past 30 s has a turn refused
+ * for the few seconds until its answer lands, never lost, and keeps its tiles (#2395's security review 2 measured 31 to
+ * 40 s answers: refused for 2 to 11 s per list).
+ *
+ * Only a machine under a sealed session can be heard from (onAlive). Any other (a cloud machine, whose requests the
+ * backend answers) proves nothing either way, and its list keeps the full LIST_TIMEOUT_MS.
  */
 const QUIET_MS = 30_000
 const PING_EVERY_MS = 15_000
@@ -576,7 +582,7 @@ export class DeviceLink {
     const waitMs = type === 'agents_list' ? LIST_TIMEOUT_MS : RPC_TIMEOUT_MS
     // A list to a machine already quiet fails as soon as it has been quiet QUIET_MS; one heard from meanwhile waits on.
     const heard = this.heardAt.get(target)
-    const quietMs = type === 'agents_list' ? Math.ceil(Math.max(RPC_TIMEOUT_MS, (heard ?? -Infinity) + QUIET_MS - this.now())) : waitMs
+    const quietMs = type === 'agents_list' && this.sessions.get(target)?.ready ? Math.ceil(Math.max(RPC_TIMEOUT_MS, (heard ?? -Infinity) + QUIET_MS - this.now())) : waitMs
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timedOut = (afterMs: number): void => {
         this.pending.delete(requestId)
