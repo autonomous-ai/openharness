@@ -117,19 +117,28 @@ it('never fails a query because its stats failed, and says so once', async () =>
   expect(problems).toEqual(['query stats failed stats bug'])
 })
 
-it('logs every interval once started, flushes the last window on stop, and records nothing after it', async () => {
+it('logs a measured window as it closes or on stop, and counts nothing between windows or after stop', async () => {
   // The default getter: what server.ts and worker.ts get from startQueryStats.
   const hooked = withQueryStats(base)
   const lines: Record<string, unknown>[] = []
-  const stop = startQueryStats({ reportMs: 50, log: (_m, c) => lines.push(c), warn: () => {} })
+  // An open window counts every query, and stop logs it.
+  let stop = startQueryStats({ everyMs: 3_600_000, reportMs: 5_000, log: (_m, c) => lines.push(c), warn: () => {} })
   await runWork('job sweepSwarms', async () => await hooked.user.count())
-  while (!lines.some(l => (l.top as Row[]).some(r => r.op === 'User.count' && r.route === 'job sweepSwarms'))) await new Promise(resolve => setTimeout(resolve, 10))
   await hooked.user.count({ where: { role: 'admin' } })
   stop()
-  const last = lines.at(-1)!.top as Row[]
-  expect(last.find(r => r.op === 'User.count')).toMatchObject({ shape: '{"role":"?"}', route: 'background', n: 1 })
-  const after = lines.length
+  const counted = lines.at(-1)!.top as Row[]
+  expect(counted.find(r => r.op === 'User.count' && r.route === 'job sweepSwarms')).toMatchObject({ n: 1 })
+  expect(counted.find(r => r.shape === '{"role":"?"}')).toMatchObject({ route: 'background', n: 1 })
+  const afterStop = lines.length
   await hooked.user.count()
-  await new Promise(resolve => setTimeout(resolve, 120))
-  expect(lines).toHaveLength(after)
+  await new Promise(resolve => setTimeout(resolve, 60))
+  expect(lines).toHaveLength(afterStop)
+  // A window logs as it closes; a query after that waits for the next window and is never counted in this one.
+  stop = startQueryStats({ everyMs: 3_600_000, reportMs: 50, log: (_m, c) => lines.push(c), warn: () => {} })
+  await hooked.user.count()
+  while (lines.length === afterStop) await new Promise(resolve => setTimeout(resolve, 10))
+  expect((lines.at(-1)!.top as Row[]).find(r => r.op === 'User.count')).toMatchObject({ n: 1 })
+  await hooked.user.count({ where: { role: 'admin' } })
+  stop()
+  expect(lines).toHaveLength(afterStop + 1)
 })
