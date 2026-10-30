@@ -5,6 +5,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
 import { SHARED_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
+/** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
+const vanish = vi.hoisted(() => ({ path: '' }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  const readdir = (async (path: Parameters<typeof fs.readdir>[0], ...rest: unknown[]) => {
+    if (vanish.path && path === vanish.path) { vanish.path = ''; await fs.rm(path, { recursive: true, force: true }) }
+    return (fs.readdir as (...args: unknown[]) => unknown)(path, ...rest)
+  }) as typeof fs.readdir
+  return { ...fs, readdir }
+})
+
 // A confidential session the Swarm ended for good in a Harness Team account (#895): its data in the Team user's shared
 // engine homes goes, and the account stays held until a sweep finds nothing of it (security re-checks of #2089).
 
@@ -228,6 +239,16 @@ describe('the sweep for what a scrub left', () => {
       expect(await sweepForSession(home, ours, []), name).toBe(left('other'))
       rmSync(join(shared, name), { recursive: true })
     }
+    // A memory folder gone between the listing and its read is no memory folder.
+    vanish.path = memory
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    expect(existsSync(memory)).toBe(false)
+    mkdirSync(memory)
+    // A transcript that cannot be read fails it by its kind: the read's own error named its path (review of #2389).
+    chmodSync(join(shared, 'theirs.jsonl'), 0o000)
+    const unread = await sweepForSession(home, ours, []).finally(() => chmodSync(join(shared, 'theirs.jsonl'), 0o600))
+    expect(unread).toBe(left('unreadTranscript'))
+    expect(unread).not.toContain(home)
     // A memory folder linked elsewhere is never followed, and fails it.
     rmSync(memory, { recursive: true })
     mkdirSync(join(home, 'elsewhere'))
@@ -376,6 +397,13 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(JSON.stringify(unread)).not.toContain(home)
     expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toHaveLength(1)
     rmSync(memory, { recursive: true })
+    // So does another folder's transcript that cannot be read: kept, never deleted unread, and named by its kind alone.
+    chmodSync(join(shared, 'theirs.jsonl'), 0o000)
+    const unreadTranscript = await restarted('pm').finally(() => chmodSync(join(shared, 'theirs.jsonl'), 0o600))
+    expect(unreadTranscript).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${left('unreadTranscript')}` })
+    expect(JSON.stringify(unreadTranscript)).not.toContain(home)
+    expect(existsSync(join(shared, 'theirs.jsonl'))).toBe(true)
+    expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toHaveLength(1)
     expect(await restarted('pm')).toEqual({ ok: true })
     expect(existsSync(join(shared, 'theirs.jsonl'))).toBe(true)
   })

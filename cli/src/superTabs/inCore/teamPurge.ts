@@ -155,8 +155,9 @@ export async function recordsOtherFolder(file: string, folder: string): Promise<
   } finally { lines.close() }
 }
 
-/** Whether the transcript [file] records [folder] or a folder inside it as its working folder (`own`), and another (`other`). */
-async function foldersOf(file: string, folder: string): Promise<{ own: boolean; other: boolean }> {
+/** Whether the transcript [file] records [folder] or a folder inside it as its working folder (`own`), and another (`other`);
+ *  `unread` when it could not be read, whose error would name its path (review of #2389). */
+async function foldersOf(file: string, folder: string): Promise<{ own: boolean; other: boolean; unread?: true }> {
   const found = { own: false, other: false }
   const lines = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
   try {
@@ -166,7 +167,7 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
       try { cwd = (JSON.parse(line) as { cwd?: unknown } | null)?.cwd } catch { continue }
       if (typeof cwd === 'string') found[cwd === folder || cwd.startsWith(`${folder}/`) ? 'own' : 'other'] = true
     }
-  } finally { lines.close() }
+  } catch { return { own: false, other: false, unread: true } } finally { lines.close() }
   return found
 }
 
@@ -178,11 +179,12 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
  * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
  */
 async function removeTranscripts(dir: string, folder: string, onShared?: () => void): Promise<void> {
-  const transcripts = new Map<string, { own: boolean; other: boolean }>()
+  const transcripts = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
   for (const name of (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.jsonl'))) {
     transcripts.set(name, await foldersOf(join(dir, name), folder))
   }
-  if (![...transcripts.values()].some(transcript => transcript.other)) { await rm(dir, { recursive: true, force: true }); return }
+  // One that could not be read may be another folder's: it and the folder stay, for the sweep to hold the account by its kind.
+  if (![...transcripts.values()].some(transcript => transcript.other || transcript.unread)) { await rm(dir, { recursive: true, force: true }); return }
   onShared?.()
   for (const [name, { own, other }] of transcripts) {
     if (!own || other) continue
@@ -199,7 +201,8 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
   const entries = (await readdir(dir, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))
   const transcripts = new Set<string>()
   for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) {
-    const { own, other } = await foldersOf(join(dir, entry.name), folder)
+    const { own, other, unread } = await foldersOf(join(dir, entry.name), folder)
+    if (unread) return SHARED_LEFT.unreadTranscript
     if (own || !other) return SHARED_LEFT.transcript
     transcripts.add(entry.name.slice(0, -'.jsonl'.length))
   }
@@ -207,8 +210,9 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
   for (const entry of entries) {
     if (entry.isFile() && entry.name.endsWith('.jsonl')) continue
     if (entry.isDirectory() && entry.name === 'memory') {
-      // One that cannot be read fails it too, by its kind: the read's own error named its path (security review of #2385).
-      const memory = await readdir(join(dir, entry.name)).catch(() => null)
+      // One that cannot be read fails it too, by its kind: the read's own error named its path (security review of #2385). One
+      // gone since the listing is none.
+      const memory = await readdir(join(dir, entry.name)).catch((error: NodeJS.ErrnoException) => error?.code === 'ENOENT' ? [] : null)
       if (!memory) return SHARED_LEFT.unreadMemory
       if (memory.length) return SHARED_LEFT.memory
     } else if (!entry.isDirectory() || !transcripts.has(entry.name)) return SHARED_LEFT.other
@@ -219,7 +223,8 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
 export const SHARED_LEFT = {
   transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
   memory: 'a memory file in its transcript folder, which another folder shares: its owner checks it and removes what is not the other folder\'s',
-  unreadMemory: 'a memory folder in its transcript folder, which another folder shares, that could not be read: its owner checks its permissions',
+  unreadMemory: 'a memory folder in its transcript folder, which another folder shares, that could not be read',
+  unreadTranscript: 'a transcript in its transcript folder, which another folder shares, that could not be read',
   other: 'something in its transcript folder, which another folder shares, that is not another folder\'s transcript',
   folder: 'its transcript folder',
 }

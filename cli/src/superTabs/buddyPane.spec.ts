@@ -116,6 +116,11 @@ it('finds the pane\'s harness and asks whether it is a Buddy, the one way the gu
   expect(await asked(swarm(true), '%42', [900, 1])).toEqual({ answer: 'not in its pane', requests: ['agents_list', 'terminal_info'] })
   // Without the command's parents (the usage wording), its pane is not checked, as before.
   expect(await asked(swarm(true), '%42', 'none')).toEqual({ answer: 'buddy', requests: ['agents_list', 'super_tabs'] })
+  // No list of this computer's harnesses, as an error reply: it cannot say, and nothing more is asked.
+  const noList = daemon(swarm(true)), listed = noList.request.getMockImplementation()!
+  noList.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { error: 'SERVICE_FAILED' } : listed(type, payload))
+  expect(await paneBuddy(noList, '%42', 'machine', ancestors)).toBe('unsure')
+  expect(noList.request.mock.calls.map(([type]) => type)).toEqual(['agents_list'])
   // The Swarm is on but cannot say for this harness.
   for (const failed of [{ error: 'SERVICE_FAILED' }, { ok: true }, { ok: true, buddy: 'yes' }]) expect((await asked(() => failed)).answer).toBe('unsure')
   // A request that fails is the caller's to read: the guard refuses, the usage wording reads it as no Buddy.
@@ -134,7 +139,12 @@ it('refuses when the pane check cannot read this computer\'s harnesses, and lets
   await expect(buddyRefusal(d.deps, 'darwin')).rejects.toThrow('Harness did not answer agents_list in time.')
   expect(d.request).not.toHaveBeenCalledWith('super_tabs', expect.objectContaining({ harnessId: expect.anything() }), expect.anything())
   expect(d.close).toHaveBeenCalledOnce()
-  // An answer that lists no harnesses is no failure: that pane is nobody's.
-  d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? {} : request(type, payload))
+  // An answer with no list is no answer either (review of #2389): an error reply was taken for "no harness here", and the
+  // command ran. A list with no harness in the pane is nobody's pane.
+  for (const reply of [{ error: 'SERVICE_FAILED' }, {}, { agents: 'none' }]) {
+    d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? reply : request(type, payload))
+    expect(await buddyRefusal(d.deps, 'darwin'), JSON.stringify(reply)).toBe('Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.')
+  }
+  d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { agents: [] } : request(type, payload))
   expect(await buddyRefusal(d.deps, 'darwin')).toBeNull()
 })
