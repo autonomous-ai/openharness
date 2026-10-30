@@ -101,10 +101,19 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     writeFileSync(join(shared, 'own.jsonl'), transcript(folder))
     writeFileSync(join(shared, 'theirs.jsonl'), `${transcript(folder)}\nnot json "cwd"\n${JSON.stringify({ cwd: OTHER })}`)
     expect([await recordsOtherFolder(join(shared, 'own.jsonl'), folder), await recordsOtherFolder(join(shared, 'theirs.jsonl'), folder)]).toEqual([false, true])
-    // A shared folder with no memory folder: its own transcript goes, the other's stays.
+    // A shared folder with no memory folder: its own transcript goes, the other's stays. One linked elsewhere is never followed.
+    const home = dirname(dirname(dirname(shared))), elsewhere = join(home, 'elsewhere')
     rmSync(join(shared, 'memory'), { recursive: true })
-    await scrubClaudeSession(dirname(dirname(dirname(shared))), target({ sessionId: null, cwd: folder }))
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
     expect(['own.jsonl', 'theirs.jsonl'].map(name => existsSync(join(shared, name)))).toEqual([false, true])
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, 'ours.md'), 'not in the transcript folder')
+    symlinkSync(elsewhere, join(shared, 'memory'))
+    writeFileSync(join(shared, 'own.jsonl'), transcript(folder, ['Write', join(shared, 'memory', 'ours.md')]))
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect([existsSync(join(shared, 'own.jsonl')), existsSync(join(elsewhere, 'ours.md'))]).toEqual([false, true])
+    writeFileSync(join(shared, 'theirs.jsonl'), transcript(OTHER))
+    expect(await sweepForSession(home, target({ cwd: folder }), [])).toBe(join(shared, 'memory'))
   })
 
   // Security review 2 of #2375: todos were matched by prefix, so a one-character session id removed every todo starting with it.

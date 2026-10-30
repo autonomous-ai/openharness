@@ -14,7 +14,7 @@
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { lstat, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { PM_HOMES } from '../teamDaemon.js'
@@ -185,10 +185,12 @@ async function readTranscript(file: string, folder: string, memory: string): Pro
   return found
 }
 
-/** Every file under [path], a link as itself and never followed; none when it is missing. */
+/** Every file under the folder [path], a link as itself and never followed; none when it is missing or no folder: a memory
+ *  folder linked elsewhere would have the scrub remove files outside the transcript folder. One it cannot read fails it. */
 async function filesUnder(path: string): Promise<string[]> {
   const files: string[] = []
-  for (const entry of (await readdir(path, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
+  const entries = (await lstat(path).catch(() => null))?.isDirectory() ? await readdir(path, { withFileTypes: true }) : []
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isDirectory()) files.push(...await filesUnder(join(path, entry.name)))
     else files.push(join(path, entry.name))
   }
