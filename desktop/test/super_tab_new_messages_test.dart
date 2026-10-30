@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_link.dart';
@@ -462,6 +463,45 @@ void main() {
         .position;
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('opened at a linked message above the line, the pill points '
+      'down to it', (tester) async {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', 42);
+    final c = await show(tester, server);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-12',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-12')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.byIcon(AppIcons.chevronDown),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
     expect(find.byKey(_jump), findsNothing);
   });
 

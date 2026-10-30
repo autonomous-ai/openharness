@@ -51,8 +51,9 @@ class SuperTabUnreadLines {
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
 
-  /// Whether the reader is scrolled away from the line.
-  bool away = false;
+  /// Whether the reader is scrolled away from the line, and whether it is
+  /// below them.
+  bool away = false, below = false;
 
   /// Conversations whose line has been in view this visit.
   final _seen = <String>{};
@@ -130,14 +131,14 @@ class SuperTabUnreadLines {
     _failed.remove(id);
     _seen.remove(id);
     catchUps.forget(id);
-    away = false;
+    away = below = false;
   }
 
   /// Read with Esc: no line or card until the next visit.
   void clear(String id) {
     _at[id] = null;
     catchUps.dismiss(id);
-    away = false;
+    away = below = false;
   }
 
   void reset() {
@@ -147,7 +148,7 @@ class SuperTabUnreadLines {
     _failed.clear();
     _seen.clear();
     catchUps.reset();
-    away = false;
+    away = below = false;
   }
 }
 
@@ -189,15 +190,25 @@ class SuperTabNewMessagesLine extends StatelessWidget {
 
 /// Shown while the New messages line, not yet seen this visit, is out of view: takes the reader back to it.
 class SuperTabJumpToUnread extends StatelessWidget {
-  const SuperTabJumpToUnread({super.key, required this.onPressed});
+  const SuperTabJumpToUnread({
+    super.key,
+    required this.onPressed,
+    this.down = false,
+  });
 
   final VoidCallback onPressed;
+
+  /// The line is below the reader (a link opened the chat above it).
+  final bool down;
 
   @override
   Widget build(BuildContext context) => FilledButton.icon(
     key: const ValueKey('super-jump-unread'),
     onPressed: onPressed,
-    icon: const Icon(AppIcons.chevronUp, size: grid.AppDesktop.iconSize),
+    icon: Icon(
+      down ? AppIcons.chevronDown : AppIcons.chevronUp,
+      size: grid.AppDesktop.iconSize,
+    ),
     label: const Text('Jump to first unread'),
   );
 }

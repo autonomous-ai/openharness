@@ -543,21 +543,27 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and Jump to latest while the list is away from its newest message.
   void _checkUnreadLine() {
     final scroll = _scroll[c.selectedId];
-    var away = false;
-    if (_unread.lineAt(c.selectedId) != null &&
-        scroll != null &&
-        scroll.hasClients) {
+    var away = false, below = false;
+    if (_unread.lineAt(c.selectedId) case final lineAt?
+        when scroll != null && scroll.hasClients) {
       final line = _unread.key.currentContext;
       final top = line == null ? null : _topInList(line);
-      away = top == null || top < 0 || top > scroll.position.viewportDimension;
+      final view = scroll.position.viewportDimension;
+      away = top == null || top < 0 || top > view;
       if (!away) _unread.saw(c.selectedId);
+      // A line not laid out is told by its place in the list.
+      below = top != null
+          ? top > view
+          : _below(c.selectedId, lineAt, scroll.position);
     }
     final id = c.selectedId;
     final awayFromEnd =
         scroll != null &&
         scroll.hasClients &&
         scroll.position.extentAfter >= 40;
-    if ((away == _unread.away && awayFromEnd == _awayFromEnd.contains(id)) ||
+    if ((away == _unread.away &&
+            below == _unread.below &&
+            awayFromEnd == _awayFromEnd.contains(id)) ||
         !mounted) {
       return;
     }
@@ -570,12 +576,23 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     setState(() {
       _unread.away = away;
+      _unread.below = below;
       if (awayFromEnd) {
         _awayFromEnd.add(id);
       } else {
         _awayFromEnd.remove(id);
       }
     });
+  }
+
+  /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
+  /// its place in the list.
+  bool _below(String id, String messageId, ScrollPosition position) {
+    final entries = superTabTranscriptEntries(_shownMessages(id));
+    final row = _rowShowing(id, messageId);
+    final index = entries.indexWhere((e) => e.message.id == row);
+    return index >= 0 &&
+        _estimate(position, index, entries.length) > position.pixels;
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
@@ -2926,6 +2943,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         ),
                         child: Center(
                           child: SuperTabJumpToUnread(
+                            down: _unread.below,
                             onPressed: () => _revealUnreadLine(c.selectedId),
                           ),
                         ),
