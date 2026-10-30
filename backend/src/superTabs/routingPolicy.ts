@@ -11,9 +11,10 @@ import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchma
 const ADDED_ROWS = [
   { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
 ] as const satisfies ReadonlyArray<Record<string, unknown>>
-/** An owner keeps up to 40 rows of their own; the rows added on read do not count against that, or a full policy could no longer
- *  be saved once read (review of #2271). */
-const MAX_MODEL_ROWS = 40 + ADDED_ROWS.length
+/** An owner keeps exactly up to 40 rows of their own. A built-in row added on read, or the owner's own version of one (the same
+ *  engine and model), never counts against that, or a full policy could no longer be saved once read (reviews of #2271). */
+const OWN_MODEL_ROWS = 40
+const builtIn = (row: { engine: string; model: string }) => ADDED_ROWS.some(added => added.engine === row.engine && added.model === row.model)
 
 const quality = z.number().int().min(1).max(3)
 const modelRow = z.object({
@@ -26,7 +27,8 @@ const modelRow = z.object({
   enabled: z.boolean(),
 }).strict()
 const fields = {
-  models: z.array(modelRow).min(1).max(MAX_MODEL_ROWS),
+  models: z.array(modelRow).min(1).max(OWN_MODEL_ROWS + ADDED_ROWS.length)
+    .refine(rows => rows.filter(row => !builtIn(row)).length <= OWN_MODEL_ROWS, `At most ${OWN_MODEL_ROWS} rows of your own.`),
   floor: z.object({ low: quality, medium: quality, high: quality }).strict(),
   quotaReserve: z.number().int().min(0).max(90),
   notes: z.string().trim().max(500),

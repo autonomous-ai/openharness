@@ -30,8 +30,18 @@ describe('routing policy', () => {
     const saved = routingPolicySchema.parse({ ...read, notes: 'Edited.' })
     expect(saved.models).toEqual(read.models)
     expect(effectivePolicy(saved, null).policy.models).toEqual(read.models)
-    // The limit grows by the added rows alone: an owner's own 41st row is still refused.
-    expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models: [...owner, { ...owner[0]!, model: 'model-40' }, { ...owner[0]!, model: 'model-41' }] }).success).toBe(false)
+  })
+
+  it('keeps the owner\'s limit at exactly 40 rows of their own, whatever built-in rows are added on read', () => {
+    const own = (n: number) => Array.from({ length: n }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
+    const parses = (models: unknown[]) => routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models }).success
+    expect(parses(own(40))).toBe(true)
+    expect(parses(own(41))).toBe(false)
+    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
+    expect(parses([...own(40), sol])).toBe(true)
+    // The owner's own version of a built-in row takes its place, not one of their 40.
+    expect(parses([...own(40), { ...sol, enabled: false }])).toBe(true)
+    expect(parses([...own(41), sol])).toBe(false)
   })
 
   it('falls back to the default with a warning for a corrupt account policy or override', () => {
