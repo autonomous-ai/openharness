@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -10,7 +11,7 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 export interface BuddyReads { file: string; drops: string }
 /** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
  *  outside its folder that stay closed, and its person's approvals on this machine. */
-export interface BuddyWide { home: string; denied: readonly string[]; approvals: string; repos: readonly string[] }
+export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[] }
 
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
@@ -27,11 +28,15 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
   'Library/Application Support/Claude']
 
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
- *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, [personKey] their id and
- *  membership, which keys their approvals, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
-export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; personKey: string; repos: readonly string[] }): BuddyWide {
+ *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
+export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[] }): BuddyWide {
   return { home: input.home, repos: input.repos, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
-    approvals: join(input.dataDir, 'buddy-approvals', `${createHash('sha256').update(input.personKey).digest('hex')}.json`) }
+    approvalsDir: join(input.dataDir, 'buddy-approvals') }
+}
+
+/** One person's approvals on this machine, by their id and membership: a new membership starts with none. */
+export function buddyApprovalsOf(personKey: string, dataDir: string = env.ADAPTER_DATA_DIR): string {
+  return join(dataDir, 'buddy-approvals', `${createHash('sha256').update(personKey).digest('hex')}.json`)
 }
 
 /** A listed file or link lasts as long as Harness keeps a download (lib/pasteDropFiles.ts): a day. */
@@ -447,11 +452,14 @@ function widerRead(w) {
 
 // An approval lasts 30 days from when its person sent it (docs/specs/2026-10-30-buddy-read-access.md, Design 1).
 const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
-// Whether its person approved exactly these words on this machine: the host's file, by their own "run:" line. A file it
-// cannot read approves nothing.
+// Whether its person approved exactly these words on this machine, by their own "run:" line: the file the host pointed this
+// session's list at once it had checked who sent them (superTabs/host.ts), and only in Harness's approvals folder. No
+// pointer, a file elsewhere or one it cannot read approves nothing.
 function approved(w) {
   try {
-    const entries = JSON.parse(readFileSync(WIDE.approvals, 'utf8')).entries, now = Date.now(), want = JSON.stringify(w)
+    const at = JSON.parse(readFileSync(READS, 'utf8')).approvals
+    if (typeof at !== 'string' || !isAbsolute(at) || resolve(at) !== at || dirname(at) !== WIDE.approvalsDir) return false
+    const entries = JSON.parse(readFileSync(at, 'utf8')).entries, now = Date.now(), want = JSON.stringify(w)
     return Array.isArray(entries) && entries.some((entry) => entry && Array.isArray(entry.argv) && entry.argv.every((word) => typeof word === 'string')
       && Number.isFinite(entry.at) && now - entry.at < APPROVAL_MS && JSON.stringify(entry.argv) === want)
   } catch { return false }
@@ -490,6 +498,18 @@ let text = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => { text += chunk })
 process.stdin.on('end', () => {
+  // The host's question (lib/buddyGuard.ts recordBuddyApprovals): is this command one of wide mode's reads? Asked with an
+  // argument Claude Code never passes, so the host judges a person's "run:" line with these very rules.
+  if (process.argv[2] === '--classify') {
+    let commands = []
+    try { commands = JSON.parse(text) } catch { /* judged as none */ }
+    const verdicts = (Array.isArray(commands) ? commands : []).map((command) => {
+      const w = typeof command === 'string' ? words(command.trim()) : null
+      return { read: !!(w && w.length && widerRead(w)), argv: w }
+    })
+    process.stdout.write(JSON.stringify({ wide: !!WIDE, verdicts }))
+    return
+  }
   let input = null
   try { input = JSON.parse(text) } catch { /* refused below */ }
   const allow = decide(input)
@@ -540,8 +560,10 @@ export function artifactLinks(text: string): string[] {
 
 interface ListedFile { path: string; dev: string; ino: string; size: string; sha256: string; at: number }
 interface ListedLink { url: string; at: number }
-/** `session`: the native session the host delivered these to, whose lists go when the Swarm ends it (`forgetBuddyReads`). */
-interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[] }
+/** `session`: the native session the host delivered these to, whose lists go when the Swarm ends it (`forgetBuddyReads`).
+ *  `approvals`: its person's approvals on this machine (`recordBuddyApprovals`), set by the host once it checked a message
+ *  was theirs; the guard reads no approvals without it. */
+interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[]; approvals?: string }
 
 /** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. */
 function heldList(file: string, session: string): List {
@@ -550,7 +572,8 @@ function heldList(file: string, session: string): List {
     const held = JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown; files?: unknown; links?: unknown }
     if (held.session !== session) return none
     const entries = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : []
-    return { version: 1, session,
+    const approvals = (held as { approvals?: unknown }).approvals
+    return { version: 1, session, ...(typeof approvals === 'string' ? { approvals } : {}),
       files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size', 'sha256']
         .every(field => typeof entry[field] === 'string') && Number.isFinite(entry.at)),
       links: entries(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string' && Number.isFinite(entry.at)) }
@@ -610,17 +633,101 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
   sweep(dir, now)
   const held = heldList(reads.file, sent.session)
   const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
-  const list: List = { version: 1, session: sent.session,
+  const list: List = { version: 1, session: sent.session, ...(held.approvals ? { approvals: held.approvals } : {}),
     files: [...fresh(held.files).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
     links: [...fresh(held.links).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) }
-  const temporary = `${reads.file}.${randomUUID()}.tmp`
+  writeWhole(reads.file, list)
+}
+
+/** Writes [value] to [file] as one rename, mode 600: a reader sees a whole old file or a whole new one, never a part. */
+function writeWhole(file: string, value: unknown): void {
+  const temporary = `${file}.${randomUUID()}.tmp`
   try {
-    writeFileSync(temporary, `${JSON.stringify(list)}\n`, { mode: 0o600, flag: 'wx' })
-    renameSync(temporary, reads.file)
+    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' })
+    renameSync(temporary, file)
   } catch (error) {
     rmSync(temporary, { force: true })
     throw error
   }
+}
+
+/** An approval lasts 30 days from when its person sent it, and a person keeps at most 200 (the spec's Design 1). */
+const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
+const MAX_APPROVALS = 200
+interface Approval { argv: string[]; at: number; messageId: string }
+
+/** A person's line approving one command: "run:" at its start, the command after it, in backticks or not. A "yes", an
+ *  "ok", a quoted line ("> run: …") or one mentioning run: in passing approves nothing. */
+const RUN_LINE = /^[ \t]*run:[ \t]*`?([^`\n]*?)`?[ \t]*$/gim
+const FORGET_LINE = /^[ \t]*forget runs[ \t]*$/im
+
+/** The guard's own judgement of [commands] (its --classify mode), in one run: whether it is in wide mode, and for each
+ *  command whether it is one of its reads, with its words. */
+function classify(node: string, guard: string, commands: readonly string[]): { wide: boolean; verdicts: { read: boolean; argv: string[] | null }[] } {
+  const run = spawnSync(node, [guard, '--classify'], { input: JSON.stringify(commands), encoding: 'utf8', timeout: 10_000 })
+  if (run.status !== 0) throw new Error(`The Buddy's guard could not judge a command (${run.error?.message ?? `exit ${run.status}`}).`)
+  const judged = JSON.parse(run.stdout) as { wide?: unknown; verdicts?: unknown }
+  if (!Array.isArray(judged.verdicts) || judged.verdicts.length !== commands.length) throw new Error('The Buddy\'s guard judged no commands.')
+  return { wide: judged.wide === true, verdicts: judged.verdicts as { read: boolean; argv: string[] | null }[] }
+}
+
+/** Whether [text] has a line approving commands or forgetting them: the host judges it only then. */
+export const hasBuddyApprovals = (text: string): boolean => new RegExp(RUN_LINE.source, 'im').test(text) || FORGET_LINE.test(text)
+
+/** A person's message, judged: the commands of its "run:" lines that a Buddy may run (with their words) and those it never
+ *  may, and whether it said "forget runs". `wide`: the Buddy's guard is in wide mode; without it nothing is recorded. */
+export interface JudgedApprovals { wide: boolean; approve: { command: string; argv: string[] }[]; refused: string[]; forgot: boolean }
+
+/**
+ * Judges the "run:" lines of a person's message with the Buddy's own guard [guard] (docs/specs/2026-10-30-buddy-read-access.md),
+ * so a command its grammar refuses (a write, a secret read, anything not a read) is never approved: one run of node for the
+ * whole message. Before any write, as the host judges it before its delivery lease (superTabs/host.ts). Throws when the
+ * guard cannot judge, so the delivery is tried again.
+ */
+export function judgeBuddyApprovals(input: { node: string; guard: string; text: string }): JudgedApprovals {
+  const forgot = FORGET_LINE.test(input.text)
+  const commands = [...input.text.matchAll(RUN_LINE)].map(match => match[1]!.trim()).filter(Boolean)
+  if (!commands.length && !forgot) return { wide: false, approve: [], refused: [], forgot: false }
+  const judged = classify(input.node, input.guard, commands)
+  if (!judged.wide) return { wide: false, approve: [], refused: [], forgot: false }
+  const approve: JudgedApprovals['approve'] = [], refused: string[] = []
+  commands.forEach((command, at) => {
+    const verdict = judged.verdicts[at]!
+    if (verdict.read === true && Array.isArray(verdict.argv)) approve.push({ command, argv: verdict.argv })
+    else refused.push(command)
+  })
+  return { wide: true, approve, refused, forgot }
+}
+
+/**
+ * Records what [judged] approves, once the caller has checked the message is the person's own, in their own Buddy chat, on
+ * their own machine (superTabs/host.ts). Approvals are kept per person and membership on this machine ([approvals],
+ * `buddyApprovalsOf`), never sent anywhere, by their exact words; one approved again is renewed, and "forget runs" clears
+ * them first. The session's list ([reads]) then points at them, keeping what else it lists. Nothing is written for a guard
+ * not in wide mode. Anything it cannot write throws, so the host tries the delivery again.
+ */
+export function recordBuddyApprovals(input: { reads: BuddyReads; session: string; approvals: string; judged: JudgedApprovals; messageId: string },
+  now = Date.now()): void {
+  const { judged } = input
+  if (!judged.wide) return
+  let held: Approval[] = []
+  if (!judged.forgot) {
+    try {
+      const entries = (JSON.parse(readFileSync(input.approvals, 'utf8')) as { entries?: unknown }).entries
+      held = Array.isArray(entries) ? entries.filter((entry): entry is Approval => !!entry && Array.isArray(entry.argv)
+        && entry.argv.every((word: unknown) => typeof word === 'string') && Number.isFinite(entry.at) && typeof entry.messageId === 'string') : []
+    } catch { /* none yet, or unreadable: start again */ }
+  }
+  const key = (argv: readonly string[]) => JSON.stringify(argv)
+  const fresh = judged.approve.filter((entry, at) => judged.approve.findIndex(other => key(other.argv) === key(entry.argv)) === at)
+    .map(entry => ({ argv: entry.argv, at: now, messageId: input.messageId }))
+  const renewed = new Set(fresh.map(entry => key(entry.argv)))
+  const entries = [...held.filter(entry => now - entry.at < APPROVAL_MS && !renewed.has(key(entry.argv))), ...fresh].slice(-MAX_APPROVALS)
+  mkdirSync(dirname(input.approvals), { recursive: true, mode: 0o700 })
+  chmodSync(dirname(input.approvals), 0o700)
+  writeWhole(input.approvals, { version: 1, entries })
+  mkdirSync(dirname(input.reads.file), { recursive: true, mode: 0o700 })
+  writeWhole(input.reads.file, { ...heldList(input.reads.file, input.session), approvals: input.approvals })
 }
 
 /**

@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { allowBuddyReads, buddyGuardSource, buddyReadsOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyReadsOf, buddyWideOf } from '../lib/buddyGuard.js'
+import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
@@ -1236,6 +1237,93 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     await tick
     expect(reads).toHaveLength(1)
     expect([delivered, listed()]).toEqual([[], null])
+  })
+  // A person approves the commands their Buddy may run in wide mode with "run:" lines of their own
+  // (docs/specs/2026-10-30-buddy-read-access.md): recorded before the Buddy hears the message, judged by its own guard.
+  describe('its person\'s "run:" lines', () => {
+    const approvals = buddyApprovalsOf('peer:g')
+    beforeEach(() => rmSync(approvals, { force: true }))
+    const recorded = () => existsSync(approvals) ? (JSON.parse(readFileSync(approvals, 'utf8')).entries as { argv: string[] }[]).map(e => e.argv.join(' ')) : []
+
+    /** The Buddy's folder, with the guard its launch writes: in wide mode, or not. */
+    function folderWith(wide: boolean, guard?: string) {
+      const folder = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-folder-'))); roots.push(folder)
+      mkdirSync(join(folder, '.claude'))
+      writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), guard ?? buddyGuardSource(folder, buddyReadsOf(key),
+        wide ? buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: ['autonomous-ai/openharness'] }) : null))
+      return folder
+    }
+    function approving(message: Record<string, unknown>, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {},
+      folder = folderWith(true)) {
+      const on = buddyOn({ attachments: [], ...message }, read, claim)
+      vi.mocked(on.t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', cwd: folder, swarmSkill: { role: 'buddy', key } } as never)
+      const guard = (command: string) => JSON.parse(spawnSync(process.execPath, [join(folder, '.claude', 'buddy-guard.mjs')], { encoding: 'utf8',
+        timeout: 10_000, input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: folder }) }).stdout)
+        .hookSpecificOutput.permissionDecision
+      return { ...on, guard }
+    }
+
+    it('records them before the Buddy hears the message, and tells it which may run and which never will', async () => {
+      const { host, delivered, guard } = approving({ text: 'Go ahead:\nrun: argocd app list\nrun: git push origin main' })
+      expect(guard('argocd app list')).toBe('deny')
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      expect(recorded()).toEqual(['argocd app list'])
+      expect(delivered[0]!.list).toMatchObject({ approvals })
+      expect(delivered[0]!.text).toContain('Your owner approved running exactly: argocd app list. Each may run now, as written, and nothing else.')
+      expect(delivered[0]!.text).toContain('Your owner\'s run: lines approve nothing for: git push origin main. A Buddy never runs these, approved or not')
+      expect(guard('argocd app list')).toBe('allow')
+      expect(guard('git push origin main')).toBe('deny')
+    })
+
+    it('clears them when its person says "forget runs"', async () => {
+      const first = approving({ text: 'run: argocd app list' })
+      await first.host.tick()
+      expect(recorded()).toEqual(['argocd app list'])
+      const second = approving({ text: 'forget runs', id: 'message-2' }, {}, {}, folderWith(true))
+      await second.host.tick()
+      expect(recorded()).toEqual([])
+      expect(second.delivered[0]!.text).toContain('Your owner cleared every command they had approved.')
+    })
+
+    it.each([
+      ['project news from outside its chat', {}, {}, { buddyNews: true }],
+      ['the PM\'s private line to its person', { author: { kind: 'agent', id: 'lead-agent', name: 'PM', membershipGeneration: 'g' } }, {}, {}],
+      ['another person', { author: { ...person, id: 'sam', name: 'sam@example.com' } }, {}, {}],
+      ['its person from an earlier membership', { author: { ...person, membershipGeneration: 'before' } }, {}, {}],
+      ['another person\'s Buddy chat', {}, { conversations: [{ ...buddyChat, buddyOwnerId: 'sam' }] }, {}],
+      ['its chat once archived', {}, { conversations: [{ ...buddyChat, archived: true }] }, {}],
+    ])('records nothing for %s, and still delivers the message', async (_, message, read, claim) => {
+      const { host, delivered, guard } = approving({ text: 'run: argocd app list', ...message }, read, claim)
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      expect(recorded()).toEqual([])
+      expect(delivered[0]!.text).not.toContain('Your owner approved')
+      expect(guard('argocd app list')).toBe('deny')
+    })
+
+    it.each([
+      ['a Buddy on someone else\'s machine', { agents: [{ ...buddyAgent, machineOwnerId: 'sam' }] }, true],
+      ['a guard not in wide mode', {}, false],
+    ])('records nothing for %s, and has it tell its person wider reads are off', async (_, read, wide) => {
+      const { host, delivered } = approving({ text: 'run: argocd app list' }, read, {}, folderWith(wide))
+      await host.tick()
+      expect(recorded()).toEqual([])
+      expect(delivered[0]!.text).toContain('Your owner sent run: lines, but wider reads are off for you on this computer, so nothing was approved.')
+    })
+
+    it('delivers nothing while its guard cannot judge the lines, and records and delivers once it can', async () => {
+      const folder = folderWith(true, 'process.exit(3)\n')
+      const { t, host, delivered } = approving({ text: 'run: argocd app list' }, {}, {}, folder)
+      await host.tick()
+      expect([delivered, recorded()]).toEqual([[], []])
+      writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), buddyGuardSource(folder, buddyReadsOf(key),
+        buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: [] })))
+      t.wait(1_000)
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      expect(recorded()).toEqual(['argocd app list'])
+    })
   })
 })
 

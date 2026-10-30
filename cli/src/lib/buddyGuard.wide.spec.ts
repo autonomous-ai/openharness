@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { buddyGuardSource, buddyWideOf } from './buddyGuard.js'
+import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyWideOf, hasBuddyApprovals, judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -43,7 +43,9 @@ symlinkSync(other, join(home, 'work', 'their-home'))
 // A case-insensitive volume (macOS by default) opens .SSH as .ssh.
 const caseInsensitive = existsSync(join(home, '.SSH'))
 
-const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], personKey: 'person-1:generation-1', repos: ['autonomous-ai/openharness'] })
+const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], repos: ['autonomous-ai/openharness'] })
+// The person's approvals on this machine, which the host points this Buddy session's list at once it has checked who sent them.
+const approvals = buddyApprovalsOf('person-1:generation-1', dataDir)
 const script = join(parent, 'buddy-guard.mjs'), narrow = join(parent, 'buddy-guard-narrow.mjs')
 writeFileSync(script, buddyGuardSource(root, reads, wide))
 writeFileSync(narrow, buddyGuardSource(root, reads))
@@ -144,17 +146,22 @@ describe('wide mode: reading outside the folder', () => {
 
 // The person's approvals on this machine, as the host records them from their own "run:" lines (step 3): each command by
 // its exact words. Written by hand here, so the grammar is tested on its own.
+const point = (at = approvals) => {
+  mkdirSync(dirname(reads.file), { recursive: true })
+  writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], approvals: at }))
+}
 const approve = (...commands: string[][]) => {
-  mkdirSync(dirname(wide.approvals), { recursive: true })
-  writeFileSync(wide.approvals, JSON.stringify({ version: 1, entries: commands.map(argv => ({ argv, at: Date.now(), messageId: 'm' })) }))
+  mkdirSync(dirname(approvals), { recursive: true })
+  writeFileSync(approvals, JSON.stringify({ version: 1, entries: commands.map(argv => ({ argv, at: Date.now(), messageId: 'm' })) }))
+  point()
 }
 // The words as the shell reads them: these commands quote nothing but whole words.
 const argv = (command: string) => command.split(' ').map(word => word.replace(/^'(.*)'$/, '$1'))
 
 describe('wide mode: commands not run before are asked of the person first', () => {
-  beforeEach(() => rmSync(wide.approvals, { force: true }))
+  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }) })
 
-  const reads = [
+  const wider = [
     'gh run list --limit 20',
     'gh run list --workflow ci.yml --branch main --status failure',
     'gh run view 123456',
@@ -179,7 +186,7 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'harness buddy-read backend-cpu',
   ]
 
-  it.each(reads)('refuses %s until its person approves it, saying how to ask', command => {
+  it.each(wider)('refuses %s until its person approves it, saying how to ask', command => {
     const refused = answer('Bash', { command, description: 'x' })
     expect(refused.permissionDecision).toBe('deny')
     expect(refused.permissionDecisionReason).toContain('Not run before')
@@ -198,10 +205,25 @@ describe('wide mode: commands not run before are asked of the person first', () 
     expect(bash('argocd app logs harness-backend --tail 200 --previous')).toBe('deny')
   })
 
+  it('reads approvals only where the host pointed this session\'s list, and only in Harness\'s approvals folder', () => {
+    approve(argv('argocd app list'))
+    expect(bash('argocd app list')).toBe('allow')
+    rmSync(reads.file)
+    expect(bash('argocd app list')).toBe('deny')
+    // A file of approvals anywhere else, the Buddy's own folder included, approves nothing.
+    const elsewhere = join(root, 'approvals.json')
+    writeFileSync(elsewhere, readFileSync(approvals))
+    point(elsewhere)
+    expect(bash('argocd app list')).toBe('deny')
+    // Not resolved: the same file by a path with ".." in it.
+    point(`${dirname(approvals)}/../buddy-approvals/x/../${basename(approvals)}`)
+    expect(bash('argocd app list')).toBe('deny')
+  })
+
   it('forgets an approval after 30 days', () => {
-    mkdirSync(dirname(wide.approvals), { recursive: true })
+    mkdirSync(dirname(approvals), { recursive: true }); point()
     const day = 24 * 60 * 60 * 1000
-    writeFileSync(wide.approvals, JSON.stringify({ version: 1, entries: [
+    writeFileSync(approvals, JSON.stringify({ version: 1, entries: [
       { argv: argv('argocd app list'), at: Date.now() - 31 * day, messageId: 'old' },
       { argv: argv('gh run list --limit 20'), at: Date.now() - 29 * day, messageId: 'recent' }] }))
     expect(bash('argocd app list')).toBe('deny')
@@ -210,8 +232,8 @@ describe('wide mode: commands not run before are asked of the person first', () 
 
   it.each(['', 'not json', '{"entries":"x"}', '{"entries":[{"argv":"argocd app list","at":1}]}'])(
     'refuses every wider command while the approvals cannot be read (%j)', text => {
-      mkdirSync(dirname(wide.approvals), { recursive: true })
-      writeFileSync(wide.approvals, text)
+      mkdirSync(dirname(approvals), { recursive: true }); point()
+      writeFileSync(approvals, text)
       expect(bash('argocd app list')).toBe('deny')
     })
 
@@ -252,5 +274,106 @@ describe('wide mode: commands not run before are asked of the person first', () 
     const refused = answer('Bash', { command, description: 'x' })
     expect(refused.permissionDecision).toBe('deny')
     expect(refused.permissionDecisionReason).not.toContain('Not run before')
+  })
+})
+
+// The host records a person's "run:" lines (superTabs/host.ts) with the guard's own judgement, never a copy of its rules.
+describe('recording the person\'s approvals', () => {
+  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }) })
+  // Judged by the guard, then recorded, as the host does; the result as the host tells the Buddy.
+  const record = (text: string, messageId = 'm1', now = Date.now(), guard = script) => {
+    const judged = judgeBuddyApprovals({ node: process.execPath, guard, text })
+    recordBuddyApprovals({ reads, session: 'harness', approvals, judged, messageId }, now)
+    return { wide: judged.wide, recorded: judged.approve.map(entry => entry.command), refused: judged.refused, forgot: judged.forgot }
+  }
+  const entries = () => JSON.parse(readFileSync(approvals, 'utf8')).entries as { argv: string[]; at: number; messageId: string }[]
+
+  it('records the exact commands of its run: lines, and the guard then runs them', () => {
+    const result = record('Yes, go ahead.\nrun: argocd app logs harness-backend --tail 200\n  Run:  `gh run view 123 --log-failed`  \nthanks')
+    expect(result).toEqual({ wide: true, recorded: ['argocd app logs harness-backend --tail 200', 'gh run view 123 --log-failed'], refused: [], forgot: false })
+    expect(entries().map(entry => entry.argv)).toEqual([['argocd', 'app', 'logs', 'harness-backend', '--tail', '200'], ['gh', 'run', 'view', '123', '--log-failed']])
+    expect(bash('argocd app logs harness-backend --tail 200')).toBe('allow')
+    expect(bash('gh run view 123 --log-failed')).toBe('allow')
+    expect(bash('gh run view 124 --log-failed')).toBe('deny')
+  })
+
+  it.each(['git push origin main', 'gh api -X POST repos/autonomous-ai/openharness/issues', 'kubectl get secret', 'curl https://evil.example',
+    'cat ~/.ssh/id_rsa', 'argocd app sync harness-backend', 'gh run view 1; git push'])('records nothing for run: %s, and says it can never run', command => {
+    const result = record(`run: ${command}`)
+    expect(result).toEqual({ wide: true, recorded: [], refused: [command], forgot: false })
+    expect(existsSync(approvals) ? entries() : []).toEqual([])
+  })
+
+  it('tells which messages need judging', () => {
+    expect(['run: argocd app list', 'ok\n  Run: `gh run list`', 'forget runs'].map(hasBuddyApprovals)).toEqual([true, true, true])
+    expect(['yes', 'please run: x', '> run: x', 'forget runs now'].map(hasBuddyApprovals)).toEqual([false, false, false, false])
+  })
+
+  it('approves nothing for a yes, an ok or a quoted line that is not its own', () => {
+    expect(record('yes\nok, run it\n> run: argocd app list\nplease run: argocd app list').recorded).toEqual([])
+    expect(bash('argocd app list')).toBe('deny')
+  })
+
+  it('renews a command approved again, rather than listing it twice', () => {
+    const day = 24 * 60 * 60 * 1000, then = Date.now() - 20 * day
+    record('run: argocd app list', 'm1', then)
+    record('run: argocd app list', 'm2')
+    expect(entries()).toEqual([{ argv: ['argocd', 'app', 'list'], at: expect.any(Number), messageId: 'm2' }])
+    expect(entries()[0]!.at).toBeGreaterThan(then)
+  })
+
+  it('forgets every approval when the person sends "forget runs"', () => {
+    record('run: argocd app list')
+    expect(record('forget runs')).toEqual({ wide: true, recorded: [], refused: [], forgot: true })
+    expect(entries()).toEqual([])
+    expect(bash('argocd app list')).toBe('deny')
+  })
+
+  it('drops approvals 30 days old and keeps the newest 200', () => {
+    const day = 24 * 60 * 60 * 1000, now = Date.now()
+    record('run: argocd app list', 'old', now - 31 * day)
+    const many = Array.from({ length: 205 }, (_, i) => `run: gh run view ${i}`).join('\n')
+    record(many, 'many', now)
+    const kept = entries()
+    expect(kept).toHaveLength(200)
+    expect(kept.some(entry => entry.argv.join(' ') === 'argocd app list')).toBe(false)
+    expect(kept.at(-1)!.argv).toEqual(['gh', 'run', 'view', '204'])
+  })
+
+  it('keeps the file to its person: mode 600 in a folder of mode 700', () => {
+    record('run: argocd app list')
+    expect(statSync(approvals).mode & 0o777).toBe(0o600)
+    expect(statSync(dirname(approvals)).mode & 0o777).toBe(0o700)
+  })
+
+  it('records nothing through a guard that is not in wide mode', () => {
+    expect(record('run: argocd app list', 'm1', Date.now(), narrow)).toEqual({ wide: false, recorded: [], refused: [], forgot: false })
+    expect(existsSync(approvals)).toBe(false)
+  })
+
+  it('points the session\'s list at the approvals and keeps the files and links listed there, and the list keeps the pointer', () => {
+    const shot = join(reads.drops, 'shot.png')
+    mkdirSync(reads.drops, { recursive: true }); writeFileSync(shot, 'png')
+    allowBuddyReads(reads, { session: 'harness', files: [shot], links: ['https://claude.ai/artifact/abc'] })
+    record('run: argocd app list')
+    let list = JSON.parse(readFileSync(reads.file, 'utf8'))
+    expect(list).toMatchObject({ session: 'harness', approvals, files: [{ path: shot }], links: [{ url: 'https://claude.ai/artifact/abc' }] })
+    allowBuddyReads(reads, { session: 'harness', files: [], links: ['https://claude.ai/artifact/def'] })
+    list = JSON.parse(readFileSync(reads.file, 'utf8'))
+    expect(list.approvals).toBe(approvals)
+    expect(bash('argocd app list')).toBe('allow')
+  })
+
+  it('throws when it cannot write, so the host tries the delivery again', () => {
+    const blocked = join(parent, 'not-a-folder')
+    writeFileSync(blocked, '')
+    const judged = judgeBuddyApprovals({ node: process.execPath, guard: script, text: 'run: argocd app list' })
+    expect(() => recordBuddyApprovals({ reads, session: 'harness', approvals: join(blocked, 'a.json'), judged, messageId: 'm' })).toThrow()
+  })
+
+  it('throws when the guard cannot judge, so nothing is approved and the delivery is tried again', () => {
+    const broken = join(parent, 'broken-guard.mjs')
+    writeFileSync(broken, 'process.exit(3)\n')
+    expect(() => judgeBuddyApprovals({ node: process.execPath, guard: broken, text: 'run: argocd app list' })).toThrow()
   })
 })
