@@ -39,8 +39,10 @@ async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
   })
   await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
   const listeners = new Set<(frame: Frame) => void>()
+  const sockets: WebSocket[] = []
   wss.on('connection', (ws) => {
     socket = ws
+    sockets.push(ws)
     ws.on('message', (raw) => {
       const frame = JSON.parse(raw.toString()) as Frame
       received.push(frame)
@@ -55,6 +57,10 @@ async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
     /** Frames for machines, as the lane sent them: its own control frames left out. */
     forMachines: () => received.filter((frame) => frame.type !== 'device_hello' && frame.type !== 'machines_watch' && frame.type !== 'ping'),
     send: (frame: Frame) => socket?.send(JSON.stringify(frame)),
+    /** Every socket the lane opened, oldest first. */
+    sockets,
+    /** The backend closes the newest socket, as a restart or a network drop does. */
+    closeCurrent: (code = 1012) => socket?.close(code),
     /** The socket to this lane closing under it, as a relay restart or a network change does. */
     drop: () => socket?.terminate(),
     on: (listener: (frame: Frame) => void) => { listeners.add(listener) },
@@ -1095,15 +1101,153 @@ describe('overlapping machine selects', () => {
   })
 
   it('fails a select in flight when the lane is revoked, and starts the next one fresh', async () => {
-    const { link, server, selects, lines } = await selecting(60_000)
+    const { link, server, selects } = await selecting(60_000)
     const pending = settled(link.attach(CLOUD))
     await soon('the select', () => selects().length === 1)
     server.send({ type: 'device_revoked' })
     expect(await pending).toBe('revoked')
-    await soon('the revoked socket to close', () => lines.some((line) => line.startsWith('device: closed')))
     const next = settled(link.attach(CLOUD))
     await soon('a select on a new socket', () => selects().length === 2)
     server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
     expect(await next).toBe('ok')
+  })
+})
+
+/**
+ * The lane's own lifecycle around a select, found while fixing overlapping selects (#2400) and in its two security
+ * reviews: a socket closed on purpose is not the lane's any more, a select answer is the backend's own, the attached
+ * machine is the one an answer settled, and a reconnect goes where the dial is now.
+ */
+describe('the lane around a select', () => {
+  const CLOUD_2 = 'second-cloud-machine'
+  const settled = (promise: Promise<void>) => promise.then(() => 'ok', (error: Error) => error.message)
+  const selectsOf = (server: { received: Frame[] }) => server.received.filter((frame) => frame.type === 'machine_select')
+    .map((frame) => (frame.payload as { machineId: string }).machineId)
+  /** A lane whose fake backend answers every select after a moment, unless told to stay quiet. */
+  async function answering(opts: { quiet?: boolean } = {}) {
+    const up = await lane()
+    up.server.on((frame) => {
+      if (frame.type !== 'machine_select' || opts.quiet) return
+      const machineId = (frame.payload as { machineId: string }).machineId
+      setTimeout(() => up.server.send({ type: 'machine_selected', payload: { machineId } }), 20)
+    })
+    await up.link.online()
+    return up
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
+
+  it('keeps the new socket of a fast replug: the old one closing later is not the lane any more', async () => {
+    const { link, server, lines } = await answering()
+    link.release()
+    expect(await link.online().then(() => 'ok', (error: Error) => error.message)).toBe('ok')
+    await settle()   // the first socket's close lands now
+    expect(server.sockets).toHaveLength(2)
+    expect(server.sockets[1]!.readyState).toBe(1)   // OPEN
+    expect(lines.filter((line) => line.startsWith('device: closed'))).toEqual([])
+    expect(await settled(link.attach(CLOUD))).toBe('ok')
+  })
+
+  it('reselects at once after a revoke, without waiting for the revoked socket to close', async () => {
+    const { link, server } = await answering()
+    await link.attach(CLOUD)
+    server.send({ type: 'device_revoked' })
+    // The dial asks again the moment the revoke is read, before the revoked socket has finished closing.
+    for (let turn = 0; turn < 50_000 && link.status() !== 'idle'; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(await settled(link.attach(CLOUD))).toBe('ok')
+    await settle()
+    expect(await settled(link.attach(CLOUD))).toBe('ok')
+    // Still attached: the old socket's close tore nothing down, so the second attach had nothing to send.
+    expect(selectsOf(server)).toEqual([CLOUD, CLOUD])
+    expect(server.sockets.at(-1)!.readyState).toBe(1)
+  })
+
+  it('still comes back after the backend closes the current socket, and after a revoke while plugged in', async () => {
+    const { link, server, lines } = await answering()
+    server.closeCurrent(1012)
+    await until('the reconnect', () => server.sockets.length === 2 && link.status() === 'ready', 4_000)
+    expect(lines).toContain('device: closed (1012)')
+    // A revoke, with the dial still plugged in, comes back as before: the held socket is opened again.
+    server.send({ type: 'device_revoked' })
+    await until('the reconnect after the revoke', () => server.sockets.length === 3 && link.status() === 'ready', 4_000)
+  })
+
+  it('settles nothing with a select answer relayed from a machine, or one opened from a sealed frame', async () => {
+    const { link, server, seal, lines, heard } = await answering({ quiet: true })
+    await link.establish(LINKED)
+    let how = ''
+    void settled(link.attach(CLOUD)).then((result) => { how = result })
+    await until('the select', () => selectsOf(server).length === 1)
+    // Tagged with a machine: what another machine on the account (or the relay on its behalf) can put on this lane.
+    server.send({ type: 'machine_selected', machineId: CLOUD_2, payload: {} })
+    server.send({ type: 'machine_select_error', machineId: CLOUD_2, payload: { error: 'NOT_YOUR_MACHINE' } })
+    // Sealed by a linked machine, which opens to a select answer.
+    seal.open.mockResolvedValueOnce({ frame: { type: 'machine_selected', machineId: LINKED, payload: {} } })
+    server.send({ type: 'machine_selected', machineId: LINKED, payload: { __e2e: { n: 0 } } })
+    await settle()
+    expect(how).toBe('')
+    expect(lines.filter((line) => line.includes('not from the backend'))).toHaveLength(3)
+    expect(heard.filter((frame) => String(frame.type).startsWith('machine_select'))).toEqual([])
+    // The backend's own answer settles it.
+    server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
+    await until('the answer', () => how !== '')
+    expect(how).toBe('ok')
+  })
+
+  it('marks attached only the machine whose select an answer settled, so a later select of a replaced one is sent', async () => {
+    const { link, server } = await answering({ quiet: true })
+    const older = settled(link.attach(CLOUD))
+    await until('the first select', () => selectsOf(server).length === 1)
+    const newer = settled(link.attach(CLOUD_2))
+    await until('the second select', () => selectsOf(server).length === 2)
+    expect(await older).toBe('SELECT_SUPERSEDED')
+    server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })                                     // late, for the replaced one
+    server.send({ type: 'machine_select_error', payload: { machineId: CLOUD_2, error: 'MACHINE_START_FAILED' } })
+    expect(await newer).toBe('MACHINE_START_FAILED')
+    let how = ''
+    void settled(link.attach(CLOUD)).then((result) => { how = result })
+    await settle()
+    expect(selectsOf(server)).toEqual([CLOUD, CLOUD_2, CLOUD])
+    expect(how).toBe('')   // waits for its own answer, not skipped
+    server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
+    await until('its answer', () => how !== '')
+    expect(how).toBe('ok')
+  })
+
+  it('tears down a socket still closing before it opens the next, so the next starts clean and the old cleanup runs once', async () => {
+    const { link, server, seal, lines } = await answering()
+    await link.establish(LINKED)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+    let asked = ''
+    void link.rpc('models_list', {}, LINKED).then(() => { asked = 'answered' }, (error: Error) => { asked = error.message })
+    await until('the request', () => server.forMachines().some((frame) => frame.type === 'models_list'))
+    // The socket starts closing (a close handshake under way, its close event not yet fired) when the next call needs one.
+    const old = (link as unknown as { ws: { close(): void; readyState: number } }).ws
+    old.close()
+    expect(old.readyState).toBe(2)   // CLOSING
+    await link.online()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The old socket's lane went with it: its request failed, its session ended at the gateway, once.
+    expect(asked).toMatch(/socket closed/)
+    expect(seal.drop).toHaveBeenCalledWith(LINKED)
+    await until('the old close to land', () => lines.some((line) => line.startsWith('device: an earlier socket closed')))
+    expect(seal.drop.mock.calls.filter(([machineId]) => machineId === LINKED)).toHaveLength(1)
+    // And the new socket holds no session of the old one: the next call to the machine says hello again.
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { content: 'on the new socket' } })
+    await until('a new hello', () => seal.hello.mock.calls.length === 2)
+    expect(server.sockets).toHaveLength(2)
+    expect(server.sockets[1]!.readyState).toBe(1)
+  })
+
+  it('reconnects to the machine chosen during the wait, not the one before the drop', async () => {
+    const { link, server } = await answering()
+    await link.attach(CLOUD)
+    server.closeCurrent(1012)
+    await until('the drop', () => link.status() === 'idle')
+    // The person picks another machine before the reconnect timer fires.
+    expect(await settled(link.attach(CLOUD_2))).toBe('ok')
+    await new Promise((resolve) => setTimeout(resolve, 1_500))   // past the reconnect timer
+    expect(selectsOf(server)).toEqual([CLOUD, CLOUD_2])
+    expect(await settled(link.attach(CLOUD_2))).toBe('ok')
+    expect(selectsOf(server)).toEqual([CLOUD, CLOUD_2])   // still there: nothing to send
   })
 })
