@@ -4572,6 +4572,42 @@ describe('swarm cards', () => {
       return isSupertab
     })
 
+    /** Tokens as the Pro's guard counts them: every object, array, string (keys too) and bare value is one. */
+    const tokens = (v: unknown): number => Array.isArray(v) ? 1 + v.reduce((n: number, x) => n + tokens(x), 0)
+      : v && typeof v === 'object' ? 1 + Object.entries(v).reduce((n, [, x]) => n + 1 + tokens(x), 0) : 1
+    const big = (n: number) => lead(n, { project: `p${n}`.padEnd(48, 'p'), owner: `o${n}`.padEnd(48, 'o'), chat: { ...pmChat, name: `c${n}`.padEnd(48, 'c') },
+      sideChat: { ...buddyChat, name: `s${n}`.padEnd(48, 's') }, buddies: true, buddy: { ...buddy, name: `b${n}`.padEnd(48, 'b') } })
+    const twelve = () => [card('st1', Array.from({ length: 12 }, (_, i) => big(i + 1)))]
+
+    it('a Pro\'s swarmBuddy supertab frame stays within 480 JSON tokens with 12 Leads and a Buddy each', async () => {
+      const { session, port } = await connect(cardHost({ cards: twelve() }))
+      try {
+        port.say({ ...BUDDY, board: 'pro' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab').length).toBeGreaterThan(0))
+        const frames = ofType(port, 'supertab')
+        // 483 tokens with every Buddy: at least one block goes, and no name is shortened for it.
+        expect((frames.at(-1)!.leads as Array<Record<string, unknown>>).some((l) => !('buddy' in l))).toBe(true)
+        expect((frames.at(-1)!.leads as Array<Record<string, unknown>>).every((l) => String(l.project).length === 48 && String(l.chatName).length === 48)).toBe(true)
+        for (const f of frames) {
+          expect(tokens(f)).toBeLessThanOrEqual(480)
+          const has = (f.leads as Array<Record<string, unknown>>).map((l) => 'buddy' in l)
+          // Buddy blocks go from the last Lead up: those kept are a prefix.
+          expect(has).toEqual([...has].sort((a, b) => Number(b) - Number(a)))
+        }
+      } finally { await session.stop() }
+    })
+
+    it('a round\'s swarmBuddy supertab frame is unchanged by the Pro budget', async () => {
+      const { session, port } = await connect(cardHost({ cards: twelve() }))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        const leads = ofType(port, 'supertab')[0].leads as Array<Record<string, unknown>>
+        expect(leads).toHaveLength(12)
+        expect(leads.every((l) => 'buddy' in l)).toBe(true)
+      } finally { await session.stop() }
+    })
+
     it('a swarmBuddy dial gets each Lead\'s buddy block and buddies flag', async () => {
       const cards = [card('st1', [withBuddy(), lead(2, { chat: pmChat, sideChat: { kind: 'lead', id: 'lead-c2', name: 'Lead', working: false }, buddies: true }), lead(3)])]
       const { session, port } = await connect(cardHost({ cards }))
