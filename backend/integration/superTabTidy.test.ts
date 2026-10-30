@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -13,6 +13,8 @@ import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
+import { SuperTabError } from '../src/superTabs/model.js'
+import { logger } from '../src/utils/logger.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -549,5 +551,127 @@ describe('a delivery that cannot move', () => {
     await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
     expect(await f.timed.settleDeliveries(f.tab, [read], f.clock.now + HOUR + MINUTE)).toBe(1)
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
+  })
+
+  // Prod 10-30, v1.3.71 (#2178): every Buddy claim answered SWARM_BUSY for two hours and nothing said so. A claim that fails
+  // that way is now written on its delivery, outside the failed transaction (store.ts recordFailedClaim).
+  describe('a claim that keeps failing', () => {
+    /** Whether the stores from failingStore answer busy, and whether the record write itself is down. Reset before each test. */
+    const busy = { on: false, recordDown: false, early: false, recordHangs: false }
+    beforeEach(() => { busy.on = false; busy.recordDown = false; busy.early = false; busy.recordHangs = false })
+    /** A store over the same database whose transactions answer busy while busy.on is set, as retryTransient ends 8 write
+     *  conflicts. By default the real body runs first (its authorization checks included) and the answer comes at commit, rolling
+     *  the body back; with busy.early the answer comes before any body runs. With busy.recordDown its single-document delivery
+     *  writes throw too; with busy.recordHangs they never answer. */
+    const failingStore = (f: Fixture) => {
+      const proxy = new Proxy(db, { get: (target, key) => {
+        const tooBusy = () => new SuperTabError('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
+        if (key === '$transaction') return (body: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) => {
+          if (!busy.on) return (target.$transaction as (...a: unknown[]) => unknown)(body, ...rest)
+          if (busy.early) return Promise.reject(tooBusy())
+          return (target.$transaction as (...a: unknown[]) => unknown)(async (tx: unknown) => { await body(tx); throw tooBusy() }, ...rest)
+        }
+        if (key === 'superTabDelivery' && (busy.recordDown || busy.recordHangs)) return new Proxy(target.superTabDelivery, { get: (model, name) =>
+          name === 'updateMany' ? () => busy.recordHangs ? new Promise(() => {}) : Promise.reject(new Error('down')) : Reflect.get(model, name) })
+        return Reflect.get(target, key)
+      } }) as PrismaClient
+      busy.on = true
+      return new SuperTabStore(proxy, () => f.clock.now)
+    }
+    const claim = { type: 'claim', claimId: 'c' } as const
+    const claimFields = ['claimFailingSince', 'claimFailedAt', 'claimFailures', 'claimFailure'] as const
+    const row = (id: string) => db.superTabDelivery.findUniqueOrThrow({ where: { id } })
+
+    it('records a busy claim on its delivery, keeps when it began and counts each one', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f)
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      const first = f.clock.now
+      f.clock.now += 30_000
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      expect(await row(id)).toMatchObject({ status: 'queued', claimFailingSince: new Date(first),
+        claimFailedAt: new Date(first + 30_000), claimFailures: 2, claimFailure: 'SWARM_BUSY' })
+    })
+    it('clears the record once a claim gets in', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      await expect(failingStore(f).delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      expect((await row(id)).claimFailures).toBe(1)
+      await f.timed.delivery(host, f.tab, f.lead, id, claim)
+      const claimed = await row(id)
+      expect(claimed.status).toBe('claimed')
+      // Unset, not null: the claim removes the keys, so "missing" stays a real absence that the first failure's isSet: false branch
+      // matches (and starts the count at 0, since Prisma's increment of a missing count leaves it null). Prisma reads both as null.
+      const [raw] = await db.superTabDelivery.findRaw({ filter: { _id: id } }) as unknown as Array<Record<string, unknown>>
+      for (const field of claimFields) { expect(claimed[field], field).toBeNull(); expect(raw, field).not.toHaveProperty(field) }
+    })
+    it('records nothing for a delivery that is no longer queued, or for an ack', async () => {
+      const f = await swarm(); const gone = await toLead(f, 'Gone'); const acked = await toLead(f, 'Acked')
+      await db.superTabDelivery.update({ where: { id: gone }, data: { status: 'claimed', claimId: 'c' } })
+      const flaky = failingStore(f)
+      await expect(flaky.delivery(host, f.tab, f.lead, gone, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(gone))[field], field).toBeNull()
+      await f.timed.delivery(host, f.tab, f.lead, acked, claim)
+      await expect(flaky.delivery(host, f.tab, f.lead, acked, { type: 'ack', claimId: 'c', receipt: 'r', uncertain: false })).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(acked))[field], field).toBeNull()
+    })
+    it('records nothing when busy is answered before the request was authorized', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.early = true
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(id))[field], field).toBeNull()
+    })
+    it('answers busy within about 2 seconds even when the record write never returns', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.recordHangs = true
+      const began = Date.now()
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY', status: 503 })
+      expect(Date.now() - began).toBeLessThan(4_000)
+    }, 15_000)
+    it('still throws the busy answer when the record itself cannot be written, and says so', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.recordDown = true
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY', status: 503 })
+        expect(warn).toHaveBeenCalledWith('[swarm-deliveries] could not record a failed claim', expect.objectContaining({ tabId: f.tab, deliveryId: id }))
+      } finally { warn.mockRestore() }
+    })
+    it('hands claimFailingSince and claimFailures to page readers', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      await expect(failingStore(f).delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      const page = await f.timed.messages(owner, f.tab, 'lead', {})
+      const shown = page.messages.flatMap(m => m.deliveries).find(d => d.id === id)
+      expect(shown).toMatchObject({ claimFailingSince: new Date(f.clock.now), claimFailures: 1 })
+      expect(JSON.parse(JSON.stringify(shown))).toMatchObject({ claimFailingSince: new Date(f.clock.now).toISOString(), claimFailures: 1 })
+    })
+    it('raises claims failing for a delivery whose claims have failed 5 minutes and still fail, and cancels nothing', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi'); const flaky = failingStore(f)
+      const began = f.clock.now
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toThrow()
+      f.clock.now = began + 5 * MINUTE
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toThrow()
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await settleStuckDeliveries(db, f.timed, began + 5 * MINUTE + 1_000)
+        // Earlier tests leave rows in the shared database; this Swarm's line is the one that counts.
+        expect(warn).toHaveBeenCalledWith('[swarm-deliveries] claims failing',
+          { tabId: f.tab, deliveries: 1, oldestFailingSince: new Date(began).toISOString(), codes: ['SWARM_BUSY'] })
+        expect(await status(id)).toBe('queued')
+      } finally { warn.mockRestore() }
+    })
+    it('says nothing for a claim failing under 5 minutes, or one whose last failure is over 5 minutes old', async () => {
+      const f = await swarm(); const young = await toLead(f, 'Young'); const old = await toLead(f, 'Old')
+      const now = f.clock.now + 10 * MINUTE
+      await db.superTabDelivery.update({ where: { id: young }, data: { claimFailingSince: new Date(now - 4 * MINUTE),
+        claimFailedAt: new Date(now - 1_000), claimFailures: 3, claimFailure: 'SWARM_BUSY' } })
+      await db.superTabDelivery.update({ where: { id: old }, data: { claimFailingSince: new Date(now - 20 * MINUTE),
+        claimFailedAt: new Date(now - 6 * MINUTE), claimFailures: 9, claimFailure: 'SWARM_BUSY' } })
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await settleStuckDeliveries(db, f.timed, now)
+        expect(warn.mock.calls.filter(([line, fields]) => line === '[swarm-deliveries] claims failing' && (fields as { tabId: string }).tabId === f.tab)).toEqual([])
+        expect(await status(young)).toBe('queued'); expect(await status(old)).toBe('queued')
+      } finally { warn.mockRestore() }
+    })
   })
 })
