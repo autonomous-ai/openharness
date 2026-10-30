@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { PULL_READ_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import type { Conversation } from './model.js'
+import { activeWork, type Conversation } from './model.js'
 import type { HeadData } from './parts/index.js'
 import type { SuperTabStore } from './store.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
@@ -10,7 +10,8 @@ import { logger } from '../utils/logger.js'
 // A finished group archives by itself (roadmap, December: nobody tidies a Swarm by hand): its task done or cancelled, quiet
 // for 30 minutes, no person's decision waiting there, and every pull request it links merged or closed. Only GitHub says
 // that, over the network, so this runs in the singleton worker and never inside a Swarm's write; the write itself checks
-// everything the Swarm knows again (store.ts archiveFinished).
+// everything the Swarm knows again (store.ts archiveFinished). A review nobody is reviewing closes the same way once every
+// pull request of the work it reviews is merged or closed (tidy.ts reviewClosable).
 
 export type PullRequestState = 'open' | 'merged' | 'closed' | null
 /** What a sweep asks GitHub: a pull request's state (null: it cannot say), and `done` once the sweep is over. */
@@ -51,11 +52,16 @@ export function appPullRequests(app: GitHubApp): PullRequests {
 
 const BATCH = 500
 
-/** Marks every part written before the finished mark whose task is done or cancelled, so the pass finds it: run once by the
- *  worker at startup, as its other index work is. Every later write of a part sets the mark itself (parts/write.ts). */
+/** Marks every part written before the finished mark whose task is done or cancelled, and every open review written before
+ *  reviews took the mark while nobody reviews them, so the pass finds it: run once by the worker at startup, as its other
+ *  index work is. Every later write of a part sets the mark itself (parts/write.ts). */
 export async function markFinishedGroups(db: PrismaClient): Promise<number> {
-  const answer = await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { workFinished: { $exists: false }, deleted: false,
-    'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true }] })
+  const answer = await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
+    { q: { workFinished: { $exists: false }, deleted: false, 'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true },
+    // Open groups only (the mark's index leads with it and archived): the reviews waiting for a Reviewer on 2026-10-30.
+    { q: { workFinished: { $in: [false, null] }, archived: false, deleted: false, 'data.reviewOf': { $type: 'string' },
+      $or: [{ 'data.assignment': null }, { 'data.assignment.status': { $in: ['done', 'stopped', 'cancelled', 'lost'] } }] }, u: { $set: { workFinished: true } }, multi: true },
+  ] })
   return Number((answer as { nModified?: number }).nModified ?? 0)
 }
 
@@ -79,11 +85,24 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
         orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH, select: { id: true, tabId: true, key: true, lastActivityAt: true, data: true } })
       for (const row of rows) {
         const group = row.data as unknown as Conversation
-        if (group.audience || !['done', 'cancelled'].includes(group.assignment?.status ?? '') || !await tidyOn(row.tabId)) continue
-        const urls = group.pullRequestUrls ?? []
-        let settled = true
-        for (const url of urls) if (!['merged', 'closed'].includes(await stateOf(url) ?? '')) { settled = false; break }
-        if (settled && await store.archiveFinished(row.tabId, row.key, urls)) archived++
+        const finished = ['done', 'cancelled'].includes(group.assignment?.status ?? ''), review = !!group.reviewOf && !activeWork(group)
+        if (group.audience || !(finished || review) || !await tidyOn(row.tabId)) continue
+        const checked: Record<string, 'merged' | 'closed'> = {}
+        // Stops at the first pull request still open, or that GitHub cannot read.
+        const settled = async (urls: string[]) => {
+          for (const url of urls) {
+            const state = await stateOf(url)
+            if (state !== 'merged' && state !== 'closed') return false
+            checked[url] = state
+          }
+          return true
+        }
+        const own = group.pullRequestUrls ?? []
+        if (finished && await settled(own) && await store.archiveFinished(row.tabId, row.key, checked)) { archived++; continue }
+        if (!review) continue
+        const reviewed = (await db.swarmGroup.findUnique({ where: { tabId_key: { tabId: row.tabId, key: group.reviewOf! } }, select: { data: true } }))?.data as unknown as Conversation | undefined
+        const urls = [...new Set([...own, ...reviewed?.pullRequestUrls ?? []])]
+        if (urls.length && await settled(urls) && await store.archiveFinished(row.tabId, row.key, checked, group.reviewOf)) archived++
       }
       if (rows.length < BATCH) return archived
       after = { at: rows.at(-1)!.lastActivityAt, id: rows.at(-1)!.id }

@@ -38,4 +38,10 @@ describe('the finished-work mark a conversation write stores', () => {
     expect(extracted('group', group('cancelled'), 1).workFinished).toBe(true)
     for (const status of ['working', 'review', 'lost', 'stopped', null]) expect(extracted('group', group(status), 1).workFinished).toBe(false)
   })
+
+  it('is set on a review while no Reviewer works on it, so the pass can close it once its pull requests are (tidy.ts)', () => {
+    const review = (status: string | null) => ({ ...group(status), reviewOf: 'built' })
+    for (const status of [null, 'lost', 'stopped', 'done', 'cancelled']) expect(extracted('group', review(status), 1).workFinished).toBe(true)
+    for (const status of ['working', 'review', 'needs_human', 'blocked']) expect(extracted('group', review(status), 1).workFinished).toBe(false)
+  })
 })
