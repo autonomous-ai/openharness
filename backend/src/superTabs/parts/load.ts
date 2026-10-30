@@ -93,6 +93,15 @@ export async function loadObserved(tx: Transaction, tabId: string, machineId: st
   return { ...loaded, groups: rows.map(row => toPart<GroupData>('group', row)) }
 }
 
+/** Machine parts by id (`${tabId}:${machineId}`), with their version, in one read by `_id`: what a reading-only report reads
+ *  (DB 2.5, superTabs/machineReports.ts). Raw, so many ids are one plain `$in`. */
+export async function loadMachineParts(tx: Transaction, ids: string[]): Promise<Map<string, { version: number; deleted: boolean; data: MachineData }>> {
+  if (!ids.length) return new Map()
+  const rows = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: ids } } }, { $project: { version: 1, deleted: 1, data: 1 } }] }) as
+    unknown as Array<{ _id: string; version: number; deleted: boolean; data: MachineData }>
+  return new Map(rows.map(row => [row._id, { version: Number(row.version), deleted: !!row.deleted, data: row.data }]))
+}
+
 /** What the read cache keeps of a Swarm at its main stamp (cache.ts): `loadActive`'s parts with every live start, and no
  *  machines, which it keeps at their own stamp (`loadMachines`). Dormant groups and their like come by name (`loadGroups`). */
 export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts> {

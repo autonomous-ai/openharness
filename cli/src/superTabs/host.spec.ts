@@ -44,6 +44,8 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   let clock = 0
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
+    // A backend from before one call for all of a machine's readings (DB 2.5): the host sends each Swarm's on its own.
+    if (path.endsWith('/readings')) return { status: 404, body: { message: `Route POST:${path} not found`, error: 'Not Found', statusCode: 404 } }
     if (path.includes('/hosts/')) data = hostForm(removed ? [] : [row], { tabs: ['tab'] })
     else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
     else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
