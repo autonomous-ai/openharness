@@ -58,14 +58,21 @@ const MAX_DELAY_MS = 30_000
 const RENEW_EVERY_MS = 30_000
 /** After the far end refused this daemon's key, frames from it start no session for this long. */
 const DENIED_QUIET_MS = 10 * 60_000
-/** Frames held per machine while its session renews, and for how long. The restart replay is a few dozen. */
+/** Frames held per machine while its session renews. The restart replay is a few dozen. */
 const HELD_MAX = 64
-const HELD_TTL_MS = 30_000
+/**
+ * How long past the longest wait a held frame can meet: a renewal the per-machine limit holds back runs up to
+ * RENEW_EVERY_MS later, and its hello may then take its whole timeout. A hold time of 30 s flat could expire
+ * a frame held just after one renewal before the delayed one read it (security review 2 on #2356).
+ */
+const HELD_SLACK_MS = 10_000
 /** And by size, in bytes as they came: the socket takes frames of any size, so a count alone would let a
  *  relay park megabytes. */
 const HELD_MAX_BYTES = 2 * 1024 * 1024
 /** How long a machine's linked-or-not answer is kept for frames arriving with no session (see `linked`). */
 const PEER_CACHE_MS = 5_000
+/** And for how many machines: the relay names the machine on every frame, so made-up ids must not grow it. */
+const PEER_CACHE_MAX = 256
 /** What the person sent each machine, kept under its session so a refusal can name what was not delivered. */
 const SENT_KEPT = 32
 /** A refusal with no counter names what was sealed this recently. */
@@ -180,10 +187,13 @@ export class DeviceLink {
   private readonly sentBefore = new Map<string, SentUnder>()
   private readonly now: () => number
   private readonly renewEvery: number
+  /** How long a held frame is kept: longer than a delayed renewal and its hello together (HELD_SLACK_MS). */
+  private readonly heldTtl: number
 
   constructor(private readonly opts: DeviceLinkOpts) {
     this.now = opts.now ?? Date.now
     this.renewEvery = opts.renewEveryMs ?? RENEW_EVERY_MS
+    this.heldTtl = this.renewEvery + (opts.handshakeTimeoutMs ?? RPC_TIMEOUT_MS) + HELD_SLACK_MS
   }
 
   status(): DeviceLinkStatus { return this.state }
@@ -665,7 +675,7 @@ export class DeviceLink {
     // and the count and size caps would stay full of frames nobody will read.
     const now = this.now()
     const held = this.held.get(machineId) ?? []
-    const list = held.filter((h) => now - h.at <= HELD_TTL_MS)
+    const list = held.filter((h) => now - h.at <= this.heldTtl)
     if (list.length < held.length) this.opts.log(`device: ${held.length - list.length} held frame(s) from ${machineId} waited too long — dropped`)
     const total = list.reduce((sum, h) => sum + h.bytes, 0)
     if (list.length >= HELD_MAX) {
@@ -692,7 +702,7 @@ export class DeviceLink {
     this.held.delete(machineId)
     const now = this.now()
     for (const { frame, at } of list) {
-      if (now - at > HELD_TTL_MS) { this.opts.log(`device: a held ${frame.type ?? '?'} from ${machineId} waited too long — dropped`); continue }
+      if (now - at > this.heldTtl) { this.opts.log(`device: a held ${frame.type ?? '?'} from ${machineId} waited too long — dropped`); continue }
       // Given up while the gateway read the last one (the socket closed, a reset): a newer session is not this one's.
       if (this.sessions.get(machineId) !== session) return
       const opened = await this.opts.seal.open(machineId, frame as Record<string, unknown>).catch((): { lost: true } => ({ lost: true }))
@@ -726,6 +736,8 @@ export class DeviceLink {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null }
     for (const timer of this.renewLater.values()) clearTimeout(timer)
     this.renewLater.clear()
+    // The machines this lane was told about go with it (a revoked dial, a sign-out).
+    this.linkedCache.clear()
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)) }
     this.pending.clear()
@@ -794,6 +806,10 @@ export class DeviceLink {
       return
     }
     if (frame.type === 'e2e_denied') {
+      // Only for a machine this daemon has a session or hello with, or is linked to (read through the bounded
+      // cache): the relay names the machine, and acting on any id it made up recorded a quiet time and a log
+      // line for each, never removed (security review 1 on #2357).
+      if (!from || (!this.sessions.has(from) && !this.cryptoWaiters.has(from) && !this.linked(from))) return
       // The far end knows this daemon's key and rejected it — the pin is stale, not merely missing.
       this.opts.log(`device: e2e denied ${from} — the remote password may have changed or this machine's link was revoked, re-run \`harness link connect ${from}\``)
       this.failCrypto(from, new Error('E2EE_DENIED'))
@@ -899,6 +915,12 @@ export class DeviceLink {
     const cached = this.linkedCache.get(machineId)
     if (cached && now - cached.at >= 0 && now - cached.at < PEER_CACHE_MS) return cached.linked
     const linked = !!this.opts.peer(machineId)
+    // Bounded: entries past their time go first, then the oldest. Re-set so a fresh read moves to the end.
+    this.linkedCache.delete(machineId)
+    if (this.linkedCache.size >= PEER_CACHE_MAX) {
+      for (const [id, entry] of this.linkedCache) if (now - entry.at < 0 || now - entry.at >= PEER_CACHE_MS) this.linkedCache.delete(id)
+      while (this.linkedCache.size >= PEER_CACHE_MAX) this.linkedCache.delete(this.linkedCache.keys().next().value!)
+    }
     this.linkedCache.set(machineId, { linked, at: now })
     return linked
   }
