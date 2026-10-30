@@ -218,8 +218,9 @@ void main() {
     SwarmDictation? dictation,
     ValueListenable<bool>? out,
     bool settle = true,
+    Size size = const Size(390, 844),
   }) async {
-    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.physicalSize = size * 3;
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -511,6 +512,54 @@ void main() {
             .hintText,
         'Message Wren · Mobile',
       );
+    });
+
+    testWidgets('on a small phone with the keyboard up, ✕, To: and the '
+        'chats scroll above the composer: a five-line draft and a refusal '
+        'fit, Send stays above the keyboard, and ✕ is a scroll away', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
+          throw const SuperTabFailure(
+            'INVALID',
+            'This chat takes no new messages.',
+            statusCode: 400,
+          );
+      await pump(tester, fake, size: const Size(320, 568));
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.pump();
+
+      const keyboard = 260.0;
+      tester.view.viewInsets = const FakeViewPadding(bottom: keyboard * 3);
+      await tester.pumpAndSettle();
+      await write(tester, 'one\ntwo\nthree\nfour\nfive');
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull, reason: 'nothing overflows');
+      expect(key('swarm-new-message-error'), findsOneWidget);
+      expect(field(tester), 'one\ntwo\nthree\nfour\nfive');
+      const above = 568 - keyboard;
+      final send = tester.getRect(key('swarm-new-message-send'));
+      expect(send.bottom, lessThanOrEqualTo(above), reason: 'above the keys');
+      expect(send.height, greaterThanOrEqualTo(44));
+      expect(
+        tester.getRect(key('swarm-new-message-error')).bottom,
+        lessThanOrEqualTo(above),
+      );
+      expect(
+        tester.getRect(key('swarm-new-message-field')).top,
+        greaterThanOrEqualTo(0),
+        reason: 'the whole draft on screen',
+      );
+
+      await tester.ensureVisible(key('swarm-new-message-close'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-new-message-close'));
+      await tester.pumpAndSettle();
+      expect(sheetOpen(), isFalse);
     });
 
     testWidgets('Send waits for a pick and for words', (tester) async {
@@ -973,6 +1022,50 @@ void main() {
       expect(find.byType(SwarmProjectPage), findsNothing);
       expect(find.byType(SwarmConversationPage), findsNothing);
       expect(key('swarm-title-button'), findsOneWidget, reason: 'Home');
+    });
+
+    testWidgets('access lost while a post with a file is out: its refusal, '
+        'once it comes, changes nothing and throws nothing', (tester) async {
+      final uploads = FakeUploads();
+      final fake = backend();
+      final answer = Completer<void>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) async {
+        await answer.future;
+        throw const SuperTabFailure(
+          'FORBIDDEN',
+          'You can no longer post in this chat.',
+          statusCode: 403,
+        );
+      };
+      pickSwarmFiles = () async => [
+        XFile.fromData(
+          Uint8List.fromList([1, 2, 3]),
+          name: 'build.log',
+          path: '/copies/build.log',
+        ),
+      ];
+      final host = await pump(tester, fake, upload: uploads.upload);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.tap(key('swarm-new-message-attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-attach-files'));
+      await tester.pumpAndSettle();
+      await write(tester, 'With the log');
+      await tester.tap(key('swarm-new-message-send'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      expect(sends(fake), hasLength(1), reason: 'the post is out');
+
+      await refuse(tester, fake, host);
+      expect(sheetOpen(), isFalse);
+      answer.complete();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expect(find.text('You can no longer post in this chat.'), findsNothing);
     });
 
     testWidgets('closed while its post is on its way, the answer opens '

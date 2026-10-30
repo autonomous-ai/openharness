@@ -371,6 +371,28 @@ void main() {
     expect(r.uploads.asked, isEmpty);
   });
 
+  test('closed while its post with a file is out, a refusal that comes '
+      'after touches nothing it let go', () async {
+    final r = rig();
+    final answer = Completer<Object?>();
+    r.swarm.routes[commands] = (_) => answer.future;
+    await r.reader.refresh();
+    final c = SwarmConversation(r.reader, 'g1');
+    await c.load();
+    c.draft = 'look';
+    c.files.add([file('a.jpg')]);
+
+    final sending = c.send();
+    await settle();
+    expect(c.pending, isNotNull, reason: 'the post is out');
+    c.dispose();
+    answer.completeError(
+      const SuperTabFailure('FORBIDDEN', 'No access.', statusCode: 403),
+    );
+
+    expect(await sending, isFalse);
+  });
+
   test('closing the chat lets its files go', () async {
     final r = rig();
     await r.reader.refresh();

@@ -22,7 +22,9 @@ import 'swarm_fixture.dart';
 /// one): Home with its floating +, the sheet it opens, narrowed by To:, a
 /// chat picked with a message typed, and a send refused — in both phone
 /// themes, 390 points wide and on a small phone, 320, from made-up Swarm
-/// data only, to the folder `SWARM_NEW_MESSAGE_SHOTS` names.
+/// data only, to the folder `SWARM_NEW_MESSAGE_SHOTS` names. On the small
+/// phone, a five-line draft refused with the keyboard up too: the test draws
+/// the keyboard's place as a grey block, since no keyboard renders here.
 final shots = Platform.environment['SWARM_NEW_MESSAGE_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -172,7 +174,30 @@ void main() {
             child: MaterialApp(
               debugShowCheckedModeBanner: false,
               theme: buildAppTheme(brightness: brightness),
-              builder: (_, child) => SwarmScope(notifier: host, child: child!),
+              builder: (context, child) => SwarmScope(
+                notifier: host,
+                child: Stack(
+                  children: [
+                    child!,
+                    // Where the keyboard is, while it is up.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: MediaQuery.viewInsetsOf(context).bottom,
+                      child: const Material(
+                        color: Color(0xFF8E8E93),
+                        child: Center(
+                          child: Text(
+                            'Keyboard',
+                            style: TextStyle(color: Color(0xFFFFFFFF)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               home: const SwarmPage(),
             ),
           ),
@@ -215,6 +240,21 @@ void main() {
         await tester.tap(key('swarm-new-message-send'));
         await tester.pumpAndSettle();
         await capture('refused');
+
+        if (width == 320) {
+          tester.view.viewInsets = FakeViewPadding(
+            bottom: 260 * tester.view.devicePixelRatio,
+          );
+          await tester.enterText(
+            field,
+            'Can we ship the floating + today?\nThe sheet scrolls now.\n'
+            'Send stays above the keys.\nTested at 320.\nFive lines.',
+          );
+          await tester.tap(key('swarm-new-message-send'));
+          await tester.pumpAndSettle();
+          await capture('keyboard');
+          tester.view.resetViewInsets();
+        }
 
         await tester.pumpWidget(const SizedBox());
         host.dispose();

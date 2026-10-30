@@ -686,6 +686,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         body: pending,
       );
     } on SuperTabFailure catch (failure) {
+      // Closed meanwhile (access lost, New message gone): its draft and files
+      // went with it, and nobody waits on the answer.
+      if (_disposed) return false;
       // A definitive refusal made no change: the text goes back to the draft
       // to correct. A lost answer keeps its receipt, so a retry is the same
       // post.
@@ -708,6 +711,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       sending = false;
       if (!_disposed) _tell();
     }
+    if (_disposed) return true;
     _uploads.forget(_sent?.files ?? const []);
     unawaited(reader.refresh());
     // Shown as on its way until the read that brings it back.

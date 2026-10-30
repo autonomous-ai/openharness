@@ -184,7 +184,8 @@ Future<SwarmChatPick?> showSwarmNewMessage(
 
 /// What [showSwarmNewMessage] shows: ✕ and its title; To:, which narrows
 /// the chats by name, case and accents aside; the chats
-/// ([swarmNewMessageChats]), one picked at a time; and a composer like a
+/// ([swarmNewMessageChats]), one picked at a time — the three scrolling as
+/// one — and, pinned under them above the keyboard, a composer like a
 /// chat's, with + and the mic.
 ///
 /// Send goes the way a chat's own composer sends ([SwarmConversation.send]):
@@ -510,20 +511,26 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _header(),
-            _to(),
+            // ✕, To: and the chats scroll as one, and only the composer is
+            // pinned: on a small phone with the keyboard up, a long draft,
+            // a reason or files still leave Send above the keys.
             Expanded(
               child: ListView(
                 key: const ValueKey('swarm-new-message-list'),
                 keyboardDismissBehavior:
                     ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpace.m,
-                  0,
-                  AppSpace.m,
-                  AppSpace.m,
-                ),
-                children: _rows(list, several: shown.length > 1),
+                padding: const EdgeInsets.only(bottom: AppSpace.m),
+                children: [
+                  _header(),
+                  _to(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: _rows(list, several: shown.length > 1),
+                    ),
+                  ),
+                ],
               ),
             ),
             SafeArea(top: false, child: _composer(tty, picked)),
