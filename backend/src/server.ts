@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import cors from '@fastify/cors'
+import { CORS_OPTIONS } from './lib/corsOptions.js'
 import Fastify from 'fastify'
 import http from 'http'
 import net from 'net'
@@ -149,14 +150,7 @@ async function start(): Promise<void> {
 
   registerSecurityHeaders(app)
 
-  // Allow all origins (reflect the request origin so credentialed requests work too). Methods +
-  // headers are reflected (allowedHeaders omitted → echoes Access-Control-Request-Headers), so any
-  // client header (Authorization, x-api-key, …) passes preflight.
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  })
+  await app.register(cors, CORS_OPTIONS)
 
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
