@@ -131,7 +131,9 @@ void main() {
               find.descendant(
                 of: find.byKey(const ValueKey('super-person-peer')),
                 // The row names the person by username (dee) or, before usernames, by email prefix (Dee).
-                matching: find.textContaining(RegExp('dee', caseSensitive: false)),
+                matching: find.textContaining(
+                  RegExp('dee', caseSensitive: false),
+                ),
               ),
             )
             .dx,
@@ -198,7 +200,8 @@ void main() {
       final server = modelsSwarm(membersSwarm());
       server.leaderboard!
         ..remove('agents')
-        ..remove('byModel');
+        ..remove('byModel')
+        ..remove('recentModels');
       final controller = await show(tester, server);
       expect(
         find.byKey(const ValueKey('leaderboard-points-peer')),
@@ -244,7 +247,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    for (final number in ['21', '44%']) {
+    for (final number in ['21', '84%']) {
       expect(find.text(number), findsOneWidget, reason: number);
       final paragraph = tester.renderObject<RenderParagraph>(find.text(number));
       expect(paragraph.didExceedMaxLines, isFalse, reason: number);
