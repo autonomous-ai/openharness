@@ -372,11 +372,18 @@ class MemorySwarmHomeKey implements SwarmHomeKey {
 /// A kept Home in a folder of its own, gone after the test.
 SwarmHomeCache memoryHomeCache() {
   final dir = Directory.systemTemp.createTempSync('swarm-home');
-  addTearDown(() => dir.deleteSync(recursive: true));
-  return SwarmHomeCache(
+  final cache = SwarmHomeCache(
     key: MemorySwarmHomeKey(),
     file: File('${dir.path}/home.bin'),
   );
+  // An inbox keeps its Home in the background (a temp file, then a rename),
+  // and a test may end while it does. The cache does one thing at a time, so
+  // the folder goes only once a clear after every save under way is done.
+  addTearDown(() async {
+    await cache.clear();
+    dir.deleteSync(recursive: true);
+  });
+  return cache;
 }
 
 /// Waits, in real time, until [done] holds: at most a few seconds.
