@@ -7,12 +7,22 @@ import '../api/api_client.dart';
 import 'client.dart';
 import 'controller.dart';
 
-/// The Swarm routes the web may call with the browser's own sign-in: the
-/// same set, and the same spelling, a machine's daemon relays
-/// (cli/src/superTabs/service.ts, `action: backend`). Anything else is
-/// refused before it is sent, so this transport never signs another route.
+/// The Swarm routes the web may call with the browser's own sign-in: the ones
+/// its screens use, and no other. The routes a machine's daemon and its agents
+/// call (hosts, starts, GitHub tokens, deliveries, terminals) are refused
+/// before anything is sent, so this transport never signs them.
+const _tab =
+    r'(?!(?:hosts|workspaces|grids|list|invitations|routing-policy|workspace-invitations)/)[A-Za-z0-9_-]+';
+const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
-  r'^/api/super-tabs(?:/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$',
+  '^/api/super-tabs(?:'
+  '|/list|/invitations|/routing-policy'
+  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
+  '|routing-policy|groups|groups/$_id|join|join/preview|native'
+  '|conversations/$_id/(?:messages|catch-up|read)'
+  '|projects/$_id/(?:github|github/approve|roles/$_id)'
+  '|route-decisions/$_id|machines/$_id/removal)'
+  r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
 
 /// The web's Swarm transport (docs/specs/2026-10-30-web-swarm-direct.md):
@@ -39,6 +49,9 @@ SuperTabTransport superTabBackendTransport(ApiClient Function() api) =>
 
 SuperTabFailure _unanswered(DioException error) {
   final cause = error.error;
+  if (cause is SignInChanged) {
+    return const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+  }
   if (cause is AccessTokenFailure && cause.signedOut) {
     return const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
   }

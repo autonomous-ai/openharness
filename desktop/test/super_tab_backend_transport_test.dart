@@ -16,9 +16,11 @@ import 'package:harness/super_tabs/controller.dart';
 
 import 'swarm_state_test.dart' show MemoryStore;
 
-class _Token implements AccessTokenSource {
+class _Token implements AccessTokenSource, SignInRevision {
   String token = 'browser-token';
   Object? failure;
+  @override
+  int signInRevision = 0;
   @override
   Future<String> accessToken({bool force = false, String? failedToken}) async {
     if (failure != null) throw failure!;
@@ -44,6 +46,9 @@ class _Backend {
         })
       >[];
   int status = 200;
+
+  /// Runs as each request arrives, before it is answered.
+  void Function()? onRequest;
   Object? answer = {
     'success': true,
     'data': {'ok': 1},
@@ -53,6 +58,7 @@ class _Backend {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       final text = await utf8.decoder.bind(request).join();
+      onRequest?.call();
       requests.add((
         method: request.method,
         path: request.uri.toString(),
@@ -207,17 +213,96 @@ void main() {
     expect(backend.requests, isEmpty);
   });
 
-  test('only Swarm routes, read or posted, get the browser sign-in', () async {
+  // The routes a machine's daemon and its agents use (hosts, starts, GitHub
+  // tokens, deliveries) and the ones the web has no screen for never get the
+  // browser's sign-in: refused before anything is sent.
+  test('only the Swarm routes the web uses get the browser sign-in', () async {
     for (final (method, path) in [
       ('GET', '/api/machines'),
       ('POST', '/api/super-tabs/../auth/logout'),
       ('GET', 'https://elsewhere.example/api/super-tabs/list'),
       ('DELETE', '/api/super-tabs/tab1'),
+      ('GET', '/api/super-tabs/tab1'),
       ('GET', '/api/super-tabsx/list'),
+      ('GET', '/api/super-tabs/hosts/m1/changes'),
+      ('GET', '/api/super-tabs/hosts/changes'),
+      ('POST', '/api/super-tabs/hosts/m1/terminal'),
+      ('POST', '/api/super-tabs/hosts/m1/starts/tab1/s1/github-token'),
+      ('POST', '/api/super-tabs/tab1/github-token'),
+      ('GET', '/api/super-tabs/tab1/starts/s1'),
+      ('POST', '/api/super-tabs/tab1/agents/a1/deliveries'),
+      ('POST', '/api/super-tabs/tab1/native/ctx1'),
+      ('POST', '/api/super-tabs/tab1/terminal/r1'),
+      ('GET', '/api/super-tabs/tab1/costs'),
+      ('GET', '/api/super-tabs/workspaces'),
+      ('GET', '/api/super-tabs/grids'),
     ]) {
       final failure = await refusal(transport(method, path));
       expect(failure.code, 'INVALID_REQUEST', reason: '$method $path');
     }
     expect(backend.requests, isEmpty);
+  });
+
+  test('every Swarm route the web uses goes to the backend', () async {
+    const routes = [
+      ('GET', '/api/super-tabs/list?mentions=1&after=abc'),
+      ('GET', '/api/super-tabs/invitations'),
+      ('GET', '/api/super-tabs/routing-policy'),
+      ('POST', '/api/super-tabs/routing-policy'),
+      ('POST', '/api/super-tabs'),
+      ('GET', '/api/super-tabs/tab1/parts'),
+      ('GET', '/api/super-tabs/tab1/changes?cursor=c%3D1'),
+      ('POST', '/api/super-tabs/tab1/commands'),
+      ('GET', '/api/super-tabs/tab1/mentions?state=waiting'),
+      ('GET', '/api/super-tabs/tab1/decisions?state=open'),
+      ('GET', '/api/super-tabs/tab1/leaderboard'),
+      ('GET', '/api/super-tabs/tab1/sharing'),
+      ('POST', '/api/super-tabs/tab1/sharing'),
+      ('GET', '/api/super-tabs/tab1/routing-policy'),
+      ('POST', '/api/super-tabs/tab1/routing-policy'),
+      ('GET', '/api/super-tabs/tab1/groups?dormant=1&projectId=p1'),
+      ('GET', '/api/super-tabs/tab1/groups/g1'),
+      ('GET', '/api/super-tabs/tab1/conversations/c1/messages?before=5'),
+      ('GET', '/api/super-tabs/tab1/conversations/c1/catch-up?after=4'),
+      ('POST', '/api/super-tabs/tab1/conversations/c1/read'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/github'),
+      ('POST', '/api/super-tabs/tab1/projects/p1/github/approve'),
+      ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
+      ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
+      ('POST', '/api/super-tabs/tab1/join'),
+      ('GET', '/api/super-tabs/tab1/join/preview'),
+      ('POST', '/api/super-tabs/tab1/native'),
+    ];
+    for (final (method, path) in routes) {
+      await transport(method, path, body: method == 'POST' ? {} : null);
+    }
+    expect(backend.requests.map((r) => '${r.method} ${r.path}'), [
+      for (final (method, path) in routes) '$method $path',
+    ]);
+  });
+
+  test('a refused call whose sign-in changed meanwhile is not retried as the '
+      'new account, and says the account changed', () async {
+    backend
+      ..status = 401
+      ..answer = {
+        'success': false,
+        'error': {'code': 'UNAUTHORIZED', 'message': 'Unauthorized'},
+      }
+      ..onRequest = () {
+        token
+          ..signInRevision += 1
+          ..token = 'another-account';
+      };
+    final failure = await refusal(
+      transport('POST', '/api/super-tabs/tab1/commands', body: {'x': 1}),
+    );
+    expect(failure.code, 'ACCOUNT_CHANGED');
+    expect(backend.requests, hasLength(1));
+    expect(
+      backend.requests.single.headers['authorization'],
+      'Bearer browser-token',
+    );
   });
 }
