@@ -40,11 +40,16 @@ printf '  123     1 claude          Mon Sep 21 10:00:00 2026 claude --resume\\n'
 
   it('reads one process\'s command line, and none for a process it is not, or when ps fails', async () => {
     const [row] = (await processRows())!
+    const differentProcess = {
+      ...row,
+      startMarker: 'another start',
+      startTicks: row.startTicks === undefined ? undefined : row.startTicks + 1,
+    }
     expect(await processArgs(row)).toBe('claude --resume')
-    expect(await processArgs({ ...row, startMarker: 'another start' })).toBe('')
+    expect(await processArgs(differentProcess)).toBe('')
     // How it was launched is its own command line, when it still has one.
     expect(await processLaunchArgs(row)).toBe('claude --resume')
-    expect(await processLaunchArgs({ ...row, startMarker: 'another start' })).toBe('')
+    expect(await processLaunchArgs(differentProcess)).toBe('')
     writeFileSync(join(dir, 'fail'), '')
     expect(await processArgs(row)).toBe('')
     expect(await processLaunchArgs(row)).toBe('')
