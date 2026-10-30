@@ -710,8 +710,8 @@ class _SuperTabLinkState extends State<SuperTabLink> {
 }
 
 /// Who a message author is in the Swarm as last read, by kind and id: the
-/// person, or the agent, whose face their own messages wear. Null for
-/// someone no longer in it.
+/// person, or the agent, whose face their own messages wear. Both are null
+/// for someone no longer in it.
 typedef SuperTabMemberOf =
     ({SuperTabPerson? person, SuperTabAgent? agent}) Function(
       String kind,

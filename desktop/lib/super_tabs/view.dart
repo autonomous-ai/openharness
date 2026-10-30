@@ -2313,7 +2313,8 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// A reply author as the Swarm last read them, so a thread's line shows
-  /// the faces their own messages wear; null for anyone no longer in it.
+  /// the faces their own messages wear; both null for anyone no longer in
+  /// it.
   ({SuperTabPerson? person, SuperTabAgent? agent}) _member(
     String kind,
     String id,
