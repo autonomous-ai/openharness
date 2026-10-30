@@ -23,7 +23,12 @@ class SuperTabLeaderboard {
       agents = _list(json['agents']).map(SuperTabAgentScore.fromJson).toList(),
       byModel = _list(json['byModel'])
           .map(SuperTabModelScore.fromJson)
-          .toList();
+          .toList(),
+      recentModels = json['recentModels'] is List
+          ? _list(json['recentModels'])
+                .map(SuperTabModelScore.fromJson)
+                .toList()
+          : null;
 
   final String projectId;
 
@@ -41,6 +46,11 @@ class SuperTabLeaderboard {
   /// Every model that worked the week, most points first; empty from a
   /// server before them.
   final List<SuperTabModelScore> byModel;
+
+  /// Each model's tasks of the 7 days up to the read, whichever [week] this
+  /// is: engine, model, tasks and first reviews, no effort or points. Null
+  /// from a server before it.
+  final List<SuperTabModelScore>? recentModels;
 }
 
 /// A permanent agent, the PM or a Buddy, scored by name like a person

@@ -877,9 +877,10 @@ class ProjectSidebar extends StatelessWidget {
                   : null,
               addTooltip: 'Add a Buddy',
               endInset: 0,
-              startInset: SuperTabSectionHeading.indentFor(0),
+              collapsed: !controller.buddiesGroupOpen,
+              onToggleCollapsed: controller.toggleBuddiesGroup,
             ),
-            ..._buddies(projects, reading),
+            if (controller.buddiesGroupOpen) ..._buddies(projects, reading),
             const SizedBox(height: 16),
           ],
           // Machine online/offline, unread marks and theme changes do not touch
@@ -913,6 +914,8 @@ class ProjectSidebar extends StatelessWidget {
             LeaderboardModelsSection(
               board: board,
               projectId: snapshot?.projectFor(controller.selectedId)?.id,
+              collapsed: !controller.modelsGroupOpen,
+              onToggleCollapsed: controller.toggleModelsGroup,
               now: now,
             ),
           ],
