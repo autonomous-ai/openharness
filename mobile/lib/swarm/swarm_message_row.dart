@@ -57,51 +57,145 @@ Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
 Color swarmChatCard(Tty tty) =>
     Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
 
-/// The names an @mention in a message is marked for, as the desktop and the
-/// prototype mark them: the pattern that finds them is made once for every
-/// message drawn with them.
+/// `@name` or `@name@domain`, as people tag in chat. Never right after a
+/// letter, digit, `@` or `/` (an address, a path, a link), and a name never
+/// ends in a dot: `@dee.` closes a sentence. The backend and the desktop read
+/// tags by this same rule; test/fixtures/tag_fixture.json is the table all
+/// three pass.
+final _tag = RegExp(
+  r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
+);
+final _oneWord = RegExp(r'^[\w+-]+(?:\.[\w+-]+)*$');
+final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
+final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
+final _linkTarget = RegExp(r'\]\([^)\]]*\)');
+final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
+String _blank(String text) => text.replaceAll(RegExp(r'[^\n]'), ' ');
+
+/// [text] with what is never a tag blanked out, each character kept in its
+/// place: fenced and indented code, code spans, bare links and link
+/// destinations.
+String _prose(String text) {
+  final lines = text.split('\n');
+  String? fence;
+  var indented = false;
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    if (fence != null) {
+      final close = _fence.firstMatch(line);
+      if (close != null &&
+          close[1]![0] == fence[0] &&
+          close[1]!.length >= fence.length &&
+          line.substring(close[0]!.length).trim().isEmpty) {
+        fence = null;
+      }
+      lines[i] = _blank(line);
+      continue;
+    }
+    final open = _fence.firstMatch(line);
+    if (open != null &&
+        !(open[1]![0] == '`' &&
+            line.substring(open[0]!.length).contains('`'))) {
+      fence = open[1];
+      lines[i] = _blank(line);
+      indented = false;
+      continue;
+    }
+    // Indented code starts after a blank line (or the first line) and runs
+    // while its lines stay indented.
+    final startsCode =
+        RegExp(r'^( {4}|\t)').hasMatch(line) &&
+        line.trim().isNotEmpty &&
+        (indented || i == 0 || lines[i - 1].trim().isEmpty);
+    indented = startsCode || (indented && line.trim().isEmpty);
+    if (startsCode) lines[i] = _blank(line);
+  }
+  String blanked(Match m) => _blank(m[0]!);
+  return lines
+      .join('\n')
+      .replaceAllMapped(_codeSpan, blanked)
+      .replaceAllMapped(_linkTarget, blanked)
+      .replaceAllMapped(_bareLink, blanked);
+}
+
+/// The names an @mention in a message is marked for, as the desktop marks
+/// them: the chat's agents here, and per message the people it tags. A name
+/// of one word is marked where the shared tag rule finds it; an agent's name
+/// of several words by the pattern made once for every message drawn with it.
 class SwarmMentions {
   SwarmMentions(List<String> names)
     : names = List.unmodifiable(names),
-      _pattern = names.isEmpty
+      _words = {
+        for (final name in names)
+          if (_oneWord.hasMatch(name)) name.toLowerCase(),
+      },
+      _pattern = names.every(_oneWord.hasMatch)
           ? null
           : RegExp(
-              // Longest first, so "@Nova2" is not read as "@Nova".
-              '(?<![\\w@])@(?:${([...names]..sort((a, b) => b.length.compareTo(a.length))).map(RegExp.escape).join('|')})(?![\\w])',
+              // Longest first, so "@Nova 2" is not read as "@Nova".
+              '(?<![\\w@/])@(?:${([for (final name in names)
+                if (!_oneWord.hasMatch(name)) name]..sort((a, b) => b.length.compareTo(a.length))).map(RegExp.escape).join('|')})(?![\\w])',
               caseSensitive: false,
             );
 
   final List<String> names;
+  final Set<String> _words;
   final RegExp? _pattern;
 
-  /// [text] with each @mention of one of [names] marked.
-  TextSpan span(String text, TextStyle style) {
-    final pattern = _pattern;
-    if (pattern == null || !text.contains('@')) {
+  /// [text] with each @mention of one of [names] or [tagged] marked. A tag by
+  /// full address is a tagged person's only when it is their address in
+  /// [addresses] (by username), as the backend matches it to their email.
+  TextSpan span(
+    String text,
+    TextStyle style, {
+    Iterable<String> tagged = const [],
+    Map<String, String> addresses = const {},
+  }) {
+    if (!text.contains('@') || (names.isEmpty && tagged.isEmpty)) {
       return TextSpan(text: text, style: style);
     }
-    return TextSpan(style: style, children: _marked(text, pattern));
+    final words = {..._words, for (final name in tagged) name.toLowerCase()};
+    final known = {
+      for (final MapEntry(:key, :value) in addresses.entries)
+        key.toLowerCase(): value.toLowerCase(),
+    };
+    bool marks(Match match) {
+      final name = match[1]!.toLowerCase();
+      if (match[2] == null) return words.contains(name);
+      if (known.containsValue('$name${match[2]!.toLowerCase()}')) return true;
+      return words.contains(name) && !known.containsKey(name);
+    }
+
+    final prose = _prose(text);
+    final ranges = [
+      for (final match in _tag.allMatches(prose))
+        if (marks(match)) (match.start, match.end),
+      if (_pattern case final pattern?)
+        for (final match in pattern.allMatches(prose)) (match.start, match.end),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    if (ranges.isEmpty) return TextSpan(text: text, style: style);
+    return TextSpan(style: style, children: _marked(text, ranges));
   }
 }
 
-List<InlineSpan> _marked(String text, RegExp pattern) {
+List<InlineSpan> _marked(String text, List<(int, int)> marks) {
   final spans = <InlineSpan>[];
   var at = 0;
-  for (final match in pattern.allMatches(text)) {
-    if (match.start > at) {
-      spans.add(TextSpan(text: text.substring(at, match.start)));
-    }
+  for (final (start, end) in marks) {
+    if (start < at) continue;
+    if (start > at) spans.add(TextSpan(text: text.substring(at, start)));
     spans.add(
       TextSpan(
-        text: match[0],
+        text: text.substring(start, end),
+        // The desktop's tag pill (message_text.dart).
         style: TextStyle(
           color: AppPalette.accentOnSurface,
-          backgroundColor: AppPalette.accentOnSurface.withValues(alpha: 0.13),
-          fontWeight: FontWeight.w500,
+          backgroundColor: AppSurface.accentWash,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
-    at = match.end;
+    at = end;
   }
   if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
   return spans;
@@ -193,6 +287,9 @@ class SwarmMessageRow extends StatelessWidget {
     required this.look,
     required this.role,
     required this.mentions,
+    this.tagged = const [],
+    this.taggedAddresses = const {},
+    this.readerId = '',
     required this.grouped,
     required this.lit,
     this.followed = false,
@@ -217,6 +314,17 @@ class SwarmMessageRow extends StatelessWidget {
   final String? role;
 
   final SwarmMentions mentions;
+
+  /// The usernames of the people [message] tags: each reads as a pill where
+  /// the text says it.
+  final List<String> tagged;
+
+  /// Their addresses, by username: a tag by full address is theirs only when
+  /// it is this one.
+  final Map<String, String> taggedAddresses;
+
+  /// Who reads it: a message that tags them stands out.
+  final String readerId;
   final bool grouped, lit, actions;
 
   /// The row a quote led to: lit, then fading. Only it animates — a fade on
@@ -249,7 +357,7 @@ class SwarmMessageRow extends StatelessWidget {
   /// PM's private line answered in the project chat.
   final Widget? below;
 
-  /// Null where the person cannot post: picks a reaction.
+  /// Opens its long-press sheet: reactions, Copy link to message.
   final VoidCallback? onLongPress;
 
   @override
@@ -313,7 +421,12 @@ class SwarmMessageRow extends StatelessWidget {
                   child: SizedBox(
                     width: double.infinity,
                     child: Text.rich(
-                      mentions.span(part.text, swarmChatText(16, height: 1.42)),
+                      mentions.span(
+                        part.text,
+                        swarmChatText(16, height: 1.42),
+                        tagged: tagged,
+                        addresses: taggedAddresses,
+                      ),
                     ),
                   ),
                 ),
@@ -367,7 +480,31 @@ class SwarmMessageRow extends StatelessWidget {
             onLongPress: onLongPress,
             child: frame,
           );
-    if (!followed) return Padding(key: key, padding: padding, child: held);
+    // A message that tags the reader stands out, as Slack marks one that
+    // names you: an accent bar on its edge over a wash of the accent. The
+    // bar is drawn over the row, so nothing in it moves.
+    final taggedYou =
+        readerId.isNotEmpty && message.mentions.contains(readerId);
+    final bar = taggedYou
+        ? BoxDecoration(
+            border: Border(
+              left: BorderSide(color: AppPalette.accentOnSurface, width: 3),
+            ),
+          )
+        : null;
+    if (!followed) {
+      if (!taggedYou) return Padding(key: key, padding: padding, child: held);
+      return KeyedSubtree(
+        key: key,
+        child: Container(
+          key: ValueKey('swarm-tagged-you-${message.id}'),
+          padding: padding,
+          decoration: BoxDecoration(color: AppSurface.accentWash),
+          foregroundDecoration: bar,
+          child: held,
+        ),
+      );
+    }
     return AnimatedContainer(
       key: key,
       duration: const Duration(milliseconds: 600),
@@ -376,9 +513,12 @@ class SwarmMessageRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: lit
             ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+            : taggedYou
+            ? AppSurface.accentWash
             : Colors.transparent,
         borderRadius: BorderRadius.circular(AppControl.rowRadius),
       ),
+      foregroundDecoration: bar,
       child: held,
     );
   }

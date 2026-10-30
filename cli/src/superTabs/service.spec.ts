@@ -1158,6 +1158,8 @@ describe('mentions on a post', () => {
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
+    // The server reads tags from the text too (backend mentions.ts).
+    expect(lead.post).toContain('An @username or @email in TEXT tags that person as well, outside code and links.')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // A former Lead still named on an older work group is not one, as in status.
     swarm(t, 'new-lead')
@@ -1280,6 +1282,13 @@ describe('the assignment a command names', () => {
       ? { status: 409, body: { success: false, error: { code: 'STALE_ASSIGNMENT', message: 'This is no longer the active assignment.' } } } : answer(method, path, body))
     expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'c', command: status('9887f5667a24ace0b589b7ff') }, owner)).toMatchObject({
       error: 'STALE_ASSIGNMENT', detail: `This is no longer the active assignment. This group's active assignment is ${live}: send it again with "assignmentId": "${live}" (or "current").` })
+  })
+
+  it('sends a check with no group to the one task the agent holds', async () => {
+    const t = setup(); withTask(t, t.agentId)
+    const check = { type: 'work.check', assignmentId: 'current', checkId: 'c1', passed: true, evidence: 'Posted' }
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'e', command: check }, owner)).toMatchObject({ ok: true })
+    expect(posted(t)).toEqual([{ ...check, conversationId: 'g1', assignmentId: live }])
   })
 
   it('never fills in another agent\'s task for a status', async () => {

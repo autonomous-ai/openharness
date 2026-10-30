@@ -1,6 +1,6 @@
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
-import { keepUsernames, setUsername } from './usernames.js'
+import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -13,7 +13,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, SAME_ENGINE, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
+import { checkMentions, MAX_MENTIONS, namedIn, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
@@ -25,7 +25,7 @@ import { credentialResult, redactCredentials, type CredentialKind } from './cred
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
-  recordVerdict } from './leaderboard/record.js'
+  recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
@@ -1724,6 +1724,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (Object.entries(command.configuration).some(([key, value]) => target.configuration[key as keyof typeof target.configuration] !== value)) {
         target.configuration = command.configuration
         target.configurationVersion = operationId
+        recordReportedModel(state, target)
       }
       break
     }
@@ -1942,7 +1943,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      const mentions = checkMentions(state, actor, group, command.mentions ?? [])
+      // The text is where tags live, as people tag in chat: each name it says tags that person, if they may read here. A tag
+      // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
+      // shows the same words. Only from the command, so a retry writes the same text.
+      const picked = checkMentions(state, actor, group, command.mentions ?? [])
+      // Every username is worked out at once, and only for a post that names or picks someone.
+      const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
+      const named = namedIn(state, command.text, names)
+      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${names.get(id)}`), command.text)
+      // A tag would tell a person about an agent-only notice they cannot see.
+      const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
@@ -1982,12 +1992,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // A reply joins its message's thread, always at the root, so threads never nest. A reply to a notice only its
       // recipients read (the Lead answering a stalled alert) stays in the chat: people open a thread from its root.
       const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread : null
       if (thread) Object.assign(effects.messages.at(-1)!, { thread, ...(command.alsoSend ? { alsoInChat: true } : {}) })
-      recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
+      recordPost(state, group, actor, { replyTo: command.replyTo, text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       leadActed(group.id, 'post')
       break
