@@ -263,6 +263,117 @@ void main() {
     return (f, c);
   }
 
+  // The desktop follows the round dial into Buddy chats (Diego, 10-30): the
+  // dial's side, and a tap on its Buddy's notification, open the chat in the
+  // Swarm tab, never a terminal tab of its own.
+  Future<void> follow(
+    SuperTabLaunchFixture f,
+    String project,
+    String chat, {
+    String tab = tabId,
+  }) => f.app.handleEventForTest('m', {
+    'type': 'dial_super_tab',
+    'payload': {'superTabId': tab, 'projectId': project, 'chat': chat},
+  });
+
+  test('the dial\'s Buddy side opens the project\'s Buddy chat in the Swarm tab, with no new tab', () async {
+    final (f, c) = await openChats();
+    final swarm = f.app.activeSwarmId;
+    f.app.newSwarm(newTabPage: true);
+    final count = f.app.swarms.length;
+    final before = announces(f).length;
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(f.app.activeSwarmId, swarm);
+    expect(f.app.swarms, hasLength(count));
+    expect(c.selectedId, 'design-pm');
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    // Each announce is the dial's own move: the daemon keeps the dial's side
+    // and sends no focus back.
+    expect(after.every((a) => a['fromDevice'] == true), isTrue);
+    expect(row(after.last)['conversationId'], 'design-pm');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  test('the dial\'s PM side opens the project\'s Lead chat', () async {
+    final (f, c) = await openChats();
+    final count = f.app.swarms.length;
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(c.selectedId, 'design-pm');
+    final before = announces(f).length;
+    await follow(f, 'design', 'pm');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(f.app.swarms, hasLength(count));
+    final after = announces(f).skip(before).toList();
+    expect(after.every((a) => a['fromDevice'] == true), isTrue);
+    expect(row(after.last)['conversationId'], 'design-lead');
+  });
+
+  test('a Buddy side where the reader has no Buddy chat opens the Lead chat and makes none', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    // Another person's Buddy chat in the project is never the reader's.
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('lead-sam', "sam's Buddy"),
+      'projectId': 'lead',
+      'kind': 'buddy',
+      'buddyOwnerId': 'sam',
+    });
+    await c.refresh();
+    c.select('design-fix');
+    await settle();
+    await follow(f, 'lead', 'buddy');
+    await settle();
+    expect(c.selectedId, 'lead');
+    final ids = [
+      for (final g in (server.state['conversations'] as List).cast<Map>())
+        g['id'],
+    ];
+    expect(ids.where((id) => '$id'.startsWith('buddy-')), isEmpty);
+  });
+
+  test('access revoked while the dial\'s Buddy open is in flight opens nothing', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    final hold = server.holdReads = Completer<void>();
+    // The Swarm's rows are gone when the pick arrives; its read is answered
+    // with the access already removed.
+    c.revokeAccess('Access removed.');
+    server.state['conversations'] = <Map<String, dynamic>>[];
+    server.state['projects'] = <Map<String, dynamic>>[];
+    final picking = follow(f, 'design', 'buddy');
+    await settle();
+    server.holdReads = null;
+    hold.complete();
+    await picking;
+    await settle();
+    expect(c.selectedId, isNot('design-pm'));
+    expect(c.buddyChat('design'), isNull);
+    // The device's mark does not outlive the pick that found nothing.
+    f.app.announceWindowForeground();
+    await settle();
+    expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  test('an unknown chat, tab or project from the dial opens nothing new', () async {
+    final (f, c) = await openChats();
+    final count = f.app.swarms.length;
+    await follow(f, 'design', 'terminal');
+    await settle();
+    // An unknown chat reads as the older pick: the project's Lead chat.
+    expect(c.selectedId, 'design-lead');
+    await follow(f, 'nope', 'buddy');
+    await follow(f, 'design', 'buddy', tab: 'ffffffffffffffffffffffff');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(f.app.swarms, hasLength(count));
+  });
+
   test('a Swarm tab announces the open conversation\'s id', () async {
     final (f, c) = await openChats();
     f.app.announceWindowForeground();
