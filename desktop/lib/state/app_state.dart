@@ -2359,6 +2359,30 @@ class AppNotifier extends ChangeNotifier {
     bindSuperTab(activeSwarmId, tabId, name);
   }
 
+  /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
+  /// shows, from the Swarm dropdown: the tab keeps its place and its name
+  /// follows. A Swarm already open in another tab is selected there instead,
+  /// so no tab is added or closed. The Swarm the tab showed is hidden here as
+  /// a closed one is, and let go, which keeps its draft for its return.
+  void showSuperTabIn(String swarmId, String tabId, String name) {
+    final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
+    final previous = tab?.superTabId;
+    if (tab == null || previous == null || previous == tabId) return;
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    if (open != null) {
+      selectSwarm(open.id);
+      return;
+    }
+    // As openSuperTab: Reopen later must not add a second view of it.
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
+    );
+    _rememberSuperTabVisibility(previous, false);
+    superTabs.release(previous);
+    bindSuperTab(swarmId, tabId, name);
+    selectSwarm(swarmId);
+  }
+
   /// Opens a tab from [closedSuperTabs]. False when it is no longer listed
   /// (open already, or the account has left it).
   bool openClosedSuperTab(String tabId, {String? intoSwarmId}) {
