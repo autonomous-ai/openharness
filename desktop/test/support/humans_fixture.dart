@@ -253,5 +253,42 @@ ConversationServer modelsSwarm([ConversationServer? base]) {
     // Only reviewed others' work: no task of its own.
     modelScore('codex', 'gpt-6.1-luna', null, attempts: 0, reviews: 5),
   ];
+  server.leaderboard!['recentModels'] = recentModels();
   return server;
 }
+
+/// One model's last 7 days on the board, as the sidebar's Models reads them:
+/// its tasks and first reviews, every effort as one.
+Map<String, dynamic> recentModel(
+  String engine,
+  String? model, {
+  required int attempts,
+  int reviewed = 0,
+  int passed = 0,
+}) => {
+  'engine': engine,
+  'model': model,
+  'attempts': attempts,
+  'firstReview': {'reviewed': reviewed, 'passed': passed},
+};
+
+/// The last 7 days of [modelsSwarm] (the approved mockup, 10-30): 100 tasks,
+/// 84 on Opus, 11 on Sonnet, 3 on Codex with no model reported, 2 on Sol.
+List<Map<String, dynamic>> recentModels() => [
+  recentModel(
+    'claude',
+    'claude-opus-5-5',
+    attempts: 84,
+    reviewed: 50,
+    passed: 46,
+  ),
+  recentModel(
+    'claude',
+    'claude-sonnet-5-5',
+    attempts: 11,
+    reviewed: 4,
+    passed: 3,
+  ),
+  recentModel('codex', null, attempts: 3),
+  recentModel('codex', 'gpt-6.1-sol', attempts: 2, reviewed: 2, passed: 2),
+];

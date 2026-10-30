@@ -44,13 +44,16 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
 }
 /** What the Swarm's host keeps on a computer that contributed to one: its host file, which wakes the service at a start,
  *  and its retention naming `lead` as an active project's Lead, which the core never closes while the Swarm is on. */
-function swarmState(d: IsolatedDaemon, lead?: string): void {
+function swarmState(d: IsolatedDaemon, lead?: string, buddy?: string): void {
   mkdirSync(join(d.dataDir, 'super-tabs'), { recursive: true, mode: 0o700 })
   writeFileSync(join(d.dataDir, 'super-tabs', `host-${MACHINE}.json`), JSON.stringify({ version: 1, machineId: MACHINE }), { mode: 0o600 })
-  if (lead) writeFileSync(join(d.dataDir, 'super-tabs', 'retained.json'), JSON.stringify({ version: 2, machineId: MACHINE, harnesses: [lead], leads: [lead] }), { mode: 0o600 })
+  if (lead || buddy) {
+    writeFileSync(join(d.dataDir, 'super-tabs', 'retained.json'), JSON.stringify({ version: 2, machineId: MACHINE,
+      harnesses: [lead, buddy].filter(Boolean), leads: lead ? [lead] : [], buddies: buddy ? [buddy] : [] }), { mode: 0o600 })
+  }
 }
-const close = (client: LocalClient, agent: Record<string, any>) =>
-  client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode: 'now' }, 60_000)
+const close = (client: LocalClient, agent: Record<string, any>, mode = 'now') =>
+  client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode }, 60_000)
 
 describe('the Swarm switch', () => {
   let daemon: IsolatedDaemon | undefined
@@ -125,5 +128,24 @@ describe('the Swarm switch', () => {
     const loaded = [...loadedModules(modules).values()].flat()
     expect(loaded.some((url) => url.includes('/src/superTabs/inCore.ts'))).toBe(true)
     expect(loaded.some((url) => url.includes('/src/services/superTabsProcess.ts'))).toBe(true)
+  }, 240_000)
+
+  // Diego's Buddy, 10-30: closing the tab that showed it stopped it. A close (a window's, `harness close`, the cleanup) never
+  // stops a Buddy the host keeps, and says it kept running; Stop Harness, the machine owner's own action, still stops it
+  // (the Product Manager, 10-30).
+  it('on, a close never stops a Buddy, and Stop Harness still does', async () => {
+    const { d, client } = await fresh({ HARNESS_SWARM: '' })
+    const agent = await create(d, client, 'swarm-buddy')
+    await turn(client, agent.id, 'a Buddy answers its person')
+    await until('the Swarm\'s process, woken by its saved state', () => swarmStarts(d) > 0 || null, 60_000, 200)
+    swarmState(d, undefined, agent.id)
+    expect(await close(client, agent, 'inspect')).toMatchObject({ activity: expect.any(String), keptRunning: true })
+    for (const mode of ['idle', 'now']) {
+      expect(await close(client, agent, mode)).toMatchObject({ error: 'BUDDY_PROTECTED', keptRunning: true,
+        detail: 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.' })
+    }
+    expect((await row(client, agent.id))?.status).toBe('active')
+    expect((await client.request('agent_delete', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('Stop Harness to stop the Buddy', async () => ((await row(client, agent.id))?.status ?? 'stopped') !== 'active' || null, 60_000, 500)
   }, 240_000)
 })

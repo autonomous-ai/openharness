@@ -7,6 +7,8 @@
  * active assignment.") without saying which one is, and the task stayed open until the Lead cancelled it. An agent may now
  * write `current` (or leave it out), and a stale id is answered with the one to use.
  */
+import { ENDED_WORK } from './wire.js'
+
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
 
@@ -23,6 +25,19 @@ export function currentAssignment(state: unknown, conversationId: unknown): { id
   return typeof assignment.id === 'string' && typeof assignment.agentId === 'string' ? { id: assignment.id, agentId: assignment.agentId } : null
 }
 
+/** The one group whose active assignment [agentId] holds, or null when it holds none or several.
+ *
+ *  A Codex Builder on Mac Auto (Swarm group #17, 2026-10-30) sent its first work.check with "current" but no
+ *  conversationId; the backend refused it, the check stayed pending, and its done came back CHECKS_PENDING. */
+export function ownGroup(state: unknown, agentId: string): string | null {
+  const conversations = object(state).conversations
+  const held = (Array.isArray(conversations) ? conversations.map(object) : []).filter(c => {
+    const assignment = object(c.assignment)
+    return typeof c.id === 'string' && assignment.agentId === agentId && !ENDED_WORK.includes(String(assignment.status))
+  })
+  return held.length === 1 ? held[0].id as string : null
+}
+
 /** Whether [command] asks for its group's current assignment: `current`, or no id at all. */
 export const wantsCurrent = (command: Json) => ASSIGNMENT_COMMANDS.has(String(command.type))
   && (command.assignmentId === undefined || command.assignmentId === null || command.assignmentId === '' || command.assignmentId === CURRENT)
@@ -31,6 +46,9 @@ export const wantsCurrent = (command: Json) => ASSIGNMENT_COMMANDS.has(String(co
  *  Unchanged when there is none, so the backend refuses it as it would have. */
 export function withCurrentAssignment(command: Json, state: unknown, agentId: string): Json {
   if (!wantsCurrent(command)) return command
+  // A status or check with no group names the agent's own task's group, when it holds exactly one.
+  const group = OWN_TASK.has(String(command.type)) && !command.conversationId ? ownGroup(state, agentId) : null
+  if (group) command = { ...command, conversationId: group }
   const current = currentAssignment(state, command.conversationId)
   if (!current || (OWN_TASK.has(String(command.type)) && current.agentId !== agentId)) return command
   return { ...command, assignmentId: current.id }

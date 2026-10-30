@@ -28,6 +28,69 @@ import UserNotifications
     ChimeChannel.register(with: engineBridge.pluginRegistry)
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
     DictationChannel.register(with: engineBridge.pluginRegistry)
+    LinkChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/links` — the message links (`harness://swarm/<tab>/<conversation>/<message>`, Desktop's
+/// Copy link to message) this phone was asked to open (Dart: `SwarmLinkChannel` in
+/// `lib/swarm/swarm_message_link.dart`). A link that launches the app comes with the scene's
+/// connection options, one that arrives while it runs through `openURLContexts`; Flutter's scene
+/// delegate passes both to plugins registered for scene events, as this is.
+///
+/// Each link waits here until Dart's `take` answers it (and empties the list), so one that launched
+/// the app, or came before sign-in, waits for the signed-in screen to ask; `arrived` tells a
+/// listening Dart that more wait. At most 20 wait, the newest kept. Only `harness://swarm` links are
+/// taken; any other URL is left to whoever else handles it.
+final class LinkChannel: NSObject, FlutterSceneLifeCycleDelegate {
+  /// Held here: the registrar keeps scene delegates weakly.
+  private static var shared: LinkChannel?
+
+  private let channel: FlutterMethodChannel
+  private var waiting: [String] = []
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let registrar = registry.registrar(forPlugin: "HarnessLinks") else { return }
+    let links = LinkChannel(messenger: registrar.messenger())
+    registrar.addSceneDelegate(links)
+    shared = links
+  }
+
+  private init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "harness/links", binaryMessenger: messenger)
+    super.init()
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "take", let self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(self.waiting)
+      self.waiting.removeAll()
+    }
+  }
+
+  @objc(scene:willConnectToSession:options:)
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions?
+  ) -> Bool {
+    receive(connectionOptions?.urlContexts ?? [])
+  }
+
+  @objc(scene:openURLContexts:)
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+    receive(URLContexts)
+  }
+
+  private func receive(_ contexts: Set<UIOpenURLContext>) -> Bool {
+    let links = contexts.map(\.url)
+      .filter { $0.scheme == "harness" && $0.host == "swarm" }
+      .map(\.absoluteString)
+    if links.isEmpty { return false }
+    waiting = Array((waiting + links).suffix(20))
+    channel.invokeMethod("arrived", arguments: nil)
+    return true
   }
 }
 
