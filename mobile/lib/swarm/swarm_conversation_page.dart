@@ -36,6 +36,7 @@ import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
+import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_thread.dart';
@@ -214,6 +215,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// placed, and whether it was placed this visit.
   String? _lineAt;
   bool _lineDecided = false;
+
+  /// The read marks the line waits on: the phone's, not read back yet when
+  /// the chat's first read came ([_placeLine]).
+  SwarmReadMarks? _marksAwaited;
   final _lineKey = GlobalKey(debugLabel: 'New messages line');
 
   /// No message has this id: held at it, a chat reads nothing until its New
@@ -318,14 +323,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Places Swarm Home C's New messages line once, from what the chat's
   /// first read brought and how far the person had read it
   /// ([SwarmReadMarks.readThrough]; nothing here is read until then, so that is
-  /// how far as it opened) ([swarmFirstUnread]). It stays there however the
-  /// chat and its marks move on. Without one, everything shown is read. A
-  /// line above the screen opens the chat at it ([_openAtLine]), unless a
-  /// notice opened it at a message.
+  /// how far as it opened) ([swarmFirstUnread]). The phone's marks may come
+  /// back after the first read: the chat stays held, and the line is placed
+  /// once they are back ([_marksMoved]). It stays there however the chat and
+  /// its marks move on. Without one, everything shown is read. A line above
+  /// the screen opens the chat at it ([_openAtLine]), unless a notice opened
+  /// it at a message.
   void _placeLine(SwarmConversation c) {
     if (!mounted || _conversation != c || _lineDecided || !widget.homeC) {
       return;
     }
+    final marks = c.reader.readMarks;
+    if (marks != null && !marks.loaded) {
+      if (_marksAwaited != marks) {
+        _stopAwaitingMarks();
+        _marksAwaited = marks..addListener(_marksMoved);
+      }
+      return;
+    }
+    _stopAwaitingMarks();
     _lineDecided = true;
     final at = swarmFirstUnread(
       c.messages,
@@ -339,6 +355,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     setState(() => _lineAt = at);
     if (widget.messageId == null) _openAtLine(c, at, 0);
+  }
+
+  /// The marks the line waits on moved: back, it is placed. Only the chat's
+  /// first read waits on them, so that read is in.
+  void _marksMoved() {
+    if (_conversation case final c?) _placeLine(c);
+  }
+
+  void _stopAwaitingMarks() {
+    _marksAwaited?.removeListener(_marksMoved);
+    _marksAwaited = null;
   }
 
   /// Once the line is drawn: on screen, all that is shown is read; above
@@ -454,6 +481,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _madeFrom = null;
     _lineAt = null;
     _lineDecided = false;
+    _stopAwaitingMarks();
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;
     _conversation = null;

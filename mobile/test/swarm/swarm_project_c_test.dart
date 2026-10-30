@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
@@ -117,12 +118,14 @@ void main() {
     return fake;
   }
 
-  /// [home] under a signed-in shell's Swarm, with Swarm turned on.
+  /// [home] under a signed-in shell's Swarm, with Swarm turned on; the
+  /// phone keeps its read marks in [marks].
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake,
     Widget home, {
     bool settle = true,
+    LocalKeyValueStore? marks,
   }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
@@ -133,7 +136,7 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
-      readMarks: MemoryKeyValueStore(),
+      readMarks: marks ?? MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -922,6 +925,29 @@ void main() {
       expect(tester.getTopLeft(find.text('Update 2.')).dy, greaterThan(y));
     });
 
+    testWidgets("the phone's marks read back after the chat's first read: "
+        'nothing is read meanwhile, and the line is still placed', (
+      tester,
+    ) async {
+      final marks = _SlowMarks();
+      final fake = chat([for (var i = 1; i <= 3; i++) said(i)], mark: 1);
+      await pump(tester, fake, page, marks: marks);
+      expect(find.text('Update 3.'), findsOneWidget);
+      expect(line, findsNothing);
+      expect(marksSent(fake), isEmpty, reason: 'held until the line is placed');
+
+      marks.back.complete();
+      await tester.pumpAndSettle();
+
+      expect(line, findsOneWidget);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 1.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, greaterThan(y));
+      // The mark is written once this frame's work is done.
+      await tester.pump(Duration.zero);
+      expect(marksSent(fake), [3], reason: 'the line on screen: all is read');
+    });
+
     testWidgets('a chat never read anywhere, or one read through its end, '
         'has none', (tester) async {
       await pump(tester, chat([said(1), said(2)], mark: 2), page);
@@ -1243,7 +1269,20 @@ void main() {
     testWidgets("a root's replies in one row, which opens its thread", (
       tester,
     ) async {
-      await pump(tester, talk(), page);
+      final fake = talk();
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'
+          '?thread=m5'] = (_) => {
+        'messages': [
+          {
+            ...said('m8', 8, 'The one on Home C.', author: 'agent-builder'),
+            'thread': 'm5',
+            'replyTo': 'm5',
+          },
+          said('m5', 5, 'Which header?'),
+        ],
+        'next': null,
+      };
+      await pump(tester, fake, page);
 
       final line = key('swarm-thread-line-m5');
       expect(
@@ -1252,6 +1291,18 @@ void main() {
       );
       expect(tester.getSize(line).height, greaterThanOrEqualTo(minTouchTarget));
       expect(key('swarm-thread-line-m4'), findsNothing, reason: 'no replies');
+
+      await tester.tap(line);
+      await tester.pumpAndSettle();
+
+      expect(
+        inside('swarm-thread-messages', find.text('Which header?')),
+        findsOneWidget,
+      );
+      expect(
+        inside('swarm-thread-messages', find.text('The one on Home C.')),
+        findsOneWidget,
+      );
     });
   });
 
@@ -1502,6 +1553,68 @@ void main() {
       expect(fake.commands, isEmpty);
     });
 
+    /// [backend] whose Mobile is private to the person and Diego, on its
+    /// Team with Diego's week open.
+    Future<FakeSwarm> diegoWeek(WidgetTester tester) async {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        final head = (read['head'] as Map)['data'] as Map<String, dynamic>;
+        final mobile = (head['projects'] as List).single as Map;
+        mobile['visibility'] = 'private';
+        mobile['members'] = [
+          {'id': 'diego', 'generation': 'gen-diego'},
+        ];
+        return read;
+      };
+      await team(tester, fake);
+      await tester.tap(key('swarm-member-person-diego'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-sheet'), findsOneWidget);
+      expect(find.text('diego'), findsWidgets);
+      return fake;
+    }
+
+    testWidgets("access taken away with a person's week open: the week "
+        'closes, and nothing of them stays', (tester) async {
+      await diegoWeek(tester);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-sheet'), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets("the project taken off the Swarm with a person's week open, "
+        'the Swarm still read: the week closes', (tester) async {
+      final fake = await diegoWeek(tester);
+      final reader = host(tester).session!.inbox.reader(tab)!;
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: const [])),
+      };
+      await reader.refresh();
+      await tester.pumpAndSettle();
+
+      expect(reader.accessRevoked, isFalse, reason: 'the Swarm is still read');
+      expect(key('swarm-leaderboard-sheet'), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets("the account signing out with a person's week open: the "
+        'week closes', (tester) async {
+      await diegoWeek(tester);
+
+      (host(tester).account as ValueNotifier<String?>).value = null;
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-sheet'), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
     testWidgets('access taken away with the chat open: its messages go, and '
         'nothing is marked read after', (tester) async {
       final fake = backend();
@@ -1605,4 +1718,16 @@ void main() {
       expect(find.byType(SwarmChatSkeleton), findsNothing);
     });
   });
+}
+
+/// A phone whose read marks come back only once [back] completes: its
+/// other keys at once.
+class _SlowMarks extends MemoryKeyValueStore {
+  final back = Completer<void>();
+
+  @override
+  Future<String?> read(String key) async {
+    if (key.startsWith('swarm_read_marks.')) await back.future;
+    return super.read(key);
+  }
 }

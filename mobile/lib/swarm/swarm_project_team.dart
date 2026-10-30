@@ -258,6 +258,11 @@ class SwarmProjectTeam extends StatefulWidget {
 class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
   late SwarmLeaderboardReader _board = _read();
 
+  /// The person's week this Team opened, while it is up. What it shows is
+  /// the project's: it closes with the Team, and when the read, the Swarm or
+  /// the project it was opened from is gone ([_closeWeek]).
+  ModalRoute<void>? _week;
+
   SwarmLeaderboardReader _read() => SwarmLeaderboardReader(
     tabId: widget.reader.tabId,
     projectId: widget.projectId,
@@ -273,12 +278,44 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
       _board.dispose();
       _board = _read();
     }
+    if (old.session != widget.session ||
+        old.reader != widget.reader ||
+        old.projectId != widget.projectId) {
+      _closeWeek();
+    }
   }
 
   @override
   void dispose() {
+    _closeWeek();
     _board.dispose();
     super.dispose();
+  }
+
+  void _openWeek(SwarmTeamHuman h, SwarmScore score) {
+    ModalRoute<void>? shown;
+    unawaited(
+      showSwarmPersonWeek(
+        context,
+        score: score,
+        person: h.person,
+        name: h.name,
+        opened: (route) => _week = shown = route,
+      ).whenComplete(() {
+        if (_week == shown) _week = null;
+      }),
+    );
+  }
+
+  /// Closes the week open, if any: once this frame is done, as a Team going
+  /// away may not change the navigator while it does.
+  void _closeWeek() {
+    final week = _week;
+    _week = null;
+    if (week == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (week.isActive) week.navigator?.removeRoute(week);
+    });
   }
 
   Future<void> _pull() =>
@@ -298,7 +335,10 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
         final project = snapshot?.projects
             .where((p) => p.id == widget.projectId)
             .firstOrNull;
-        if (snapshot == null || project == null) return const SizedBox.shrink();
+        if (snapshot == null || project == null) {
+          _closeWeek();
+          return const SizedBox.shrink();
+        }
         final now = clock.now();
         final tasks = swarmProjectTasks(session.inbox, reader, project.id, now);
         final personName = swarmTaskPersonName(snapshot);
@@ -389,14 +429,7 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                       },
                       points: h.score?.points,
                       onTap: switch (h.score) {
-                        final score? => () => unawaited(
-                          showSwarmPersonWeek(
-                            context,
-                            score: score,
-                            person: h.person,
-                            name: h.name,
-                          ),
-                        ),
+                        final score? => () => _openWeek(h, score),
                         null => null,
                       },
                     ),
