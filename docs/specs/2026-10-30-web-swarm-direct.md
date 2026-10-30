@@ -1,6 +1,6 @@
 # Web Swarm chats straight from the backend
 
-Status: proposed, for the Lead's go before code. Requested by Huy (10-30).
+Status: approved by the Lead and built in #2306. Requested by Huy (10-30).
 
 ## Problem
 
@@ -61,6 +61,10 @@ browser coming back online, not on a machine connecting. The machine-connect tri
 
 ### Authentication, CORS, CSRF
 
+- Routes: the transport signs only the Swarm routes the web's screens call (list, invitations, routing policy, create;
+  per Swarm: parts, changes, commands, mentions, decisions, leaderboard, sharing, routing policy, groups, conversations'
+  messages, catch-up and read marks, project GitHub and roles, route decisions, machine removal, join, terminal
+  sharing). Host, start, GitHub token, delivery and terminal routes are refused before anything is sent.
 - Token: the browser's own sign-in, which the web already sends on every other direct call (desk, machines, uploads):
   an Autonomous SSO access token, or a Harness `viewer` session after a QR sign-in. `registerAuthMiddleware` accepts
   both on every control route. Swarm routes treat the caller as the signed-in person; the only session-kind check in
@@ -68,7 +72,8 @@ browser coming back online, not on a machine connecting. The machine-connect tri
   holds one (team sessions are minted only for a machine's daemon, `lib/teamSession.ts`). So the browser has exactly
   the person's access, the same the relaying machine's `computer` session had. No daemon or Team-account credential
   is in the browser, before or after.
-- CORS: unchanged. The server already reflects the origin (`server.ts`); requests carry `Authorization: Bearer` from
+- CORS: which origins are let in is unchanged; only `Access-Control-Max-Age: 600` is added (Scale, below). The server
+  already reflects the origin (`server.ts`, `lib/corsOptions.ts`); requests carry `Authorization: Bearer` from
   the app's own storage, which another origin cannot read. No route is added and none accepts weaker auth.
 - CSRF: N/A because the control API authenticates only by the bearer header, never by cookie
   (`authMiddleware.ts bearerToken`); a cross-site form or link carries no credential.
@@ -78,11 +83,23 @@ browser coming back online, not on a machine connecting. The machine-connect tri
 
 ### Caching and offline
 
-Unchanged in kind. The web's saved Swarm views (`SuperTabSavedViews`, browser storage) are already claimed per
+Unchanged in kind, with one gap left for a follow-up (below). The web's saved Swarm views (`SuperTabSavedViews`, browser storage) are already claimed per
 account, forgotten when another account signs in on that browser or the account leaves, and cleared by Settings ▸
 Account ▸ Clear now. In-memory state is per account generation (`SuperTabClient.request` drops answers that land
 after an account change; `superTabMachineRequest` the same by `_authRevision`). Offline: reads fail with the network
 text above and retry on the existing poll; posts stay in the composer with their operation id, as now.
+
+What a sign-out on the web leaves in browser storage today (each keyed by account, so another account signing in never
+reads them through the app, but they stay on a shared browser). Follow-up: clear them on a web sign-out.
+- `super_tab.<account>.<swarm>`: each Swarm's unsent composer drafts per conversation, its selection and what is expanded;
+- `super_tab.launch.<account>.<tab>.<conversation>`: an unsent New Harness or New Project draft;
+- `super_tab.hidden.<account>`: the Swarms hidden on this browser;
+- `super_tab.personal.<account>`: the Swarm last chosen in the switcher.
+
+A 401 retry never goes out as another account (security review of 0993e291d): the bearer interceptor records which
+sign-in each request went out under (`SignInRevision`, moving with every sign-in and sign-out, and in a browser with
+another tab's too) and refuses the retry when it has moved, as the daemon's account fence does; the Swarm call then says
+the account changed.
 
 Live updates: the browser hears `swarm_changed` only on its sockets to the backend, one per machine
 (`lib/webAccountPushes.ts`). With no machine at all there is no socket, so the web reads on its 15 s timer instead
@@ -90,7 +107,8 @@ Live updates: the browser hears `swarm_changed` only on its sockets to the backe
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: ______  Reviewer (another engine): ______
+Reviewed revision: 0993e291d  Reviewers: the two security reviews of #2306 (sign-in and access checks; browser data and
+sign-out on shared machines), no critical or important findings; their minor ones are fixed in the next revision.
 
 1. **Growth:** N/A because nothing new is stored: no records, fields or caches. The saved views keep their existing
    lifecycle (above).
@@ -110,6 +128,9 @@ Reviewed revision: ______  Reviewer (another engine): ______
    simulated minutes): quiet 24.7 requests/min through a machine and 24.7 direct; a push every 10 s 33.3 and 33.3; a
    machine reconnecting every 20 s 29.5 through it and 24.7 direct (no read on reconnect any more). Against the default
    limits (15,000/person/min, 50/caller/s) a busy web client uses about 0.2% of its minute, about 450x headroom.
+   Each of these is signed with an Authorization header, so a browser sends a CORS preflight before it, which would
+   double the requests on the wire; `Access-Control-Max-Age: 600` (`backend/src/lib/corsOptions.ts`, the most Safari
+   keeps) lets it keep that answer for 10 minutes, so it is one preflight per route per 10 minutes instead.
 5. **Compatibility:** client-only. An old web bundle still relays through a machine, and the daemon keeps its
    `action: backend` (the phone app and old web bundles use it). A new web bundle against any server from the last
    months works, because these routes already accept the person's sign-in. The relay's `machine.contribute` retry
