@@ -121,7 +121,7 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
  * routes a machine's host and its agents call keep their own answers, which hosts act on (cli superTabs/machines.ts).
  */
 export const PERSON_ROUTES: ReadonlySet<string> = new Set([
-  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'POST /api/super-tabs/:tabId/commands',
+  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'POST /api/super-tabs/:tabId/commands',
   'GET /api/super-tabs/:tabId/mentions', 'GET /api/super-tabs/:tabId/decisions', 'GET /api/super-tabs/:tabId/leaderboard',
   'GET /api/super-tabs/:tabId/sharing', 'POST /api/super-tabs/:tabId/sharing', 'GET /api/super-tabs/:tabId/routing-policy',
   'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
