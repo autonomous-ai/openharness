@@ -149,6 +149,16 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   /// The person may reply: as they may post in the chat.
   bool get canPost => chat.canPost;
 
+  /// The person sees the thread: read through its newest row on every device
+  /// (backend readMarks.ts thread marks), once its own read brought it.
+  void markRead() {
+    if (_disposed || reader.accessRevoked || state != SwarmChatState.loaded) {
+      return;
+    }
+    final last = messages.lastOrNull?.sequence ?? 0;
+    if (last > 0) reader.readMarks?.markThreadRead(chat.id, root, last);
+  }
+
   /// Tells the reply box what changed in it — the draft, Also send, a reply
   /// leaving it — while this notifier itself tells the messages.
   Listenable get composer => _composer;
