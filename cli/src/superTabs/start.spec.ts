@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_SESSION_ENGINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
@@ -269,6 +269,46 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
   expect(payload.prompt).not.toContain('assign')
   expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {
+  const plain = fixture()
+  plain.start.request = { ...plain.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof plain.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-main', request: plain.start.request }, plain.scoped, where, plain.open)
+  const main = plain.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 42 } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-main', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  const chat = f.start.request.conversationId
+  // Everything but the prompt is the main Buddy's: its role, permissions, worktree and skill.
+  const { prompt, ...rest } = payload, { prompt: mainPrompt, ...mainRest } = main
+  expect(rest).toEqual(mainRest)
+  expect(prompt).not.toBe(mainPrompt)
+  expect(prompt).toContain('Use the built-in swarm-buddy skill for this session.')
+  expect(prompt).toContain(`harness super-tab --tab tab messages ${chat} --thread root-1`)
+  expect(prompt).toContain(`post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID`)
+  expect(prompt).toContain('only in this thread')
+  expect(prompt).not.toContain('greet')
+  expect(prompt).not.toContain('assign')
+})
+
+it('refuses a Codex thread session before anything launches: Codex runs without the Buddy guard hook (security review 1 of #2345)', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine: 'codex', buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof f.start.request
+  const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-codex-session', request: f.start.request }, f.scoped, where, f.open)
+  expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_SESSION_ENGINE })
+  expect(f.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(false)
+  expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_SESSION_ENGINE }) }))
+})
+
+it('starts a plain Buddy for a thread session whose thread is not an id', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'x; rm -rf ~', from: 1 } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-odd', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.prompt).not.toContain('rm -rf')
+  expect(payload.prompt).not.toContain('--thread')
 })
 
 it('starts no Buddy with full permissions or the GitHub App\'s token: Claude refusing what its guard does not allow, Codex in its read-only sandbox asking', async () => {

@@ -1100,6 +1100,8 @@ model SuperTabMessage {
   thread          String?
   /// A thread reply also shown in the conversation's main stream.
   alsoInChat      Boolean?
+  /// A reply in a Buddy thread session's thread (superTabs/buddySessions.ts): the main Buddy never reads it.
+  buddySession    Boolean?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
