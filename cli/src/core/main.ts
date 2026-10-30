@@ -2894,7 +2894,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
+    // A Swarm Buddy keeps running when a window closes its view (Diego, 10-30); Stop Harness above still stops it.
+    ...(swarm ? {
+      leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId),
+      buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
+    } : {}),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

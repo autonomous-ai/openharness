@@ -14,7 +14,7 @@ import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { retainedHarnesses, retentionFile } from './retention.js'
+import { mayBeBuddy, retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { createAccountHttp } from '../gateway/accountHttp.js'
@@ -90,6 +90,55 @@ describe('current Swarm role lookup', () => {
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent],
         conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }] }) } }))
     expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
+  })
+  // Security reviews of #2248: the server blanks every agent's machine and session ids in a Buddy's own read (backend
+  // model.ts visibleState, read/views.ts), so a lookup that matched them there never found the Buddy.
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const blanked = (agent: Record<string, unknown>) => ({ ...agent, machineId: '', harnessId: '' })
+  it('derives a Buddy from this machine\'s own roster row when its own read blanks its machine and session ids', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: BUDDY_OF }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, skillMode: 'default' }]) : swarmReply(path, { agents: [blanked(agent)],
+        projects: [{ id: 'lead', skillMode: 'default' }], conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'default' })
+  })
+  it('derives a Buddy when its own read no longer lists it while this machine\'s roster still does', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: BUDDY_OF }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, skillMode: 'default' }]) : swarmReply(path, { agents: [], conversations: [] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'default' })
+  })
+  it('comes back as a Buddy when the same session is a Buddy in one Swarm and a Lead in another', async () => {
+    const t = setup()
+    const buddy = { id: 'buddy', harnessId: 'harness', machineId: 'machine-1', buddyOf: BUDDY_OF }
+    const lead = { id: 'lead-agent', harnessId: 'harness', machineId: 'machine-1' }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+      ? hostForm([{ tabId: 'tab', agent: buddy }, { tabId: 'tab-2', agent: lead }])
+      : path.includes('tab-2') ? swarmReply(path, { id: 'tab-2', agents: [lead], conversations: [{ id: 'g', leadId: 'lead-agent', agentIds: [] }] })
+        : swarmReply(path, { agents: [blanked(buddy)], conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['buddy'] }] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
+  })
+  it('never takes a blank or another session id in a read for a non-Buddy row', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let seen: Record<string, unknown> = blanked(agent)
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [seen], conversations: [{ leadId: 'agent' }] }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+    // The same agent id reused for another session (another Swarm's copy, a stale part) is not this one.
+    seen = { ...agent, harnessId: 'another-harness' }
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+  })
+  it('fails the lookup, never answering "no role", when a Buddy\'s Swarm read fails', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: BUDDY_OF }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => path.includes('/hosts/')
+      ? { status: 200, body: { success: true, data: hostForm([{ tabId: 'tab', agent }]) } }
+      : { status: 500, body: { success: false, error: { code: 'INTERNAL', message: 'Unavailable' } } })
+    await expect(swarmRoleFor(sourcesOf(t.core), 'harness')).rejects.toThrow()
   })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
@@ -2470,6 +2519,23 @@ describe('closing the sessions the backend ends', () => {
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
     expect(t.commands).toHaveLength(1)
+  })
+
+  // Diego, 10-30: a close never stops a Buddy, yet its person removing it must. The host drops the Buddy from what it keeps
+  // before it closes the session, so the core's close guard no longer names it when the close arrives.
+  it('closes a Buddy its person removed, which the close guard no longer names by then', async () => {
+    const buddy = { tabId: 'tab', active: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'diego', generation: 'g1' } } }
+    const t = lifeFixture([buddy])
+    const guardAtClose: boolean[] = []
+    t.closeMember.mockImplementation(async () => { guardAtClose.push(mayBeBuddy(t.core.dataDir, 'harness')); return { closed: true as const } })
+    await t.poll()
+    expect([mayBeBuddy(t.core.dataDir, 'harness'), retainedHarnesses(t.core.dataDir).has('harness')]).toEqual([true, true])
+    expect(t.closeMember).not.toHaveBeenCalled()
+    t.rows.splice(0, 1, ended({ active: false }))
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(guardAtClose).toEqual([false])
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
   })
 
   // Lead, 10-30: a Buddy removed, its person gone from the Swarm, or its chat purged with its project: the Swarm ends its

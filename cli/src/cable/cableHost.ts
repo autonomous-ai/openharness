@@ -117,7 +117,7 @@ export interface CableHostWiring {
    *  `refused` with the backend's reason when it refused the post. */
   swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
-  superTabSelected?: (superTabId: string, projectId: string) => void
+  superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -449,8 +449,9 @@ export class DaemonCableHost implements CableHost {
     return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
   }
 
-  superTabSelected(superTabId: string, projectId: string): void {
-    this.wiring.superTabSelected?.(superTabId, projectId)
+  superTabSelected(superTabId: string, projectId: string, chat?: CardSide): void {
+    if (chat) this.wiring.superTabSelected?.(superTabId, projectId, chat)
+    else this.wiring.superTabSelected?.(superTabId, projectId)
   }
 
   /**

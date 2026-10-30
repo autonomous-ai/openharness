@@ -137,7 +137,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// above the first message the person had not read as it opened
   /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
   /// above the screen; and Jump to latest while they read more than a
-  /// screen back.
+  /// screen back. The person's own Buddy chat has both too, in the project's
+  /// Buddy tab and on its own page.
   final bool homeC;
 
   @override
@@ -205,8 +206,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// says how many. Null at the foot.
   final _held = ValueNotifier<String?>(null);
 
-  /// Swarm Home C: the person reads more than a screen back, where Jump to
-  /// latest is offered.
+  /// Whether this chat has the New messages line and Jump to latest: Swarm
+  /// Home C's project chat and the person's own Buddy chat, known as the chat
+  /// opens. Not a work chat.
+  bool _unreadLine = false;
+
+  /// Whether this chat's Swarm has not been read yet, so whose Buddy chat it
+  /// is is not known: [_unreadLine] waits for the first read that works, and
+  /// nothing is read until then, as until the line is placed.
+  bool _ownerUnknown = false;
+
+  /// The chat's first read is done, so its line can be placed.
+  bool _firstRead = false;
+
+  /// The person reads more than a screen back, where Jump to latest is
+  /// offered.
   final _farBack = ValueNotifier<bool>(false);
 
   /// Each entry's row as last built, with what it was built from ([_row]).
@@ -289,6 +303,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       return;
     }
     session.inbox.removeListener(_attach);
+    _ownerUnknown =
+        !widget.homeC && widget.buddy == null && reader.snapshot == null;
+    _unreadLine =
+        widget.homeC ||
+        widget.buddy != null ||
+        swarmIsOwnBuddyChat(reader, widget.conversationId);
     // Set before what the chat kept is shown, so it is read only as far as
     // it is seen: opened at a message, through it until the person goes
     // down to the foot; with a New messages line to place, nothing until it
@@ -300,7 +320,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       heldAt:
           widget.messageId ??
           _held.value ??
-          (widget.homeC && !_lineDecided ? _undecided : null),
+          ((_unreadLine || _ownerUnknown) && !_lineDecided ? _undecided : null),
     );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
@@ -310,8 +330,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _watch();
     unawaited(
       c.load().then((_) {
+        // A chat left behind may finish reading after its replacement began.
+        if (!mounted || _conversation != c) return;
+        _firstRead = true;
         _placeLine(c);
-        if (!mounted || _conversation != c || _noticeHandled) return;
+        if (_noticeHandled) return;
         if (widget.messageId case final messageId?) {
           _noticeHandled = true;
           unawaited(_jumpTo(c, messageId));
@@ -331,7 +354,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// the screen opens the chat at it ([_openAtLine]), unless a notice opened
   /// it at a message.
   void _placeLine(SwarmConversation c) {
-    if (!mounted || _conversation != c || _lineDecided || !widget.homeC) {
+    if (!mounted || _conversation != c || _lineDecided || _ownerUnknown) {
+      return;
+    }
+    if (!_unreadLine) {
+      if (c.heldAt == _undecided) c.heldAt = null;
       return;
     }
     final marks = c.reader.readMarks;
@@ -435,6 +462,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
+    if (_ownerUnknown && c.reader.snapshot != null) {
+      _ownerUnknown = false;
+      _unreadLine = swarmIsOwnBuddyChat(c.reader, widget.conversationId);
+      if (_firstRead) _placeLine(c);
+    }
     final view = _view.value = _ChatView.of(session, c, _view.value);
     _seeBuddy(c, view.buddyProject);
     final decisionId = widget.decisionId;
@@ -482,6 +514,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _madeFrom = null;
     _lineAt = null;
     _lineDecided = false;
+    _ownerUnknown = false;
+    _firstRead = false;
+    _farBack.value = false;
     _stopAwaitingMarks();
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;
@@ -555,7 +590,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _nearTop();
     if (!_scroll.hasClients) return;
     final back = _scroll.offset > _readingBack;
-    if (widget.homeC) {
+    if (_unreadLine) {
       _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
     }
     // At the foot all is seen; reading back, only what was seen at the foot
@@ -1025,9 +1060,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               child: ListenableBuilder(
                 listenable: Listenable.merge([c, _held, _farBack]),
                 builder: (context, _) => switch (_waiting(c)) {
-                  0 when !_farBack.value => const SizedBox.shrink(),
+                  0 when !_farBack.value || c.state == SwarmChatState.lost =>
+                    const SizedBox.shrink(),
                   final count => Center(
-                    child: _NewPill(count: count, onTap: _toFoot),
+                    child: SwarmNewPill(count: count, onTap: _toFoot),
                   ),
                 },
               ),
@@ -2252,9 +2288,9 @@ class _Day extends StatelessWidget {
 
 /// How many messages arrived below while the person read back — or, with
 /// none ([count] 0), Jump to latest while they read far back (Swarm Home C);
-/// a tap goes down to the foot.
-class _NewPill extends StatelessWidget {
-  const _NewPill({required this.count, required this.onTap});
+/// a tap goes down to the foot. The chat's and a thread's.
+class SwarmNewPill extends StatelessWidget {
+  const SwarmNewPill({super.key, required this.count, required this.onTap});
 
   static const double _height = 36;
 
