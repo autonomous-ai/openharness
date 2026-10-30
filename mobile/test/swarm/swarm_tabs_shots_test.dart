@@ -6,37 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
-import '../phone_edge/edge_fixture.dart' show edgeApp;
 import '../voice_fakes.dart';
+import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of Swarm's tab bar, direction C, as Tony's prototype
 /// C1 draws it (2026-10-30), with the tabs main has screens for: Swarm Home
-/// over the bar with what waits on the person counted on Activity, each
-/// tab's touch area outlined, Activity's Needs you, and You's Settings, on a
+/// as C1 draws it over the bar — back after two hours away — with what
+/// waits on the person counted on Activity, its switcher and Jump to, each
+/// touch area outlined; Activity's Needs you; and You as C4 draws it, on a
 /// 390-point phone in both phone themes, from made-up data only, to the
 /// folder `SWARM_TABS_SHOTS` names.
 final shots = Platform.environment['SWARM_TABS_SHOTS'];
 void main() {
   setUpAll(() async {
     if (shots == null || !Platform.isMacOS) return;
-    PackageInfo.setMockInitialValues(
-      appName: 'Harness',
-      packageName: 'ai.autonomous.harness',
-      version: '1.2.3',
-      buildNumber: '456',
-      buildSignature: '',
-    );
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
@@ -93,6 +84,33 @@ void main() {
         ),
         'projectId': projectId,
       };
+      // Work in each project: Nova working on mobile, Ash waiting on the
+      // person in the API, Kite down on desktop; three tasks done since the
+      // person left, one before.
+      Map<String, dynamic> work(
+        String projectId,
+        String id,
+        String status,
+        String worker, {
+        Duration? done,
+      }) => {
+        ...groupData(
+          id,
+          title: id,
+          agentIds: [worker],
+          status: status,
+          workerId: worker,
+        ),
+        'projectId': projectId,
+        if (done != null)
+          'assignment': {
+            'id': 'attempt-$id',
+            'agentId': worker,
+            'status': status,
+            'result': null,
+            'progressAt': ago(done),
+          },
+      };
       // When each project's chat last moved, in minutes.
       const moved = {
         'lead-p-oh': 2,
@@ -108,27 +126,77 @@ void main() {
         'next': null,
       };
       final load = firstLoad(
-        head: headData(
-          name: 'Autonomous',
-          projects: [
-            projectOf('p-oh', 'openharness'),
-            projectOf('p-mobile', 'harness-mobile'),
-            projectOf('p-api', 'backend-api'),
-            projectOf('p-desk', 'desktop'),
-          ],
-        ),
+        head: {
+          ...headData(
+            name: 'Autonomous',
+            projects: [
+              projectOf('p-oh', 'openharness'),
+              projectOf('p-mobile', 'harness-mobile'),
+              projectOf('p-api', 'backend-api'),
+              projectOf('p-desk', 'desktop'),
+            ],
+          ),
+          'localModels': {'grid': 'grid-1', 'enabled': true},
+        },
         agents: [
           {
             ...agent('agent-river', name: 'Lead', displayName: 'River'),
             'projectId': 'p-oh',
           },
+          {
+            ...agent('agent-nova', displayName: 'Nova'),
+            'projectId': 'p-mobile',
+          },
+          {...agent('agent-ash', displayName: 'Ash'), 'projectId': 'p-api'},
+          {
+            ...agent('agent-kite', displayName: 'Kite'),
+            'projectId': 'p-desk',
+            'downSince': '2026-10-29T01:00:00.000Z',
+          },
         ],
         groups: [
           for (final id in ['p-oh', 'p-mobile', 'p-api', 'p-desk']) lead(id),
+          work('p-mobile', 'g-tabs', 'working', 'agent-nova'),
+          work('p-api', 'g-ask', 'needs_human', 'agent-ash'),
+          for (final (i, minutes) in [20, 45, 70, 180].indexed)
+            work(
+              'p-oh',
+              'g-done-$i',
+              'done',
+              'agent-river',
+              done: minute * minutes,
+            ),
         ],
       );
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...load,
+        // A made-up person, in a meeting (no emoji: a test draws none), and
+        // the models one machine serves.
+        'members': [
+          part(me, 1, {
+            ...person(me),
+            'email': 'ada@example.com',
+            'status': {'text': 'In a meeting'},
+          }),
+        ],
+        'machines': [
+          part('mac-1', 1, {
+            'machineId': 'mac-1',
+            'name': 'Studio',
+            'contributorId': me,
+            'observation': {
+              'receivedAt': now.millisecondsSinceEpoch,
+              'localModels': [
+                for (final (model, kind) in [
+                  ('qwen3-coder', 'local'),
+                  ('llama-4', 'shared'),
+                  ('moonshotai/kimi-k3', 'api'),
+                ])
+                  {'grid': 'grid-1', 'model': model, 'kind': kind},
+              ],
+            },
+          }),
+        ],
         // The fixture's lead chat is another project's.
         'groups': [
           for (final row in load['groups'] as List)
@@ -167,6 +235,17 @@ void main() {
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
       final account = ValueNotifier<String?>(me);
+      final computers =
+          FakeComputers(const [
+              (name: 'Studio', away: false),
+              (name: 'Laptop', away: false),
+              (name: 'Mini', away: true),
+            ])
+            ..own = [
+              (id: 'studio', name: 'Studio', away: false),
+              (id: 'laptop', name: 'Laptop', away: false),
+              (id: 'mini', name: 'Mini', away: true),
+            ];
       final host = SwarmHost(
         accountId: () => me,
         account: account,
@@ -174,14 +253,10 @@ void main() {
         notices: SilentSystemNotices(),
         features: features,
         readMarks: MemoryKeyValueStore(),
+        computers: computers,
       )..foreground = false;
-      // The phone's own Settings as You, for a made-up person.
-      final app = edgeApp()
-        ..currentUser = const CurrentUserProfile(
-          id: 'u',
-          name: 'Ada Lovelace',
-          email: 'ada@example.com',
-        );
+      // Gone two hours: Home has While you were away.
+      host.session!.home.seen(now.subtract(const Duration(hours: 2)));
       final boundary = GlobalKey();
       final targets = ValueNotifier(<Rect>[]);
       await tester.pumpWidget(
@@ -207,10 +282,7 @@ void main() {
                 ],
               ),
             ),
-            home: SwarmTabsPage(
-              onSettings: (_) {},
-              settings: (_) => SettingsPage(notifier: app),
-            ),
+            home: SwarmTabsPage(onSettings: (_) {}),
           ),
         ),
       );
@@ -225,25 +297,61 @@ void main() {
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
+      Rect rect(String key) => tester.getRect(find.byKey(ValueKey(key)));
       await capture('home');
       targets.value = [
+        for (final key in [
+          'swarm-title-button',
+          'swarm-compose',
+          'swarm-jump',
+          'swarm-away',
+          'swarm-project-$tab-p-oh',
+        ])
+          rect(key),
         for (final tab in [SwarmTab.home, SwarmTab.activity, SwarmTab.you])
-          tester.getRect(find.byKey(ValueKey('swarm-tab-${tab.name}'))),
+          rect('swarm-tab-${tab.name}'),
       ];
       await tester.pump();
       await capture('targets');
       targets.value = [];
+      await tester.tap(find.byKey(const ValueKey('swarm-title-button')));
+      await tester.pumpAndSettle();
+      await capture('switcher');
+      targets.value = [rect('swarm-switch-$tab'), rect('swarm-switch-join')];
+      await tester.pump();
+      await capture('switcher-targets');
+      targets.value = [];
+      Navigator.of(
+        tester.element(find.byKey(const ValueKey('swarm-switch-join'))),
+      ).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('swarm-jump')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-jump-query')),
+        'har',
+      );
+      await tester.pump();
+      await capture('jump');
+      await tester.tap(find.byKey(const ValueKey('swarm-jump-cancel')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('swarm-tab-activity')));
       await tester.pumpAndSettle();
       await capture('activity');
       await tester.tap(find.byKey(const ValueKey('swarm-tab-you')));
-      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
       await capture('you');
+      targets.value = [
+        for (final row in ['status', 'models', 'devices', 'settings'])
+          tester.getRect(find.byKey(ValueKey('swarm-you-$row'))),
+      ];
+      await tester.pump();
+      await capture('you-targets');
+      targets.value = [];
       await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 3));
-      app.dispose();
       await tester.pump(const Duration(seconds: 30));
       host.dispose();
+      computers.dispose();
       account.dispose();
       targets.dispose();
     }

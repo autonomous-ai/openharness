@@ -1,6 +1,6 @@
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
-import { keepUsernames, setUsername } from './usernames.js'
+import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -10,21 +10,22 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
-import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
-import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
+import { agentQuality, agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, SAME_ENGINE, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
+import { checkMentions, MAX_MENTIONS, namedIn, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
+import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
-  recordVerdict } from './leaderboard/record.js'
+  recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
@@ -33,10 +34,10 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
+import { LEAD_NAME, launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -67,8 +68,15 @@ const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() })
 const maxAgents = z.number().int().min(1).max(1024)
 // Copied Default roles keep the ids lead, dev and review; a role the owner adds gets 12 random hex characters from the client.
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
+/** A role's default engine, model and effort (projects.ts RoleDefaults). */
+/** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
+const LAUNCH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\-[\]]{0,63}$/
+const LAUNCH_EFFORT = /^[a-z]{1,16}$/
+const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
+  effort: z.string().trim().min(1).max(80).optional() }).strict()
 const role = z.object({ id: roleId, name: z.string().trim().min(1).max(40), kind: z.enum(['lead', 'builder', 'reviewer']),
-  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.') }).strict()
+  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.'),
+  defaults: roleDefaultsSchema.optional() }).strict()
 const roleSet = z.array(role).min(1).max(MAX_ROLES)
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(), roleId: roleId.optional(),
@@ -101,7 +109,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
-  z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
+  z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSaveSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
@@ -140,7 +148,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
     mergedAt: z.iso.datetime().optional(), fixes: z.string().max(400).regex(PULL_REQUEST_URL).optional() }).strict(),
-  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
+  // `launchRefused`: the model and effort a Product Manager's own-machine launch asked for, which that machine refused before
+  // launching anything, so it runs its engine's own model (Desktop AgentCreationAttempt; leadStart.ts launchRefusedLine).
+  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional(),
+    launchRefused: z.object({ model: z.string().regex(LAUNCH_MODEL), effort: z.string().regex(LAUNCH_EFFORT).optional() }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
   // owner's message there asking for it. Its files are its own uploads in that chat, or files its owner sent there (store.ts proposable).
@@ -392,7 +403,8 @@ function roleSetOf(roles: ProjectRole[]): ProjectRole[] {
   }
   return roles
 }
-const projectRole = (r: z.infer<typeof role>): ProjectRole => ({ id: r.id, name: r.name, kind: r.kind, version: roleVersion(r.text) })
+const projectRole = (r: z.infer<typeof role>): ProjectRole => ({ id: r.id, name: r.name, kind: r.kind, version: roleVersion(r.text),
+  ...(r.defaults ? { defaults: r.defaults } : {}) })
 
 /** The custom set's role an agent of this kind is started or assigned with. */
 function chosenRole(project: SwarmProject, id: string, kind: RoleKind): ProjectRole {
@@ -656,6 +668,28 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** The Mac a Harness Team account's machine is, for a machines rule naming the Mac (machines.ts teamStartRequest). */
   const macOf = (id: string) => state.machines?.find(m => m.machineId === id)?.hostMachineId
   const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
+  /** [request] with its role's [defaults] filled in (projects.ts withRoleDefaults) while the routing policy has that model on and
+   *  the project's rules allow it. Otherwise it starts as asked, on its engine's own model, and [conversationId] says why: a
+   *  default never overrides the owner's model list or rules (review of #2274). */
+  const defaulted = <T extends { engine: string; model?: string; effort?: string; gridModel?: string }>(request: T, defaults: RoleDefaults | undefined,
+    conversationId: string, machineId: string, name: string): T => {
+    const filled = withRoleDefaults(request, defaults)
+    if (filled === request) return request
+    const model = filled.model!, engineName = filled.engine === 'codex' ? 'Codex' : 'Claude'
+    const rows = policy.models.filter(m => m.engine === filled.engine && m.model === model)
+    const exact = rows.find(m => m.effort === (filled.effort ?? 'default'))
+    // Each rule on its own: one the plain request already breaks never hides another the default breaks (re-review of #2274).
+    const target = (r: T) => startTarget({ ...r, machineId })
+    const rule = groupRules(conversationId).map(r => !broken([r], target(request), machineName, macOf) && broken([r], target(filled), machineName, macOf)).find(Boolean)
+    const why = !rows.length ? `the routing policy has no row for ${engineName} ${model}.`
+      : !(exact ? exact.enabled : rows.some(m => m.enabled)) ? `the routing policy turns off ${engineName} ${model}${exact ? ` at ${exact.effort}` : ''}.`
+      : rule ? rule.replace(/^./, c => c.toLowerCase())
+      : null
+    if (!why) return filled
+    effects.messages.push({ id: stableId(operationId, 'role-default'), conversationId, author: sender, replyTo: null, recipients: [], source: RULE_ROW,
+      text: `${name} starts on its engine\u2019s own model, not ${model}${filled.effort ? ` at ${filled.effort}` : ''}: ${why}` })
+    return request
+  }
   /** A requirement names only machines its setter sees, so it never names one to a reader who could not (model.ts TaskRequirement). */
   const requirable = (task: WorkTask | undefined) => {
     const machines = task?.requires?.machines
@@ -677,7 +711,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
     if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
-    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true))
+    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true), context.now)
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
     return stepped ? { code: 'STEPPED_UP', why: stepped } : null
@@ -979,7 +1013,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const { type: _type, projectId: _projectId, machineId, ...request } = command
       // Only its person knows which machine stays on (Ken, 10-29): a Desktop from before asked for the first free one.
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${LEAD_NAME} runs on.`, 400)
-      const start = placeLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
+      // Its person named no model: the lead role's default for this engine (Claude Opus 5.5 at xhigh in the built-in sets).
+      const asked = defaulted(request, roleDefaults(project, 'lead'), project.leadConversationId, machineId, LEAD_NAME)
+      const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
@@ -1455,6 +1491,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
         message(group.id, command.initialMessage)
       }
+      // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
+      // run the model its role asked for.
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused), [], null, SYSTEM_ROW)
       break
     }
     case 'agent.start': {
@@ -1482,7 +1521,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
-      const request = teamStartRequest(state, command.request, home, context.teamAccountsIdle, context.teamMachines)
+      // A person's start that names no model takes its role's default. A routed start keeps the model its route picked.
+      const asked = command.routeDecisionId ? command.request
+        : defaulted(command.request, roleDefaults(home, command.request.role ?? 'builder', command.request.roleId), command.request.conversationId,
+          command.request.machineId, command.request.name)
+      const request = teamStartRequest(state, asked, home, context.teamAccountsIdle, context.teamMachines)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -1724,6 +1767,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (Object.entries(command.configuration).some(([key, value]) => target.configuration[key as keyof typeof target.configuration] !== value)) {
         target.configuration = command.configuration
         target.configurationVersion = operationId
+        recordReportedModel(state, target)
       }
       break
     }
@@ -1942,7 +1986,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      const mentions = checkMentions(state, actor, group, command.mentions ?? [])
+      // The text is where tags live, as people tag in chat: each name it says tags that person, if they may read here. A tag
+      // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
+      // shows the same words. Only from the command, so a retry writes the same text.
+      const picked = checkMentions(state, actor, group, command.mentions ?? [])
+      // Every username is worked out at once, and only for a post that names or picks someone.
+      const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
+      const named = namedIn(state, command.text, names)
+      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${names.get(id)}`), command.text)
+      // A tag would tell a person about an agent-only notice they cannot see.
+      const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
@@ -1982,12 +2035,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // A reply joins its message's thread, always at the root, so threads never nest. A reply to a notice only its
       // recipients read (the Lead answering a stalled alert) stays in the chat: people open a thread from its root.
       const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread : null
       if (thread) Object.assign(effects.messages.at(-1)!, { thread, ...(command.alsoSend ? { alsoInChat: true } : {}) })
-      recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
+      recordPost(state, group, actor, { replyTo: command.replyTo, text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       leadActed(group.id, 'post')
       break
@@ -2038,7 +2091,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The step this attempt is comes from the group alone (stepUp.ts), and why a review stays on its Builder's engine from
       // the server's own judgement (rules.ts).
       const step = conversation(state, command.conversationId).stepUp
-      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true))
+      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true), context.now)
       const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
       const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
@@ -2046,7 +2099,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"${sameEngine ? ` · ${SAME_ENGINE}` : ''}`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
@@ -2158,7 +2211,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
-      message(group.id, `${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
+      // A review on its Builder's own engine says so first, so its Reviewer knows why (rules.ts sameEngineReview).
+      const sameEngine = sameEngineReview(state, group.reviewOf, agentTarget(state, worker), policy, mayRun(group.id, true), context.now)
+      message(group.id, `${sameEngine ? `${sameEngine}\n\n` : ''}${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
       const news = assignedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
@@ -2221,8 +2276,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now),
+          strength: a => agentQuality(state, policy, a),
+          sameEngine: a => sameEngineReview(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now) })
         if (opened) effects.messages.push(...opened.messages)
+        // No new Reviewer on another engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
+        const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, policy, mayRun(group.id, false), context.now) : null
+        // A row of its own beside the command's, as the ship notice is: written as the Engineer who handed over.
+        if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
+          text: short.text, replyTo: null, recipients: [], source: short.source, ...(short.mentions.length ? { mentions: short.mentions } : {}) })
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
@@ -2342,6 +2404,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
   // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
   for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
+  // Each row is stored under its id: two alike roll the whole command back on a duplicate key, in the store alone (review of
+  // #2275: the review-capacity notice took the Ready for review row's id, so no Builder could hand over during a shortage).
+  const ids = new Set<string>()
+  for (const draft of effects.messages) {
+    if (ids.has(draft.id)) throw new Error(`Command ${command.type} wrote two messages with the id ${draft.id}.`)
+    ids.add(draft.id)
+  }
   return effects
 }
 

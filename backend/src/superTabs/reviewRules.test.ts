@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_ROUTING_POLICY as policy } from './routingPolicy.js'
-import { agentTarget, broken, reviewRefusal, targetQuality } from './rules.js'
+import { agentTarget, broken, reviewRefusal, SAME_ENGINE, sameEngineReview, startTarget, targetQuality } from './rules.js'
+import { effectivePolicy } from './routingPolicy.js'
 import { cheapAttempt } from './stepUp.js'
 import { recordRun } from './leaderboard/record.js'
 const builder = { id: 'builder', machineId: 'allowed', harnessId: 'hb', configuration: { engine: 'claude', model: 'opus', effort: 'high' } }
@@ -34,3 +35,81 @@ describe('reviews and step-ups by what each attempt runs on', () => {
   })
 })
 
+// 2026-10-30: every Codex Reviewer was out of weekly quota for days, yet a Claude build's top-tier Claude review was refused
+// because Codex machines existed, and reviews waited all morning (Tony). Another engine counts only where a Reviewer of it
+// could start within the start window: on a machine the review may use, online, with quota now or once a window resets
+// inside the window.
+describe('a review on its Builder\'s own engine when no Reviewer of another engine could start soon', () => {
+  const NOW = Date.parse('2026-10-30T09:00:00Z'), MIN = 60_000, DAY = 86_400_000
+  const opus = { id: 'reviewer', machineId: 'allowed', harnessId: 'hr', contributorId: 'owner', configuration: { engine: 'claude', model: 'opus', effort: 'high' } }
+  const codexBox = (resetsIn: number | null, usedPercent = 100, extra: Record<string, unknown> = {}) => ({ machineId: 'codex-box', contributorId: 'tony', engines: ['codex'],
+    observation: { receivedAt: NOW - 1000, readiness: { engines: [{ engine: 'codex', installed: true, signedIn: true }] },
+      quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent, resetsAt: resetsIn === null ? null : new Date(NOW + resetsIn).toISOString() }] }] }, ...extra })
+  const judge = (machines: unknown[], rules: unknown[] = []) => {
+    const state = stateOf(opus)
+    Object.assign(state, { machines, rules })
+    const target = agentTarget(state, opus as any)
+    return { refusal: reviewRefusal(state, 'work', target, policy, undefined, NOW), note: sameEngineReview(state, 'work', target, policy, undefined, NOW) }
+  }
+
+  it('lets Claude Opus review a Claude build while every Codex machine is out of quota for days, and says why', () => {
+    expect(judge([codexBox(3 * DAY)])).toEqual({ refusal: null, note: expect.stringMatching(new RegExp(`^${SAME_ENGINE}`)) })
+    expect(SAME_ENGINE).toBe('same-engine review: no Reviewer of another engine has quota')
+    // Nor does an exhausted window that never says when it resets count.
+    expect(judge([codexBox(null)]).refusal).toBeNull()
+  })
+
+  it('still refuses Claude while Codex resets inside the start window, or has quota now', () => {
+    expect(judge([codexBox(10 * MIN)])).toEqual({ refusal: 'A review runs on another engine than the reviewed Builder\'s, Claude.', note: null })
+    expect(judge([codexBox(3 * DAY, 40)]).refusal).toBe('A review runs on another engine than the reviewed Builder\'s, Claude.')
+    // A quota it cannot read stays usable, as a start there is.
+    const unread = codexBox(3 * DAY); unread.observation.quotas[0]!.known = false
+    expect(judge([unread]).refusal).not.toBeNull()
+  })
+
+  it('lets Claude review when Codex runs only on a machine the owner left out, or one that is offline, signed out or suspended', () => {
+    const owners = [{ projectId: 'p', rule: { kind: 'machines', machineIds: ['allowed'] }, text: 'Only the approved machine.' }]
+    expect(judge([codexBox(3 * DAY, 40)], owners)).toEqual({ refusal: null, note: expect.stringMatching(new RegExp(`^${SAME_ENGINE}`)) })
+    const offline = codexBox(3 * DAY, 40); offline.observation.receivedAt = NOW - 10 * MIN
+    expect(judge([offline]).refusal).toBeNull()
+    const signedOut = codexBox(3 * DAY, 40); signedOut.observation.readiness.engines[0]!.signedIn = false
+    expect(judge([signedOut]).refusal).toBeNull()
+    expect(judge([codexBox(3 * DAY, 40, { engineSuspensions: { codex: { at: NOW - MIN, fine: true } } })]).refusal).toBeNull()
+    // Paused by its owner, as the CLI's route reads it (review of #2275: the route offered Claude, the server refused it).
+    expect(judge([codexBox(3 * DAY, 40, { paused: true })])).toEqual({ refusal: null, note: expect.stringMatching(new RegExp(`^${SAME_ENGINE}`)) })
+  })
+
+  it('counts a Codex agent on a machine outside the contributions while it is up, and not once a usage limit holds it past the window', () => {
+    const codexAgent = { id: 'codex', machineId: 'elsewhere', harnessId: 'hx', contributorId: 'owner', configuration: { engine: 'codex', model: 'default', effort: 'high' } } as any
+    const state = stateOf(opus)
+    state.agents.push(codexAgent)
+    const target = agentTarget(state, opus as any)
+    expect(reviewRefusal(state, 'work', target, policy, undefined, NOW)).not.toBeNull()
+    codexAgent.limitedUntil = new Date(NOW + 5 * MIN).toISOString()
+    expect(reviewRefusal(state, 'work', target, policy, undefined, NOW)).not.toBeNull()
+    codexAgent.limitedUntil = new Date(NOW + 2 * DAY).toISOString()
+    expect(reviewRefusal(state, 'work', target, policy, undefined, NOW)).toBeNull()
+  })
+})
+
+// A Codex Reviewer started on a model named for it (Lead, 10-30: a gpt-6.1-sol Reviewer was refused as quality 1, and on a Mac
+// whose Codex default is a local model no review could run).
+describe('a Codex Reviewer on a named model', () => {
+  const codexOn = (model: string) => startTarget({ machineId: 'allowed', engine: 'codex', model, effort: 'high' })
+  it('accepts gpt-6.1-sol at quality 3', () => {
+    const state = stateOf({ id: 'other', machineId: 'allowed', harnessId: 'ho', configuration: { engine: 'claude', model: 'opus', effort: 'high' } })
+    expect(targetQuality(policy, codexOn('gpt-6.1-sol'))).toBe(3)
+    expect(reviewRefusal(state, 'work', codexOn('gpt-6.1-sol'), policy)).toBeNull()
+  })
+  it('still refuses a Codex model the policy does not name', () => {
+    const state = stateOf({ id: 'other', machineId: 'allowed', harnessId: 'ho', configuration: { engine: 'claude', model: 'opus', effort: 'high' } })
+    expect(targetQuality(policy, codexOn('gpt-7-unknown'))).toBe(1)
+    expect(reviewRefusal(state, 'work', codexOn('gpt-7-unknown'), policy)).toBe('A review needs a model of quality 2 or more, and Codex gpt-7-unknown is 1.')
+  })
+  it('rates gpt-6.1-sol in a policy saved before its row, and keeps an owner\'s own row for it', () => {
+    const saved = { ...policy, models: policy.models.filter(m => m.model !== 'gpt-6.1-sol') }
+    expect(targetQuality(effectivePolicy(saved, null).policy, codexOn('gpt-6.1-sol'))).toBe(3)
+    const owned = { ...policy, models: [...saved.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', quality: 2, cost: 2, enabled: false }] }
+    expect(targetQuality(effectivePolicy(owned, null).policy, codexOn('gpt-6.1-sol'))).toBe(2)
+  })
+})

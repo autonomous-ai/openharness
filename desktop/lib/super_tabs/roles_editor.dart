@@ -410,6 +410,8 @@ class _RolesEditorState extends State<_RolesEditor> {
                               'name': name,
                               'kind': kind,
                               'text': markdown,
+                              // Not shown here; kept so an edit never drops it.
+                              'defaults': ?role?.defaults,
                             },
                           });
                           if (!dialogContext.mounted) return;

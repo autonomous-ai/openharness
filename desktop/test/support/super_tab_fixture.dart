@@ -46,6 +46,10 @@ Map<String, dynamic> projectFixture(
 /// next version and a new `changedAt`, a part that is gone gets a tombstone. Tests keep changing the state as they
 /// did; the reads see exactly those changes.
 class SwarmPartsBackend {
+  /// A broken server that sends groups the reader may not read, so a test can
+  /// prove the app keeps them off screen itself.
+  bool leaksHiddenGroups = false;
+
   /// The server's clock, one tick per change; a cursor is a tick.
   int clock = 1000;
   int _version = 100;
@@ -173,6 +177,13 @@ class SwarmPartsBackend {
   /// by its audience (and the project's Lead, an agent), owners included, and
   /// by each person only at the membership generation they were listed with
   /// (backend projects.ts canReadGroup), when [state] gives them one.
+  bool _hides(
+    String id,
+    _HeldPart part,
+    String? reader,
+    Map<String, dynamic> state,
+  ) => !leaksHiddenGroups && _hidden(id, part, reader, state);
+
   static bool _hidden(
     String id,
     _HeldPart part,
@@ -231,7 +242,7 @@ class SwarmPartsBackend {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head' || entry.value.deleted) continue;
         if (kind == 'groups' && dormant(entry.value.data)) continue;
-        if (_hidden(entry.key, entry.value, reader, state)) continue;
+        if (_hides(entry.key, entry.value, reader, state)) continue;
         (answer[kind] as List).add(_envelope(entry.key, entry.value));
       }
       return _measured('parts', answer);
@@ -259,7 +270,7 @@ class SwarmPartsBackend {
       };
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
-        if (_hidden(entry.key, entry.value, reader, state)) continue;
+        if (_hides(entry.key, entry.value, reader, state)) continue;
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head') {
           answer['head'] = _envelope(entry.key, entry.value);
@@ -276,7 +287,7 @@ class SwarmPartsBackend {
         final held = _parts['groups:${segments[4]}'];
         if (held == null ||
             held.deleted ||
-            _hidden('groups:${segments[4]}', held, reader, state)) {
+            _hides('groups:${segments[4]}', held, reader, state)) {
           throw const SuperTabFailure(
             'NOT_FOUND',
             'Conversation not found.',
@@ -292,7 +303,7 @@ class SwarmPartsBackend {
           if (entry.key.startsWith('groups:') &&
               !entry.value.deleted &&
               dormant(entry.value.data) &&
-              !_hidden(entry.key, entry.value, reader, state) &&
+              !_hides(entry.key, entry.value, reader, state) &&
               (projectId == null ||
                   (entry.value.data['projectId'] ?? 'lead') == projectId))
             entry,
@@ -427,6 +438,10 @@ class ConversationServer {
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
+
+  /// Commands the server refuses as a backend from before them does: its
+  /// strict schema answers `VALIDATION_ERROR` with a 400.
+  bool Function(Map command)? unknownCommand;
   // While set, every command waits for it before it answers: a slow server.
   Completer<void>? holdCommands;
 
@@ -454,6 +469,10 @@ class ConversationServer {
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
   final leaderboardReads = <String>[];
+
+  /// How many leaderboard reads fail as a server that is down does, before
+  /// they answer again.
+  var failLeaderboardReads = 0;
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
@@ -793,6 +812,13 @@ class ConversationServer {
         throw const SuperTabFailure(
           'INVALID_RECIPIENT',
           'Choose an agent in this conversation.',
+          statusCode: 400,
+        );
+      }
+      if (unknownCommand?.call(body['command'] as Map? ?? const {}) ?? false) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Invalid request.',
           statusCode: 400,
         );
       }
@@ -1227,6 +1253,10 @@ class ConversationServer {
     }
     if (uri.pathSegments.last == 'leaderboard') {
       leaderboardReads.add(path);
+      if (failLeaderboardReads > 0) {
+        failLeaderboardReads--;
+        throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+      }
       final board = leaderboard;
       if (board == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);

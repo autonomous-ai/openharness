@@ -13,19 +13,20 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_connection_notice.dart';
-import 'swarm_drawer.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
+import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
+import 'swarm_jump_page.dart';
 import 'swarm_needs_page.dart';
-import 'swarm_profile_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
+import 'swarm_tabs.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
@@ -51,28 +52,30 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
       (reader.snapshot?.projects.any((p) => p.id == projectId) ?? false);
 }
 
-/// Swarm Home, direction B (Tony's prototype B1, 2026-10-29): what needs the
-/// person ("Needs you", two of it and See all), then the projects they
-/// pinned on this phone, then the others by their latest activity, those
-/// quiet for a day folded under "Other projects" ([swarmHomeLists]). Every
-/// Swarm's, or the one the drawer picked ([SwarmHomePrefs.swarmId]). Its
-/// drawer ([SwarmDrawer]) is the way to everything else.
+/// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
+/// its title the Swarm shown, a switcher to every Swarm, All Swarms and Join
+/// or create ([showSwarmSwitcher]), and compose at its end; Jump to…; While
+/// you were away, once the person has been gone a while ([SwarmAwayCard]);
+/// then the projects they pinned on this phone, then the others by their
+/// latest activity, those quiet for a day folded under "Other projects"
+/// ([swarmHomeLists]). Every Swarm's, or the one picked
+/// ([SwarmHomePrefs.swarmId]). What needs the person is the Activity tab's;
+/// who they are, their models and devices, and Settings, the You tab's.
 ///
-/// The phone's Home while Settings ▸ Experimental ▸ Swarm is on; pushed over
-/// another page it has a back button instead of the drawer. Its top bar holds
-/// the menu and its title in one line, as the approved prototype draws it.
+/// Threads, and While you were away's new threads, wait for a read of the
+/// threads with new replies across a Swarm, which the server does not have
+/// yet (Lead, 2026-10-30): the phone reads no chat by chat for them.
+///
+/// Pushed over another page it has a back button instead of the switcher.
 /// Reads the account's [SwarmSession] from the shell; with none, says why.
 class SwarmPage extends StatefulWidget {
-  const SwarmPage({super.key, this.onSettings, this.now = DateTime.now});
+  const SwarmPage({super.key, this.now = DateTime.now});
 
-  /// Settings over Swarm Home, from the drawer.
-  final void Function(BuildContext context)? onSettings;
-
-  /// What a project's last move is measured from.
+  /// What a project's last move, and the time away, is measured from.
   final DateTime Function() now;
 
-  /// How many needs Home shows before See all.
-  static const needsShown = 2;
+  /// Gone for less is no time away: no card.
+  static const awayAfter = Duration(minutes: 5);
 
   @override
   State<SwarmPage> createState() => _SwarmPageState();
@@ -90,6 +93,32 @@ class _SwarmPageState extends State<SwarmPage> {
   /// minute while it is in sight.
   Timer? _tick;
 
+  /// When the person last left the app, as read when Home first drew and
+  /// each time the app came back: what While you were away counts from.
+  DateTime? _away;
+  bool _awayRead = false;
+
+  /// When the person came back: the app shown again, or Home opened for the
+  /// account. Time away ends there, so using the app on never adds to it.
+  DateTime? _back;
+
+  /// The app leaving and coming back: the first is when the person left
+  /// ([SwarmHomePrefs.seen]), the second when they came back, and reads
+  /// when they left again.
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle = AppLifecycleListener(
+      onHide: () => _session?.home.seen(widget.now()),
+      onShow: () => setState(() {
+        _awayRead = false;
+        _back = widget.now();
+      }),
+    );
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -97,6 +126,11 @@ class _SwarmPageState extends State<SwarmPage> {
     final hidden = OutOfSight.of(context);
     if (session == _session && hidden == _hidden) return;
     if (!_hidden) _session?.leave();
+    // Another account's Home: its own time away, from now.
+    if (session != _session) {
+      _awayRead = false;
+      _back = widget.now();
+    }
     _session = session;
     _hidden = hidden;
     _tick?.cancel();
@@ -111,20 +145,14 @@ class _SwarmPageState extends State<SwarmPage> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _tick?.cancel();
     if (!_hidden) _session?.leave();
     super.dispose();
   }
 
   void _openProject(BuildContext context, String swarmId, String projectId) =>
-      unawaited(
-        Navigator.of(context).push(
-          phoneRoute(
-            (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
-            listensForItself: true,
-          ),
-        ),
-      );
+      openSwarmProject(context, swarmId: swarmId, projectId: projectId);
 
   /// The projects quiet for a day are listed under Other projects.
   bool _quietOpen = false;
@@ -144,20 +172,6 @@ class _SwarmPageState extends State<SwarmPage> {
         : Listenable.merge([session, session.inbox, session.home]);
     return Scaffold(
       backgroundColor: tty.ground,
-      // Home's drawer; a Swarm page pushed over another page has its back
-      // button instead. None out of sight: one closing as Harness took the
-      // screen would stop there, its animation off, and be found half open.
-      drawer: pushed || _hidden
-          ? null
-          : ListenableBuilder(
-              listenable: listens ?? const _Nothing(),
-              builder: (context, _) => SwarmDrawer(
-                session: session,
-                onSettings: widget.onSettings,
-                onProfile: (swarmId) =>
-                    unawaited(showSwarmProfile(context, swarmId: swarmId)),
-              ),
-            ),
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -205,27 +219,55 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Home's top bar: the menu or back button and its title, with a quiet
-  /// "Updating…" under it while it shows the Home kept ([_updating]).
+  /// Home's top bar. At the root, the tab's title: the Swarm shown, a button
+  /// to switch it, and compose; pushed over another page, back and "Swarm".
+  /// Either has a quiet "Updating…" under it while it shows the Home kept
+  /// ([_updating]).
   Widget _topBar(
     BuildContext context, {
     required bool pushed,
     bool updating = false,
-  }) => SwarmTopBar(
-    leading: pushed
-        ? SwarmBackButton(onPressed: () => Navigator.of(context).maybePop())
-        : const _MenuButton(),
-    title: 'Swarm',
-    subtitle: updating ? 'Updating…' : null,
-  );
+  }) {
+    final session = _session;
+    if (pushed) {
+      return SwarmTopBar(
+        leading: SwarmBackButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: 'Swarm',
+        subtitle: updating ? 'Updating…' : null,
+      );
+    }
+    if (session == null) return const SwarmTabHeader('Swarm');
+    final shown = _shown(session);
+    final title = swarmHomeTitle(session.inbox, shown);
+    // The one Swarm named has its tile; All Swarms has none.
+    final named = swarmHomeNamed(session.inbox, shown);
+    return SwarmTabHeader(
+      title,
+      leading: named == null ? null : SwarmProjectTile(named.name),
+      titleLabel: 'Swarm: $title. Switch Swarm',
+      subtitle: updating ? 'Updating…' : null,
+      onTitle: () => unawaited(showSwarmSwitcher(context, session)),
+      trailing: SwarmIconButton(
+        key: const ValueKey('swarm-compose'),
+        icon: LucideIcons.squarePen300,
+        label: 'New message',
+        onPressed: () => openSwarmJump(context, compose: true),
+      ),
+    );
+  }
 
-  /// The Swarms Home shows: the one the drawer picked while it is listed,
-  /// else all of them.
+  /// The Swarms Home shows: the one the switcher picked while it is listed
+  /// and its read not taken away, else all of them.
   List<SwarmListing> _shown(SwarmSession session) {
-    final swarms = session.inbox.swarms;
+    final inbox = session.inbox;
     final picked = session.home.swarmId;
-    final one = swarms.where((swarm) => swarm.id == picked).toList();
-    return one.isEmpty ? swarms : one;
+    if (picked == null || !swarmHomeOffers(inbox, picked)) return inbox.swarms;
+    return [
+      for (final swarm in inbox.swarms)
+        if (swarm.id == picked) swarm,
+    ];
   }
 
   List<Widget> _body(BuildContext context, SwarmSession session) {
@@ -255,69 +297,74 @@ class _SwarmPageState extends State<SwarmPage> {
         ? shown.single.id
         : null;
     final now = widget.now();
-    final first = notice == null;
     return [
       ?notice,
       if (error != null) _error(error, key: 'swarm-error'),
-      ..._needs(context, session, shown, picked, now, first: first),
+      Padding(
+        padding: EdgeInsets.only(
+          top: notice == null ? AppSpace.xs : AppSpace.m,
+          bottom: AppSpace.xs,
+        ),
+        child: SwarmJumpField(
+          key: const ValueKey('swarm-jump'),
+          onTap: () => openSwarmJump(context),
+        ),
+      ),
+      ?_awayCard(context, session, shown, picked, now),
       ..._projects(context, session, shown, now),
     ];
   }
 
-  /// Needs you: two of what waits on the person, newest asks first, each a
-  /// row that opens it among the rest; See all for every one.
-  List<Widget> _needs(
+  /// While you were away, once the person has been gone [SwarmPage.awayAfter]
+  /// or more: the work done since in the Swarms shown and what needs them
+  /// there now, each unknown while a Swarm, or what waits in it, is not read.
+  /// A tap opens Activity.
+  Widget? _awayCard(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
     String? picked,
-    DateTime now, {
-    required bool first,
-  }) {
+    DateTime now,
+  ) {
+    final home = session.home;
+    if (!_awayRead && home.loaded) {
+      _away = home.seenAt;
+      _awayRead = true;
+    }
+    final since = _away;
+    // Decided at the return: time in the foreground is no time away.
+    final back = _back ?? now;
+    if (since == null || back.difference(since) < SwarmPage.awayAfter) {
+      return null;
+    }
     final inbox = session.inbox;
-    final needs = swarmNeedsOf(inbox, picked);
-    return [
-      SwarmCaption('Needs you', count: needs.length, first: first),
-      if (needs.isNotEmpty)
-        SwarmGroup(
-          children: [
-            for (final need in needs.take(SwarmPage.needsShown))
-              SwarmHomeNeedRow(
-                key: ValueKey('swarm-home-need-${need.key}'),
-                session: session,
-                need: need,
-                now: now,
-                onTap: () =>
-                    openSwarmNeeds(context, focus: need.key, swarmId: picked),
-              ),
-            if (needs.length > SwarmPage.needsShown)
-              SwarmSeeAllRow(
-                key: const ValueKey('swarm-needs-all'),
-                count: needs.length,
-                onTap: () => openSwarmNeeds(context, swarmId: picked),
-              ),
-          ],
-        )
-      else
-        switch (_emptyNeeds(inbox, shown)) {
-          _EmptyNeeds.reading => SwarmSkeletonRows(
-            id: 'swarm-needs-loading',
-            rows: 1,
-          ),
-          _EmptyNeeds.unread => _error(
-            'Could not load what is waiting for you. Try again.',
-            key: 'swarm-needs-unread',
-            top: 0,
-          ),
-          _EmptyNeeds.none => Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
-            child: SwarmRow.line(
-              'Nothing needs you.',
-              key: const ValueKey('swarm-needs-none'),
-            ),
-          ),
+    // A Swarm not read, or out of reach, leaves the work done unknown.
+    int? done = 0;
+    for (final swarm in shown) {
+      final reader = inbox.reader(swarm.id);
+      final snapshot = reader == null || reader.accessRevoked
+          ? null
+          : reader.snapshot;
+      done = snapshot == null ? null : done! + swarmDoneSince(snapshot, since);
+      if (done == null) break;
+    }
+    final needs = swarmNeedsOf(inbox, picked).length;
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.s),
+      child: SwarmAwayCard(
+        key: const ValueKey('swarm-away'),
+        since: since,
+        back: back,
+        done: done,
+        // None found is not none waiting until all of it is read.
+        needs: needs > 0 || _needsRead(inbox, shown) ? needs : null,
+        onTap: () {
+          if (!showSwarmTab(context, SwarmTab.activity)) {
+            openSwarmNeeds(context, swarmId: picked);
+          }
         },
-    ];
+      ),
+    );
   }
 
   /// Pinned, then Projects: every project of the Swarms shown, grouped by
@@ -451,13 +498,10 @@ class _SwarmPageState extends State<SwarmPage> {
     session.home.pin(swarmId, projectId, !pinned);
   }
 
-  /// Home before the list answers: Needs you and the projects as rows on
-  /// their way, in the order Home shows them; under a card, its first
-  /// caption not [first].
+  /// Home before the list answers: the projects as rows on their way; under
+  /// a card, its caption not [first].
   List<Widget> _reading({bool first = true}) => [
-    SwarmCaption('Needs you', first: first),
-    SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
-    const SwarmCaption('Projects'),
+    SwarmCaption('Projects', first: first),
     SwarmSkeletonRows(id: 'swarm-projects-loading'),
   ];
 
@@ -473,17 +517,6 @@ class _SwarmPageState extends State<SwarmPage> {
   );
 }
 
-/// Nothing to listen to: a drawer with no session.
-class _Nothing implements Listenable {
-  const _Nothing();
-
-  @override
-  void addListener(VoidCallback listener) {}
-
-  @override
-  void removeListener(VoidCallback listener) {}
-}
-
 /// Home shows the Home kept, not read again yet: the list not read, or a
 /// Swarm on it holding only what was kept. Not while no computer answers:
 /// the card says so then ([SwarmConnectionNotice]).
@@ -493,42 +526,19 @@ bool _updating(SwarmInbox inbox) =>
     (!inbox.loaded ||
         inbox.swarms.any((swarm) => swarmHomeKept(inbox.reader(swarm.id))));
 
-/// Why Needs you is empty.
-enum _EmptyNeeds {
-  /// A Swarm, or what waits on the person in it, is still being read.
-  reading,
-
-  /// Something could not be read: "nothing" is not known.
-  unread,
-
-  /// Everything was read, and nothing needs the person.
-  none,
-}
-
-/// Why [inbox]'s Needs you is empty: still reading while a Swarm [shown],
-/// or what waits on the person in it since it was last read in full, is not
-/// read yet.
-_EmptyNeeds _emptyNeeds(SwarmInbox inbox, List<SwarmListing> shown) {
-  var reading = false, unread = false;
-  for (final swarm in shown) {
-    switch (inbox.reader(swarm.id)) {
-      case SwarmReader(snapshot: _?):
-        if (inbox.asks(swarm.id) case final asks?) {
-          if (asks.loading) {
-            reading = true;
-          } else if (asks.error != null) {
-            unread = true;
-          }
-        }
-      case SwarmReader(error: _?):
-        unread = true;
-      case _:
-        reading = true;
-    }
-  }
-  if (reading) return _EmptyNeeds.reading;
-  return unread ? _EmptyNeeds.unread : _EmptyNeeds.none;
-}
+/// Whether what waits on the person in every Swarm [shown] is read: the
+/// Swarm, and what waits in it since it was last read in full.
+bool _needsRead(SwarmInbox inbox, List<SwarmListing> shown) => shown.every(
+  (swarm) => switch (inbox.reader(swarm.id)) {
+    SwarmReader(snapshot: _?, accessRevoked: false) => switch (inbox.asks(
+      swarm.id,
+    )) {
+      null => true,
+      final asks => !asks.loading && asks.error == null,
+    },
+    _ => false,
+  },
+);
 
 /// No session: Swarm is off, or nobody is signed in on this phone.
 class _Unavailable extends StatelessWidget {
@@ -550,19 +560,5 @@ class _Unavailable extends StatelessWidget {
         style: AppType.body(color: AppPalette.textSecondary, height: 1.45),
       ),
     ],
-  );
-}
-
-/// Opens Home's drawer: the top bar's 44-point box, the drawer's mark.
-class _MenuButton extends StatelessWidget {
-  const _MenuButton();
-
-  @override
-  Widget build(BuildContext context) => SwarmIconButton(
-    key: const ValueKey('swarm-menu'),
-    icon: LucideIcons.menu300,
-    size: 24,
-    label: 'Menu',
-    onPressed: () => Scaffold.of(context).openDrawer(),
   );
 }

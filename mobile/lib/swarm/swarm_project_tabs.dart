@@ -17,20 +17,31 @@ import 'swarm_row.dart';
 import 'swarm_style.dart';
 import 'swarm_unread.dart';
 
-/// A project's tabs, as B2 draws them (Tony, 2026-10-29): its chat with
-/// everyone, the person's Buddy chat, its tasks and its leaderboard.
+/// A project's tabs: as B2 draws them (Tony, 2026-10-29), its chat with
+/// everyone, the person's Buddy chat, its tasks and its leaderboard
+/// ([homeB]); as Swarm Home C draws them (Tony, 2026-10-30), its chat and its
+/// team ([homeC]).
 enum SwarmProjectTab {
   chat('Chat'),
   buddy('Buddy'),
   tasks('Tasks'),
-  leaderboard('Leaderboard');
+  leaderboard('Leaderboard'),
+  team('Team');
 
   const SwarmProjectTab(this.label);
 
   final String label;
+
+  static const homeB = [chat, buddy, tasks, leaderboard];
+  static const homeC = [chat, team];
+
+  /// The tabs a project opens with: Swarm Home C's, the phone's Swarm Home
+  /// since #2262 (Tony, 2026-10-30). Every way into a project takes these
+  /// ([SwarmProjectPage]'s default), so none opens direction B's by mistake.
+  static const current = homeC;
 }
 
-/// The row of a project's tabs under its header: each a quarter of the
+/// The row of a project's [tabs] under its header: each an equal share of the
 /// width, the one shown bright over a line, the others quiet. The chat's
 /// says what is new in it as a project's Home row does: the Lead's tags
 /// waiting there in a filled "@N", else a dot while it is unread
@@ -40,9 +51,11 @@ class SwarmProjectTabBar extends StatelessWidget {
     super.key,
     required this.selected,
     required this.onSelect,
+    this.tabs = SwarmProjectTab.homeB,
     this.chatNews = swarmNoNews,
   });
 
+  final List<SwarmProjectTab> tabs;
   final SwarmProjectTab selected;
   final ValueChanged<SwarmProjectTab> onSelect;
   final SwarmRowNews chatNews;
@@ -58,7 +71,7 @@ class SwarmProjectTabBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
         child: Row(
           children: [
-            for (final tab in SwarmProjectTab.values)
+            for (final tab in tabs)
               Expanded(
                 child: _Tab(
                   tab: tab,

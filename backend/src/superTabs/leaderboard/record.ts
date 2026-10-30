@@ -2,7 +2,7 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import { activeWork, isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS, weekStart } from './week.js'
 import { agentTarget } from '../rules.js'
@@ -239,6 +239,22 @@ export function recordRun(state: SuperTabState, group: Conversation, assignment:
   const ledger = group.ledger ??= {}
   ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** An agent started on its engine's own model reports which one only once it runs (Codex): its open task's attempt, recorded
+ *  with none, takes the model it reports, so the board names it and step-ups rate it by it rather than by the engine alone
+ *  (Dee, 2026-10-30). A model on record is never rewritten, and a finished task's attempt is history. */
+export function recordReportedModel(state: SuperTabState, worker: Agent): void {
+  const model = worker.configuration.model
+  if (!model || worker.gridModel) return
+  for (const group of state.conversations) {
+    const assignment = group.assignment
+    if (!assignment || assignment.agentId !== worker.id || !activeWork(group)) continue
+    // The attempt, and the copy of it kept when its merge was recorded while it still ran.
+    for (const on of [group.ledger?.runs?.find(r => r.assignmentId === assignment.id), group.ledger?.shippedBy]) {
+      if (on?.assignmentId === assignment.id && on.model === null && !on.grid && on.engine === worker.configuration.engine) on.model = model
+    }
+  }
 }
 
 /** When a request's first attempt was assigned: kept since that was recorded. A request recorded before has its first

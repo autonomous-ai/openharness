@@ -546,14 +546,33 @@ describe('built-in Swarm skills', () => {
     })
   })
 
-  it('keeps standalone session skills out of Git, including git add -A', () => {
+  // Diego, 10-30: the ignore file itself was left untracked, so every Swarm worktree read as uncommitted work and neither
+  // the cleanup of a removed agent nor the weekly sweep ever removed one. The whole folder stays out of Git, including
+  // git add -A; every launch writes the file again, so committing it kept nothing (#1533 wanted generated skills unstaged).
+  it('keeps the whole Harness folder out of Git, including git add -A, while a file someone adds there still shows', () => {
     const workspace = fixture()
     execFileSync('git', ['init', '-q', workspace])
     prepareSwarmSkill(workspace, { role: 'dev', key: 'standalone' })
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('')
     execFileSync('git', ['add', '-A'], { cwd: workspace })
-    const staged = execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })
-    expect(staged).not.toContain('SKILL.md')
-    expect(staged.trim()).toBe('.harness/.gitignore')
+    expect(execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })).toBe('')
+    writeFileSync(join(workspace, '.harness', 'notes.md'), 'mine')
+    // Review of #2266: the rule names only Harness's own file, so an ignore file someone adds deeper still shows.
+    mkdirSync(join(workspace, '.harness', 'mine'))
+    writeFileSync(join(workspace, '.harness', 'mine', '.gitignore'), 'scratch/\n')
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' }))
+      .toBe('?? .harness/mine/.gitignore\n?? .harness/notes.md\n')
+  })
+
+  it('accepts the self rule in either form and adds only the runtime rules missing beside it', () => {
+    for (const self of ['.gitignore', '/.gitignore']) {
+      const workspace = fixture()
+      mkdirSync(join(workspace, '.harness'))
+      const file = join(workspace, '.harness', '.gitignore')
+      writeFileSync(file, `legacy-AGENTS.md\n${self}\n`)
+      prepareSwarmSkill(workspace, { role: 'dev', key: 'either' })
+      expect(readFileSync(file, 'utf8')).toBe(`legacy-AGENTS.md\n${self}\nruntime/\n`)
+    }
   })
 
   it('preserves custom ignore rules and adds the Store runtime rules only once', () => {
@@ -562,9 +581,20 @@ describe('built-in Swarm skills', () => {
     const file = join(workspace, '.harness', '.gitignore')
     writeFileSync(file, '# Mine\nprivate-data')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n/.gitignore\n')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n/.gitignore\n')
+  })
+
+  // A project may have committed the ignore file (git add -A staged it before). Adding a line to a committed file would
+  // itself be uncommitted work and land in every worker's pull request, so a file that has its rules is left as it is.
+  it('leaves an ignore file that already has the runtime rules byte for byte as it was', () => {
+    const workspace = fixture()
+    mkdirSync(join(workspace, '.harness'))
+    const file = join(workspace, '.harness', '.gitignore')
+    writeFileSync(file, 'runtime/\nlegacy-AGENTS.md\n')
+    prepareSwarmSkill(workspace, { role: 'dev', key: 'committed' })
+    expect(readFileSync(file, 'utf8')).toBe('runtime/\nlegacy-AGENTS.md\n')
   })
 
   it('refuses a redirected runtime ignore file without modifying its target', () => {
@@ -699,7 +729,11 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
       disableAllHooks: false,
       hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
     })
-    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    // It reads its own session's list of what its person sent it (Tony, 10-30), kept beside Harness's downloads.
+    const reads = (hash: string) => ({ file: join(process.env.ADAPTER_DATA_DIR!, 'buddy-reads', `${hash}.json`),
+      drops: join(process.env.ADAPTER_DATA_DIR!, 'paste-drops') })
+    const own = reads('3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175')
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace), own))
     for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json'), guard]) {
       expect(statSync(file).mode & 0o222, file).toBe(0)
     }
@@ -709,8 +743,13 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     // A relaunch prepares it again the same way, a guard someone changed put back.
     chmodSync(guard, 0o600); writeFileSync(guard, 'process.exit(0)\n')
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
-    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace), own))
     expect(statSync(guard).mode & 0o222).toBe(0)
+    // Another Buddy session reads its own list, never this one's.
+    const other = fixture()
+    prepareSwarmSkill(other, { role: 'buddy', key: 'other-session' })
+    expect(readFileSync(join(other, '.claude', 'buddy-guard.mjs'), 'utf8'))
+      .toBe(buddyGuardSource(realpathSync(other), reads('5f711b23ee4fecbbb8e053b872bbda822ad77cd627e586f7c3d8d663289c033b')))
   })
 
   it('carries Harness\'s own hooks from the person\'s Claude settings into the folder\'s, and nobody else\'s (Lead, 10-29)', () => {
