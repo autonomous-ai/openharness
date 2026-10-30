@@ -428,22 +428,36 @@ describe('a Buddy through the store', () => {
     expect(leadIn(first)).toEqual({ status: 'started' })
     expect(JSON.stringify(first)).not.toMatch(leak)
 
-    // The joined row: its machine for people, "a machine" for the Buddy, in its page and when it reads that row alone.
+    // The joined row: its machine for people, "a machine" for the Buddy, in its page and when it reads that row alone. It says
+    // the PM runs another model than it asked for (#2274), which names no machine and stays.
+    const asked = 'It asked for opus at xhigh and runs fixture-model at high there.'
     const joined = (await f.store.messages(owner, f.tab, app.conversationId, {})).messages.find(m => m.text.startsWith('Product Manager started on'))!
-    expect(joined.text).toBe('Product Manager started on Kens-Mac-Studio.local.')
-    expect((await f.store.messages(peer, f.tab, app.conversationId, {})).messages.map(m => m.text)).toContain('Product Manager started on Kens-Mac-Studio.local.')
+    expect(joined.text).toBe(`Product Manager started on Kens-Mac-Studio.local. ${asked}`)
+    expect((await f.store.messages(peer, f.tab, app.conversationId, {})).messages.map(m => m.text)).toContain(joined.text)
     const page = (await f.store.messages(peer, f.tab, app.conversationId, {}, agentId)).messages
     const alone = (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id }, agentId)).messages
-    expect([page.find(m => m.id === joined.id)?.text, alone.map(m => m.text)]).toEqual(['Product Manager started on a machine.', ['Product Manager started on a machine.']])
+    expect([page.find(m => m.id === joined.id)?.text, alone.map(m => m.text)]).toEqual([`Product Manager started on a machine. ${asked}`, [`Product Manager started on a machine. ${asked}`]])
     expect(JSON.stringify([page, alone])).not.toMatch(leak)
 
-    // A joined row stored before its source named the machine (a plain system row) reads the same: stored rows stay as written.
+    // A joined row stored before its source named the machine (a plain system row) reads the same, with or without the model
+    // sentence: stored rows stay as written, and people read them in full.
+    const buddyReads = async () => (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id }, agentId)).messages.map(m => m.text)
+    const peopleRead = async () => (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id })).messages.map(m => m.text)
     await db.superTabMessage.update({ where: { id: joined.id }, data: { source: { kind: 'system' } } })
-    const older = (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id }, agentId)).messages
-    expect(older.map(m => m.text)).toEqual(['Product Manager started on a machine.'])
-    expect(JSON.stringify(older)).not.toMatch(leak)
-    expect((await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id })).messages.map(m => m.text))
-      .toEqual(['Product Manager started on Kens-Mac-Studio.local.'])
+    expect(await buddyReads()).toEqual([`Product Manager started on a machine. ${asked}`])
+    expect(await peopleRead()).toEqual([joined.text])
+    await db.superTabMessage.update({ where: { id: joined.id }, data: { text: 'Product Manager started on Kens-Mac-Studio.local.' } })
+    expect(await buddyReads()).toEqual(['Product Manager started on a machine.'])
+    expect(await peopleRead()).toEqual(['Product Manager started on Kens-Mac-Studio.local.'])
+
+    // A removed session's notice names its machine too (liveness.ts unpurged; review 2 of #2258): as it is stored now, and as
+    // it was stored before its source named it.
+    const notice = (machine: string) => `The saved session of a removed agent that held people's private chats, on ${machine}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`
+    await db.superTabMessage.update({ where: { id: joined.id }, data: { text: notice('Kens-Mac-Studio.local'), source: { kind: 'system', machine: 'Kens-Mac-Studio.local' } } })
+    expect(await buddyReads()).toEqual([notice('a machine')])
+    await db.superTabMessage.update({ where: { id: joined.id }, data: { source: { kind: 'system' } } })
+    expect(await buddyReads()).toEqual([notice('a machine')])
+    expect(await peopleRead()).toEqual([notice('Kens-Mac-Studio.local')])
   })
 })
 

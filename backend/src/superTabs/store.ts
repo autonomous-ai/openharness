@@ -30,7 +30,7 @@ import { LEAD_NAME } from './leadStart.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
-import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -384,7 +384,8 @@ const readsRow = (actor: Actor, buddy: boolean) => (m: Pick<SuperTabMessage, 'so
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
  *  its source (liveness.ts loseTask), a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine), and
- *  the machine a Product Manager started on (leadStart.ts leadJoined; Diego, 10-30). */
+ *  the machine a Product Manager started on (leadStart.ts leadJoined; Diego, 10-30) or a removed session is still held on
+ *  (liveness.ts unpurged; review 2 of #2258). */
 function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
   const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown } | null
   if (source?.kind === 'work-lost' && typeof source.reason === 'string') {
@@ -396,13 +397,20 @@ function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
     const text = m.text.startsWith(machine) ? `A machine${m.text.slice(machine.length)}` : m.text
     return { ...m, text: text.split(machine).join('a machine'), source: rest as SuperTabMessage['source'] }
   }
-  // A joined row stored before its source named the machine: the whole line is the server's own (leadJoined).
-  if (source?.kind === 'system' && source.machine === undefined && m.text.startsWith(LEAD_STARTED) && m.text.endsWith('.') && !m.text.includes('\n')) {
-    return { ...m, text: `${LEAD_STARTED}a machine.` }
+  // A row stored before its source named the machine: only the server writes system rows, so the machine sits where its line
+  // puts it. A joined row (leadJoined) may end with the model it runs (#2274), which stays; so does a removed session's notice
+  // (liveness.ts unpurged) around its machine.
+  if (source?.kind === 'system' && source.machine === undefined && !m.text.includes('\n')) {
+    if (m.text.startsWith(LEAD_STARTED) && m.text.endsWith('.')) {
+      const rest = m.text.slice(LEAD_STARTED.length), asked = rest.indexOf(LEAD_ASKED)
+      return { ...m, text: `${LEAD_STARTED}a machine.${asked < 0 ? '' : rest.slice(asked + 1)}` }
+    }
+    if (m.text.startsWith(UNPURGED_HEAD) && m.text.endsWith(UNPURGED_TAIL)) return { ...m, text: unpurgedNotice('a machine') }
   }
   return m
 }
-const LEAD_STARTED = `${LEAD_NAME} started on `
+const LEAD_STARTED = `${LEAD_NAME} started on `, LEAD_ASKED = '. It asked for '
+const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [string, string]
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
