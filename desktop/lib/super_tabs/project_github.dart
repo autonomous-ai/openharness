@@ -452,8 +452,8 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                    horizontal: grid.AppDesktop.groupGap,
+                    vertical: grid.AppDesktop.controlGap,
                   ),
                   decoration: BoxDecoration(
                     color: grid.AppSurface.wellFill,
@@ -664,10 +664,13 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         if (canPush)
           Container(
             key: const Key('super-project-github-can-push'),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: grid.AppPalette.online.withValues(alpha: .14),
-              borderRadius: BorderRadius.circular(999),
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.badgeInset,
+              vertical: grid.AppDesktop.listRowGap,
+            ),
+            decoration: ShapeDecoration(
+              color: grid.AppPalette.online.withValues(alpha: .16),
+              shape: const StadiumBorder(),
             ),
             child: Text(
               'You can push',
