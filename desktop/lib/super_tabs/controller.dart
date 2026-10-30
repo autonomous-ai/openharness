@@ -1107,8 +1107,29 @@ class SuperTabController extends ChangeNotifier {
   bool threadUnread(SuperTabThread thread) {
     final last = thread.authors.firstOrNull;
     return thread.people.contains(accountId) &&
-        thread.lastSequence > (_threadSeen[thread.id] ?? 0) &&
+        thread.lastSequence > threadReadMark(thread.id) &&
         !(last?['kind'] == 'person' && last?['id'] == accountId);
+  }
+
+  /// How far the reader has read [root]'s thread: the higher of this
+  /// device's mark and the server's, from any of their devices (backend
+  /// readMarks.ts), which reads a thread opened only elsewhere as read here.
+  int threadReadMark(String root) =>
+      max(_threadSeen[root] ?? 0, _serverThreadMark(root));
+
+  /// The server's thread marks by root, from the snapshot's by conversation;
+  /// worked out again only when a read brings new ones.
+  Map<String, Map<String, int>>? _threadMarksFrom;
+  var _threadMarksByRoot = const <String, int>{};
+
+  int _serverThreadMark(String root) {
+    final marks = snapshot?.threadMarks;
+    if (marks == null || marks.isEmpty) return 0;
+    if (!identical(marks, _threadMarksFrom)) {
+      _threadMarksFrom = marks;
+      _threadMarksByRoot = {for (final threads in marks.values) ...threads};
+    }
+    return _threadMarksByRoot[root] ?? 0;
   }
 
   void _keepThreads(String id, Object? rows) {
@@ -1137,6 +1158,17 @@ class SuperTabController extends ChangeNotifier {
           0,
       threadMessages(root).lastOrNull?.sequence ?? 0,
     );
+    if (open != null &&
+        open.root == root &&
+        !accessRevoked &&
+        last > 0 &&
+        snapshot?.conversation(open.conversationId) != null) {
+      _serverThreadMarks.mark(
+        (open.conversationId, root),
+        last,
+        kept: snapshot?.threadMarks[open.conversationId]?[root] ?? 0,
+      );
+    }
     if ((_threadSeen[root] ?? 0) >= last) return;
     // Moved to the end: the newest marks are the ones a save keeps.
     _threadSeen.remove(root);
@@ -1649,12 +1681,26 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
 
-  late final _serverMarks = SuperTabReadMarkSender(
+  late final _serverMarks = SuperTabReadMarkSender<String>(
     (id, sequence) => request(
       'POST',
       '$_path/conversations/${Uri.encodeComponent(id)}/read',
       body: {'sequence': sequence},
     ),
+  );
+
+  /// Sends the marks of threads read here, by conversation and root. A server
+  /// without thread marks refuses them; this device's own mark stands, and a
+  /// refused mark waits a minute before it is tried again.
+  late final _serverThreadMarks = SuperTabReadMarkSender<(String, String)>(
+    (thread, sequence) => request(
+      'POST',
+      '$_path/conversations/${Uri.encodeComponent(thread.$1)}'
+          '/threads/${Uri.encodeComponent(thread.$2)}/read',
+      body: {'sequence': sequence},
+    ),
+    retryAfter: const Duration(minutes: 1),
+    now: clock.now,
   );
 
   /// Whether [group] has a message in its main stream past the reader's
@@ -3874,6 +3920,7 @@ class SuperTabController extends ChangeNotifier {
     }
     _queuedSends.clear();
     _serverMarks.dispose();
+    _serverThreadMarks.dispose();
     _poll?.cancel();
     _toldRead?.cancel();
     _graceEnd?.cancel();

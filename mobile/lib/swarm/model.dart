@@ -490,6 +490,15 @@ class SuperTabSnapshot {
             if (key is String && value is num) key: value.toInt(),
       }),
       buddiesEnabled = row['buddies'] == true,
+      threadMarks = Map.unmodifiable({
+        if (row['threadMarks'] case final Map marks)
+          for (final MapEntry(key: id, value: threads) in marks.entries)
+            if (id is String && threads is Map)
+              id: Map<String, int>.unmodifiable({
+                for (final MapEntry(:key, :value) in threads.entries)
+                  if (key is String && value is num) key: value.toInt(),
+              }),
+      }),
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -568,6 +577,11 @@ class SuperTabSnapshot {
   /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
   /// conversation, on any of their devices. Never another person's.
   final Map<String, int> readMarks;
+
+  /// The reader's own thread marks kept on the server (backend readMarks.ts): by conversation, the newest message
+  /// sequence read in each thread, by its root, on any of their devices. Empty from a backend before them.
+  final Map<String, Map<String, int>> threadMarks;
+
   // Built on first use: a read is never changed, and lookups run per row on
   // every build.
   late final _conversationsById = _byId(conversations, (c) => c.id);

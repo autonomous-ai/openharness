@@ -131,7 +131,8 @@ The measurements use Juno's read-only methods (Lead, 10-30), nothing wider:
   `changeStream`, `collStats`, `dbHash`, `dbStats`, `find`, `killCursors`, `listCollections`, `listIndexes`,
   `listSearchIndexes`, `planCacheRead`, and `listDatabases` on the cluster; 8.2's `performRawDataOperations` is left out); `clusterMonitor` is refused, as its actions include setting
   changes. It reads `estimatedDocumentCount` per collection and a `$sum` of `size` on
-  `SuperTabAttachment`, and prints no connection string, its errors included.
+  `SuperTabAttachment`, and prints no connection string, its errors included. MongoDB's 64-bit integers (bson `Long`)
+  print as plain numbers, or as exact digits past 2^53, never as their low and high parts (Ken's Mac, CLI 0.5.17).
 
 Rulings:
 - No recipe for CPU. Why: a fixed command needs no wrapper. Cost if wrong: the Buddy sums the per-pod numbers itself.

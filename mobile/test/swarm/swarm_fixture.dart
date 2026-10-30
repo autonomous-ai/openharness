@@ -389,14 +389,17 @@ SwarmHomeCache memoryHomeCache() {
 }
 
 /// Swarm Home C's project screen is up for the project named [name]: its
-/// #name, and the tabs Chat and Team, none of direction B's (Buddy, Tasks,
-/// Leaderboard) nor B's team button.
+/// #name and ☰, and no tab bar: none of direction B's tabs (Buddy, Tasks,
+/// Leaderboard), nor B's team button.
 void expectHomeCProject(String name) {
   Finder tab(String t) => find.byKey(ValueKey('swarm-project-tab-$t'));
   expect(find.text('#$name'), findsOneWidget, reason: 'its #name');
-  expect(tab('chat'), findsOneWidget, reason: 'Chat');
-  expect(tab('team'), findsOneWidget, reason: 'Team');
-  for (final b in ['buddy', 'tasks', 'leaderboard']) {
+  expect(
+    find.byKey(const ValueKey('swarm-project-menu')),
+    findsOneWidget,
+    reason: '☰',
+  );
+  for (final b in ['chat', 'buddy', 'tasks', 'leaderboard']) {
     expect(tab(b), findsNothing, reason: "B's $b tab");
   }
   expect(

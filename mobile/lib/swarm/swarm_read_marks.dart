@@ -8,48 +8,74 @@ import '../core/local_key_value_store.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 
-/// Sends the reader's read marks to the server (backend `superTabs/readMarks.ts`, #2131), so a chat read on this phone
-/// reads as read on every other device. The desktop's `SuperTabReadMarkSender`: one request per chat at a time; a
-/// higher mark asked for while one is on its way goes after it, and a lower or equal one is never sent. A failed send
-/// is forgotten, so the next mark asked for tries again; meanwhile this phone's own mark keeps the chat read here.
-class SwarmReadMarkSender {
-  SwarmReadMarkSender(this._send);
+/// Sends the reader's read marks to the server (backend `superTabs/readMarks.ts`, #2131), so a chat, or a thread
+/// ([K] names which), read on this phone reads as read on every other device. The desktop's
+/// `SuperTabReadMarkSender`: one request per chat or thread at a time; a higher mark asked for while one is on its way
+/// goes after it, and a lower or equal one is never sent. A failed send is forgotten, so the next mark asked for tries
+/// again (after [retryAfter] when it is no higher); meanwhile this phone's own mark keeps it read here.
+class SwarmReadMarkSender<K> {
+  SwarmReadMarkSender(
+    this._send, {
+    this.retryAfter = Duration.zero,
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   /// Writes [sequence] as the mark of [conversationId]; completes once the server kept it, or throws.
-  final Future<void> Function(String conversationId, int sequence) _send;
+  final Future<void> Function(K conversationId, int sequence) _send;
+
+  /// How long a mark whose send failed waits before it is sent again: a
+  /// thread asks for its mark on every change while it is open, and a server
+  /// without thread marks refuses each.
+  final Duration retryAfter;
+  final DateTime Function() _now;
 
   /// The highest mark sent and kept, by chat.
-  final _sent = <String, int>{};
+  final _sent = <K, int>{};
 
   /// The mark waiting for the one on its way, by chat.
-  final _next = <String, int>{};
-  final _sending = <String>{};
+  final _next = <K, int>{};
+  final _sending = <K>{};
+
+  /// The mark on its way, by conversation: one asked for again meanwhile is not sent twice.
+  final _inFlight = <K, int>{};
+
+  /// The last mark that failed, and when, by chat.
+  final _failed = <K, (int, DateTime)>{};
   bool _disposed = false;
 
   /// Asks for [sequence] to be [conversationId]'s mark on the server, unless [kept] (what the server already holds)
   /// or a mark sent from here is as high.
-  void mark(String conversationId, int sequence, {int kept = 0}) {
+  void mark(K conversationId, int sequence, {int kept = 0}) {
     if (_disposed || sequence <= kept) return;
     if (sequence <= (_sent[conversationId] ?? 0)) return;
     if (sequence <= (_next[conversationId] ?? 0)) return;
+    if (sequence <= (_inFlight[conversationId] ?? 0)) return;
+    if (_failed[conversationId] case (final failed, final at)
+        when sequence <= failed && _now().difference(at) < retryAfter) {
+      return;
+    }
     _next[conversationId] = sequence;
     if (_sending.add(conversationId)) unawaited(_drain(conversationId));
   }
 
-  Future<void> _drain(String conversationId) async {
+  Future<void> _drain(K conversationId) async {
     while (!_disposed) {
       final sequence = _next.remove(conversationId);
       if (sequence == null) break;
+      _inFlight[conversationId] = sequence;
       try {
         await _send(conversationId, sequence);
+        _failed.remove(conversationId);
         if (sequence > (_sent[conversationId] ?? 0)) {
           _sent[conversationId] = sequence;
         }
       } catch (_) {
+        _failed[conversationId] = (sequence, _now());
         // Offline, or a server without read marks: this phone's mark stands,
         // and the next one asked for is sent afresh.
       }
     }
+    _inFlight.remove(conversationId);
     _sending.remove(conversationId);
   }
 
@@ -77,13 +103,23 @@ class SwarmReadMarks extends ChangeNotifier {
     required this.store,
     this.saveAfter = Duration.zero,
   }) {
-    _sender = SwarmReadMarkSender(
+    _sender = SwarmReadMarkSender<String>(
       (id, sequence) => reader.request(
         'POST',
         '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
             '/conversations/${Uri.encodeComponent(id)}/read',
         body: {'sequence': sequence},
       ),
+    );
+    _threadSender = SwarmReadMarkSender<(String, String)>(
+      (thread, sequence) => reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
+            '/conversations/${Uri.encodeComponent(thread.$1)}'
+            '/threads/${Uri.encodeComponent(thread.$2)}/read',
+        body: {'sequence': sequence},
+      ),
+      retryAfter: const Duration(minutes: 1),
     );
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
@@ -94,6 +130,15 @@ class SwarmReadMarks extends ChangeNotifier {
   /// the Swarm's read no longer has go first.
   static const kept = 1000;
 
+  /// The most threads whose marks the phone keeps per Swarm, as the server
+  /// does (backend readMarks.ts THREAD_MARK_CAP): those of chats the Swarm's
+  /// read no longer has go first, then those of the chat kept longest, its
+  /// oldest first (not the oldest overall: no mark keeps a time). A thread
+  /// without one reads
+  /// as far as the phone's other marks say (Activity's opened mark, the
+  /// chat's).
+  static const keptThreads = 500;
+
   final SwarmReader reader;
 
   /// How long marks wait to be written: at once by default, after what moved
@@ -102,10 +147,14 @@ class SwarmReadMarks extends ChangeNotifier {
 
   /// Where the phone keeps its marks; null keeps them in memory only.
   final LocalKeyValueStore? store;
-  late final SwarmReadMarkSender _sender;
+  late final SwarmReadMarkSender<String> _sender;
+  late final SwarmReadMarkSender<(String, String)> _threadSender;
 
   /// The phone's own marks, by chat.
   final _marks = <String, int>{};
+
+  /// The phone's own thread marks, by chat then thread root.
+  final _threads = <String, Map<String, int>>{};
 
   /// The marks were read back from the phone (or there is no store).
   bool _loaded = false;
@@ -140,6 +189,39 @@ class SwarmReadMarks extends ChangeNotifier {
         )
       : null;
 
+  /// How far the person has read [root]'s thread in [conversationId]: the
+  /// higher of the server's thread mark, from any of their devices, and this
+  /// phone's; null until the phone's are read back, and once access is lost.
+  /// Zero for a thread with no mark: the chat's own mark is the caller's.
+  int? threadThrough(String conversationId, String root) =>
+      _loaded && !reader.accessRevoked
+      ? max(
+          reader.snapshot?.threadMarks[conversationId]?[root] ?? 0,
+          _threads[conversationId]?[root] ?? 0,
+        )
+      : null;
+
+  /// The person saw [root]'s thread in [conversationId] through [sequence]:
+  /// sent to the server, and kept on the phone when it moves the phone's mark
+  /// on.
+  void markThreadRead(String conversationId, String root, int sequence) {
+    if (_disposed || reader.accessRevoked || sequence <= 0) return;
+    // A chat the Swarm's read no longer has is not the person's to mark.
+    if (reader.snapshot?.conversation(conversationId) == null) return;
+    _threadSender.mark(
+      (conversationId, root),
+      sequence,
+      kept: reader.snapshot?.threadMarks[conversationId]?[root] ?? 0,
+    );
+    final held = _threads[conversationId] ??= {};
+    if (sequence <= (held[root] ?? 0)) return;
+    // Moved to the end: the newest are the ones a trim keeps.
+    held.remove(root);
+    held[root] = sequence;
+    _saveSoon();
+    notifyListeners();
+  }
+
   /// The person saw [conversationId] through [sequence]: sent to the server,
   /// and kept on the phone when it moves the phone's mark on.
   void markRead(String conversationId, int sequence) {
@@ -157,23 +239,43 @@ class SwarmReadMarks extends ChangeNotifier {
 
   Future<void> _load() async {
     final held = <String, int>{};
+    final threads = <String, Map<String, int>>{};
     var found = false;
     try {
       if (await store?.read(_key) case final raw?) {
-        if (jsonDecode(raw) case {'marks': final Map marks}) {
+        final value = jsonDecode(raw);
+        if (value case {'marks': final Map marks}) {
           for (final MapEntry(:key, :value) in marks.entries) {
             if (key is String && value is num) held[key] = value.toInt();
           }
           found = true;
+        }
+        // Absent from what a phone before thread marks wrote.
+        if (value case {'threads': final Map kept}) {
+          for (final MapEntry(key: id, value: roots) in kept.entries) {
+            if (id is! String || roots is! Map) continue;
+            for (final MapEntry(:key, :value) in roots.entries) {
+              if (key is String && value is num) {
+                (threads[id] ??= {})[key] = value.toInt();
+              }
+            }
+          }
         }
       }
     } catch (_) {
       // An unreadable value is no marks: the next first read starts afresh.
     }
     if (_disposed || reader.accessRevoked) return;
-    final marked = _marks.isNotEmpty;
+    final marked = _marks.isNotEmpty || _threads.isNotEmpty;
     for (final MapEntry(:key, :value) in held.entries) {
       if (value > (_marks[key] ?? 0)) _marks[key] = value;
+    }
+    // A thread read before the marks were back keeps the higher of the two.
+    for (final MapEntry(key: id, value: roots) in threads.entries) {
+      final now = _threads[id] ??= {};
+      for (final MapEntry(:key, :value) in roots.entries) {
+        if (value > (now[key] ?? 0)) now[key] = value;
+      }
     }
     _loaded = true;
     _started |= found;
@@ -211,8 +313,9 @@ class SwarmReadMarks extends ChangeNotifier {
   void _forget() {
     _save?.cancel();
     _save = null;
-    final had = _marks.isNotEmpty || _started;
+    final had = _marks.isNotEmpty || _threads.isNotEmpty || _started;
     _marks.clear();
+    _threads.clear();
     _started = false;
     unawaited(store?.delete(_key).catchError((Object _) {}));
     if (had) notifyListeners();
@@ -227,13 +330,17 @@ class SwarmReadMarks extends ChangeNotifier {
   void _write() {
     _save = null;
     _trim();
-    final value = jsonEncode({'marks': _marks});
+    final value = jsonEncode({
+      'marks': _marks,
+      if (_threads.isNotEmpty) 'threads': _threads,
+    });
     unawaited(store?.write(_key, value).catchError((Object _) {}));
   }
 
   /// At most [kept] marks: those of chats the Swarm's read no longer has go
   /// first, then the oldest kept.
   void _trim() {
+    _trimThreads();
     if (_marks.length <= kept) return;
     final read = {
       for (final group in reader.snapshot?.conversations ?? const []) group.id,
@@ -250,6 +357,24 @@ class SwarmReadMarks extends ChangeNotifier {
     }
   }
 
+  /// At most [keptThreads] thread marks: those of chats the Swarm's read no
+  /// longer has go first, then those of the chat kept longest, its oldest
+  /// first.
+  void _trimThreads() {
+    int count() => _threads.values.fold(0, (n, roots) => n + roots.length);
+    if (count() <= keptThreads) return;
+    final read = {
+      for (final group in reader.snapshot?.conversations ?? const []) group.id,
+    };
+    _threads.removeWhere((id, _) => !read.contains(id));
+    // Then the chat kept longest (the first key), its oldest mark first.
+    while (count() > keptThreads) {
+      final id = _threads.keys.first;
+      final roots = _threads[id]!..remove(_threads[id]!.keys.first);
+      if (roots.isEmpty) _threads.remove(id);
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -261,6 +386,7 @@ class SwarmReadMarks extends ChangeNotifier {
     reader.removeListener(_swarmChanged);
     reader.reads.removeListener(_swarmChanged);
     _sender.dispose();
+    _threadSender.dispose();
     super.dispose();
   }
 }

@@ -140,6 +140,9 @@ class SwarmSession extends ChangeNotifier {
   /// unless [undo] takes it back first.
   void hold(SwarmDecisionNeed need, int choice) {
     if (_disposed) return;
+    // Off the list since it was asked (answered elsewhere, or access taken
+    // away): there is nothing to answer.
+    if (!inbox.needs.any((open) => open.key == need.key)) return;
     _held.remove(need.key)?.timer.cancel();
     _dropped.remove(need.key);
     if (undoWindow <= Duration.zero) {
