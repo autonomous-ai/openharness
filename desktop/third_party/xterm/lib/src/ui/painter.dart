@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/painting.dart';
 import 'package:quiver/collection.dart';
@@ -74,13 +75,14 @@ double symbolFontSizeForCell({
 }
 
 /// Where a Powerline separator's ink starts and ends across its glyph, as
-/// fractions of an em from the glyph's origin; null for any other code point.
+/// fractions of an em from the glyph's origin; null for any other code point
+/// and for the filled separators [powerlineSeparatorPath] draws.
 ///
 /// A separator joins the coloured cells on either side of it, so it is
 /// stretched to fill its cell edge to edge and top to bottom. Scaled like an
 /// icon, it covered about 60% of the row and stopped short of its neighbours.
-/// Each glyph sits in its em differently (U+E0B0 at the left, U+E0B2 at the
-/// right, U+E0B8 across it), so the painter needs its ink, not its advance.
+/// Each glyph sits in its em differently (U+E0B1 at the left, U+E0B3 at the
+/// right, U+E0B9 across it), so the painter needs its ink, not its advance.
 /// Ink outside 0–1 is the face's bleed past a flat side, which overlaps the
 /// neighbouring segment.
 (double, double)? powerlineSeparatorInk(int codePoint) {
@@ -89,26 +91,99 @@ double symbolFontSizeForCell({
   return (ink.$1 / _symbolUnitsPerEm, ink.$2 / _symbolUnitsPerEm);
 }
 
-/// Horizontal ink of the Powerline and Powerline Extra separators in the
-/// bundled Symbols Nerd Font Mono 3.5.1, in font units. Its line, ascent plus
-/// descent, is exactly one em, so an em tall is the cell's height.
+/// The outline of a filled Powerline separator in [cell], or null for any
+/// other code point.
+///
+/// The face puts these glyphs' corners just outside its em, so fitted to the
+/// cell a triangle's flat side began about half a pixel below the cell's top,
+/// and whether that corner pixel showed at all depended on the platform's
+/// rasteriser. Drawn as shapes, their corners are the cell's. The flat side
+/// reaches [bleed] past the cell into the segment it joins, in the same
+/// outline, so no seam shows where their edges meet inside a pixel. The round
+/// or pointed side stops at the cell's edge.
+Path? powerlineSeparatorPath(int codePoint, Rect cell, double bleed) {
+  final left = cell.left;
+  final top = cell.top;
+  final right = cell.right;
+  final bottom = cell.bottom;
+  switch (codePoint) {
+    case 0xE0B0: // left hard divider
+      return Path()
+        ..moveTo(left - bleed, top)
+        ..lineTo(left, top)
+        ..lineTo(right, cell.center.dy)
+        ..lineTo(left, bottom)
+        ..lineTo(left - bleed, bottom)
+        ..close();
+    case 0xE0B2: // right hard divider
+      return Path()
+        ..moveTo(right + bleed, top)
+        ..lineTo(right, top)
+        ..lineTo(left, cell.center.dy)
+        ..lineTo(right, bottom)
+        ..lineTo(right + bleed, bottom)
+        ..close();
+    case 0xE0B4: // right half circle thick
+      return Path()
+        ..moveTo(left - bleed, top)
+        ..lineTo(left, top)
+        ..arcTo(Rect.fromLTRB(left - cell.width, top, right, bottom),
+            -math.pi / 2, math.pi, false)
+        ..lineTo(left - bleed, bottom)
+        ..close();
+    case 0xE0B6: // left half circle thick
+      return Path()
+        ..moveTo(right + bleed, top)
+        ..lineTo(right, top)
+        ..arcTo(Rect.fromLTRB(left, top, right + cell.width, bottom),
+            -math.pi / 2, -math.pi, false)
+        ..lineTo(right + bleed, bottom)
+        ..close();
+    case 0xE0B8: // lower left triangle
+      return Path()
+        ..moveTo(left - bleed, top)
+        ..lineTo(left, top)
+        ..lineTo(right, bottom)
+        ..lineTo(left - bleed, bottom)
+        ..close();
+    case 0xE0BA: // lower right triangle
+      return Path()
+        ..moveTo(right + bleed, top)
+        ..lineTo(right, top)
+        ..lineTo(left, bottom)
+        ..lineTo(right + bleed, bottom)
+        ..close();
+    case 0xE0BC: // upper left triangle
+      return Path()
+        ..moveTo(left - bleed, top)
+        ..lineTo(right, top)
+        ..lineTo(left, bottom)
+        ..lineTo(left - bleed, bottom)
+        ..close();
+    case 0xE0BE: // upper right triangle
+      return Path()
+        ..moveTo(left, top)
+        ..lineTo(right + bleed, top)
+        ..lineTo(right + bleed, bottom)
+        ..lineTo(right, bottom)
+        ..close();
+  }
+  return null;
+}
+
+/// Horizontal ink of the Powerline and Powerline Extra separators, other than
+/// the filled ones drawn as paths, in the bundled Symbols Nerd Font Mono
+/// 3.5.1, in font units. Its line, ascent plus descent, is exactly one em, so
+/// an em tall is the cell's height.
 const _symbolUnitsPerEm = 2048;
 const _powerlineSeparatorInk = <int, (int, int)>{
-  0xE0B0: (-122, 1325), // left hard divider
   0xE0B1: (0, 1433), // left soft divider
-  0xE0B2: (724, 2171), // right hard divider
   0xE0B3: (615, 2048), // right soft divider
-  0xE0B4: (-122, 1097), // right half circle thick
   0xE0B5: (0, 1023), // right half circle thin
-  0xE0B6: (951, 2171), // left half circle thick
   0xE0B7: (1024, 2048), // left half circle thin
-  0xE0B8: (-101, 2048), // lower left triangle
   0xE0B9: (0, 2047), // backslash separator
-  0xE0BA: (1, 2150), // lower right triangle
   0xE0BB: (1, 2048), // forward slash separator
-  0xE0BC: (-101, 2048), // upper left triangle
   0xE0BD: (0, 2047), // forward slash separator (redundant)
-  0xE0BE: (1, 2150), // upper right triangle
   0xE0BF: (1, 2048), // backslash separator (redundant)
   0xE0C0: (-101, 2048), // flame thick
   0xE0C1: (0, 2049), // flame thin
@@ -578,6 +653,18 @@ class TerminalPainter {
       return;
     }
 
+    if (_symbolFace(charCode)) {
+      final outline = powerlineSeparatorPath(
+        charCode,
+        offset & _cellSize,
+        _separatorBleed,
+      );
+      if (outline != null) {
+        _paintSeparatorOutline(canvas, offset, cellData, outline);
+        return;
+      }
+    }
+
     final cacheKey = cellData.getHash() ^ _textScaler.hashCode;
     var paragraph = _paragraphCache.getLayoutFromCache(cacheKey);
 
@@ -681,6 +768,27 @@ class TerminalPainter {
       return;
     }
     canvas.drawParagraph(paragraph, offset);
+  }
+
+  /// Fills a filled Powerline separator's [outline] (see
+  /// [powerlineSeparatorPath]) in the colour its text would have.
+  void _paintSeparatorOutline(
+    Canvas canvas,
+    Offset offset,
+    CellData cellData,
+    Path outline,
+  ) {
+    final cellFlags = cellData.flags;
+    var color = cellFlags & CellFlags.inverse == 0
+        ? resolveForegroundColor(cellData.foreground)
+        : resolveBackgroundColor(cellData.background);
+    if (cellFlags & CellFlags.faint != 0) {
+      color = color.withValues(alpha: 0.5);
+    }
+    canvas.drawPath(outline, Paint()..color = color);
+    if (cellData.flags & CellFlags.underline != 0) {
+      _paintIconUnderline(canvas, offset, cellData, 1);
+    }
   }
 
   final _underlineCellData = CellData.empty();

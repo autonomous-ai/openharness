@@ -344,7 +344,11 @@ it if one is dropped.
     before then are dropped), centred, and clipped to its cell. Powerline
     separators (U+E0B0–U+E0D7) join the coloured cells beside them instead:
     each is stretched so its ink (`powerlineSeparatorInk`, read from the
-    bundled face) fills the cell edge to edge and top to bottom. An underlined
+    bundled face) fills the cell edge to edge and top to bottom. The filled
+    ones (the triangles and thick half circles) are drawn as paths instead
+    (`powerlineSeparatorPath`): the face puts their corners outside its em, so
+    a corner began half a pixel inside the cell, and Linux's rasteriser left
+    that pixel empty. An underlined
     icon draws its underline as an underlined U+00A0 in the text face, level
     with the text beside it. Regression:
     `test/terminal_glyph_presentation_test.dart`,

@@ -110,12 +110,38 @@ void main() {
   );
 
   test('Powerline separators carry their ink; other icons do not', () {
-    final (left, right) = powerlineSeparatorInk(0xE0B0)!;
+    final (left, right) = powerlineSeparatorInk(0xE0C0)!;
     expect(left, lessThan(0));
-    expect(right, closeTo(0.65, 0.01));
+    expect(right, closeTo(1, 0.01));
     // The branch symbol beside them is an icon, fitted like any other.
     expect(powerlineSeparatorInk(0xE0A0), isNull);
     expect(powerlineSeparatorInk(0xF07B), isNull);
+  });
+
+  test('a filled Powerline separator is a shape cornered on its cell', () {
+    const cell = Rect.fromLTWH(10, 0, 7.75, 16);
+    expect(powerlineSeparatorInk(0xE0B0), isNull);
+    final arrow = powerlineSeparatorPath(0xE0B0, cell, 1)!;
+    // Its flat side reaches a pixel into the segment before it, and its
+    // corners are the cell's, so the corner pixels show on every platform.
+    expect(
+      arrow.getBounds(),
+      rectMoreOrLessEquals(const Rect.fromLTRB(9, 0, 17.75, 16)),
+    );
+    expect(arrow.contains(const Offset(10.05, 0.1)), isTrue);
+    expect(arrow.contains(const Offset(10.05, 15.9)), isTrue);
+    expect(
+      powerlineSeparatorPath(0xE0B2, cell, 1)!.getBounds(),
+      rectMoreOrLessEquals(const Rect.fromLTRB(10, 0, 18.75, 16)),
+    );
+    // A cap's curve stays inside the cell.
+    expect(
+      powerlineSeparatorPath(0xE0B6, cell, 1)!.getBounds().left,
+      moreOrLessEquals(10),
+    );
+    // The thin separators are lines in the face, drawn from it.
+    expect(powerlineSeparatorPath(0xE0B1, cell, 1), isNull);
+    expect(powerlineSeparatorPath(0xF07B, cell, 1), isNull);
   });
 
   test('a Powerline separator covers its cell from top to bottom', () async {
