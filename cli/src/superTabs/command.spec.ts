@@ -1,6 +1,7 @@
-import { expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PassThrough } from 'node:stream'
 import { resolve } from 'node:path'
-import { parseSuperTabArgs, superTabCommand } from './command.js'
+import { parseSuperTabArgs, readStdin, StdinIdle, superTabCommand } from './command.js'
 import type { Where } from '../agentClient/daemon.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const prefix = ['--tab', 'tab', '--agent', 'agent']
@@ -700,4 +701,124 @@ it('reads the cost summary of the last 7 days, or of --days N up to 90', () => {
   expect(parseSuperTabArgs([...prefix, 'costs', '--days', '30'], where).payload).toMatchObject({ action: 'costs', days: 30 })
   for (const argv of [[...prefix, 'costs', '--days'], [...prefix, 'costs', '--days', '0'], [...prefix, 'costs', '--days', '91'],
     [...prefix, 'costs', '--days', '7x'], [...prefix, 'costs', 'extra']]) expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+})
+
+// #2360 took the stdin form out of a Buddy's help, as its guard refuses a post or proposal read from stdin (#2358). The usage
+// line and the JSON hints still offered it, so a Buddy that followed them was refused and tried again.
+describe("a Buddy's usage line and JSON hints", () => {
+  const buddyDeps = (buddy: boolean | 'fails') => {
+    const asked: Array<[string, Record<string, unknown> | undefined, number]> = [], opened: Where[] = []
+    const request = vi.fn(async (type: string, payload?: Record<string, unknown>) => {
+      asked.push([type, payload, opened.length])
+      if (type === 'agents_list') return { agents: [{ id: 'buddy-h', engine: 'claude', tmuxPane: '%9', status: 'active' }] }
+      if (payload?.action === 'buddyCheck') {
+        if (buddy === 'fails') throw new Error('daemon gone')
+        return { ok: true, buddy }
+      }
+      return { ok: true }
+    })
+    const print = vi.fn()
+    const open = vi.fn(async (at: Where) => { opened.push(at); return { request, close: vi.fn(), machineId: 'machine' } })
+    const run = async (argv: string[]) => {
+      expect(await superTabCommand(['--tab', 'tab', ...argv], { where: () => where, pane: '%9', open, print, terminal: () => false })).toBe(1)
+      return JSON.parse(print.mock.calls.at(-1)![0]).error as string
+    }
+    return { run, asked, opened, request }
+  }
+  const BAD = [['post', 'lead', 'Ready'], ['propose', 'op-1', '{"goal":'], ['propose'], ['propose', 'op-1'], ['command', 'op-1', '{"a":"b', 'c"}']]
+
+  it('has no stdin form for a Buddy: its post line takes TEXT, and its JSON goes in single quotes', async () => {
+    const { run } = buddyDeps(true)
+    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--reply-to')
+    expect(await run(['propose', 'op-1', '{"goal":'])).toMatch(/^The propose JSON is not valid \(.*\)\. Pass it as one argument, with the JSON in single quotes: propose OPERATION_ID '\{\.\.\.\}' \(an apostrophe inside it as \\u0027\)\.$/)
+    expect(await run(['propose'])).toContain("A line break without \\ before it ends the command; send it again with the JSON in single quotes: propose OPERATION_ID '{...}'")
+    expect(await run(['propose', 'op-1'])).toBe("propose needs its JSON after OPERATION_ID: propose op-1 JSON, with the JSON in single quotes: propose OPERATION_ID '{...}' (an apostrophe inside it as \\u0027).")
+    for (const argv of BAD) {
+      const error = await run(argv)
+      expect(error, argv.join(' ')).not.toMatch(/stdin|TEXT\|-|<<| - /)
+    }
+  })
+
+  it('keeps the stdin form for any other agent, and for a harness Harness cannot confirm is a Buddy', async () => {
+    for (const buddy of [false, 'fails'] as const) {
+      const { run } = buddyDeps(buddy)
+      expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT|- OPERATION_ID')
+      expect(await run(['propose', 'op-1', '{"goal":'])).toContain("or send the JSON on stdin with - in its place: propose OPERATION_ID - <<'JSON'")
+      expect(await run(['command', 'op-1', '{"a":"b', 'c"}'])).toContain("or send the JSON on stdin with - in its place: command OPERATION_ID - <<'JSON'")
+    }
+  })
+
+  it("asks this computer's daemon about the pane's own harness, only when the command is refused", async () => {
+    const { run, asked, opened } = buddyDeps(true)
+    await run(['propose', 'op-1', '{"goal":'])
+    expect(asked.find(([, payload]) => payload?.action === 'buddyCheck')?.[1]).toEqual({ action: 'buddyCheck', harnessId: 'buddy-h' })
+    // Another machine named with --machine is never the one asked: the pane is this computer's.
+    expect(await run(['--port', '14002', '--machine', 'other', 'propose', 'op-1', '{"goal":'])).toContain('single quotes')
+    expect(opened).toEqual([where, where])
+    // A command that parses never asks.
+    const ok = buddyDeps(true)
+    await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready', 'op-1'], { where: () => where, pane: '%9', open: async () => ({ request: ok.request, close: vi.fn(), machineId: 'machine' }), print: vi.fn() })
+    expect(ok.request).toHaveBeenCalled()
+    expect(ok.asked.some(([, payload]) => payload?.action === 'buddyCheck')).toBe(false)
+  })
+  // Windows cannot check a pty host pane (buddyPane.ts): an agent's shell on a computer running a Buddy gets a Buddy's words.
+  it('words it for a Buddy on Windows from an agent\'s shell while this computer runs one', async () => {
+    const wording = async (buddiesHere: boolean, env: NodeJS.ProcessEnv) => {
+      const print = vi.fn(), request = vi.fn(async (_type: string, payload?: Record<string, unknown>) =>
+        payload?.action === 'buddyCheck' ? { ok: true, buddiesHere } : { agents: [] })
+      await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready'], { where: () => where, print, platform: 'win32', env, pane: undefined,
+        open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })
+      return JSON.parse(print.mock.calls.at(-1)![0]).error as string
+    }
+    expect(await wording(true, { HARNESS_PANE: 'p1:%3' })).toContain('post GROUP TEXT OPERATION_ID')
+    expect(await wording(false, { HARNESS_PANE: 'p1:%3' })).toContain('post GROUP TEXT|- OPERATION_ID')
+    expect(await wording(true, {})).toContain('post GROUP TEXT|- OPERATION_ID')
+  })
+})
+
+// #2355: post - (and command JSON -) read stdin with no limit, so a pipe left open and idle waited for good.
+describe('stdin for -', () => {
+  afterEach(() => { vi.useRealTimers() })
+  it('refuses an open stdin that sends nothing for 30 s, and lets go of it', async () => {
+    vi.useFakeTimers()
+    const stream = new PassThrough()
+    const read = readStdin(stream).catch((error: Error) => error)
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(stream.destroyed).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await read).toBeInstanceOf(StdinIdle)
+    expect(stream.destroyed).toBe(true)
+  })
+
+  it('reads a slow, steady stream whole, however long it takes, and refuses one that stalls part way', async () => {
+    vi.useFakeTimers()
+    const stream = new PassThrough()
+    const read = readStdin(stream)
+    for (let line = 0; line < 20; line++) { stream.write(`line ${line}\n`); await vi.advanceTimersByTimeAsync(29_000) }
+    stream.end('last')
+    expect(await read).toBe(Array.from({ length: 20 }, (_, line) => `line ${line}\n`).join('') + 'last')
+    const stalled = new PassThrough()
+    const partial = readStdin(stalled).catch((error: Error) => error)
+    stalled.write('{"type":')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await partial).toBeInstanceOf(StdinIdle)
+  })
+
+  it('says how to end stdin for a post or a JSON, and sends nothing', async () => {
+    const print = vi.fn(), request = vi.fn(async () => ({ ok: true }))
+    const deps = { where: () => where, pane: undefined, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print, terminal: () => false,
+      stdin: () => Promise.reject(new StdinIdle()) }
+    expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-1'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(await superTabCommand([...prefix, 'command', 'op-2', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("command - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was sent. "
+      + "Close stdin after the JSON, as a heredoc does: command OPERATION_ID - <<'JSON' (the JSON on the next lines, then JSON alone on a line), or pass it as one argument.")
+    expect(request).not.toHaveBeenCalled()
+    // What arrives in time is used as before, read once.
+    const stdin = vi.fn(async () => '{"type":"work.status"}\n')
+    expect(await superTabCommand([...prefix, 'command', 'op-3', '-'], { ...deps, stdin })).toBe(0)
+    expect(stdin).toHaveBeenCalledOnce()
+    expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ operationId: 'op-3', command: { type: 'work.status' } }), 30_000)
+  })
 })
