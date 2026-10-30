@@ -1863,6 +1863,35 @@ describe('Reviewer role', () => {
         done()
       })
 
+      // Review 4 of #2382 (Kai): verdicts outside the short Hold list read as passes, so done went through with one real pass.
+      it.each([['Not ready at head 2: P1 replay on reconnect.'], ['Request changes at head 2: P1 replay on reconnect.'], ['Blocked at head 2: one P1.'],
+        ['Looked at head 2; see the findings below.']])('refuses done when a review passes its check with %j, naming its Reviewer', (wording) => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const [one, two] = reviews()
+        verdict(f, one!, group, built, one!.assignment!.agentId, true)
+        const actor: Actor = { kind: 'agent', agentId: two!.assignment!.agentId, machineOwnerId: 'target-owner' }
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 2.' }, actor)
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: wording }, actor)
+        const name = f.state.agents.find(a => a.id === two!.assignment!.agentId)!
+        expect(() => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor))
+          .toThrow(`Still to pass it at this revision, after their review's pass verdict: ${name.displayName ?? name.name}.`)
+      })
+
+      it.each([['No finding at head 2.'], ['Pass at head 2.'], ['Ready: yes at head 2.'], ['Approve at head 2.']])('counts a review whose verdict says %j as a pass', (wording) => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        for (const review of reviews()) {
+          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
+          f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: wording }, actor)
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 2.' }, actor)
+        }
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+      })
+
       it('counts both passes when each Reviewer passes the work first and then records its review\'s pass verdict', () => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         markReady(`Ready. ${pr}`)

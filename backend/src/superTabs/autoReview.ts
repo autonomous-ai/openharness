@@ -47,10 +47,15 @@ const sameStamp = (a: ReviewStamp | undefined, b: ReviewStamp | undefined) => !!
 export const reviewHeldBy = (state: SuperTabState, build: Conversation, agentId: string): Conversation | undefined =>
   state.conversations.filter(c => c.reviewOf === build.id && c.assignment?.agentId === agentId).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
 
-/** A Hold in a review's verdict: Reviewers often pass their review's own check to say a verdict was given, whatever it was. */
-const HOLD = /\b(hold|holds|held|ready:\s*(no|with fixes)|changes (needed|requested))\b/i
-/** Whether [review] gave a pass verdict: its own check passed, and its verdict holds nothing back. */
-export const reviewPassed = (review: Conversation): boolean => review.checks.some(c => c.passedBy && c.evidence && !HOLD.test(c.evidence))
+/** A verdict that says it passes. Reviewers often pass their review's own check only to say a verdict was given, whatever it
+ *  was, so the words decide: a review passes only when they say so (review 4 of #2382: "Not ready", "Request changes" and
+ *  "Blocked" each read as a pass when only Hold words were looked for). */
+const PASS = /\b(no findings?|pass(es|ed)?|ready:\s*yes|approved?|approves)\b/i
+/** Words that take a pass back even beside a pass word ("Ready: yes with fixes", "did not pass"). */
+const NOT_PASS = /\b(hold|holds|held|not ready|ready:\s*(no|with fixes)|with fixes|request(s|ed)? changes|changes (needed|requested)|block(ed|s|ing|er)?|not pass(ed)?|did not|fail(s|ed)?)\b/i
+/** Whether [review] gave a pass verdict: its own check passed, and its verdict says it passes; anything else is not yet. */
+export const reviewPassed = (review: Conversation): boolean =>
+  review.checks.some(c => c.passedBy && c.evidence && PASS.test(c.evidence) && !NOT_PASS.test(c.evidence))
 
 /** The hand-over a pass on [build] through [review] counts for: the review's own, once the review gave a pass verdict, while
  *  it still reviews [build]'s current attempt and was not closed; else -1, never counted. A pass on the work given while
