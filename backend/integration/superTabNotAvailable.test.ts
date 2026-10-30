@@ -116,6 +116,15 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`,
       { type: 'claim', claimId: op() }),
+    json('GET', 'GET /api/super-tabs/:tabId/native/:contextId', `${t}/native/${MISSING}`),
+    json('POST', 'POST /api/super-tabs/:tabId/native/:contextId', `${t}/native/${MISSING}`,
+      { turnId: op(), kind: 'prompt', previousEventId: null, text: 'hello', truncated: false, interrupted: false }),
+    json('POST', 'POST /api/super-tabs/:tabId/github-token', `${t}/github-token`, { machineId: MISSING }),
+    json('POST', 'POST /api/super-tabs/:tabId/machines/:machineId', `${t}/machines/${MISSING}`, { generation: 'g1',
+      resources: { cpuPercent: 1, memoryTotalBytes: 1e9, memoryUsedBytes: 1e8, diskFreeBytes: 1e9, diskTotalBytes: 2e9, projectDiskFreeBytes: 1e9,
+        deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] }),
+    json('POST', 'POST /api/super-tabs/:tabId/stopped', `${t}/stopped`, { assignmentId: MISSING, receipt: 'stopped' }),
   ]
 }
 
@@ -136,7 +145,8 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
-      const expected = call.route.endsWith('/github/approve') ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
+      // So does a GitHub token, which needs the same app.
+      const expected = /\/github\/approve$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
       for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
     }
   })

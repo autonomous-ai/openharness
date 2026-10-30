@@ -436,6 +436,21 @@ const authorForBuddy = <T extends Pick<Author, 'kind' | 'membershipGeneration'> 
   author?.kind === 'agent' && author.membershipGeneration ? { ...author, membershipGeneration: '' } : author
 const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [string, string]
 
+/** Someone with no part in this Swarm: not in it, hosting none of its agents, contributing none of its machines and running
+ *  none of its work. A refusal to them is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE):
+ *  its words would say the Swarm is there. Anyone with a part keeps them. */
+function stranger(state: SuperTabState, userId: string): boolean {
+  return !state.people.some(p => p.id === userId) && !state.agents.some(a => a.machineOwnerId === userId)
+    && !(state.machines ?? []).some(m => m.contributorId === userId)
+    && !state.conversations.some(c => c.assignment?.execution.machineOwnerId === userId)
+}
+async function strangerRefusal<T>(state: SuperTabState, userId: string, check: () => T | Promise<T>): Promise<T> {
+  try { return await check() } catch (error) {
+    if (error instanceof SuperTabError && stranger(state, userId)) throw new SuperTabError(error.code, error.message, error.status, true)
+    throw error
+  }
+}
+
 /** A Workspace refusal to someone not in the Swarm (a Workspace admin need not be): the routes answer it as for a Swarm that
  *  does not exist (routes/superTabs.ts NOT_AVAILABLE), since its words would say the Swarm is there. Its members keep them. */
 async function outsiderRefusal(state: SuperTabState, userId: string, check: () => Promise<void>): Promise<void> {
@@ -753,18 +768,12 @@ export class SuperTabStore {
       if (!workspaceLeave) await requireWorkspaceAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
-    // Someone neither in the Swarm nor hosting any of its agents learns nothing of it from an agent id, real, made up or
-    // another Swarm's: the person routes answer them as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
-    // The refusal itself is unchanged, for the host routes.
-    const outsider = !state.people.some(p => p.id === user.sub) && !state.agents.some(a => a.machineOwnerId === user.sub)
-    let target: Agent
-    try {
-      target = agent(state, agentId)
-      if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
-    } catch (error) {
-      if (outsider && error instanceof SuperTabError) throw new SuperTabError(error.code, error.message, error.status, true)
-      throw error
-    }
+    // A stranger learns nothing of the Swarm from an agent id, real, made up or another Swarm's.
+    const target = await strangerRefusal(state, user.sub, () => {
+      const found = agent(state, agentId)
+      if (found.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
+      return found
+    })
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const reads = new GrantReads()
@@ -2329,8 +2338,11 @@ export class SuperTabStore {
       // Only the conversations its checks read (parts/load.ts loadObserved): the whole Swarm was ~1.1 MB a report (#876).
       const loaded = loadedFrom(await this.row(tx, user, tabId), await loadObserved(tx, tabId, machineId)), state = structuredClone(loaded.state)
       await this.hostFor(tx, user, machineId, owned, state)
-      const pool = machineContribution(state, machineId)
-      if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
+      const pool = await strangerRefusal(state, user.sub, () => {
+        const found = machineContribution(state, machineId)
+        if (!found || found.contributorId !== user.sub || found.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
+        return found
+      })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
@@ -2912,8 +2924,11 @@ export class SuperTabStore {
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
       const before = { agents: state.agents, conversations: structuredClone(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
-      const assignment = group?.assignment
-      if (!assignment || assignment.execution.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can confirm this stop.', 403)
+      const assignment = await strangerRefusal(state, user.sub, () => {
+        const found = group?.assignment
+        if (!found || found.execution.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can confirm this stop.', 403)
+        return found
+      })
       const execution = assignment.execution
       await this.hostFor(tx, user, execution.machineId)
       const machine = await tx.machine.findFirst({ where: { machineId: execution.machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })

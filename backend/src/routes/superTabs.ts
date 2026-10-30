@@ -139,6 +139,8 @@ export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', 'GET /api/super-tabs/:tabId/terminal/:requestId',
   'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
   'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
+  'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/github-token',
+  'POST /api/super-tabs/:tabId/machines/:machineId', 'POST /api/super-tabs/:tabId/stopped',
 ])
 /** The one answer on those routes for anything the caller cannot reach. 404 with the code every client already
  *  reads as gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404). */
