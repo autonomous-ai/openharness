@@ -21,6 +21,8 @@ import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
+import { listNamedIndexes, NAMED_INDEX } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -44,6 +46,8 @@ beforeAll(async () => {
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
+  // The owner's machine, where the fixture's worker runs (reading as that agent).
+  await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   const store = new SuperTabStore(db, () => clock)
   app = Fastify()
   app.setErrorHandler(errorHandler)
@@ -71,6 +75,7 @@ async function scene() {
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
   const secretGroup = s.group('Secret work', secret)
+  const worker = s.add('worker', web, false, ownerActor, 'host', owner.sub)
   s.edit(state => {
     state.conversations.find(c => c.id === web)!.lastMessageSequence = 100
     state.conversations.find(c => c.id === secretGroup)!.lastMessageSequence = 50
@@ -79,7 +84,7 @@ async function scene() {
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 3 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
-  return { tabId, web, secretGroup }
+  return { tabId, web, secretGroup, worker }
 }
 
 const call = async (method: 'GET' | 'POST', url: string, as: AuthUser, payload?: unknown) => {
@@ -261,5 +266,153 @@ describe('catch-up summary (what the reader missed since their mark)', () => {
     expect((await catchUp(s.tabId, s.web, 1, owner, '&asAgentId=lead-agent')).status).toBe(400)
     expect((await catchUp(s.tabId, s.web, 1, ownerTeam)).status).toBe(403)
     expect((await call('GET', `/api/super-tabs/${s.tabId}/conversations/${s.web}/catch-up`, owner)).status).toBe(400)
+  })
+})
+
+describe('thread marks (one per person and thread)', () => {
+  /** A thread rooted at `root` in `conversationId`: the root, then `replies` replies numbered after it. */
+  const thread = (tabId: string, conversationId: string, root: string, at: number, replies = 2) =>
+    db.superTabMessage.createMany({ data: Array.from({ length: replies + 1 }, (_, i) => ({ id: i ? `${root}-r${i}` : root, tabId, conversationId,
+      sequence: at + i, thread: root, author: { kind: 'agent', id: 'lead-agent' }, text: i ? `Reply ${i}` : 'Root', recipientIds: [], mentions: [] })) })
+  const scenario = async () => {
+    const s = await scene()
+    const root = `${s.tabId}-root`, secretRoot = `${s.tabId}-secret-root`
+    await thread(s.tabId, s.web, root, 10)
+    await thread(s.tabId, s.secretGroup, secretRoot, 20)
+    return { ...s, root, secretRoot }
+  }
+  const markThread = (tabId: string, conversationId: string, root: string, sequence: number, as: AuthUser = owner, query = '') =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/read${query}`, as, { sequence })
+  const threadMarksOf = async (tabId: string, as: AuthUser, query = '') =>
+    (await call('GET', `/api/super-tabs/${tabId}/parts${query}`, as)).body.data.derived.threadMarks as Record<string, Record<string, number>> | undefined
+
+  it('keeps the person\'s thread mark and gives it back in their own read only', async () => {
+    const s = await scenario()
+    expect(await markThread(s.tabId, s.web, s.root, 11)).toMatchObject({ status: 200, body: { data: { sequence: 11 } } })
+    expect(await threadMarksOf(s.tabId, owner)).toEqual({ [s.web]: { [s.root]: 11 } })
+    // Another reader of the same thread never sees it, and a person with none gets no field at all.
+    expect(await threadMarksOf(s.tabId, peer)).toBeUndefined()
+    await markThread(s.tabId, s.web, s.root, 12, peer)
+    expect(await threadMarksOf(s.tabId, peer)).toEqual({ [s.web]: { [s.root]: 12 } })
+    expect(await threadMarksOf(s.tabId, owner)).toEqual({ [s.web]: { [s.root]: 11 } })
+    // An agent reading as itself (a Buddy is one) has none, though its owner has.
+    const asAgent = await call('GET', `/api/super-tabs/${s.tabId}/parts?asAgentId=${s.worker}`, owner)
+    expect(asAgent.status, JSON.stringify(asAgent.body.error)).toBe(200)
+    expect(asAgent.body.data.derived.threadMarks).toBeUndefined()
+  })
+
+  it('never moves a thread mark back, whichever device writes last', async () => {
+    const s = await scenario()
+    await markThread(s.tabId, s.web, s.root, 12)
+    expect((await markThread(s.tabId, s.web, s.root, 10)).body.data).toEqual({ sequence: 12 })
+    expect(await threadMarksOf(s.tabId, owner)).toEqual({ [s.web]: { [s.root]: 12 } })
+    const other = await scenario()
+    await Promise.all([10, 12, 11, 10, 12].map(n => markThread(other.tabId, other.web, other.root, n)))
+    expect(await threadMarksOf(other.tabId, owner)).toEqual({ [other.web]: { [other.root]: 12 } })
+    expect(await db.superTabThreadMark.count({ where: { tabId: other.tabId } })).toBe(1)
+  })
+
+  it('stops at the conversation\'s newest message', async () => {
+    const s = await scenario()
+    expect((await markThread(s.tabId, s.web, s.root, 5_000)).body.data).toEqual({ sequence: 100 })
+  })
+
+  it('leaves the conversation\'s own mark as it was: a client without thread marks reads the same', async () => {
+    const s = await scenario()
+    await mark(s.tabId, s.web, 5)
+    await markThread(s.tabId, s.web, s.root, 12)
+    expect(await marksOf(s.tabId, owner)).toEqual({ [s.web]: 5 })
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(1)
+  })
+
+  it('refuses a thread of another conversation, an unknown one and one the person cannot read alike, storing nothing', async () => {
+    const s = await scenario()
+    const refused = [
+      await markThread(s.tabId, s.secretGroup, s.secretRoot, 21, outsider),
+      // The private chat's thread named under a conversation the person reads.
+      await markThread(s.tabId, s.web, s.secretRoot, 21, outsider),
+      await markThread(s.tabId, s.web, 'no-such-root', 21, outsider),
+      await markThread(s.tabId, 'no-such-group', s.root, 21, outsider),
+    ]
+    expect(refused.map(r => r.status)).toEqual([404, 404, 404, 404])
+    expect(new Set(refused.map(r => JSON.stringify(r.body.error)))).toHaveLength(1)
+    expect(JSON.stringify(refused)).not.toContain('Secret')
+    expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId } })).toBe(0)
+  })
+
+  it('stops sending a thread mark once the person can no longer read its conversation', async () => {
+    const s = await scenario()
+    await markThread(s.tabId, s.web, s.root, 11, peer)
+    expect(await threadMarksOf(s.tabId, peer)).toEqual({ [s.web]: { [s.root]: 11 } })
+    await swarmTransaction(db, async tx => {
+      const current = (await parts.loadActive(tx, s.tabId, { groupIds: [s.web] })).groups.find(g => g.key === s.web)!
+      const data = { ...structuredClone(current.data!), audience: { people: [{ id: owner.sub, generation: 0 }] } } as Conversation
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'group', key: s.web, seen: current.version, data }, clock)
+    })
+    expect(await threadMarksOf(s.tabId, peer)).toBeUndefined()
+    expect((await markThread(s.tabId, s.web, s.root, 12, peer)).status).toBe(404)
+  })
+
+  it('keeps no thread marks for agents or Team sessions', async () => {
+    const s = await scenario()
+    expect((await markThread(s.tabId, s.web, s.root, 11, owner, '?asAgentId=some-agent')).status).toBe(400)
+    expect((await markThread(s.tabId, s.web, s.root, 11, ownerTeam)).status).toBe(403)
+    expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId } })).toBe(0)
+  })
+
+  it('sends a later read only the thread marks that moved since its cursor', async () => {
+    const s = await scenario()
+    clock = NOW
+    await markThread(s.tabId, s.secretGroup, s.secretRoot, 21)
+    clock = NOW + 60_000
+    const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+    const changes = async (at: number) => {
+      clock = at
+      return (await call('GET', `/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)).body.data.derived.threadMarks
+    }
+    expect(await changes(NOW + 61_000)).toBeUndefined()
+    clock = NOW + 62_000
+    await markThread(s.tabId, s.web, s.root, 12)
+    expect(await changes(NOW + 63_000)).toEqual({ [s.web]: { [s.root]: 12 } })
+    clock = NOW
+  })
+
+  it(`keeps at most ${THREAD_MARK_CAP} per person and Swarm, dropping the least recently moved`, async () => {
+    const s = await scenario()
+    const write = (threadId: string, at: number, personId = owner.sub) =>
+      writeThreadMark(db, { tabId: s.tabId, personId, conversationId: s.web, threadId, sequence: 1, now: at })
+    for (let i = 0; i < THREAD_MARK_CAP; i++) await write(`t${i}`, NOW + i)
+    // Another person's marks count apart.
+    await write('t0', NOW, peer.sub)
+    // t0 moves on, so t1 is now the least recently moved.
+    await writeThreadMark(db, { tabId: s.tabId, personId: owner.sub, conversationId: s.web, threadId: 't0', sequence: 2, now: NOW + THREAD_MARK_CAP })
+    await write('newest', NOW + THREAD_MARK_CAP + 1)
+    const kept = await db.superTabThreadMark.findMany({ where: { tabId: s.tabId, personId: owner.sub }, select: { threadId: true } })
+    expect(kept).toHaveLength(THREAD_MARK_CAP)
+    expect(kept.map(k => k.threadId)).toEqual(expect.arrayContaining(['t0', 'newest']))
+    expect(kept.map(k => k.threadId)).not.toContain('t1')
+    expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId, personId: peer.sub } })).toBe(1)
+  }, 60_000)
+
+  it('reads a person\'s thread marks through their named indexes, planned once', async () => {
+    const s = await scenario()
+    await markThread(s.tabId, s.web, s.root, 11)
+    await listNamedIndexes(db)
+    await db.$runCommandRaw({ planCacheClear: 'SuperTabThreadMark' })
+    await db.$runCommandRaw({ profile: 0 })
+    await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
+    await db.$runCommandRaw({ create: 'system.profile', capped: true, size: 16 * 1024 * 1024 })
+    await db.$runCommandRaw({ profile: 2, slowms: 0 })
+    try {
+      const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+      await call('GET', `/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)
+    } finally {
+      await db.$runCommandRaw({ profile: 0 })
+    }
+    const rows = (await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SuperTabThreadMark$' } }, batchSize: 1000 }) as unknown as
+      { cursor: { firstBatch: Array<{ command?: { hint?: unknown }; planSummary?: string; fromMultiPlanner?: boolean }> } }).cursor.firstBatch
+    const hints = rows.map(row => JSON.stringify(row.command?.hint))
+    expect(hints).toEqual(expect.arrayContaining([JSON.stringify(NAMED_INDEX.SuperTabThreadMark.held), JSON.stringify(NAMED_INDEX.SuperTabThreadMark.moved)]))
+    expect(rows.every(row => row.planSummary?.startsWith('IXSCAN') && !row.fromMultiPlanner), JSON.stringify(rows.map(r => r.planSummary))).toBe(true)
   })
 })

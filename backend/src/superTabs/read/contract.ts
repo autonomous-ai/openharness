@@ -82,6 +82,10 @@ export interface Derived {
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
+  /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
+   *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
+   *  Absent when there are none, and from an older backend. Never another person's. */
+  threadMarks?: Record<string, Record<string, number>>
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false

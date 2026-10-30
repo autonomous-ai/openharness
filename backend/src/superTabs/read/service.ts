@@ -8,7 +8,8 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../..
 import { author, fail, groupWithoutMachines, isLeads, seenMachineIds, stableId, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, writeReadMark } from '../readMarks.js'
+import { readMarks, readThreadMarks, writeReadMark, writeThreadMark } from '../readMarks.js'
+import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import type { CacheView } from '../cache.js'
@@ -39,14 +40,20 @@ interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedA
 const MACHINE_READS_MS = 15_000
 type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
 
-/** The reader's marks of the conversations they can read now, a dormant one read by id included: a mark never names a
- *  conversation the reader has lost. Only in a person's read; nothing for an agent. */
-function readableMarks(read: Read, marks: Map<string, number>): Pick<Derived, 'readMarks'> {
+/** The conversations the reader can read now, a dormant one read by id included. */
+function readableGroups(read: Read): Set<string> {
+  return new Set([...read.view.parts.groups.map(g => g.key),
+    ...read.parts.groups.filter(g => g.dormant && canReadGroup(read.view.state, read.actor, g.data!)).map(g => g.key)])
+}
+
+/** The reader's marks of the conversations and threads they can read now: a mark never names a conversation the reader has
+ *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent). */
+function readableMarks(read: Read, marks: Map<string, number>, threads: Map<string, Map<string, number>>): Pick<Derived, 'readMarks' | 'threadMarks'> {
   if (read.actor.kind !== 'person') return {}
-  const shown = new Set(read.view.parts.groups.map(g => g.key))
-  const readable = (id: string) => shown.has(id)
-    || read.parts.groups.some(g => g.key === id && g.dormant && canReadGroup(read.view.state, read.actor, g.data!))
-  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable(id))) }
+  const readable = readableGroups(read)
+  const threadMarks = Object.fromEntries([...threads].filter(([id]) => readable.has(id)).map(([id, held]) => [id, Object.fromEntries(held)]))
+  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable.has(id))),
+    ...(Object.keys(threadMarks).length ? { threadMarks } : {}) }
 }
 
 /** `loaded` with these starts too: a change poll's own (SwarmReads.pollStarts), never one it holds already. */
@@ -76,7 +83,8 @@ export class SwarmReads {
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts,
-        derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor)) } }
+        derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
+          await this.threadMarksOf(tx, tabId, read.actor, { conversationIds: [...readableGroups(read)] })) } }
     })
   }
 
@@ -134,12 +142,14 @@ export class SwarmReads {
       const held = new Set(read.parts.groups.map(g => g.key))
       // So is a conversation whose read mark moved, so the mark goes only to a reader who can still read it.
       const marks = await this.marksOf(tx, tabId, read.actor, from.since)
-      const unheld = [...new Set([...changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []), ...marks.keys()])]
+      const threadMarks = await this.threadMarksOf(tx, tabId, read.actor, { since: from.since })
+      const unheld = [...new Set([...changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []), ...marks.keys(),
+        ...threadMarks.keys()])]
         .filter(id => !held.has(id))
       if (unheld.length) read = await this.load(tx, cached, user, tabId, asAgentId, t0, { ...light, groupIds: [...mentioned, ...unheld] }, lightly)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor),
-        derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks) } }
+        derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks) } }
     })
   }
 
@@ -195,6 +205,26 @@ export class SwarmReads {
     const { group } = await this.group(user, tabId, conversationId)
     const newest = group.data!.lastMessageSequence
     return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: Math.min(sequence, newest), now: this.now() }) }
+  }
+
+  /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
+   *  newest message (readMarks.ts), which the reader sees already: a hidden reply's sequence never shows in the answer. The
+   *  root must be a message of that conversation; one of another conversation, or none, is refused as an unreadable
+   *  conversation is. Only a person reading as themselves has marks. */
+  async markThreadRead(user: AuthUser, tabId: string, conversationId: string, threadId: string, sequence: number): Promise<{ sequence: number }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { group } = await this.group(user, tabId, conversationId)
+    const root = await readBy(this.db, 'SuperTabMessage', 'thread', [{ $match: { tabId, conversationId, thread: threadId } }, { $limit: 1 },
+      { $project: { _id: 1 } }])
+    if (!root.length) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    const newest = group.data!.lastMessageSequence
+    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
+      now: this.now() }) }
+  }
+
+  /** A person's own thread marks (an agent has none), of the listed conversations or those moved since a time. */
+  private async threadMarksOf(tx: PrismaClient, tabId: string, actor: Actor, among: Parameters<typeof readThreadMarks>[3]): Promise<Map<string, Map<string, number>>> {
+    return actor.kind === 'person' ? readThreadMarks(tx, tabId, actor.userId, among) : new Map()
   }
 
   /** A person's own read marks (an agent has none), every one or those moved since `since`. */
