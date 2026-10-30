@@ -32,7 +32,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { fullReviewOf, openReview, opensReviews, projectPullRequest, reviewersToPass, reviewHeldBy, reviewStampOf, supersedeReviews, swarmAuthor, verdictHandoff, verdictPending } from './autoReview.js'
+import { fullReviewOf, openReview, opensReviews, PASS_HINT, projectPullRequest, reviewersToPass, reviewHeldBy, reviewStampOf, supersedeReviews, swarmAuthor, verdictHandoff, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
@@ -2430,7 +2430,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && !reviewsPassed(assignment, reviewsWanted(group.task))) {
         const missing = reviewersToPass(state, group)
         fail('REVIEWS_PENDING', `This task wants ${reviewsWanted(group.task)} independent reviews: it is done once that many different Reviewers pass its independent check at the revision handed over last.${
-          missing.length ? ` Still to pass it at this revision, after their review's pass verdict: ${missing.join(', ')}.` : ''}`)
+          missing.length ? ` Still to pass it at this revision, after their review's pass verdict: ${missing.join(', ')}. ${PASS_HINT}` : ''}`)
       }
       let asked: string | undefined
       if (command.ask) {

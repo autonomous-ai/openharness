@@ -1869,7 +1869,10 @@ describe('Reviewer role', () => {
         // Review 5 (Kai): Holds that report test runs or name approval words read as passes when pass words matched anywhere.
         ['Two findings at d4e5f6: P1 in the sweep. Ran specs: 300 passed.'], ['P1 at d4e5f6: the token leaks. 120 tests passed.'],
         ['Needs work at d4e5f6: P1. CI passed.'], ['Cannot approve d4e5f6: P1.'], ['Not approved: P1.'], ['Rejected at d4e5f6. Unit suite passes.'],
-        ['Pass — with fixes at d4e5f6: P2 in the sweep.']])('refuses done when a review passes its check with %j, naming its Reviewer', (wording) => {
+        ['Pass — with fixes at d4e5f6: P2 in the sweep.'],
+        // Review 6 (Kai): "Passed"/"passes" report runs, not a verdict; an orchestration opening that holds back is not a pass.
+        ['Passed typecheck at d4e5f6; P1 below.'], ['Passes the unit suite at d4e5f6, but P1 below.'],
+        ['Meets the brief: yes, quality: no. Ready: with fixes — revision d4e5f6.'], ['Meets the brief: no, quality: yes. Ready: yes — revision d4e5f6.']])('refuses done when a review passes its check with %j, naming its Reviewer', (wording) => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         markReady(`Ready. ${pr}`)
         const [one, two] = reviews()
@@ -1880,11 +1883,13 @@ describe('Reviewer role', () => {
         f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: wording }, actor)
         const name = f.state.agents.find(a => a.id === two!.assignment!.agentId)!
         expect(() => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor))
-          .toThrow(`Still to pass it at this revision, after their review's pass verdict: ${name.displayName ?? name.name}.`)
+          .toThrow(`Still to pass it at this revision, after their review's pass verdict: ${name.displayName ?? name.name}. A review's verdict passes when it opens with No finding or Pass.`)
       })
 
       it.each([['No finding at head 2.'], ['Pass at head 2.'], ['Ready: yes at head 2.'], ['Approve at head 2.'], ['Pass — d4e5f6, every check rerun.'],
-        ['Verdict: No finding on d4e5f6.'], ['No finding on d4e5f6.\nRan specs: 300 passed, 0 failed.']])('counts a review whose verdict says %j as a pass', (wording) => {
+        ['Verdict: No finding on d4e5f6.'], ['No finding on d4e5f6.\nRan specs: 300 passed, 0 failed.'],
+        // Review 6 (Kai): the Harness orchestration Reviewer's opening, a pass with minor notes.
+        ['Meets the brief: yes, quality: yes. Ready: yes — revision d4e5f6. Two minor notes below.']])('counts a review whose verdict says %j as a pass', (wording) => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         markReady(`Ready. ${pr}`)
         const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id

@@ -51,11 +51,20 @@ export const reviewHeldBy = (state: SuperTabState, build: Conversation, agentId:
  *  their review's own check only to say a verdict was given, whatever it was, so the words decide, and only the opening ones:
  *  swarm-review opens with "No finding on <rev>" or "Hold — <rev>" (reviews 4 and 5 of #2382: "Not ready", "Request changes"
  *  and "Blocked" read as passes, then a Hold reporting "300 passed" or "CI passed" did). */
-const PASS = /^\s*(verdict\s*:\s*)?(no findings?|pass(es|ed)?|ready\s*:\s*yes|approved?|approves)\b/i
-/** Words in its opening line that take a pass back ("Pass — with fixes", "Ready: yes, but blocked"). */
-const NOT_PASS = /\b(hold|holds|held|not ready|ready\s*:\s*(no|with fixes)|with fixes|request(s|ed)? changes|changes (needed|requested)|block(ed|s|ing|er)?|not pass(ed)?|did not|fail(s|ed)?)\b/i
-/** Whether [verdict] is a pass: it opens with a pass and its opening line takes nothing back; anything else is not yet. */
-export const passVerdict = (verdict: string): boolean => PASS.test(verdict) && !NOT_PASS.test(verdict.trimStart().split('\n')[0]!)
+const PASS = /^\s*(verdict\s*:\s*)?(no findings?|pass|ready\s*:\s*yes|approved?|approves)\b/i
+/** The Harness orchestration Reviewer's opening ("Meets the brief: yes, quality: yes, then Ready: yes — revision <rev>"):
+ *  "Ready: yes" anywhere in the opening line passes too (review 6 of #2382). "Passed"/"passes" never do: they report runs. */
+const READY_YES = /\bready\s*:\s*yes\b/i
+/** Words in its opening line that take a pass back ("Pass — with fixes", "Ready: yes, but blocked", "quality: no"). */
+const NOT_PASS = /\b(hold|holds|held|not ready|ready\s*:\s*(no|with fixes)|with fixes|request(s|ed)? changes|changes (needed|requested)|block(ed|s|ing|er)?|not pass(ed)?|did not|fail(s|ed)?|(brief|quality)\s*:\s*no)\b/i
+/** How a review's verdict reads as a pass, for a refused done to say. */
+export const PASS_HINT = 'A review\'s verdict passes when it opens with No finding or Pass.'
+/** Whether [verdict] is a pass: it opens with a pass, or its opening line says Ready: yes, and that line takes nothing back;
+ *  anything else is not yet. */
+export function passVerdict(verdict: string): boolean {
+  const opening = verdict.trimStart().split('\n')[0]!
+  return (PASS.test(verdict) || READY_YES.test(opening)) && !NOT_PASS.test(opening)
+}
 /** Whether [review] gave a pass verdict: its own check passed, and its verdict opens with a pass. */
 export const reviewPassed = (review: Conversation): boolean => review.checks.some(c => c.passedBy && c.evidence && passVerdict(c.evidence))
 
