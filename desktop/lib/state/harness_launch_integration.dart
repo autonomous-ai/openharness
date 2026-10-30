@@ -99,6 +99,10 @@ class HarnessLaunchIntegration {
   final bool Function()? needsAttachmentReview;
   final Future<void> Function(bool resend)? resolveAttachments;
   bool pending = false;
+
+  /// The model and effort the launch asked for that its machine refused, so
+  /// the agent runs its engine's own model: its join says so in the chat.
+  ({String model, String effort})? launchModelRefused;
   bool completed = false;
   String? preparedPrompt;
   // What a request was sent with. The journal keeps them, and a [pending]

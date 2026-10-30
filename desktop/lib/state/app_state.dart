@@ -97,6 +97,7 @@ import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
+import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
@@ -294,7 +295,20 @@ class AgentCreationAttempt {
     String? creationId,
     this.holdWait,
     this.beforeSubmit,
+    this.launchModel,
   }) : _id = creationId ?? _newCreationId();
+
+  /// A model and effort for this session alone, passed as the engine's own
+  /// flags (cli lib/launchModel.ts): a Product Manager's role default. A
+  /// machine that cannot take them refuses before anything launches, and the
+  /// same request then starts the agent on its engine's own model.
+  final ({String model, String effort})? launchModel;
+  bool _launchModelDropped = false;
+
+  /// The [launchModel] the machine refused, once the agent started on its
+  /// engine's own model instead; null when it launched with it.
+  ({String model, String effort})? get launchModelRefused =>
+      _launchModelDropped ? launchModel : null;
 
   /// How long a request the machine holds is waited for before the create
   /// answers ([AppNotifier._createFollowingHold]). Null answers at once with
@@ -361,6 +375,15 @@ class AgentCreationAttempt {
   /// used until the person chooses it.
   String? _existingFolder;
   String? get existingFolder => _existingFolder;
+
+  /// After the machine refused a launch model before launching anything
+  /// (AppNotifier.createAgent): the request may be sent again without it.
+  void _retryWithoutLaunchModel() {
+    _launchModelDropped = true;
+    _finished = false;
+    _outcome = null;
+    _refusal = null;
+  }
 
   String? _complete(String? error) {
     _finished = true;
@@ -1904,6 +1927,10 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
     },
     transport: (method, path, {body}) async {
+      // The web asks the backend itself, signed as the person in this
+      // browser (docs/specs/2026-10-30-web-swarm-direct.md): no machine of
+      // theirs needs to be online, a Team machine or a slow link in between.
+      if (viewer != null) return _webSuperTabRequest(method, path, body: body);
       final target = sharedTabsTarget;
       if (target == null) {
         if (_teamComputer) {
@@ -1926,6 +1953,60 @@ class AppNotifier extends ChangeNotifier {
       return result['value'];
     },
   );
+
+  late final SuperTabTransport _webSuperTabs = superTabBackendTransport(
+    () => api,
+  );
+
+  /// A backend from before projects refuses `project.create` by its schema:
+  /// the person is told it needs an update, not the schema's words.
+  static SuperTabFailure? _tooOldForProjects(
+    Object? body,
+    String code,
+    String? detail,
+    int status,
+  ) {
+    final command = body is Map ? body['command'] : null;
+    if (command is! Map ||
+        command['type'] != 'project.create' ||
+        code != 'VALIDATION_ERROR' ||
+        detail?.contains('command.type') != true ||
+        detail?.contains('discriminator') != true) {
+      return null;
+    }
+    return SuperTabFailure(
+      'UPDATE_REQUIRED',
+      'The Swarm service needs an update before you can create a project. Your draft is saved.',
+      statusCode: status,
+    );
+  }
+
+  /// One Swarm call from the web, straight to the backend. An answer, or a
+  /// refusal, that lands after the account changed is dropped, as a relayed
+  /// one is ([superTabMachineRequest]).
+  Future<Object?> _webSuperTabRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final revision = _authRevision;
+    const changed = SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    final Object? value;
+    try {
+      value = await _webSuperTabs(method, path, body: body);
+    } on SuperTabFailure catch (failure) {
+      if (!_authWorkCurrent(revision)) throw changed;
+      throw _tooOldForProjects(
+            body,
+            failure.code,
+            failure.message,
+            failure.statusCode,
+          ) ??
+          failure;
+    }
+    if (!_authWorkCurrent(revision)) throw changed;
+    return value;
+  }
 
   Map<String, String> _superTabNames = {};
   bool _superTabsEntered = false;
@@ -1975,19 +2056,9 @@ class AppNotifier extends ChangeNotifier {
       if (!_authWorkCurrent(revision)) {
         return const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
       }
-      final body = payload['body'];
-      final command = body is Map ? body['command'] : null;
-      if (payload['action'] == 'backend' &&
-          command is Map &&
-          command['type'] == 'project.create' &&
-          code == 'VALIDATION_ERROR' &&
-          detail?.contains('command.type') == true &&
-          detail?.contains('discriminator') == true) {
-        return SuperTabFailure(
-          'UPDATE_REQUIRED',
-          'The Swarm service needs an update before you can create a project. Your draft is saved.',
-          statusCode: status,
-        );
+      if (payload['action'] == 'backend') {
+        final old = _tooOldForProjects(payload['body'], code, detail, status);
+        if (old != null) return old;
       }
       return SuperTabFailure(
         code,
@@ -1996,6 +2067,24 @@ class AppNotifier extends ChangeNotifier {
       );
     }
 
+    // On the web only what acts on a machine comes here (adding it, sharing
+    // its terminal, waking it): one that cannot do it says why, never the
+    // catch-all (docs/specs/2026-10-30-web-swarm-direct.md).
+    final machine = viewer == null ? null : machineStates[machineId];
+    final name = machine?.machine.displayName;
+    if (machine != null && machine.isOffline) {
+      throw SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        '$name is offline. Open Harness on it, then try again.',
+      );
+    }
+    if (machine != null && machine.machine.isTeamAccount) {
+      throw SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        '$name runs Swarm agents for a Harness Team account, so it cannot do '
+            'this for you. Use another of your machines.',
+      );
+    }
     final Map<String, dynamic> result;
     try {
       result = await _conn(machineId).request(
@@ -2008,6 +2097,16 @@ class AppNotifier extends ChangeNotifier {
         failure.code,
         failure.detail,
         (failure.payload['status'] as num?)?.toInt() ?? 0,
+      );
+    } on WsRequestTimeout {
+      if (machine == null) rethrow;
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+      throw SuperTabFailure(
+        'MACHINE_SLOW',
+        '$name is taking too long to answer. Its connection may be slow. '
+            'Try again.',
       );
     }
     if (!_authWorkCurrent(revision)) {
@@ -9359,11 +9458,15 @@ class AppNotifier extends ChangeNotifier {
         );
       }
     }
-    // Swarm reads go through a connected machine: the moment one can serve
-    // them again, the Swarm on screen reads (`SuperTabReading.readsOnConnect`).
-    final served = sharedTabsTarget != null;
-    if (served && !_superTabsServed) superTabs.serverAvailable();
-    _superTabsServed = served;
+    // Natively, Swarm reads go through this computer's daemon: the moment it
+    // can serve them again, the Swarm on screen reads
+    // (`SuperTabReading.readsOnConnect`). The web reads the backend itself,
+    // so a machine connecting there is no reason to read.
+    if (viewer == null) {
+      final served = sharedTabsTarget != null;
+      if (served && !_superTabsServed) superTabs.serverAvailable();
+      _superTabsServed = served;
+    }
     notifyListeners();
   }
 
@@ -14822,7 +14925,9 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
-  }) {
+  }) async {
+    final creation = attempt ?? AgentCreationAttempt();
+    final launch = creation._launchModelDropped ? null : creation.launchModel;
     final choices = <String, dynamic>{
       'engine': engine,
       if (projectFolder == null && folder != null) 'cwd': folder,
@@ -14842,6 +14947,8 @@ class AppNotifier extends ChangeNotifier {
       },
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
+      'model': ?launch?.model,
+      'effort': ?launch?.effort,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -14856,7 +14963,6 @@ class AppNotifier extends ChangeNotifier {
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
     };
-    final creation = attempt ?? AgentCreationAttempt();
     Future<String?> ask() => _create(
       machineId,
       choices,
@@ -14867,8 +14973,26 @@ class AppNotifier extends ChangeNotifier {
       attempt: creation,
       placement: placement,
     );
+    final answer = await _createFollowingHold(creation, creation.holdWait, ask);
+    if (launch == null ||
+        !_launchModelRefusals.contains(creation._refusal) ||
+        _disposed) {
+      return answer;
+    }
+    // Refused before any receipt: the same request, without them, so the
+    // agent starts on its engine's own model rather than not at all.
+    choices
+      ..remove('model')
+      ..remove('effort');
+    creation._retryWithoutLaunchModel();
     return _createFollowingHold(creation, creation.holdWait, ask);
   }
+
+  /// A machine's refusals of a launch model, made before anything launched.
+  static const _launchModelRefusals = {
+    'LAUNCH_MODEL_UNSUPPORTED',
+    'INVALID_LAUNCH_MODEL',
+  };
 
   /// How often a harness the machine holds or is starting is asked after
   /// ([_createFollowingHold]): the pace `harness new` asks at.
@@ -15440,6 +15564,7 @@ class AppNotifier extends ChangeNotifier {
       // Refusals that happen before a launch are safe to correct. INTERNAL,
       // spawn timeouts and connection failures cannot prove nothing started.
       const refusedBeforeLaunch = {
+        ..._launchModelRefusals,
         'INVALID_PROJECT_SOURCE',
         'INVALID_REPOSITORY',
         'PROJECT_EXISTS',

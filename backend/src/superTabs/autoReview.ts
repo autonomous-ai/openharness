@@ -53,17 +53,22 @@ const free = (state: SuperTabState, agent: Agent) =>
 
 /**
  * The Reviewer for [group]'s review: the one that reviewed its earlier head while it is still free (a delta review), else
- * a free Reviewer of the project, one on another engine than the Engineer's first. Never one that is stopping, waiting to
+ * a free Reviewer of the project: one at least as strong as the Engineer ([strength], up to the top tier) first, as the CLI's
+ * route holds a Reviewer to the Builder's strength (review of #2274), and among those one on another engine than the
+ * Engineer's first; else the weaker ones in that order. Never one that is stopping, waiting to
  * resume a lost task, down (its session gone or its machine silent), or (`mayWork`) not allowed to take this work: on its
  * machine, or by the owner's rules (#610 review).
  */
 function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: Conversation | undefined,
-  mayWork: (agent: Agent) => boolean, now: number): Agent | null {
+  mayWork: (agent: Agent) => boolean, strength: (agent: Agent) => number, now: number): Agent | null {
   const projectId = groupProject(state, group).id
   const candidates = state.agents.filter(a => agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
     a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && free(state, a) && mayWork(a))
   const previous = candidates.find(a => a.id === earlier?.assignment?.agentId)
-  return previous ?? candidates.find(a => a.configuration.engine !== engineer?.configuration.engine) ?? candidates[0] ?? null
+  const floor = engineer ? Math.min(3, strength(engineer)) : 0
+  const strong = candidates.filter(a => strength(a) >= floor), weaker = candidates.filter(a => strength(a) < floor)
+  const otherEngine = (list: Agent[]) => list.find(a => a.configuration.engine !== engineer?.configuration.engine) ?? list[0]
+  return previous ?? otherEngine(strong) ?? otherEngine(weaker) ?? null
 }
 
 function briefOf(group: Conversation, handoff: string, pullRequest: string, earlier: Conversation | undefined): string {
@@ -92,14 +97,15 @@ export interface OpenedReview { review: Conversation; reviewer: Agent | null; me
  * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
-  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; sameEngine?: (agent: Agent) => string | null }): OpenedReview | null {
+  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number;
+    sameEngine?: (agent: Agent) => string | null }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
   // Only a review that gave its verdict reviewed the earlier head: one cancelled before it reviewed nothing (#610 review).
   const earlier = state.conversations.filter(c => c.reviewOf === group.id && c.assignment && verdictGiven(c)).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
   const engineer = state.agents.find(a => a.id === group.assignment?.agentId)
-  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.now)
+  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.strength, context.now)
   const id = stableId(context.operationId, 'auto-review')
   const number = nextConversationNumber(state)
   state.groupCounter = number
