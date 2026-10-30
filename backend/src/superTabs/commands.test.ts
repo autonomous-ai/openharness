@@ -1403,6 +1403,10 @@ describe('Reviewer role', () => {
     // An older CLI's same-engine note is not kept on the decision.
     codexBox()
     expect(route({}, { sameEngine: 'same-engine review: no Reviewer of another engine has quota' }).routeDecisions[0]).not.toHaveProperty('record.sameEngine')
+    // Nor at the start of its why (review of #2313).
+    codexBox()
+    expect(route({}, { why: 'same-engine review: no Reviewer of another engine has quota. First by the owner\'s rules and the policy order.' }).routeDecisions[0])
+      .toMatchObject({ record: { why: 'First by the owner\'s rules and the policy order.' } })
     codexBox()
     expect(() => route({ model: 'default', effort: 'default' })).toThrow('Claude default is 1.')
     expect(() => route({ model: 'default', effort: 'default', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' })).toThrow('never runs on a model served on the Swarm\'s grid')
@@ -1411,6 +1415,16 @@ describe('Reviewer role', () => {
     const assigned = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
     expect(assigned.result.warnings).toBeUndefined()
     expect(assigned.messages.find(m => m.recipients.includes(reviewer))!.text).toMatch(/^Review it\./)
+  })
+
+  it('lets the Builder join its own review group: joining is not reviewing (review of #2313)', () => {
+    const { f, leadActor, group, builder } = reviewed()
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const added = f.run({ type: 'conversation.agent', conversationId: review, agentId: builder, present: true, lead: false }, leadActor)
+    expect(added.result.warnings).toBeUndefined()
+    expect(f.state.conversations.find(c => c.id === review)!.agentIds).toContain(builder)
   })
 
   it('never lets a small or unnamed model review: a review needs a model the policy names at quality 2 or more', () => {
@@ -1822,6 +1836,26 @@ describe('Reviewer role', () => {
       Object.assign(f.state.agents.find(a => a.id === fresh)!, patch)
       markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment).toBeNull()
+    })
+
+    // Review of #2313: ties at the top tier are common (Codex default and Opus are both 3), and right after the deploy most
+    // Reviewers are Codex; one out of quota came first and took the review.
+    it('passes over a free Reviewer whose machine reads its engine out of quota', () => {
+      const { f, fresh, reviewer, markReady, reviews } = ready('claude')
+      f.state.agents.find(a => a.id === reviewer)!.configuration = { ...config, engine: 'codex', model: 'gpt-6.1-sol' }
+      teamMachine(f, 'owner')
+      f.state.machines![0]!.engines = ['claude', 'codex']
+      f.state.machines![0]!.observation!.quotas = [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }]
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('passes over a Reviewer a usage limit holds, on a machine that reports nothing', () => {
+      const { f, fresh, reviewer, markReady, reviews } = ready('claude')
+      Object.assign(f.state.agents.find(a => a.id === reviewer)!, { configuration: { ...config, engine: 'codex', model: 'gpt-6.1-sol' },
+        limitedUntil: new Date(Date.now() + 86_400_000).toISOString() })
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
     })
 
     it('gives a Claude build\'s review to the strongest free Claude Reviewer, before a weaker one that comes first', () => {

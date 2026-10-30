@@ -70,6 +70,8 @@ const maxAgents = z.number().int().min(1).max(1024)
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
 /** A role's default engine, model and effort (projects.ts RoleDefaults). */
 /** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
+/** How a CLI from before 2026-10-30 starts the why of a review on its Builder's own engine (cli superTabs/route.ts, removed). */
+const OLD_SAME_ENGINE = /^same-engine review: no Reviewer of another engine has quota\. /
 const LAUNCH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\-[\]]{0,63}$/
 const LAUNCH_EFFORT = /^[a-z]{1,16}$/
 const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
@@ -705,19 +707,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const mayRun = (conversationId: string, requirement: boolean) => (target: RunTarget, contributorId: string) =>
     !broken(groupRules(conversationId), target, machineName, macOf) && (!requirement || !unmet(conversation(state, conversationId).task?.requires, target, macOf))
     && !teamWorkCheck(state, target.machineId, contributorId, groupProject(state, conversation(state, conversationId)), context.now, context.teamMachines, context.otherWorkspaceMachines)
-  /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). */
-  const refusal = (target: RunTarget, conversationId: string, builds = true): { code: string; why: string } | null => {
+  /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). [reviews]: it would review
+   *  the group's work, so the review rule holds (rules.ts reviewRefusal); merely joining a review group is not reviewing. */
+  const refusal = (target: RunTarget, conversationId: string, builds = true, reviews = true): { code: string; why: string } | null => {
     const rule = broken(groupRules(conversationId), target, machineName, macOf)
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
     if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
-    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy)
+    const review = reviews ? reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy) : null
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
     return stepped ? { code: 'STEPPED_UP', why: stepped } : null
   }
-  const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false, builds = true) => {
-    const refused = refusal(target, conversationId, builds)
+  const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false, builds = true, reviews = true) => {
+    const refused = refusal(target, conversationId, builds, reviews)
     if (!refused) return
     const { code, why } = refused
     if (actor.kind === 'agent' && !personChose) fail(code, `${why} Route again.`, 403)
@@ -1916,7 +1919,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         // A Reviewer added to a group is handed its review, as an assignment hands a Builder its task.
         if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-        ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`, false, false)
+        // Only a Reviewer added here is handed the review; anyone else joining is not reviewing (review of #2313).
+        ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`, false, false, reviewer)
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Adding a Reviewer to a group reuses it, as assigning work reuses a Builder.
         if (reviewer) delete member.workDecision
@@ -2087,10 +2091,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
-      // The step this attempt is comes from the group alone (stepUp.ts). An older CLI's same-engine note is not kept: any
-      // engine reviews now (rules.ts reviewRefusal).
+      // The step this attempt is comes from the group alone (stepUp.ts). An older CLI's same-engine note, as a field or at the
+      // start of its why, is not kept: any engine reviews now (rules.ts reviewRefusal).
       const step = conversation(state, command.conversationId).stepUp
-      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
+      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...sent } = decision
+      const made = { ...sent, why: sent.why.replace(OLD_SAME_ENGINE, '') || sent.why }
       const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
         record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, jobKind } })
