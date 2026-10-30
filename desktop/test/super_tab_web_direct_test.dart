@@ -3,6 +3,8 @@
 // person's at all, the Swarm list, a project chat and the Buddy chat load and
 // send; with one connected, its socket still tells the browser what changed,
 // and the read it starts goes direct too. Native Desktop is unchanged.
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
@@ -33,6 +35,16 @@ class _Backend extends ApiClient {
   final ConversationServer server;
   final calls = <String>[];
 
+  /// The person lost the Swarm: every read is refused, as the backend
+  /// refuses one they may no longer read.
+  bool forbidden = false;
+
+  /// No answer at all: the browser is offline or the backend unreachable.
+  bool down = false;
+
+  /// While set, every call waits for it: a slow answer.
+  Completer<void>? hold;
+
   @override
   Future<Response<dynamic>> superTabCall(
     String method,
@@ -41,6 +53,23 @@ class _Backend extends ApiClient {
   }) async {
     calls.add('$method $path');
     final options = RequestOptions(path: path, method: method);
+    await hold?.future;
+    if (down) {
+      throw DioException(
+        requestOptions: options,
+        type: DioExceptionType.connectionError,
+      );
+    }
+    if (forbidden) {
+      return Response(
+        requestOptions: options,
+        statusCode: 403,
+        data: {
+          'success': false,
+          'error': {'code': 'FORBIDDEN', 'message': 'Forbidden'},
+        },
+      );
+    }
     try {
       final data = await server.request(method, path, body: body);
       return Response(
@@ -267,5 +296,81 @@ void main() {
         'Try again.',
       );
     });
+  });
+
+  group('privacy and recovery through the direct path', () {
+    test('access lost while a chat is open clears what it showed', () async {
+      server.append('Private plan');
+      final c = await app.superTabs.open(_tab);
+      await c.refresh();
+      expect(await c.select('lead'), isTrue);
+      await c.loadMessages('lead');
+      expect(c.messages('lead').map((m) => m.text), contains('Private plan'));
+
+      backend.forbidden = true;
+      await c.refresh();
+      expect(c.accessRevoked, isTrue);
+      expect(c.snapshot, isNull);
+      expect(c.messages('lead'), isEmpty);
+    });
+
+    test('an answer that lands after the account changed is dropped', () async {
+      final c = await app.superTabs.open(_tab);
+      await c.refresh();
+      backend.hold = Completer<void>();
+      final late = app.superTabs.request('GET', '/api/super-tabs/$_tab/parts');
+      app.currentUser = const CurrentUserProfile(
+        id: 'someone-else',
+        email: 'else@example.com',
+      );
+      backend.hold!.complete();
+      await expectLater(
+        late,
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (f) => f.code,
+            'code',
+            'ACCOUNT_CHANGED',
+          ),
+        ),
+      );
+      expect(app.superTabs.peek(_tab), isNull);
+    });
+
+    test('signed out, nothing is asked of the backend', () async {
+      app.currentUser = null;
+      final before = backend.calls.length;
+      await expectLater(
+        app.superTabs.request('GET', '/api/super-tabs/list'),
+        throwsA(
+          isA<SuperTabFailure>().having((f) => f.code, 'code', 'SIGNED_OUT'),
+        ),
+      );
+      expect(backend.calls, hasLength(before));
+    });
+
+    test(
+      'a first load with no connection says so, then recovers and sends',
+      () async {
+        backend.down = true;
+        final c = await app.superTabs.open(_tab);
+        await c.refresh();
+        expect(c.loading, isFalse);
+        expect(c.snapshot, isNull);
+        expect(c.error, 'Could not reach Harness. Check your connection.');
+
+        backend.down = false;
+        await c.refresh();
+        expect(c.error, isNull);
+        expect(c.snapshot, isNotNull);
+        expect(await c.select('lead'), isTrue);
+        c.setDraft('lead', 'Back online');
+        expect(await c.send(), isNotNull);
+        expect(
+          server.messages.where((m) => m['text'] == 'Back online'),
+          hasLength(1),
+        );
+      },
+    );
   });
 }
