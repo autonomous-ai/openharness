@@ -302,6 +302,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.reactions,
     this.thread,
     this.below,
+    this.receipt,
     this.card,
     this.onLongPress,
   });
@@ -356,6 +357,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// Under its reactions: what the person may do with it besides Reply — the
   /// PM's private line answered in the project chat.
   final Widget? below;
+
+  /// Under all that: where the delivery of the person's newest message stands
+  /// (swarm_message_receipt.dart); null for every other message.
+  final Widget? receipt;
 
   /// Opens its long-press sheet: reactions, Copy link to message.
   final VoidCallback? onLongPress;
@@ -445,6 +450,7 @@ class SwarmMessageRow extends StatelessWidget {
         ?reactions,
         ?thread,
         ?below,
+        ?receipt,
         if (actions)
           Padding(
             padding: const EdgeInsets.only(top: AppSpace.s),

@@ -20,8 +20,8 @@ import 'swarm_fixture.dart';
 /// Review screenshots of Swarm's tab bar, direction C, as Tony's prototype
 /// C1 draws it (2026-10-30), with the tabs main has screens for: Swarm Home
 /// as C1 draws it over the bar — back after two hours away — with what
-/// waits on the person counted on Activity, its switcher and Jump to, each
-/// touch area outlined; Activity's Needs you; and You as C4 draws it, on a
+/// waits on the person counted on Activity and its switcher, each touch
+/// area outlined; Activity's Needs you; and You as C4 draws it, on a
 /// 390-point phone in both phone themes, from made-up data only, to the
 /// folder `SWARM_TABS_SHOTS` names.
 final shots = Platform.environment['SWARM_TABS_SHOTS'];
@@ -303,7 +303,6 @@ void main() {
         for (final key in [
           'swarm-title-button',
           'swarm-new-message',
-          'swarm-jump',
           'swarm-away',
           'swarm-project-$tab-p-oh',
         ])
@@ -324,16 +323,6 @@ void main() {
       Navigator.of(
         tester.element(find.byKey(const ValueKey('swarm-switch-join'))),
       ).pop();
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('swarm-jump')));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const ValueKey('swarm-jump-query')),
-        'har',
-      );
-      await tester.pump();
-      await capture('jump');
-      await tester.tap(find.byKey(const ValueKey('swarm-jump-cancel')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('swarm-tab-activity')));
       await tester.pumpAndSettle();

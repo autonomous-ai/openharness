@@ -7,7 +7,7 @@
  * A thread is unread as Desktop marks it (desktop super_tabs/controller.dart threadUnread): the person started it, replied in
  * it or was tagged in it; its newest reply is someone else's; and it has replies by others after both the person's read mark
  * on the chat and their own newest reply there. A chat they never marked read counts as read, as Desktop opens it at its end.
- * Desktop also keeps a seen mark per thread on the device; the server has none yet, so the chat's mark stands in for it.
+ * A thread the person read on any device (their thread mark, readMarks.ts) counts only replies past that mark too.
  *
  * Cost: every message read is bounded by an index range and a limit: the newest UNREAD_SCAN rows past the mark in at most
  * THREAD_CHATS chats; the roots of the newest CANDIDATE_THREADS threads; MEMBER_SCAN rows before the mark of a thread whose
@@ -23,7 +23,7 @@ import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type C
 import { readConversation } from '../projects.js'
 import { deliveredCopies, type ThreadReply } from '../pageReads.js'
 import { threadSummaries } from '../threads.js'
-import { readMarks } from '../readMarks.js'
+import { readMarks, readThreadMarks } from '../readMarks.js'
 import { readBy } from '../parts/indexed.js'
 import { ms } from '../parts/light.js'
 import type { SuperTabStore } from '../store.js'
@@ -163,8 +163,8 @@ interface Candidate { conversationId: string; root: string; mark: number; replie
 
 /** The threads of `chats` the person has unread replies in (see the file's comment), from each chat's newest UNREAD_SCAN rows
  *  past their mark. */
-async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[], personId: string, marks: Map<string, number>):
-  Promise<{ threads: InboxThread[]; more: boolean }> {
+async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[], personId: string, marks: Map<string, number>,
+  threadMarks: Map<string, Map<string, number>>): Promise<{ threads: InboxThread[]; more: boolean }> {
   if (!chats.length) return { threads: [], more: false }
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
   const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
@@ -180,8 +180,10 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
     const newest = rows[0]!
     // The person answered last: nothing in it waits for them.
     if (own(newest.author)) continue
-    const answered = rows.find(m => own(m.author))?.sequence ?? 0
-    const unread = rows.filter(m => !own(m.author) && m.sequence > answered).length
+    // Read through the later of their own newest reply and their mark of this thread from any device.
+    const seen = Math.max(rows.find(m => own(m.author))?.sequence ?? 0, threadMarks.get(newest.conversationId)?.get(newest.thread!) ?? 0)
+    const unread = rows.filter(m => !own(m.author) && m.sequence > seen).length
+    if (!unread) continue
     candidates.push({ conversationId: newest.conversationId, root: newest.thread!, mark: marks.get(newest.conversationId)!, replies: rows, unread,
       member: rows.some(inIt), at: newest.createdAt.getTime(), id: newest.id })
   }
@@ -233,7 +235,9 @@ export async function readInbox(store: SuperTabStore, user: AuthUser, tabId: str
   // A chat never marked read counts as read: its threads wait for the person's first visit.
   const unread = chats.filter(g => { const mark = marks.get(g.id) ?? 0; return mark > 0 && g.lastMessageSequence > mark })
   const shown = chats.slice(0, LATEST_CHATS)
-  const [latest, threaded] = await Promise.all([latestIn(db, tabId, shown), threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), user.sub, marks)])
+  // The person's thread marks: one indexed read (readMarks.ts), beside the latest messages'.
+  const [latest, threaded] = await Promise.all([latestIn(db, tabId, shown),
+    readThreadMarks(db, tabId, user.sub).then(threadMarks => threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), user.sub, marks, threadMarks))])
   const threads = threaded.threads.sort((a, b) => newestFirst({ at: Date.parse(a.lastReplyAt), id: a.rootId }, { at: Date.parse(b.lastReplyAt), id: b.rootId }))
   const more = chats.length > LATEST_CHATS || latest.more || unread.length > THREAD_CHATS || threaded.more || threads.length > MAX_THREADS
   return { threads: threads.slice(0, MAX_THREADS), more,

@@ -14,7 +14,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart'
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
-import 'package:harness_mobile/swarm/swarm_jump_page.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_new_message_sheet.dart';
@@ -353,9 +352,9 @@ void main() {
 
   group("Home's top", () {
     testWidgets('as C1 draws it: the Swarm shown is the title, a button with '
-        'its tile, and nothing at its end; Jump to under it, then the '
-        "projects, New message's + floating over them; no menu, no Needs "
-        'you, no Buddies', (tester) async {
+        'its tile, and nothing at its end; the projects under it, New '
+        "message's + floating over them; no Jump to, no menu, no Needs you, "
+        'no Buddies', (tester) async {
       await pump(tester, backend(buddy: true));
 
       expect(
@@ -372,11 +371,9 @@ void main() {
       );
       expect(key('swarm-menu'), findsNothing);
       expect(key('tty-back'), findsNothing, reason: 'Home is the root');
-      for (final k in ['swarm-title-button', 'swarm-jump']) {
-        final size = tester.getSize(key(k));
-        expect(size.height, greaterThanOrEqualTo(44), reason: k);
-        expect(size.width, greaterThanOrEqualTo(44), reason: k);
-      }
+      final size = tester.getSize(key('swarm-title-button'));
+      expect(size.height, greaterThanOrEqualTo(44));
+      expect(size.width, greaterThanOrEqualTo(44));
       expect(
         key('swarm-compose'),
         findsNothing,
@@ -388,13 +385,9 @@ void main() {
       );
       expect(
         y(tester, 'swarm-title-button'),
-        lessThan(y(tester, 'swarm-jump')),
-      );
-      expect(
-        y(tester, 'swarm-jump'),
         lessThan(y(tester, 'swarm-project-$tab-$project')),
       );
-      expect(inside('swarm-jump', find.text('Jump to…')), findsOneWidget);
+      expect(find.text('Jump to…'), findsNothing);
       expect(find.text('Needs you'), findsNothing, reason: "Activity's now");
       expect(find.text('Ship it behind a flag?'), findsNothing);
       expect(key('swarm-away'), findsNothing, reason: 'the person never left');
@@ -444,56 +437,6 @@ void main() {
       expect(find.text('Join or create a Swarm'), findsNothing);
     });
 
-    testWidgets('Jump to lists every project by name; typing narrows it; a '
-        'pick opens the project in its place, and back is Home', (
-      tester,
-    ) async {
-      await pump(tester, backend());
-      await tester.tap(key('swarm-jump'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SwarmJumpPage), findsOneWidget);
-      expect(find.text('Jump to…'), findsOneWidget, reason: 'its field');
-      expect(
-        y(tester, 'swarm-jump-$tab-$project'),
-        lessThan(y(tester, 'swarm-jump-$tab-$web')),
-        reason: 'Mobile, then Web',
-      );
-      expect(inside('swarm-jump-$tab-$web', find.text('Web')), findsOneWidget);
-      expect(
-        inside('swarm-jump-$tab-$web', find.text('Phone Swarm')),
-        findsNothing,
-        reason: 'one Swarm: its name is not on each row',
-      );
-
-      await tester.enterText(key('swarm-jump-query'), 'WE');
-      await tester.pump();
-      expect(key('swarm-jump-$tab-$project'), findsNothing);
-      expect(key('swarm-jump-$tab-$web'), findsOneWidget);
-
-      await tester.enterText(key('swarm-jump-query'), 'nothing like it');
-      await tester.pump();
-      expect(
-        tester.widget<Text>(key('swarm-jump-none')).data,
-        'No project matches.',
-      );
-
-      await tester.enterText(key('swarm-jump-query'), 'web');
-      await tester.pump();
-      await tester.tap(key('swarm-jump-$tab-$web'));
-      await tester.pumpAndSettle();
-
-      final page = tester.widget<SwarmProjectPage>(
-        find.byType(SwarmProjectPage),
-      );
-      expect((page.swarmId, page.projectId), (tab, web));
-      expect(find.byType(SwarmJumpPage), findsNothing, reason: 'in its place');
-      await tester.tap(key('tty-back'));
-      await tester.pumpAndSettle();
-      expect(find.byType(SwarmProjectPage), findsNothing);
-      expect(key('swarm-title-button'), findsOneWidget);
-    });
-
     testWidgets("+ asks where the new message goes, over the same "
         "projects' chats; ✕ goes back to Home", (tester) async {
       await pump(tester, backend());
@@ -501,7 +444,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmNewMessageSheet), findsOneWidget);
-      expect(find.byType(SwarmJumpPage), findsNothing);
       expect(key('swarm-new-message-$tab-$leadChat'), findsOneWidget);
       expect(key('swarm-new-message-$tab-$webLead'), findsOneWidget);
       expect(
@@ -515,22 +457,100 @@ void main() {
       expect(find.byType(SwarmNewMessageSheet), findsNothing);
       expect(key('swarm-title-button'), findsOneWidget);
     });
+  });
 
-    testWidgets('Jump to says a Swarm could not be read, never that there is '
-        'no project, and leaves no skeleton', (tester) async {
-      final fake = backend()
-        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
-            throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      await pump(tester, fake);
-      await tester.tap(key('swarm-jump'));
+  group('a list that could not be read', () {
+    const unread = 'Could not load your Swarms. Try again.';
+    Never broken(_) => throw const FormatException('Bad answer');
+
+    testWidgets('before any read, Home stays on its skeleton with no words, '
+        'and the rows come once the list answers', (tester) async {
+      final fake = backend();
+      final listed = fake.routes['/api/super-tabs/list']!;
+      fake.routes['/api/super-tabs/list'] = broken;
+      final host = await pump(tester, fake, settle: false);
+
+      expect(host.session!.inbox.error, unread);
+      expect(key('swarm-projects-loading'), findsOneWidget);
+      expect(find.text('Projects'), findsOneWidget);
+      expect(find.text(unread), findsNothing);
+
+      fake.routes['/api/super-tabs/list'] = listed;
+      await host.session!.inbox.refresh();
       await tester.pumpAndSettle();
 
-      expect(key('swarm-jump-loading'), findsNothing);
-      expect(key('swarm-jump-none'), findsNothing);
-      expect(
-        tester.widget<Text>(key('swarm-jump-unread')).data,
-        'Some projects could not be loaded. Pull down on Home to try again.',
-      );
+      expect(key('swarm-projects-loading'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    testWidgets("a server's own refusal is no line either", (tester) async {
+      const moving = 'This Swarm is being moved. Try again in a moment.';
+      final fake = backend()
+        ..routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+          'SWARM_MIGRATING',
+          moving,
+          statusCode: 503,
+        );
+      await pump(tester, fake, settle: false);
+
+      expect(key('swarm-projects-loading'), findsOneWidget);
+      expect(find.text(moving), findsNothing);
+    });
+
+    testWidgets('once read, the rows stay with no line over them', (
+      tester,
+    ) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+
+      fake.routes['/api/super-tabs/list'] = broken;
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      expect(host.session!.inbox.error, unread);
+      expect(find.text(unread), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    testWidgets('a server with no list at all says so, quietly, as no read '
+        'will bring its rows', (tester) async {
+      final fake = backend()
+        ..routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+          'NOT_FOUND',
+          'This Super Tab is unavailable.',
+          statusCode: 404,
+        );
+      await pump(tester, fake);
+
+      expect(key('swarm-projects-loading'), findsNothing);
+      final line = tester.widget<Text>(key('swarm-too-old'));
+      expect(line.data, swarmServerTooOld);
+      expect(line.style?.color, isNot(AppColors.danger));
+    });
+  });
+
+  group("Home's first caption", () {
+    bool first(WidgetTester tester, String text) => tester
+        .widget<SwarmCaption>(
+          find.byWidgetPredicate((w) => w is SwarmCaption && w.text == text),
+        )
+        .first;
+
+    testWidgets('with nothing over it, Projects has the first room', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+
+      expect(first(tester, 'Projects'), isTrue);
+    });
+
+    testWidgets('over Pinned, Projects has the usual room', (tester) async {
+      final host = await pump(tester, backend());
+      host.session!.home.pin(tab, project, true);
+      await tester.pumpAndSettle();
+
+      expect(first(tester, 'Pinned'), isTrue);
+      expect(first(tester, 'Projects'), isFalse);
     });
   });
 
@@ -590,9 +610,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        y(tester, 'swarm-jump'),
+        y(tester, 'swarm-title-button'),
         lessThan(y(tester, 'swarm-away')),
-        reason: 'under Jump to',
       );
       expect(
         y(tester, 'swarm-away'),
@@ -1170,7 +1189,6 @@ void main() {
       expect(find.byType(SwarmPage), findsOneWidget);
       expect(key('swarm-title-button'), findsNothing);
       expect(key('swarm-new-message'), findsNothing);
-      expect(key('swarm-jump'), findsOneWidget, reason: 'Jump to stays');
 
       await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
@@ -1188,16 +1206,6 @@ void main() {
         find.byType(SwarmProjectPage),
       );
       expect((page.swarmId, page.projectId), (tab, web));
-      expectHomeCProject('Web');
-    });
-
-    testWidgets("Jump to's pick opens Home C's project screen", (tester) async {
-      await pump(tester, backend());
-      await tester.tap(key('swarm-jump'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-jump-$tab-$web'));
-      await tester.pumpAndSettle();
-
       expectHomeCProject('Web');
     });
 
@@ -1510,48 +1518,6 @@ void main() {
 
       expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
       expect(find.text('Phone Swarm'), findsNothing);
-    });
-
-    testWidgets("Jump to names each project's Swarm; a Swarm whose read is "
-        'taken away while it is open leaves it at once, and a tap on its '
-        'row as it goes opens nothing', (tester) async {
-      final fake = two();
-      final host = await pump(tester, fake);
-      await tester.tap(key('swarm-jump'));
-      await tester.pumpAndSettle();
-      expect(
-        inside('swarm-jump-$second-$project', find.text('Work Swarm')),
-        findsOneWidget,
-      );
-      expect(
-        inside('swarm-jump-$tab-$project', find.text('Phone Swarm')),
-        findsOneWidget,
-        reason: 'the same project id in two Swarms is two rows',
-      );
-      final stale = tester
-          .widget<SwarmRow>(key('swarm-jump-$second-$project'))
-          .onTap!;
-
-      Never refused(_) => throw const SuperTabFailure(
-        'FORBIDDEN',
-        'You no longer have access to this Swarm.',
-        statusCode: 403,
-      );
-      fake.routes['/api/super-tabs/$second/changes'] = refused;
-      fake.routes['/api/super-tabs/$second/parts'] = refused;
-      await host.session!.inbox.reader(second)!.refresh();
-      expect(host.session!.inbox.reader(second)!.accessRevoked, isTrue);
-      await tester.pump();
-
-      expect(key('swarm-jump-$second-$project'), findsNothing);
-      expect(find.textContaining('Backend'), findsNothing);
-      expect(find.text('Work Swarm'), findsNothing);
-      expect(key('swarm-jump-unread'), findsNothing, reason: 'nothing of it');
-
-      stale();
-      await tester.pumpAndSettle();
-      expect(find.byType(SwarmProjectPage), findsNothing);
-      expect(find.byType(SwarmJumpPage), findsOneWidget);
     });
 
     testWidgets('a Swarm the account loses while Home is open: its rows '
@@ -2588,7 +2554,6 @@ void main() {
         reason: 'the switcher stays',
       );
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
-      expect(key('swarm-jump'), findsNothing);
       expect(find.text('Projects'), findsNothing);
     });
 
@@ -2601,7 +2566,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmStartView), findsNothing);
-      expect(key('swarm-jump'), findsOneWidget);
       expect(find.text('Projects'), findsOneWidget);
     });
 
@@ -2611,7 +2575,6 @@ void main() {
       await pump(tester, backend(), computers: _Computers(const [mac]));
 
       expect(find.byType(SwarmStartView), findsNothing);
-      expect(key('swarm-jump'), findsOneWidget);
       expect(find.text('Projects'), findsOneWidget);
     });
   });
