@@ -53,11 +53,12 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
-import { costRows, summarizeCosts } from './costs/read.js'
-import { recordEvidence } from './evidence/store.js'
+import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
+import { proposalQuestion, reflectionAsked, reflectionMessageId, routingReflection } from './costs/reflection.js'
+import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, MAX_OPEN_DECISIONS, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -2614,6 +2615,53 @@ export class SuperTabStore {
       await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
     }
     return { held: true }
+  }
+
+  /**
+   * Posts a project's nightly routing reflection for local date `on` (lib/routingReflection.ts) in its project chat under its
+   * Lead's name, and asks each proposal of the project owner as a decision from the Lead; nothing changes routing by itself.
+   * Counts only the attempts and failed starts of the project's own task groups, never a private or Buddy chat, the Leads
+   * conversation or another project. One transaction: the report's id is the project's and date's, so a second pass or worker
+   * writes nothing ('already'). 'empty': no attempt and no failed start in the last day. 'skipped': no such Swarm or project,
+   * a paused Swarm, or a project with no Lead to post it.
+   */
+  async postReflection(tabId: string, projectId: string, on: string): Promise<'posted' | 'already' | 'empty' | 'skipped'> {
+    return transaction(this.db, async tx => {
+      const id = reflectionMessageId(tabId, projectId, on)
+      if (await tx.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row) return 'skipped'
+      const now = this.now(), since = now - 7 * 24 * 60 * 60_000
+      const { rows, truncated } = await costRows(tx, tabId, since)
+      const failed = await failedStarts(tx, tabId, since)
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [...new Set([...rows, ...failed].map(r => r.conversationId))] })
+      const state = structuredClone(loaded.state)
+      const project = projectsOf(state).find(p => p.id === projectId)
+      const chat = project && state.conversations.find(c => c.id === project.leadConversationId)
+      const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
+      if (state.paused || !project || !chat || !lead) return 'skipped'
+      const ids = new Set(state.conversations.filter(g => !g.audience && !isLeads(g) && g.id !== chat.id && groupProject(state, g).id === projectId).map(g => g.id))
+      const report = routingReflection({ now, rows: rows.filter(r => ids.has(r.conversationId)), groups: state.conversations.filter(g => ids.has(g.id)),
+        failedStarts: failed.filter(f => ids.has(f.conversationId)), evidence: (await readEvidence(tx, tabId, since, [projectId])).models, truncated })
+      if (!report) return 'empty'
+      // Each proposal once while it waits: one still open from an earlier night is not asked again, and none past the cap.
+      const owner = state.people.find(p => p.id === project.ownerId)
+      const asking = owner && canReadGroup(state, { kind: 'person', userId: owner.id, email: owner.email }, chat) ? report.proposals : []
+      const open = asking.length ? (await tx.superTabDecision.findMany({ where: { tabId, personId: project.ownerId, askerAgentId: lead.id,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }, select: { question: true }, take: MAX_OPEN_DECISIONS })).map(d => d.question) : []
+      const waiting = asking.filter(p => reflectionAsked(p, open))
+      const fresh = asking.filter(p => !waiting.includes(p)).slice(0, Math.max(0, MAX_OPEN_DECISIONS - open.length))
+      const waitingLine = waiting.length ? [`Still waiting for the owner's answer: ${waiting.map(p => report.proposals.indexOf(p) + 1).join(', ')}.`] : []
+      const message: MessageDraft = { id, conversationId: chat.id, replyTo: null, recipients: [],
+        author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
+        text: [report.text, ...waitingLine].join('\n'), source: { kind: 'routing-reflection', projectId, on } }
+      const sequences = numberMessages(state, [message], now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, [message], sequences)
+      if (fresh.length) await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
+        { operationId: id, askerAgentId: lead.id, assignmentId: null }), now)
+      return 'posted'
+    })
   }
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still

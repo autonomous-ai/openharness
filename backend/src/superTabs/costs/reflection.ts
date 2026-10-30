@@ -5,7 +5,7 @@
  * posts the text. Counts only: engines, models, efforts and kinds of work, never a task's title, a message or an id.
  * Nothing here changes routing; a proposal is a question for the owner.
  */
-import type { Conversation } from '../model.js'
+import { stableId, type Conversation } from '../model.js'
 import type { ModelKindEvidence } from '../evidence/store.js'
 import { attemptCost } from './cost.js'
 import { MAX_ROWS, summarizeCosts, type CostRow, type CostSummaryRow } from './read.js'
@@ -168,3 +168,13 @@ export function routingReflection(input: ReflectionInput): Reflection | null {
   ].join('\n')
   return { text, proposals: proposed }
 }
+
+/** The id of a project's report for one local date: one a night, so a second pass or a second worker writes none. */
+export const reflectionMessageId = (tabId: string, projectId: string, on: string): string => stableId('routing-reflection', tabId, projectId, on)
+
+/** A proposal asked of the project owner as a decision. The question starts with the proposal's title, so a proposal still
+ *  waiting for an answer is not asked again on a later night (reflectionAsked). */
+export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}? Expected saving: ${p.saving}. ${p.why}`,
+  options: ['Yes, change routing this way', 'No, keep routing as it is'], recommended: 0,
+  unblocks: 'The Lead changes the routing rule only once you approve it; nothing changes by itself.' })
+export const reflectionAsked = (p: Proposal, openQuestions: readonly string[]): boolean => openQuestions.some(q => q.startsWith(`${p.title}?`))

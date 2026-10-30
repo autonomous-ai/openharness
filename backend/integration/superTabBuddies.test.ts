@@ -257,6 +257,21 @@ describe('a Buddy through the store', () => {
     await expect(f.store.costSummary(peer, f.tab, 7, agentId)).rejects.toThrow('A Buddy reads no routing')
   })
 
+  it('never reads the nightly routing reflection, which says what each engine and model cost: routing too', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] })).result.conversationId)
+    const at = Date.now() - 60 * 60_000
+    await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: group, assignmentId: randomUUID(), outcome: 'done',
+      createdAt: new Date(at), final: { kind: 'member' }, record: { assessment: { kind: 'parser' } }, run: { machineId: 'peer-mac', harnessId: 'h',
+        engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription', startedAt: at, start: {}, endedAt: at + 60_000, end: {} } } })
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
+    const report = (await f.store.messages(peer, f.tab, 'lead', {})).messages.find(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')
+    expect(report?.text).toContain('- claude opus high, parser: 1 attempt, 0 shipped')
+    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report!.id)
+    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report!.id }, agentId)).resolves.toMatchObject({ messages: [] })
+  })
+
   it('still reads a task archived before the PM reported on it, until it leaves the active set (security review 1 of #2115)', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
