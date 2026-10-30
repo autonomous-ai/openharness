@@ -329,3 +329,23 @@ it if one is dropped.
     Backspace never reached the PTY. On the web the key now goes to
     `keyInput` everywhere. Regression: `test/web/terminal_backspace_test.dart`
     (run with `--platform=chrome`).
+
+17. **Private-use icons are drawn with a symbol face, fitted to the cell**
+    (`lib/src/ui/painter.dart`, `lib/src/ui/terminal_text_style.dart`).
+    Claude Code and shell prompts print Nerd Font icons from the private-use
+    area as one column, and the stock text faces have none of them, so they
+    showed as empty boxes. `TerminalStyle.symbolFontFamily` names a face for
+    them (the app bundles Symbols Nerd Font Mono, and leaves it out when the
+    terminal font is a Nerd Font itself). Only the code points that face has
+    (`isBundledSymbol`) use it; any other private-use character, such as SF
+    Mono's Apple logo at U+F8FF, stays on the text face at its size. An icon
+    is one em wide, wider than the cell, so it is drawn at the size that fits
+    the cell width (measured once the face has loaded; paragraphs laid out
+    before then are dropped), centred, and clipped to its cell. Powerline
+    separators (U+E0B0–U+E0D7) join the coloured cells beside them instead:
+    each is stretched so its ink (`powerlineSeparatorInk`, read from the
+    bundled face) fills the cell edge to edge and top to bottom. An underlined
+    icon draws its underline as an underlined U+00A0 in the text face, level
+    with the text beside it. Regression:
+    `test/terminal_glyph_presentation_test.dart`,
+    which rasterises through the real painter.
