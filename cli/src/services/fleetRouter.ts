@@ -81,6 +81,13 @@ function placeholderId(computerId: string): string {
 const REMOTE_REFRESH_MS = 5_000
 /** How long a machine's last good list survives failures before its tiles leave the carousel. */
 const REMOTE_GRACE_MS = 30_000
+/** How the lane says an agent list went unanswered (DeviceLink.rpc). Every other failure of a list the machine
+ *  answered during is its answer: a refusal. */
+const LIST_TIMED_OUT = 'agents_list timed out'
+
+/** Each other machine's agents, as last read. `asked` throttles the round; `at` ages the answer; `refusedSince` is the
+ *  machine's first refusal of a list since its last good one. */
+interface RemoteList { agents: CableAgent[]; at: number; asked: number; refusedSince?: number }
 
 /** A fleet row as the wire carries it. `authMode` does not travel: the dial has no use for the word, and
  *  `remote` is just `!local`, which the row already says. */
@@ -102,8 +109,8 @@ export class FleetRouter implements FleetRouting {
    *  daemon restart is not one the five-minute window would have carried anyway. */
   private lastTurn?: { agentId: string; at: number }
 
-  /** Each other machine's agents, as last read. `asked` throttles the round; `at` ages the answer. */
-  private readonly remoteAgents = new Map<string, { agents: CableAgent[]; at: number; asked: number }>()
+  /** Each other machine's agents, as last read (RemoteList). */
+  private readonly remoteAgents = new Map<string, RemoteList>()
   /** Machines with a list RPC in flight, so a slow machine is asked once rather than every tick. */
   private readonly inFlight = new Set<string>()
   /** agentId → machineId, rebuilt from the snapshot last handed to the dial. */
@@ -397,6 +404,14 @@ export class FleetRouter implements FleetRouting {
    * seconds — then putting them back — is a far worse lie than briefly showing a list that is a minute
    * old.
    *
+   * A machine that answers under its own session is up, and how its list failed says why. Timed out: it is
+   * slow, and its tiles stay however long that lasts (Diego, 10-30, #2381). Answered with an error: it is
+   * refusing, and its tiles keep the same grace, counted from its first refusal since its last good list
+   * (#2381's second review: without that, a machine that refuses every list kept its tiles for ever).
+   *
+   * A list still out when its machine goes offline, loses its link or leaves the list changes nothing when it
+   * lands: the tiles that machine had are gone, and only a list asked after it is back brings them again.
+   *
    * `unknown` is NOT a reason to drop anything, and reading it as one cost a morning. It means the
    * backend could not be asked — `MachineListCache.degrade()` sets every machine to it in one go when
    * the list cannot be refreshed, on the stated principle that the rows are "stale but not wrong". The
@@ -409,6 +424,9 @@ export class FleetRouter implements FleetRouting {
     if (!this.fleet) return
     const fleet = this.fleet
     const now = Date.now()
+    // Gone from the list (unlinked, its access revoked, signed out): what it said is not kept for its return.
+    const listed = new Set(machines.map((m) => m.id))
+    for (const id of [...this.remoteAgents.keys()]) if (!listed.has(id)) this.remoteAgents.delete(id)
     for (const m of machines) {
       if (m.local) continue
       const entry = this.remoteAgents.get(m.id)
@@ -416,8 +434,9 @@ export class FleetRouter implements FleetRouting {
         // The machine ITSELF says it has nothing to offer, which is different from not being able to
         // ask it. No grace period, but never silently: an agent leaving the carousel is exactly the
         // event that is impossible to diagnose after the fact from its absence.
-        if (entry && entry.agents.length) {
-          this.remoteAgents.set(m.id, { agents: [], at: now, asked: entry.asked })
+        // Replaced even when empty, so a list still out from before it went cannot fill it when it lands.
+        if (entry) this.remoteAgents.set(m.id, { agents: [], at: now, asked: entry.asked })
+        if (entry?.agents.length) {
           this.local.log(`cable: ${m.name} is ${m.state} — its ${entry.agents.length} agents left the carousel`)
         }
         continue
@@ -427,25 +446,36 @@ export class FleetRouter implements FleetRouting {
       if (entry && now - entry.asked < REMOTE_REFRESH_MS) continue
       if (this.inFlight.has(m.id)) continue
       this.inFlight.add(m.id)
-      this.remoteAgents.set(m.id, { agents: entry?.agents ?? [], at: entry?.at ?? 0, asked: now })
+      // This entry, replaced only when the machine goes offline, loses its link or leaves the list, is what its
+      // answer may change: one that lands after is about tiles no longer shown.
+      const asking: RemoteList = { agents: entry?.agents ?? [], at: entry?.at ?? 0, asked: now, refusedSince: entry?.refusedSince }
+      this.remoteAgents.set(m.id, asking)
       void fleet.listAgents(m.id)
         .then((agents) => {
-          const before = this.remoteAgents.get(m.id)
+          if (this.remoteAgents.get(m.id) !== asking) return
           this.remoteAgents.set(m.id, { agents, at: Date.now(), asked: Date.now() })
           // One line per TRANSITION, not per round: this runs every few seconds forever, and a healthy
           // machine that logs each time buries everything else in the file.
-          if (!before || before.agents.length !== agents.length) {
+          if (asking.agents.length !== agents.length) {
             this.local.log(`cable: ${m.name} → ${agents.length} agents`)
           }
         })
         .catch((err) => {
-          const before = this.remoteAgents.get(m.id)
-          // A machine that answered under its own session while this list was out is slow, not gone (Diego, 10-30:
-          // 15 carousel drops in a day of a Mac whose late replies kept arriving): its last good list stays.
-          const stale = before && Date.now() - before.at > REMOTE_GRACE_MS && fleet.reachable?.(m.id)?.ok !== true
-          if (stale) this.remoteAgents.set(m.id, { agents: [], at: Date.now(), asked: Date.now() })
-          if (before?.agents.length && stale) {
-            this.local.log(`cable: ${m.name} dropped off the carousel (${(err as Error).message})`)
+          if (this.remoteAgents.get(m.id) !== asking) return
+          const failedAt = Date.now()
+          const message = (err as Error).message
+          let stale: boolean
+          if (fleet.reachable?.(m.id)?.ok !== true) stale = failedAt - asking.at > REMOTE_GRACE_MS
+          // Answered under its own session while this list was out, and the list timed out: slow, not gone (Diego,
+          // 10-30: 15 carousel drops in a day of a Mac whose late replies kept arriving). Its last good list stays.
+          else if (message === LIST_TIMED_OUT) stale = false
+          else {
+            asking.refusedSince ??= failedAt
+            stale = failedAt - asking.refusedSince > REMOTE_GRACE_MS
+          }
+          if (stale) this.remoteAgents.set(m.id, { agents: [], at: failedAt, asked: failedAt })
+          if (asking.agents.length && stale) {
+            this.local.log(`cable: ${m.name} dropped off the carousel (${message})`)
           }
         })
         .finally(() => this.inFlight.delete(m.id))
