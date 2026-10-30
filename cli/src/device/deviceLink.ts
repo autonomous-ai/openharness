@@ -622,6 +622,13 @@ export class DeviceLink {
   private async connect(): Promise<void> {
     if (this.ws?.readyState === WebSocket.OPEN) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return this.waitOpen()
+    // A socket still closing (its close event not yet fired) is torn down here, before the next one replaces it: its
+    // close is ignored once it is not the lane's socket (open()), so nothing else would end its sessions, fail what
+    // waits on it, or stop its ping, and the next socket would start with all of it (review 2 on #2402).
+    if (this.ws) {
+      this.opts.log(`device: the socket is still closing — tearing it down before the next one`)
+      this.teardown('socket closed while closing')
+    }
     this.state = 'connecting'
     const base = this.opts.backendWsBase.replace(/\/$/, '')
     const url = `${base}/api/device-ws?computer=${encodeURIComponent(this.opts.computerId)}`

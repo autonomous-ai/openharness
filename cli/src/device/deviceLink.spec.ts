@@ -1213,6 +1213,31 @@ describe('the lane around a select', () => {
     expect(how).toBe('ok')
   })
 
+  it('tears down a socket still closing before it opens the next, so the next starts clean and the old cleanup runs once', async () => {
+    const { link, server, seal, lines } = await answering()
+    await link.establish(LINKED)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+    let asked = ''
+    void link.rpc('models_list', {}, LINKED).then(() => { asked = 'answered' }, (error: Error) => { asked = error.message })
+    await until('the request', () => server.forMachines().some((frame) => frame.type === 'models_list'))
+    // The socket starts closing (a close handshake under way, its close event not yet fired) when the next call needs one.
+    const old = (link as unknown as { ws: { close(): void; readyState: number } }).ws
+    old.close()
+    expect(old.readyState).toBe(2)   // CLOSING
+    await link.online()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The old socket's lane went with it: its request failed, its session ended at the gateway, once.
+    expect(asked).toMatch(/socket closed/)
+    expect(seal.drop).toHaveBeenCalledWith(LINKED)
+    await until('the old close to land', () => lines.some((line) => line.startsWith('device: an earlier socket closed')))
+    expect(seal.drop.mock.calls.filter(([machineId]) => machineId === LINKED)).toHaveLength(1)
+    // And the new socket holds no session of the old one: the next call to the machine says hello again.
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { content: 'on the new socket' } })
+    await until('a new hello', () => seal.hello.mock.calls.length === 2)
+    expect(server.sockets).toHaveLength(2)
+    expect(server.sockets[1]!.readyState).toBe(1)
+  })
+
   it('reconnects to the machine chosen during the wait, not the one before the drop', async () => {
     const { link, server } = await answering()
     await link.attach(CLOUD)
