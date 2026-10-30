@@ -242,16 +242,18 @@ export function recordRun(state: SuperTabState, group: Conversation, assignment:
 }
 
 /** An agent started on its engine's own model reports which one only once it runs (Codex): its open task's attempt, recorded
- *  with none, takes the model it reports, so the board names it rather than the engine alone (Dee, 2026-10-30). A model on
- *  record is never rewritten, and a finished task's attempt is history. */
+ *  with none, takes the model it reports, so the board names it and step-ups rate it by it rather than by the engine alone
+ *  (Dee, 2026-10-30). A model on record is never rewritten, and a finished task's attempt is history. */
 export function recordReportedModel(state: SuperTabState, worker: Agent): void {
   const model = worker.configuration.model
   if (!model || worker.gridModel) return
   for (const group of state.conversations) {
     const assignment = group.assignment
     if (!assignment || assignment.agentId !== worker.id || !activeWork(group)) continue
-    const run = group.ledger?.runs?.find(r => r.assignmentId === assignment.id)
-    if (run && run.model === null && !run.grid && run.engine === worker.configuration.engine) run.model = model
+    // The attempt, and the copy of it kept when its merge was recorded while it still ran.
+    for (const on of [group.ledger?.runs?.find(r => r.assignmentId === assignment.id), group.ledger?.shippedBy]) {
+      if (on?.assignmentId === assignment.id && on.model === null && !on.grid && on.engine === worker.configuration.engine) on.model = model
+    }
   }
 }
 
