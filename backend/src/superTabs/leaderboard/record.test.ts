@@ -75,6 +75,20 @@ describe('who asked for a group', () => {
     expect(f.group(id).ledger).toEqual({ askedAt: 1_000 })
   })
 
+  it('tells a Lead that opens a build group for nobody to name who asked; never for a named requester, a person or a review', () => {
+    const f = fixture(), lead = f.add('lead', 'lead', true)
+    f.invitePeer()
+    const open = (actor: Actor, extra: Record<string, unknown> = {}) =>
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result
+    const unnamed = open(f.asAgent(lead))
+    expect(unnamed).toMatchObject({ requesterUnknown: true, warnings: [expect.stringContaining('Name the person who asked')] })
+    for (const result of [open(f.asAgent(lead), { requesterId: 'peer' }), open(owner),
+      open(f.asAgent(lead), { reviewOf: unnamed.conversationId as string, title: 'Review: Offline editing' })]) {
+      expect(result.requesterUnknown).toBeUndefined()
+      expect(result.warnings).toBeUndefined()
+    }
+  })
+
   it('refuses a requester who is not a member of the Swarm', () => {
     const f = fixture(), lead = f.add('lead', 'lead', true)
     expect(() => f.create(f.asAgent(lead), { requesterId: 'stranger' })).toThrow('no longer have access')
@@ -1048,6 +1062,19 @@ describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy e
     const { buddy, proposal } = proposed(f)
     const id = createFrom(f, proposal)
     expect(f.group(id).ledger).toEqual({ askedAt: 5_000, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
+  })
+
+  it('is requested by the person the proposal was sent for when a Lead names nobody, and by the one it names otherwise', () => {
+    const f = fixture(), lead = f.asAgent(f.add('lead', 'lead', true))
+    f.invitePeer()
+    const { proposal } = proposed(f)
+    const fromLead = (extra: Record<string, unknown> = {}) => f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.',
+      checks, proposalMessageId: 'm-proposal', ...extra }), lead, { proposal }).result.conversationId as string
+    expect(f.group(fromLead()).requesterId).toBe('owner')
+    expect(f.group(fromLead({ requesterId: 'peer' })).requesterId).toBe('peer')
+    // A person opening it from someone else's proposal opens it for that someone.
+    const forPeer = { ...proposal, source: { ...proposal.source, personId: 'peer' } }
+    expect(f.group(createFrom(f, forPeer)).requesterId).toBe('peer')
   })
 
   it('refuses a link to a message that is not a Buddy\'s proposal in this project\'s chat', () => {
