@@ -109,16 +109,23 @@ export function githubSignIn(env: { GITHUB_APP_CLIENT_ID: string; GITHUB_APP_CLI
   return new GitHubSignIn({ clientId, clientSecret })
 }
 
+/** What GitHub last said about the reader on a repository: they can push (they allowed it in this Swarm before), or they
+ *  cannot (their sign-in was refused for this project). Null before they signed in for it. */
+export interface ReaderAccess { canPush: boolean; githubLogin: string }
+
 /** Where approvals are kept. */
 export interface Approvals {
   approved(autonomousEnv: string, tabId: string, projectId: string, repository: string): Promise<boolean>
   approve(request: ApprovalRequest, githubLogin: string): Promise<void>
+  /** GitHub said [request]'s person cannot push to its repository (2026-10-30 design: the app asks them to send it on). */
+  refuse(request: ApprovalRequest, githubLogin: string): Promise<void>
+  reader(autonomousEnv: string, tabId: string, projectId: string, repository: string, userId: string): Promise<ReaderAccess | null>
   /** The projects of [tabId] [repository] is approved for one by one (not those approved for the whole Swarm). */
   approvedProjects(autonomousEnv: string, tabId: string, repository: string): Promise<string[]>
 }
 
 export class PrismaApprovals implements Approvals {
-  constructor(private readonly db: Pick<PrismaClient, 'gitHubRepositoryApproval'>) {}
+  constructor(private readonly db: Pick<PrismaClient, 'gitHubRepositoryApproval' | 'gitHubApprovalRefusal'>) {}
 
   async approved(autonomousEnv: string, tabId: string, projectId: string, repository: string): Promise<boolean> {
     return !!await this.db.gitHubRepositoryApproval.findFirst({ where: { autonomousEnv, tabId, repository: repository.toLowerCase(),
@@ -138,5 +145,27 @@ export class PrismaApprovals implements Approvals {
     await this.db.gitHubRepositoryApproval.upsert({ where, update: { approvedBy: request.userId, githubLogin },
       create: { id: randomUUID(), autonomousEnv: request.autonomousEnv, tabId: request.tabId, projectId, repository: request.repository,
         approvedBy: request.userId, githubLogin } })
+    // Allowed now: nobody's refusal for it is worth showing any more.
+    await this.db.gitHubApprovalRefusal.deleteMany({ where: { autonomousEnv: request.autonomousEnv, tabId: request.tabId,
+      repository: request.repository, ...(request.scope === 'swarm' ? {} : { projectId: request.projectId }) } })
+  }
+
+  async refuse(request: ApprovalRequest, githubLogin: string): Promise<void> {
+    const where = { autonomousEnv_tabId_repository_projectId_userId: { autonomousEnv: request.autonomousEnv, tabId: request.tabId,
+      repository: request.repository, projectId: request.projectId, userId: request.userId } }
+    await this.db.gitHubApprovalRefusal.upsert({ where, update: { githubLogin, createdAt: new Date() },
+      create: { id: randomUUID(), autonomousEnv: request.autonomousEnv, tabId: request.tabId, projectId: request.projectId,
+        repository: request.repository, userId: request.userId, githubLogin } })
+  }
+
+  async reader(autonomousEnv: string, tabId: string, projectId: string, repository: string, userId: string): Promise<ReaderAccess | null> {
+    repository = repository.toLowerCase()
+    const refused = await this.db.gitHubApprovalRefusal.findUnique({ where: { autonomousEnv_tabId_repository_projectId_userId:
+      { autonomousEnv, tabId, repository, projectId, userId } }, select: { githubLogin: true } })
+    if (refused) return { canPush: false, githubLogin: refused.githubLogin }
+    // They allowed this repository for another project of the Swarm: GitHub said then that they can push to it.
+    const allowed = await this.db.gitHubRepositoryApproval.findFirst({ where: { autonomousEnv, tabId, repository, approvedBy: userId },
+      select: { githubLogin: true } })
+    return allowed ? { canPush: true, githubLogin: allowed.githubLogin } : null
   }
 }

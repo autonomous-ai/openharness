@@ -410,12 +410,15 @@ void main() {
       );
       expect(find.text('acme/app'), findsOneWidget);
       expect(find.text('Push branches and open pull requests'), findsOneWidget);
-      await tester.ensureVisible(
-        find.byKey(const Key('super-project-github-ask')),
+      // Before GitHub has said anything about the reader, no claim either way.
+      expect(
+        find.textContaining('Anyone who can push to acme/app'),
+        findsOneWidget,
       );
-      await tester.tap(find.byKey(const Key('super-project-github-ask')));
-      await tester.pumpAndSettle();
-      expect(find.text('Message copied'), findsOneWidget);
+      expect(
+        find.byKey(const Key('super-project-github-can-push')),
+        findsNothing,
+      );
       await tester.ensureVisible(
         find.byKey(const Key('super-project-github-approve')),
       );
@@ -465,6 +468,98 @@ void main() {
         findsNothing,
       );
       c.dispose();
+    },
+  );
+
+  // Design 2026-10-30, 2a and 2b: "You can push" only once GitHub has said so, and someone GitHub refused is asked to send
+  // it on rather than offered the same sign-in again.
+  testWidgets(
+    'the dialog says you can push once GitHub has, and asks someone it refused to send it on',
+    (tester) async {
+      Future<SuperTabController> open(Map<String, dynamic> you) async {
+        answer = {
+          'state': 'not-approved',
+          'repository': 'acme/app',
+          'canApprove': true,
+          'you': you,
+        };
+        final c = controllerFor();
+        await c.refresh();
+        final project = c.snapshot!.projects.first;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showProjectGitHubAccess(context, c, project),
+                  child: const Text('open github'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('open github'));
+        await tester.pumpAndSettle();
+        return c;
+      }
+
+      final able = await open({'canPush': true, 'githubLogin': 'olive'});
+      expect(
+        find.byKey(const Key('super-project-github-can-push')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('You have write access, so you can allow it.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+      able.dispose();
+      final refused = await open({'canPush': false, 'githubLogin': 'olive'});
+      expect(
+        find.text('Someone with write access needs to allow this'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('(olive) can\'t push to acme/app'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('super-project-github-approve')),
+        findsNothing,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-ask')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-ask')));
+      await tester.pumpAndSettle();
+      expect(find.text('Message copied'), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      refused.dispose();
+      // Refused while waiting: back in the app, the wait ends on the ask, not on the question again.
+      final waiting = await open({});
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-approve')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Finish in GitHub'), findsOneWidget);
+      answer = {
+        'state': 'not-approved',
+        'repository': 'acme/app',
+        'canApprove': true,
+        'you': {'canPush': false, 'githubLogin': 'olive'},
+      };
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Someone with write access needs to allow this'),
+        findsOneWidget,
+      );
+      waiting.dispose();
     },
   );
 
