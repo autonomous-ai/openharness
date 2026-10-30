@@ -23,7 +23,7 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '200000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
-const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+const config = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const MINUTE = 60_000
 
 beforeAll(async () => {
@@ -823,8 +823,8 @@ describe('an agent whose task was lost', () => {
     await loseByOffline(f)
     await backOnline(f)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: f.group, decision } as Command, host, f.lead)).result.routeDecisionId)
     await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker, routeDecisionId,
@@ -919,11 +919,11 @@ describe('a start that never runs', () => {
   /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
   const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: 'lead', decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     // The start's own machine dispatches and confirms it.
@@ -1025,11 +1025,11 @@ describe('a task that stalls', () => {
     const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
       checks: [{ description: 'Read', independent: false }] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     return { group, startId }
