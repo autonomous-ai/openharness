@@ -8,6 +8,7 @@ import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, i
 import { accessInputs, canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { noteProjectReports } from './projectUpdates.js'
+import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
 import type { DeliveriesWaiting } from './store.js'
@@ -201,7 +202,7 @@ export class SuperTabNativeStore {
     const event = nativeEventSchema.parse(input)
     return this.deps.transaction(async tx => {
       const { loaded, record, binding, team } = await this.hosted(tx, user, tabId, contextId)
-      const state = structuredClone(loaded.state)
+      const state = cloneData(loaded.state)
       const target = agent(state, record.agentId), group = conversation(state, record.conversationId)
       const eventId = stableId('native-event', contextId, event.turnId, event.kind), requestHash = digest(event)
       const prior = await tx.superTabOperation.findUnique({ where: { id: eventId } })

@@ -72,11 +72,12 @@ export function loadActive(tx: Transaction, tabId: string,
  * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
  * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
  * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
- * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are.
+ * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are. No project's report
+ * progress either: only commands and native events note reports (projectUpdates.ts), so none is loaded or committed.
  */
 export async function loadObserved(tx: Transaction, tabId: string, machineId: string): Promise<SwarmParts> {
   const live = { deleted: false }
-  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: live, start: { ...live, finishedAt: null }, group: [] })
+  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: null, start: { ...live, finishedAt: null }, group: [] })
   const { projects, leadsConversationId } = loaded.head.data!
   // A head that never stored the Leads conversation's id finds it where model.ts syncLeads would make it.
   const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? stableId(tabId, 'leads')]
