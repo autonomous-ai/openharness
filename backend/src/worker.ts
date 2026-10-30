@@ -29,6 +29,7 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
+import { startRoutingReflection } from './lib/routingReflection.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -63,6 +64,7 @@ async function start(): Promise<void> {
   let stopArchive = (): void => {}
   let stopDeliveries = (): void => {}
   let stopReceiptSweep = (): void => {}
+  let stopReflection = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -74,6 +76,7 @@ async function start(): Promise<void> {
     stopArchive()
     stopDeliveries()
     stopReceiptSweep()
+    stopReflection()
     // The last partial minute, before the database closes.
     stopQueryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
@@ -100,6 +103,9 @@ async function start(): Promise<void> {
   stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
+  // At 23:00 in each project's time zone, what its routed work cost and how it went, with routing changes asked of its owner
+  // (lib/routingReflection.ts).
+  stopReflection = startRoutingReflection(prisma, swarms)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')
