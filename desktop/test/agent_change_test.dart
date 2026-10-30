@@ -28,6 +28,8 @@ class SwitchConnection extends MonitorConnection {
   late AppNotifier app;
   final events = <String>[];
   String? closeError;
+  /// The machine's whole refusal, as a daemon sends it (a Swarm Buddy's, say).
+  Map<String, dynamic>? closeRefusal;
   Completer<void>? holdClose;
   Completer<void>? holdHandoff;
   Map<String, dynamic> recent = {'asks': <String>[], 'events': <Object>[]};
@@ -77,6 +79,14 @@ class SwitchConnection extends MonitorConnection {
       await holdClose?.future;
       if (closeError != null) {
         return {'error': 'SAVE_FAILED', 'detail': closeError};
+      }
+      if (closeRefusal case final refusal?) {
+        throw WsRequestFailure(
+          responseType: 'agent_close_result',
+          code: refusal['error'] as String,
+          detail: refusal['detail'] as String?,
+          payload: refusal,
+        );
       }
       await app.handleEventForTest('m', {
         'type': 'agent_deleted',
@@ -1164,6 +1174,29 @@ void main() {
     connection.closeError = null;
     expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
     expect(connection.creations.single['engine'], 'claude');
+  });
+
+  test('a Buddy keeps its agent, and the refusal says how to use another', () async {
+    // The daemon's refusal speaks of Stop Harness, which is no help to someone changing the agent.
+    final connection = SwitchConnection()
+      ..closeRefusal = {
+        'error': 'BUDDY_PROTECTED',
+        'detail':
+            'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+        'keptRunning': true,
+      };
+    final app = fixture(connection);
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    final pane = app.panes.single;
+    expect(
+      await app.changeAgent('m', 'a0', 'opencode'),
+      'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.',
+    );
+    expect(connection.creations, isEmpty);
+    expect(app.panes.single, same(pane));
+    expect(pane.agentId, 'a0');
+    expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
   });
 
   test('a failed launch preserves the stopped session and permits a different agent', () async {

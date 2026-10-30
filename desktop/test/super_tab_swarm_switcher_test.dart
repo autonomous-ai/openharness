@@ -35,6 +35,9 @@ class _Backend {
   /// While set, preparing a machine for a Swarm waits for it.
   Completer<void>? holdPrepare;
 
+  /// Machines answer preparing with this state ('ready' sets them up).
+  String prepareState = 'ready';
+
   /// The Swarm an account's personal-swarm request already made, by account.
   final personalOf = <String, String>{};
 
@@ -152,7 +155,7 @@ class _Connection extends WsConn {
     if (action == 'prepareContribution') {
       if (backend.holdPrepare case final hold?) await hold.future;
       return {
-        'state': 'ready',
+        'state': backend.prepareState,
         'scope': 'swarm',
         'cwd': '/Users/person/harnesses/swarm',
         'engines': ['claude', 'codex'],
@@ -232,6 +235,17 @@ Future<(AppNotifier, _Backend)> _twoTabs({
   final alpha = app.swarms.firstWhere((s) => s.superTabId == 'alpha');
   app.selectSwarm(alpha.id);
   return (app, backend);
+}
+
+/// A store whose reads of one key wait for [hold], as a slow disk does.
+class _SlowStore extends MemoryStore {
+  String? slowKey;
+  Completer<void>? hold;
+  @override
+  Future<String?> read(String key) async {
+    if (key == slowKey) await hold?.future;
+    return super.read(key);
+  }
 }
 
 Future<SuperTabController> _pumpBar(
@@ -550,7 +564,10 @@ void main() {
     await _settle();
     expect(backend.creates, isEmpty);
     expect(backend.machineCalls, isEmpty);
-    expect(personal.error, AppNotifier.teamComputerSwarmMessage);
+    expect(
+      personal.errorIn(app.activeSwarmId),
+      AppNotifier.teamComputerSwarmMessage,
+    );
     expect(app.activeSwarm.superTabId, 'alpha');
   });
 
@@ -670,7 +687,7 @@ void main() {
     answer.complete();
     await picking;
     await _settle();
-    expect(PersonalSwarm.of(app).error, isNull);
+    expect(PersonalSwarm.of(app).errorIn(tab), isNull);
     expect(_shown(app, tab), 'gamma');
   });
 
@@ -766,7 +783,7 @@ void main() {
     await late;
     await _settle();
     expect(_shown(other, tab2), 'alpha');
-    expect(PersonalSwarm.of(other).error, isNull);
+    expect(PersonalSwarm.of(other).errorIn(tab2), isNull);
   });
 
   for (final dropdown in [true, false]) {
@@ -814,6 +831,58 @@ void main() {
       await _releaseAll(tester, app);
     });
   }
+
+  test('a failure to add this computer says so in the tab Personal was '
+      'picked in, and only there', () async {
+    final (app, backend) = await _twoTabs();
+    final alphaTab = app.activeSwarmId;
+    final betaTab = app.swarms.firstWhere((s) => s.superTabId == 'beta').id;
+    backend.prepareState = 'unknown';
+    await PersonalSwarm.of(app).show(alphaTab);
+    await _settle();
+    expect(
+      PersonalSwarm.of(app).errorIn(alphaTab),
+      'Could not add this computer to Personal. '
+      'Update Harness on this machine, then try again.',
+    );
+    expect(PersonalSwarm.of(app).errorIn(betaTab), isNull);
+  });
+
+  test('a failed creation says so only in the tab it was picked in', () async {
+    final (app, backend) = await _twoTabs();
+    final alphaTab = app.activeSwarmId;
+    final betaTab = app.swarms.firstWhere((s) => s.superTabId == 'beta').id;
+    backend.failCreate = true;
+    await PersonalSwarm.of(app).show(alphaTab);
+    await _settle();
+    expect(
+      PersonalSwarm.of(app).errorIn(alphaTab),
+      'Swarm is busy. Try again.',
+    );
+    expect(PersonalSwarm.of(app).errorIn(betaTab), isNull);
+  });
+
+  test('a tab that moves on while Personal’s saved state is read shows no '
+      'error', () async {
+    final store = _SlowStore();
+    final (app, backend) = await _twoTabs(store: store);
+    final tab = app.activeSwarmId;
+    const id = 'swarm-owner-$kPersonalSwarmOperation';
+    store
+      ..slowKey = 'super_tab.owner.$id'
+      ..hold = Completer<void>();
+    final picking = PersonalSwarm.of(app).show(tab);
+    await _settle();
+    expect(_shown(app, tab), id);
+    // The person moves the tab on before Personal has opened.
+    app.showSuperTabIn(tab, 'gamma', 'Gamma');
+    store.hold!.complete();
+    await picking;
+    await _settle();
+    expect(PersonalSwarm.of(app).errorIn(tab), isNull);
+    expect(backend.contributions(id), isEmpty);
+    expect(_shown(app, tab), 'gamma');
+  });
 
   testWidgets('a failed creation says so under the bar, and picking Personal '
       'again creates it', (tester) async {

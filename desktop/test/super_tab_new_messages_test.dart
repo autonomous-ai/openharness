@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -21,8 +24,12 @@ ConversationServer _server(int count) {
   return server;
 }
 
-void _fromLead(ConversationServer server, String text) {
-  server.append(text);
+void _fromLead(
+  ConversationServer server,
+  String text, {
+  String conversationId = 'lead',
+}) {
+  server.append(text, conversationId: conversationId);
   server.messages.last['author'] = {
     'kind': 'agent',
     'id': 'lead-agent',
@@ -64,10 +71,10 @@ void main() {
       .position;
 
   /// Whether [finder]'s top edge is inside the message list's viewport.
-  bool onScreen(WidgetTester tester, Finder finder) {
+  bool onScreen(WidgetTester tester, Finder finder, {String chat = 'lead'}) {
     if (finder.evaluate().isEmpty) return false;
     final list = tester.getRect(
-      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      find.byKey(PageStorageKey('super-messages-tab-$chat')),
     );
     final top = tester.getTopLeft(finder).dy;
     return top >= list.top && top < list.bottom;
@@ -398,21 +405,252 @@ void main() {
     );
   });
 
-  testWidgets('scrolled away from the line, a pill jumps back to it', (
-    tester,
-  ) async {
+  testWidgets('once the line has been seen, reading on to the end offers no '
+      'way back to it', (tester) async {
     final server = _server(60)..markReadElsewhere('lead', 20);
     await show(tester, server);
-    expect(find.byKey(_jump), findsNothing);
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
     final position = scroll(tester);
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isFalse);
-    expect(find.byKey(_jump), findsOneWidget);
-    expect(find.text('Jump to first unread'), findsOneWidget);
-    await tester.tap(find.byKey(_jump));
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  /// The offline chat's 60 messages from the Lead, read up to [mark].
+  ConversationServer offlineChat(int mark) {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', mark);
+    return server;
+  }
+
+  testWidgets('in a long chat, the line on screen as it opens offers no way '
+      'back to it', (tester) async {
+    final server = _server(150)..markReadElsewhere('lead', 20);
+    await show(tester, server);
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+    // Seen, so reading on does not bring it back either.
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isFalse);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('a long chat opening at its line never shows the pill on the '
+      'way there', (tester) async {
+    final server = _server(150)..markReadElsewhere('lead', 20);
+    final c = server.controller();
+    await c.refresh();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: c,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Team Mac',
+          ),
+        ),
+      ),
+    );
+    for (var frame = 0; frame < 60; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.byKey(_jump), findsNothing, reason: 'frame $frame');
+    }
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isTrue);
+  });
+
+  testWidgets('opened at a linked message with the line near the top, the '
+      'pill is still the way back to it', (tester) async {
+    final c = await show(tester, offlineChat(8));
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-50',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-50')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    // The jump to the link passed the line; the reader never saw it.
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('opened at a linked message below the line, a pill above the '
+      'list takes the reader back to it, then goes', (tester) async {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', 22);
+    final c = await show(tester, server);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-60',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'offline');
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-60')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    // In its own place above the list: it covers no message.
+    final list = tester.getRect(
+      find.byKey(const PageStorageKey('super-messages-tab-offline')),
+    );
+    expect(
+      tester.getRect(find.byKey(_jump)).bottom,
+      lessThanOrEqualTo(list.top),
+    );
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+    final position = tester
+        .widget<ScrollView>(
+          find.byKey(const PageStorageKey('super-messages-tab-offline')),
+        )
+        .controller!
+        .position;
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('opened at a linked message above the line, the pill points '
+      'down to it', (tester) async {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', 42);
+    final c = await show(tester, server);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-12',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-12')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.byIcon(AppIcons.chevronDown),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  Finder offlineList() =>
+      find.byKey(const PageStorageKey('super-messages-tab-offline'));
+
+  Future<double> linkedTop(
+    WidgetTester tester,
+    ConversationServer server,
+  ) async {
+    final c = await show(tester, server);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-45',
+      ),
+    );
+    await tester.pumpAndSettle();
+    return tester
+        .getTopLeft(find.byKey(const ValueKey('super-message-message-45')))
+        .dy;
+  }
+
+  testWidgets('the pill\'s band appearing leaves the linked message where '
+      'the link put it', (tester) async {
+    final read = await linkedTop(tester, offlineChat(62));
+    expect(find.byKey(_jump), findsNothing);
+    final unread = await linkedTop(tester, offlineChat(22));
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(unread, read);
+  });
+
+  testWidgets('the band going as the reader scrolls up to the line moves the '
+      'messages only by the scroll', (tester) async {
+    await linkedTop(tester, offlineChat(22));
+    expect(find.byKey(_jump), findsOneWidget);
+    final rows = find.byWidgetPredicate(
+      (w) =>
+          w.key is ValueKey<String> &&
+          (w.key! as ValueKey<String>).value.startsWith(
+            'super-message-message-',
+          ),
+    );
+    var steps = 0;
+    while (find.byKey(_jump).evaluate().isNotEmpty && steps++ < 60) {
+      final list = tester.getRect(offlineList());
+      // A message in the middle of the view, still on screen after the step.
+      final middle = rows.evaluate().map((e) => e.widget.key!).firstWhere((
+        key,
+      ) {
+        final top = tester.getTopLeft(find.byKey(key)).dy;
+        return top > list.center.dy - 100 && top < list.center.dy + 100;
+      });
+      final before = tester.getTopLeft(find.byKey(middle)).dy;
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(
+          position: list.center,
+          scrollDelta: const Offset(0, -30),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(find.byKey(middle)).dy - before,
+        moreOrLessEquals(30, epsilon: .5),
+        reason: 'step $steps',
+      );
+    }
     expect(find.byKey(_jump), findsNothing);
   });
 
