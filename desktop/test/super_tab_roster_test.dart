@@ -30,6 +30,7 @@ class RosterFixture {
   late final controller = server.controller(account: account);
   SuperTabAgent? opened;
   SuperTabConversation? added;
+  String? answered;
   final boundary = GlobalKey();
   bool disposed = false;
 
@@ -93,7 +94,7 @@ class RosterFixture {
               app: nativeState ? app : null,
               onInvite: () {},
               onAddAgent: (group) => added = group,
-              onAnswer: (_) {},
+              onAnswer: (id) => answered = id,
               onOpenAgent: (agent) => opened = agent,
             ),
           ),
@@ -107,10 +108,21 @@ class RosterFixture {
   Finder inRow(int i, Finder child) =>
       find.descendant(of: row(i), matching: child);
 
-  /// The row's one line: state, machine, model and effort (team glance, 2026-10-27).
+  /// The row's details line: its task and the time since its last progress,
+  /// or its state in a word (Dee, 2026-10-30).
   Finder line(int i) => find.byKey(ValueKey('super-member-line-agent-$i'));
   String lineText(WidgetTester tester, int i) =>
       tester.widget<Text>(line(i)).data!;
+
+  /// The hover's state line: state, machine, model and effort (team glance,
+  /// 2026-10-27), on the row until 2026-10-30.
+  String glanceText(WidgetTester tester, int i) => tester
+      .widgetList<Tooltip>(
+        find.ancestor(of: row(i), matching: find.byType(Tooltip)),
+      )
+      .single
+      .message!
+      .split('\n')[1];
   HarnessActivity activity(WidgetTester tester, int i) =>
       tester.widget<ActivityMark>(inRow(i, find.byType(ActivityMark))).activity;
 
@@ -193,7 +205,7 @@ void main() {
       ).toUtc().toIso8601String();
       await f.controller.refresh();
       await f.show(tester);
-      expect(f.lineText(tester, 1), 'Limited until 09:05 · Test host');
+      expect(f.glanceText(tester, 1), 'Limited until 09:05 · Test host');
       expect(rowTooltip(tester, f, 1), contains('Limited until 09:05'));
       await captureBoundary(
         tester,
@@ -211,7 +223,7 @@ void main() {
         await f.controller.refresh();
         await tester.pumpAndSettle();
         expect(find.textContaining('Limited until'), findsNothing);
-        expect(f.lineText(tester, 1), 'Assigned · Test host');
+        expect(f.glanceText(tester, 1), 'Assigned · Test host');
         expect(
           rowTooltip(tester, f, 1),
           contains('Assigned to "Offline editing"'),
@@ -221,50 +233,47 @@ void main() {
     },
   );
 
-  testWidgets(
-    'agent tooltip combines known model, machine, task and activity',
-    (tester) async {
-      final f = await fixture(tester);
-      final lastActive = DateTime.now().subtract(const Duration(hours: 2));
-      (f.server.state['agents'] as List)[1]['configuration'] = {
-        'engine': 'claude',
-        'model': 'opus',
-      };
-      (f.server.state['conversations'] as List)[1]['assignment'] = {
-        'agentId': 'agent-1',
-        'status': 'working',
-      };
-      f.app.stateOf('m')!.agents = [
-        Agent(
-          id: 'a1',
-          name: 'Multiply',
-          engine: 'claude',
-          lastActivityAt: lastActive,
-        ),
-      ];
-      f.app.stateOf('m')!.processingAgentIds.add('a1');
-      await f.controller.refresh();
-      await f.show(tester);
-      expect(
-        rowTooltip(tester, f, 1),
-        contains(
-          'Claude Opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
-        ),
-      );
-      expect(
-        rowTooltip(tester, f, 1),
-        contains('Sage · Engineer · openharness'),
-      );
-      expect(f.lineText(tester, 1), 'Working · Test host · Opus');
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(tester.getCenter(f.row(1)));
-      await tester.pumpAndSettle(const Duration(milliseconds: 800));
-      expect(find.text(rowTooltip(tester, f, 1)), findsOneWidget);
-      await mouse.removePointer();
-      await f.close(tester);
-    },
-  );
+  testWidgets('agent tooltip combines known model, machine, task and activity', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    final lastActive = DateTime.now().subtract(const Duration(hours: 2));
+    (f.server.state['agents'] as List)[1]['configuration'] = {
+      'engine': 'claude',
+      'model': 'opus',
+    };
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.app.stateOf('m')!.agents = [
+      Agent(
+        id: 'a1',
+        name: 'Multiply',
+        engine: 'claude',
+        lastActivityAt: lastActive,
+      ),
+    ];
+    f.app.stateOf('m')!.processingAgentIds.add('a1');
+    await f.controller.refresh();
+    await f.show(tester);
+    // Who, then where and on what, then the task, then when (Dee, 2026-10-30).
+    expect(
+      rowTooltip(tester, f, 1),
+      'Sage · Engineer · openharness · Claude\n'
+      'Working · Test host · Opus\n'
+      'Working on "Offline editing"\n'
+      'Last active 2 hours ago',
+    );
+    expect(f.glanceText(tester, 1), 'Working · Test host · Opus');
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(f.row(1)));
+    await tester.pumpAndSettle(const Duration(milliseconds: 800));
+    expect(find.text(rowTooltip(tester, f, 1)), findsOneWidget);
+    await mouse.removePointer();
+    await f.close(tester);
+  });
 
   // The PM's row and details read the configuration's raw "opus" or "claude-opus-5-5" (2026-10-28): both name the
   // model as people know it.
@@ -279,9 +288,9 @@ void main() {
     };
     await f.controller.refresh();
     await f.show(tester);
-    expect(f.lineText(tester, 1), contains('Opus 5.5'));
-    expect(f.lineText(tester, 1), isNot(contains('unknown')));
-    await tester.tap(f.row(1));
+    expect(f.glanceText(tester, 1), contains('Opus 5.5'));
+    expect(f.glanceText(tester, 1), isNot(contains('unknown')));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(
       find.descendant(
@@ -305,10 +314,10 @@ void main() {
     );
     expect(rowTooltip(tester, f, 0), contains('Codex'));
     // No native state and no task: idle as far as the Swarm's work goes; the tooltip says what is not known.
-    expect(f.lineText(tester, 0), 'Idle');
+    expect(f.glanceText(tester, 0), 'Idle');
     expect(rowTooltip(tester, f, 0), contains('Status unavailable'));
     expect(rowTooltip(tester, f, 0), isNot(contains('Last active')));
-    await tester.tap(f.row(0));
+    await tester.longPress(f.row(0));
     await tester.pumpAndSettle();
     for (final absent in [
       'Model',
@@ -345,7 +354,7 @@ void main() {
     await f.controller.refresh();
     await f.show(tester);
     expect(f.activity(tester, 1), HarnessActivity.needsInput);
-    expect(f.lineText(tester, 1), 'Waiting · Test host');
+    expect(f.glanceText(tester, 1), 'Waiting · Test host');
     expect(rowTooltip(tester, f, 1), contains('Needs input'));
     expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     await f.close(tester);
@@ -365,7 +374,7 @@ void main() {
       await f.show(tester);
       final tooltip = rowTooltip(tester, f, 1);
       expect(tooltip, contains(title));
-      expect(f.lineText(tester, 1), 'Working · Test host');
+      expect(f.glanceText(tester, 1), 'Working · Test host');
       expect(tester.getSize(f.line(1)).height, lessThan(30));
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
@@ -418,7 +427,7 @@ void main() {
     ];
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Offline editing'), findsOneWidget);
@@ -462,7 +471,7 @@ void main() {
     );
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(
       find.byTooltip('https://github.com/acme/project/pull/42'),
@@ -495,7 +504,7 @@ void main() {
     }
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(
       find.byTooltip('https://github.com/acme/project/pull/42'),
@@ -532,7 +541,7 @@ void main() {
     };
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(
       find.byTooltip('https://github.com/acme/project/pull/42'),
@@ -567,7 +576,7 @@ void main() {
     }
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(find.text('Latest PR'), findsNothing);
     expect(f.controller.messages('offline').length, 300);
@@ -592,7 +601,7 @@ void main() {
     };
     await f.controller.refresh();
     await f.show(tester);
-    await tester.tap(f.row(1));
+    await tester.longPress(f.row(1));
     await tester.pumpAndSettle();
     expect(find.text('Unrecognized setting'), findsOneWidget);
     expect(find.text('unmapped-mode-id'), findsNothing);
@@ -620,7 +629,7 @@ void main() {
       };
       await f.controller.refresh();
       await f.show(tester);
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
       expect(find.text('Read only, asks you'), findsOneWidget);
       expect(find.text('Unrecognized setting'), findsNothing);
@@ -645,7 +654,7 @@ void main() {
       };
       await f.controller.refresh();
       await f.show(tester);
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
       expect(find.text('Reads only, never asks'), findsOneWidget);
       expect(find.text('Unrecognized setting'), findsNothing);
@@ -669,7 +678,7 @@ void main() {
         rowTooltip(tester, f, 1),
         contains('Waiting for a person to answer'),
       );
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
       expect(find.text('Who can answer'), findsOneWidget);
       expect(
@@ -684,7 +693,7 @@ void main() {
       await tester.pumpAndSettle();
       f.app.stateOf('m')!.blockedAgents.clear();
       await f.show(tester);
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
       expect(find.text('Who can answer'), findsNothing);
       await f.close(tester);
@@ -694,7 +703,7 @@ void main() {
   group('agent details Owner', () {
     Future<void> openDetails(WidgetTester tester, RosterFixture f) async {
       await f.show(tester);
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
     }
 
@@ -753,7 +762,7 @@ void main() {
     expect(f.controller.snapshot!.agents.first.id, 'agent-0');
     expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
     expect(f.controller.snapshot!.agents.first.engine, 'claude');
-    await tester.tap(f.row(0));
+    await tester.longPress(f.row(0));
     await tester.pumpAndSettle();
     expect(find.text('Claude'), findsOneWidget);
     expect(find.text('Sonnet'), findsOneWidget);
@@ -1188,7 +1197,7 @@ void main() {
         tester.getTopLeft(f.row(1)).dy,
         lessThan(tester.getTopLeft(f.row(3)).dy),
       );
-      await tester.tap(f.row(1));
+      await tester.longPress(f.row(1));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
@@ -1270,12 +1279,12 @@ void main() {
       ..['assignment'] = {'agentId': 'agent-1', 'status': 'planned'};
     await f.controller.refresh();
     await f.show(tester, nativeState: false);
-    expect(f.lineText(tester, 1), 'Assigned');
+    expect(f.glanceText(tester, 1), 'Assigned');
     expect(
       rowTooltip(tester, f, 1),
       contains('Assigned to "Polish navigation"'),
     );
-    expect(f.lineText(tester, 0), 'Idle');
+    expect(f.glanceText(tester, 0), 'Idle');
     // Unseen by this computer, the Swarm's held task gives the mark; the words
     // still say only Assigned.
     expect(f.activity(tester, 1), HarnessActivity.working);
@@ -1331,7 +1340,7 @@ void main() {
             : 'Assigned to "Polish navigation"';
         expect(f.activity(tester, 1), shown);
         expect(
-          f.lineText(tester, 1),
+          f.glanceText(tester, 1),
           activity == HarnessActivity.working
               ? 'Working · Test host'
               : 'Assigned · Test host',
@@ -1343,7 +1352,7 @@ void main() {
       }
       await f.show(tester, nativeState: false);
       expect(f.activity(tester, 1), HarnessActivity.working);
-      expect(f.lineText(tester, 1), 'Assigned');
+      expect(f.glanceText(tester, 1), 'Assigned');
       await f.close(tester);
     },
   );
@@ -1362,7 +1371,7 @@ void main() {
     (f.server.state['conversations'] as List).add(currentTask);
     await f.controller.refresh();
     await f.show(tester, nativeState: false);
-    expect(f.lineText(tester, 1), 'Assigned');
+    expect(f.glanceText(tester, 1), 'Assigned');
     expect(
       rowTooltip(tester, f, 1),
       contains('Assigned to "Polish navigation"'),
@@ -1372,7 +1381,7 @@ void main() {
     (currentTask['assignment'] as Map)['status'] = 'cancelled';
     await f.controller.refresh();
     await tester.pumpAndSettle();
-    expect(f.lineText(tester, 1), 'Idle');
+    expect(f.glanceText(tester, 1), 'Idle');
     expect(rowTooltip(tester, f, 1), isNot(contains('Polish navigation')));
     expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     await f.close(tester);
@@ -1391,7 +1400,8 @@ void main() {
       ),
       (
         'review',
-        HarnessActivity.idle,
+        // In review waits on its reviewer whatever this Mac reads (Dee, 2026-10-30).
+        HarnessActivity.done,
         'Waiting for review on "Polish navigation"',
         'In review · Test host',
       ),
@@ -1408,7 +1418,7 @@ void main() {
       await f.controller.refresh();
       await f.show(tester);
       expect(f.activity(tester, 1), activity);
-      expect(f.lineText(tester, 1), line);
+      expect(f.glanceText(tester, 1), line);
       expect(rowTooltip(tester, f, 1), contains(label));
       expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     }
@@ -1481,7 +1491,7 @@ void main() {
           ];
         await f.show(tester);
         expect(f.activity(tester, 1), activity);
-        expect(f.lineText(tester, 1), '$line · Test host');
+        expect(f.glanceText(tester, 1), '$line · Test host');
         expect(rowTooltip(tester, f, 1), contains(status));
         expect(f.inRow(1, find.textContaining('Working')), findsNothing);
         expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
@@ -1630,10 +1640,10 @@ void main() {
       expect(tops.toSet(), hasLength(expected.length));
       // The words agree with the mark where something stops the agent; a task
       // with no turn seen still reads Assigned.
-      expect(f.lineText(tester, 6), startsWith('Down'));
-      expect(f.lineText(tester, 7), startsWith('Down'));
-      expect(f.lineText(tester, 8), startsWith('Down'));
-      expect(f.lineText(tester, 1), startsWith('Assigned'));
+      expect(f.glanceText(tester, 6), startsWith('Down'));
+      expect(f.glanceText(tester, 7), startsWith('Down'));
+      expect(f.glanceText(tester, 8), startsWith('Down'));
+      expect(f.glanceText(tester, 1), startsWith('Assigned'));
       final saved = grid.AppTheme.brightness.value;
       addTearDown(() => grid.AppTheme.brightness.value = saved);
       for (final brightness in Brightness.values) {
@@ -1681,13 +1691,13 @@ void main() {
       reports(mac: silent, team: now);
       await f.controller.refresh();
       await f.show(tester);
-      expect(f.lineText(tester, 1), startsWith('Idle · Mac Studio'));
+      expect(f.glanceText(tester, 1), startsWith('Idle · Mac Studio'));
       expect(f.activity(tester, 1), HarnessActivity.idle);
       reports(mac: now, team: silent);
       await f.controller.refresh();
       await f.show(tester);
       expect(f.activity(tester, 1), HarnessActivity.offline);
-      expect(f.lineText(tester, 1), startsWith('Down'));
+      expect(f.glanceText(tester, 1), startsWith('Down'));
       await f.close(tester);
     },
   );
@@ -1732,7 +1742,11 @@ void main() {
       await f.show(tester, nativeState: false);
       expect(f.activity(tester, 1), HarnessActivity.working);
       expect(f.activity(tester, 3), HarnessActivity.idle);
-      expect(find.text('Private plans'), findsNothing);
+      // Nor its title, on the row's task line or on hover.
+      expect(find.textContaining('Private plans'), findsNothing);
+      expect(find.textContaining('Mira and Sparky'), findsNothing);
+      expect(f.lineText(tester, 3), 'Idle');
+      expect(rowTooltip(tester, f, 3), isNot(contains('Private plans')));
       // The same group, once the reader is in it, does change the mark.
       ((private['audience'] as Map)['people'] as List).add({'id': 'owner'});
       await f.controller.refresh();
@@ -1777,7 +1791,7 @@ void main() {
       expect(f.activity(tester, 0), HarnessActivity.idle);
       // Lost work reads Lost on its line; its mark is the tabs' Offline.
       expect(f.activity(tester, 4), HarnessActivity.offline);
-      expect(f.lineText(tester, 4), startsWith('Lost'));
+      expect(f.glanceText(tester, 4), startsWith('Lost'));
       final tops = [
         for (final i in [3, 1, 0, 4]) tester.getTopLeft(f.row(i)).dy,
       ];
@@ -2051,4 +2065,277 @@ void main() {
       );
     }
   }
+
+  group('Swarm-first marks (Dee, 2026-10-30)', () {
+    /// A task the Swarm holds for [agent], with its last progress [ago] and
+    /// its lease, as the backend sends them (assignment.progressAt and
+    /// leaseUntil, five minutes apart).
+    Map<String, dynamic> task(
+      String id,
+      String title,
+      String agent,
+      String status, {
+      required Duration ago,
+      Duration lease = const Duration(minutes: 5),
+    }) {
+      final at = DateTime.now().subtract(ago).millisecondsSinceEpoch;
+      return {
+        ...conversationFixture(id, title),
+        'assignment': {
+          'agentId': agent,
+          'status': status,
+          'progressAt': at,
+          'leaseUntil': at + lease.inMilliseconds,
+        },
+      };
+    }
+
+    /// This Mac sees the agents' machine (a shared one, as Dee's Mac sees the
+    /// Mac Studio) and has no turn reported for any of them: it reads idle.
+    void seenIdleHere(RosterFixture f) {
+      f.app.stateOf('m')!.agents = [
+        for (final i in [0, 1, 3])
+          Agent(id: 'a$i', name: 'n$i', engine: 'codex'),
+      ];
+    }
+
+    testWidgets(
+      'an agent this Mac reads as idle shows the Swarm\'s fresh work: working and in review',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 4, seconds: 10),
+          ),
+          task(
+            't3',
+            'Reviewer names',
+            'agent-3',
+            'review',
+            ago: const Duration(minutes: 20, seconds: 10),
+          ),
+        ]);
+        await f.controller.refresh();
+        seenIdleHere(f);
+        await f.show(tester);
+        expect(f.activity(tester, 1), HarnessActivity.working);
+        expect(f.activity(tester, 3), HarnessActivity.done);
+        expect(f.activity(tester, 0), HarnessActivity.idle);
+        // The details line: the task in plain words and the time since its
+        // last progress; no task, the state in a word.
+        expect(f.lineText(tester, 1), 'Sidebar rescan fix · 4m');
+        expect(f.lineText(tester, 3), 'Reviewer names · 20m');
+        expect(f.lineText(tester, 0), 'Idle');
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'a task past its lease is status unavailable; a done task waits for its merge',
+      (tester) async {
+        final f = await fixture(tester);
+        final done =
+            task(
+                't3',
+                'Reviewer names',
+                'agent-3',
+                'done',
+                ago: const Duration(minutes: 30),
+              )
+              ..['cards'] = {
+                'pullRequests': [
+                  <String, Object>{
+                    'url': 'https://github.com/o/r/pull/7',
+                    'messageId': 'pr-card',
+                  },
+                ],
+              };
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 9),
+          ),
+          done,
+        ]);
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false);
+        // Nothing has said how agent-1 is for longer than its lease.
+        expect(f.activity(tester, 1), HarnessActivity.unknown);
+        expect(f.lineText(tester, 1), 'Sidebar rescan fix · 9m');
+        // Its pull request not merged yet: waiting, with the task it waits on.
+        expect(f.activity(tester, 3), HarnessActivity.done);
+        expect(f.lineText(tester, 3), 'Reviewer names · 30m');
+        // Merged: nothing left for it, idle.
+        ((done['cards'] as Map)['pullRequests'] as List).first['mergedAt'] =
+            DateTime.now().millisecondsSinceEpoch;
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        expect(f.activity(tester, 3), HarnessActivity.idle);
+        expect(f.lineText(tester, 3), 'Idle');
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'this Mac\'s reading wins only when it is live, or the Swarm\'s is stale',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 9),
+          ),
+          task(
+            't3',
+            'Reviewer names',
+            'agent-3',
+            'review',
+            ago: const Duration(minutes: 2),
+          ),
+        ]);
+        await f.controller.refresh();
+        seenIdleHere(f);
+        // A turn running here is fresher than a review status.
+        f.app.stateOf('m')!.processingAgentIds.add('a3');
+        await f.show(tester);
+        expect(f.activity(tester, 3), HarnessActivity.working);
+        // Past its lease, the Swarm says nothing fresh: this Mac's idle stands.
+        expect(f.activity(tester, 1), HarnessActivity.idle);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'machine, engine, model and effort are on hover, not on the row; most recent progress first within a mark',
+      (tester) async {
+        final f = await fixture(tester);
+        final agents = f.server.state['agents'] as List;
+        (agents[1] as Map)['configuration'] = {
+          'engine': 'claude',
+          'model': 'opus',
+          'effort': 'high',
+        };
+        f.server.state['machines'] = [
+          {
+            'machineId': 'm',
+            'name': 'Mac Studio',
+            'contributorId': 'owner',
+            'observation': {
+              'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            },
+          },
+        ];
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 4),
+          ),
+          task(
+            't3',
+            'Reviewer names',
+            'agent-3',
+            'working',
+            ago: const Duration(minutes: 1),
+          ),
+        ]);
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false);
+        final tip = rowTooltip(tester, f, 1);
+        expect(tip, contains('Mac Studio'));
+        expect(tip, contains('Claude'));
+        expect(tip, contains('Opus'));
+        expect(tip, contains('high'));
+        expect(tip, contains('Sidebar rescan fix'));
+        final line = f.lineText(tester, 1);
+        for (final word in ['Claude', 'Opus', 'high', 'Mac Studio']) {
+          expect(line, isNot(contains(word)));
+        }
+        // Both working: the one heard from a minute ago comes first.
+        expect(
+          tester.getTopLeft(f.row(3)).dy,
+          lessThan(tester.getTopLeft(f.row(1)).dy),
+        );
+        expect(
+          tester.getTopLeft(f.row(1)).dy,
+          lessThan(tester.getTopLeft(f.row(0)).dy),
+        );
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'clicking a row opens its task\'s conversation; a needs-you row its question; no task, its details',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 1),
+          ),
+          task(
+            't3',
+            'Pick a sign-in page',
+            'agent-3',
+            'needs_human',
+            ago: const Duration(minutes: 12),
+          ),
+        ]);
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false);
+        expect(f.activity(tester, 3), HarnessActivity.needsInput);
+        await tester.tap(f.row(1));
+        await tester.pumpAndSettle();
+        expect(f.answered, 't1');
+        await tester.tap(f.row(3));
+        await tester.pumpAndSettle();
+        expect(f.answered, 't3');
+        f.answered = null;
+        await tester.tap(f.row(0));
+        await tester.pumpAndSettle();
+        expect(f.answered, isNull);
+        expect(find.widgetWithText(AlertDialog, 'Role'), findsOneWidget);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'access revoked while the list is open clears every row and task title',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['conversations'] as List).add(
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 1),
+          ),
+        );
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false);
+        expect(find.text('Sidebar rescan fix · 1m'), findsOneWidget);
+        f.controller.revokeAccess('Access removed');
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Sidebar rescan fix'), findsNothing);
+        expect(f.row(1), findsNothing);
+        await f.close(tester);
+      },
+    );
+  });
 }

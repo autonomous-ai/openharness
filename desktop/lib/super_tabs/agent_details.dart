@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'agent_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -251,7 +252,18 @@ Future<void> showSuperTabAgentDetails(
       listenable: Listenable.merge([controller, ?app]),
       builder: (context, _) {
         final current = controller.snapshot?.agent(agent.id) ?? agent;
-        final info = SuperTabAgentInfo(controller, app, current);
+        // The same words the Agents list's hover says: the Swarm's state first.
+        final info = SuperTabAgentInfo(
+          controller,
+          app,
+          current,
+          activity: superTabAgentWordsActivity(
+            controller,
+            app,
+            current,
+            now: DateTime.now(),
+          ),
+        );
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;

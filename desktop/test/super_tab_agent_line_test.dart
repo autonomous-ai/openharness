@@ -118,8 +118,15 @@ Future<ConversationServer> _swarm(
 }
 
 Finder _row(String id) => find.byKey(ValueKey('super-member-$id'));
-Finder _line(String id, String text) =>
-    find.descendant(of: _row(id), matching: find.text(text));
+
+/// The row's state, machine, model and effort, now on hover (Dee, 2026-10-30):
+/// the row's own line is its task.
+Finder _line(String id, String text) => find.ancestor(
+  of: _row(id),
+  matching: find.byWidgetPredicate(
+    (w) => w is Tooltip && (w.message ?? '').split('\n').contains(text),
+  ),
+);
 
 void main() {
   group('an agent row', () {
