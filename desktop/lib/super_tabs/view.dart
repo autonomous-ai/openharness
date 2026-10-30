@@ -2933,21 +2933,27 @@ class _SuperTabViewState extends State<SuperTabView>
               : Column(
                   children: [
                     // Above the list, never over a message.
-                    if (_unread.offersJump(c.selectedId))
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          grid.AppDesktop.panelPadding,
-                          grid.AppDesktop.controlGap,
-                          grid.AppDesktop.panelPadding,
-                          0,
-                        ),
-                        child: Center(
-                          child: SuperTabJumpToUnread(
-                            down: _unread.below,
-                            onPressed: () => _revealUnreadLine(c.selectedId),
-                          ),
-                        ),
-                      ),
+                    SuperTabUnreadBand(
+                      key: ValueKey('super-unread-band-${c.selectedId}'),
+                      scroll: _scroll[c.selectedId],
+                      child: _unread.offersJump(c.selectedId)
+                          ? Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                grid.AppDesktop.panelPadding,
+                                grid.AppDesktop.controlGap,
+                                grid.AppDesktop.panelPadding,
+                                0,
+                              ),
+                              child: Center(
+                                child: SuperTabJumpToUnread(
+                                  down: _unread.below,
+                                  onPressed: () =>
+                                      _revealUnreadLine(c.selectedId),
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
                     Expanded(
                       child: Stack(
                         children: [

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -211,4 +212,51 @@ class SuperTabJumpToUnread extends StatelessWidget {
     ),
     label: const Text('Jump to first unread'),
   );
+}
+
+/// The jump pill's place above the list ([child], or nothing). When it opens
+/// or closes, [scroll] moves by the same height in that frame, so the messages
+/// under the reader's eye stay where they were.
+class SuperTabUnreadBand extends SingleChildRenderObjectWidget {
+  const SuperTabUnreadBand({super.key, required this.scroll, super.child});
+
+  final ScrollController? scroll;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      RenderSuperTabUnreadBand(scroll);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    RenderSuperTabUnreadBand renderObject,
+  ) => renderObject.scroll = scroll;
+}
+
+class RenderSuperTabUnreadBand extends RenderProxyBox {
+  RenderSuperTabUnreadBand(this.scroll);
+
+  ScrollController? scroll;
+  double? _height;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final previous = _height;
+    _height = size.height;
+    final scroll = this.scroll;
+    if (previous == null ||
+        previous == size.height ||
+        scroll == null ||
+        !scroll.hasClients ||
+        !scroll.position.hasPixels) {
+      return;
+    }
+    // Laid out before the list below it, which then takes the corrected
+    // offset: the list's top moves by the change, and the messages do not.
+    // Only the view's edge moves, not the content, so this is not a
+    // correctBy (which moves the place the chat's list keeps as well).
+    final position = scroll.position;
+    position.correctPixels(position.pixels + size.height - previous);
+  }
 }

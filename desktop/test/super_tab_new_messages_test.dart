@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -502,6 +503,84 @@ void main() {
     await tester.tap(find.byKey(_jump));
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  /// The offline chat's 60 messages from the Lead, read up to [mark].
+  ConversationServer offlineChat(int mark) {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', mark);
+    return server;
+  }
+
+  Finder offlineList() =>
+      find.byKey(const PageStorageKey('super-messages-tab-offline'));
+
+  Future<double> linkedTop(
+    WidgetTester tester,
+    ConversationServer server,
+  ) async {
+    final c = await show(tester, server);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-45',
+      ),
+    );
+    await tester.pumpAndSettle();
+    return tester
+        .getTopLeft(find.byKey(const ValueKey('super-message-message-45')))
+        .dy;
+  }
+
+  testWidgets('the pill\'s band appearing leaves the linked message where '
+      'the link put it', (tester) async {
+    final read = await linkedTop(tester, offlineChat(62));
+    expect(find.byKey(_jump), findsNothing);
+    final unread = await linkedTop(tester, offlineChat(22));
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(unread, read);
+  });
+
+  testWidgets('the band going as the reader scrolls up to the line moves the '
+      'messages only by the scroll', (tester) async {
+    await linkedTop(tester, offlineChat(22));
+    expect(find.byKey(_jump), findsOneWidget);
+    final rows = find.byWidgetPredicate(
+      (w) =>
+          w.key is ValueKey<String> &&
+          (w.key! as ValueKey<String>).value.startsWith(
+            'super-message-message-',
+          ),
+    );
+    var steps = 0;
+    while (find.byKey(_jump).evaluate().isNotEmpty && steps++ < 60) {
+      final list = tester.getRect(offlineList());
+      // A message in the middle of the view, still on screen after the step.
+      final middle = rows.evaluate().map((e) => e.widget.key!).firstWhere((
+        key,
+      ) {
+        final top = tester.getTopLeft(find.byKey(key)).dy;
+        return top > list.center.dy - 100 && top < list.center.dy + 100;
+      });
+      final before = tester.getTopLeft(find.byKey(middle)).dy;
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(
+          position: list.center,
+          scrollDelta: const Offset(0, -30),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(find.byKey(middle)).dy - before,
+        moreOrLessEquals(30, epsilon: .5),
+        reason: 'step $steps',
+      );
+    }
     expect(find.byKey(_jump), findsNothing);
   });
 
