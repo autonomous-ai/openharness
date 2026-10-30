@@ -61,7 +61,7 @@ export const routeRecordSchema = z.object({
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
   /** The step up this attempt is (stepUp.ts), written by the server from its group, never taken from the route. */
   stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
-  /** Why a review runs on its Builder's own engine (rules.ts sameEngineReview), written by the server, never taken from the route. */
+  /** Why a review ran on its Builder's own engine, on records from before 2026-10-30, when another engine had to review when it could. Never written since, never taken from the route. */
   sameEngine: z.string().min(1).max(300).optional(),
   /** The job's kind from the fixed list (evidence/jobKind.ts), written by the server from its group, never taken from the route. */
   jobKind: z.enum(JOB_KINDS).optional(),

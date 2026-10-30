@@ -467,13 +467,14 @@ number and why) is kept on the attempt and its route decision.
 **Reviews.** A review never runs on a grid model or on a model the policy rates
 below 2. A model the policy does not name, a small Codex variant such as a mini
 or nano among them, is rated 1; an agent launched on its engine's own model is
-rated by that engine's `default` row. A review runs on another engine than the
-reviewed Builder's while a strong Reviewer of another engine can run in the
-Swarm (a Builder on a grid model counts as that model's family). A Swarm with
-one engine keeps its automatic reviews: the Builder's own engine reviews at its
-top tier (quality 3) only, and the route decision records why. The server
-refuses such a start, assignment or pick from an agent, whatever the soft rules
-say, and lets a person through with a warning.
+rated by that engine's `default` row. Any engine reviews any build, the
+Builder's own included (Ken, 2026-10-30: a Reviewer is a session of its own
+with fresh context, so its strength is what counts), and a review never waits
+for another engine's quota. The agent that built the work never reviews it.
+The route holds a Reviewer to the Builder's strength where one can run, and the
+owner's preferred engine for kind `review` ranks the rest. The server refuses
+such a start, assignment or pick from an agent, whatever the soft rules say,
+and lets a person through with a warning.
 
 Design:
 

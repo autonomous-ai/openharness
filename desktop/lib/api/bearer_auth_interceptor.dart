@@ -14,6 +14,16 @@ class BearerAuthInterceptor extends Interceptor {
 
   static const _tokenKey = 'bearer.token';
   static const _retriedKey = 'bearer.retried';
+  static const _signInKey = 'bearer.signIn';
+
+  /// Whether someone signed in or out here since [options] went out (as the
+  /// daemon's account fence asks): its retry would then go out as another
+  /// account. A source that cannot say is taken as unchanged.
+  bool _signInMoved(RequestOptions options) => switch (_auth) {
+    final SignInRevision source =>
+      options.extra[_signInKey] != source.signInRevision,
+    _ => false,
+  };
 
   @override
   Future<void> onRequest(
@@ -21,6 +31,9 @@ class BearerAuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     try {
+      if (_auth case final SignInRevision source) {
+        options.extra[_signInKey] = source.signInRevision;
+      }
       final token = await _auth.accessToken();
       options.headers['authorization'] = 'Bearer $token';
       options.headers['x-autonomous-env'] = autonomousEnv;
@@ -41,11 +54,25 @@ class BearerAuthInterceptor extends Interceptor {
       handler.next(response);
       return;
     }
+    // A 401 for an account that has since signed out is not the current
+    // account's to retry: A's command must never run as B.
+    final changed = DioException(
+      requestOptions: options,
+      error: const SignInChanged(),
+    );
+    if (_signInMoved(options)) {
+      handler.reject(changed);
+      return;
+    }
     try {
       await _auth.accessToken(
         force: true,
         failedToken: options.extra[_tokenKey] as String?,
       );
+      if (_signInMoved(options)) {
+        handler.reject(changed);
+        return;
+      }
       options.extra[_retriedKey] = true;
       // A form is read once: the retry sends a copy, as the first try did.
       if (options.data case final FormData form) options.data = form.clone();

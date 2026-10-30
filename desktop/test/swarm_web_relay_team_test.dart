@@ -7,6 +7,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
@@ -48,6 +49,26 @@ class _Api extends ApiClient {
   _Api() : super(config: AppConfig.dev, session: AuthSession());
 
   final posted = <String>[];
+
+  /// Swarm calls sent straight to the backend, as the web sends them.
+  final direct = <String>[];
+
+  @override
+  Future<Response<dynamic>> superTabCall(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    direct.add('$method $path');
+    return Response(
+      requestOptions: RequestOptions(path: path),
+      statusCode: 200,
+      data: {
+        'success': true,
+        'data': {'result': <String, dynamic>{}},
+      },
+    );
+  }
 
   @override
   Future<Response<dynamic>> postForm(
@@ -94,6 +115,7 @@ void main() {
       config: AppConfig.dev,
       authSession: session,
       connectionForTest: (id) => _Daemon(id, relayed),
+      paneLayoutStore: PaneLayoutStore(storage: storage),
       viewer: ViewerServices(
         config: AppConfig.dev,
         session: session,
@@ -133,9 +155,16 @@ void main() {
     expect(_row('old').isTeamAccount, isFalse);
   });
 
-  test('on the web a Swarm post goes through the person\'s own machine, never '
-      'a Team account machine that sorts first or is selected', () async {
+  // The web sends Swarm calls straight to the backend with the person's own
+  // sign-in (docs/specs/2026-10-30-web-swarm-direct.md): no machine relays
+  // them, so a Harness Team account machine never can. Shared tabs still ask
+  // one of the person's own machines, never the Team one.
+  test('on the web a Swarm post goes straight to the backend, through no '
+      'machine: not a Team account machine that sorts first or is selected, '
+      'nor the person\'s own', () async {
     web();
+    final api = _Api();
+    app.api = api;
     // The Team account on the person's Mac: its daemon signs in with a team
     // session, which the server refuses to act as the person.
     online(_row('a-team', sessionKind: 'team', hostMachineId: 'own-mac'));
@@ -144,7 +173,8 @@ void main() {
 
     expect(app.sharedTabsTarget?.machine.machineId, 'own-mac');
     await post();
-    expect(relayed, ['own-mac']);
+    expect(api.direct, ['POST /api/super-tabs/tab/commands']);
+    expect(relayed, isEmpty);
   });
 
   /// The desktop app on a computer: its own machine is the one it asks.
@@ -161,12 +191,15 @@ void main() {
     app.machineStates[local.machineId]!.localOnly = true;
   }
 
-  test('natively a Swarm post goes through this computer\'s own machine', () async {
-    native(_row('here', sessionKind: 'computer'));
-    expect(app.sharedTabsTarget?.machine.machineId, 'here');
-    await post();
-    expect(relayed, ['here']);
-  });
+  test(
+    'natively a Swarm post goes through this computer\'s own machine',
+    () async {
+      native(_row('here', sessionKind: 'computer'));
+      expect(app.sharedTabsTarget?.machine.machineId, 'here');
+      await post();
+      expect(relayed, ['here']);
+    },
+  );
 
   test('natively on a computer switched to a Harness Team account nothing is '
       'sent, and the app says this computer cannot send it', () async {
@@ -180,31 +213,32 @@ void main() {
       throwsA(
         isA<SuperTabFailure>()
             .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
-            .having((f) => f.message, 'message', contains('This computer runs Swarm agents')),
+            .having(
+              (f) => f.message,
+              'message',
+              contains('This computer runs Swarm agents'),
+            ),
       ),
     );
     expect(relayed, isEmpty);
   });
 
-  test('on the web with only a Team account machine online nothing is sent, '
-      'and the app says no machine of the person\'s is online', () async {
-    web();
-    online(_row('a-team', sessionKind: 'team', hostMachineId: 'own-mac'));
-    app.selectedMachineId = 'a-team';
+  test(
+    'on the web with only a Team account machine online the post still '
+    'goes to the backend, and nothing goes through the Team machine',
+    () async {
+      web();
+      final api = _Api();
+      app.api = api;
+      online(_row('a-team', sessionKind: 'team', hostMachineId: 'own-mac'));
+      app.selectedMachineId = 'a-team';
 
-    expect(app.sharedTabsTarget, isNull);
-    await expectLater(
-      post(),
-      throwsA(
-        isA<SuperTabFailure>().having(
-          (f) => f.code,
-          'code',
-          'MACHINE_UNAVAILABLE',
-        ),
-      ),
-    );
-    expect(relayed, isEmpty);
-  });
+      expect(app.sharedTabsTarget, isNull);
+      await post();
+      expect(api.direct, ['POST /api/super-tabs/tab/commands']);
+      expect(relayed, isEmpty);
+    },
+  );
 
   group('on a computer switched to a Harness Team account', () {
     late _Api api;
@@ -225,11 +259,14 @@ void main() {
       app.api = api = _Api();
     }
 
-    test('a file is sent from this computer\'s own machine as before', () async {
-      computer('computer');
-      await upload();
-      expect(api.posted, ['/api/super-tabs/tab/attachments']);
-    });
+    test(
+      'a file is sent from this computer\'s own machine as before',
+      () async {
+        computer('computer');
+        await upload();
+        expect(api.posted, ['/api/super-tabs/tab/attachments']);
+      },
+    );
 
     test('a file is refused here, plainly, and never sent', () async {
       computer('team');
@@ -244,21 +281,24 @@ void main() {
       expect(api.posted, isEmpty);
     });
 
-    test('a profile picture is refused here, plainly, and never sent', () async {
-      computer('team');
-      await expectLater(
-        app.superTabs.avatarUpload(
-          tabId: 'tab',
-          png: Uint8List.fromList([1, 2, 3]),
-        ),
-        throwsA(
-          isA<SuperTabFailure>()
-              .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
-              .having((f) => f.message, 'message', plainly),
-        ),
-      );
-      expect(api.posted, isEmpty);
-    });
+    test(
+      'a profile picture is refused here, plainly, and never sent',
+      () async {
+        computer('team');
+        await expectLater(
+          app.superTabs.avatarUpload(
+            tabId: 'tab',
+            png: Uint8List.fromList([1, 2, 3]),
+          ),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
+                .having((f) => f.message, 'message', plainly),
+          ),
+        );
+        expect(api.posted, isEmpty);
+      },
+    );
 
     test('a shared-tabs read is refused plainly too, and never sent', () async {
       computer('team');
