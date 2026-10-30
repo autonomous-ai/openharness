@@ -24,7 +24,7 @@ import { attribution } from '../github/attribution.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
-import { readInbox } from '../superTabs/read/inbox.js'
+import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -364,7 +364,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
   // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, (req, reply) => respond(reply, () => readInbox(store, req.user!, req.params.tabId)))
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await inboxWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many inbox reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
+    })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
