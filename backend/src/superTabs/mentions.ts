@@ -195,14 +195,26 @@ export async function markDone(tx: Tx, tabId: string, id: string, personId: stri
   await tx.superTabMention.updateMany({ where: { id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'done' } })
 }
 
+/** A person's unexpired tags in a Swarm, waiting or answered, newest first: the rows [readable] lists and counts. */
+const tagRows = (tabId: string, personId: string, now: number, open: boolean) => ({
+  where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...(open ? waiting : { resolvedAt: { not: null } }) },
+  orderBy: { createdAt: 'desc' as const }, take: 500,
+})
+
+/** The conversations of a person's waiting tags, newest tag first, once each: those [waitingMentions] may read beyond what a
+ *  read holds, so a change poll can hold them per conversation (read/service.ts). */
+export async function waitingTagConversations(tx: Tx, tabId: string, personId: string, now: number): Promise<string[]> {
+  const rows = await tx.superTabMention.findMany({ ...tagRows(tabId, personId, now, true), select: { conversationId: true } })
+  return [...new Set(rows.map(row => row.conversationId))]
+}
+
 /** The person's own unexpired tags in conversations they can still read, newest first, each with its conversation. The badge
  *  counts this same list. Ordinary loads leave quiet (dormant) conversations out of the state, so the ones a tag is in are
  *  read here: the count and the list check the same conversations whichever state they get.
  *  ponytail: capped at 500 per state; page it if a person ever gets more in 30 days. */
 async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   person(state, actor.userId)
-  const rows = await tx.superTabMention.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) },
-    ...(open ? waiting : { resolvedAt: { not: null } }) }, orderBy: { createdAt: 'desc' }, take: 500 })
+  const rows = await tx.superTabMention.findMany(tagRows(tabId, actor.userId, now, open))
   const groups = new Map(state.conversations.map(c => [c.id, c]))
   const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
