@@ -127,8 +127,9 @@ Route<void> swarmChatRoute({
 /// and the read settles it once: a project's chat then turns into its page;
 /// anything else, or access lost, stays the chat page. A copy of the Swarm
 /// read before the chat opened may be older than its project, so a chat no
-/// project names there waits for one read asked as it opens (as
-/// [SwarmProjectPage] reads on open).
+/// project names there is decided only by a read sent after it opened that
+/// got through (as [SwarmProjectPage] reads on open). A read that fails
+/// decides nothing: the reader's next one that gets through does.
 class SwarmOpenedChat extends StatefulWidget {
   const SwarmOpenedChat({
     super.key,
@@ -147,6 +148,9 @@ class SwarmOpenedChat extends StatefulWidget {
 
 class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
   SwarmSession? _session;
+
+  /// The Swarm's reader as last seen. What is asked of it, and waited for,
+  /// belongs to it: a new one starts again.
   SwarmReader? _reader;
 
   /// The project whose chat it is, once the read said so.
@@ -155,9 +159,13 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
   /// The read has said what the chat is; nothing more is listened to.
   bool _settled = false;
 
-  /// A read of the Swarm asked since it opened ([_readOnce]): under way,
-  /// and finished.
-  bool _reading = false, _read = false;
+  /// [_reader] was asked for a read sent after the chat opened ([_ask]).
+  bool _asked = false;
+
+  /// The count of [_reader]'s reads that got through ([SwarmReader.reads])
+  /// that a read sent after the chat opened brings it to; null until that
+  /// read is sent.
+  int? _decidedAt;
 
   @override
   void didChangeDependencies() {
@@ -176,19 +184,26 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
     super.dispose();
   }
 
+  void _follow(SwarmReader? reader) {
+    _reader?.removeListener(_look);
+    _reader?.reads.removeListener(_look);
+    _reader = reader;
+    reader?.addListener(_look);
+    // A read that got through but changed nothing tells only [reads].
+    reader?.reads.addListener(_look);
+    _asked = false;
+    _decidedAt = null;
+  }
+
   void _stopListening() {
     _session?.inbox.removeListener(_look);
-    _reader?.removeListener(_look);
-    _reader = null;
+    _follow(null);
   }
 
   void _look() {
     if (_settled || !mounted) return;
     final reader = _session?.inbox.reader(widget.swarmId);
-    if (reader != _reader) {
-      _reader?.removeListener(_look);
-      _reader = reader?..addListener(_look);
-    }
+    if (reader != _reader) _follow(reader);
     if (reader == null) return;
     if (reader.accessRevoked) return _settle(null);
     final snapshot = reader.snapshot;
@@ -198,9 +213,11 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
         .firstOrNull;
     if (project != null) return _settle(project.id);
     // Not a project's chat in this copy, which may be older than the
-    // project: a read since it opened decides.
-    if (_read) return _settle(null);
-    _readOnce(reader);
+    // project: a read sent since it opened that got through decides.
+    if (_decidedAt case final at? when reader.reads.value >= at) {
+      return _settle(null);
+    }
+    if (!_asked) _ask(reader);
   }
 
   void _settle(String? projectId) {
@@ -211,15 +228,22 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
     setState(() => _projectId = projectId);
   }
 
-  /// One read of [reader], joining one under way; what it brings decides.
-  void _readOnce(SwarmReader reader) {
-    if (_reading) return;
-    _reading = true;
+  /// Asks [reader] for a read sent from now. One under way may have been
+  /// sent before the chat opened, so it is let finish and one more is sent
+  /// after it: once, never again on a failure — the reader's own reads
+  /// carry on from there, so being offline asks nothing in a loop.
+  void _ask(SwarmReader reader) {
+    _asked = true;
+    void send() {
+      _decidedAt = reader.reads.value + 1;
+      unawaited(reader.refresh());
+    }
+
+    if (!reader.refreshing) return send();
     unawaited(
       reader.refresh().whenComplete(() {
-        if (!mounted || _settled) return;
-        _read = true;
-        _look();
+        if (!mounted || _settled || !identical(reader, _reader)) return;
+        send();
       }),
     );
   }

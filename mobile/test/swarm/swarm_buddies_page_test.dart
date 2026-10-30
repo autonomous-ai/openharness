@@ -166,8 +166,9 @@ void main() {
   ) async {
     await pump(tester, buddiesBackend());
 
-    // The second a frame later, at the row's start where it is then: still
-    // in sight while the chat slides in over it.
+    // Two in one frame, then a third a frame later, at the row's start
+    // where it is then: still in sight while the chat slides in over it.
+    await tester.tap(key(mobile));
     await tester.tap(key(mobile));
     await tester.pump(const Duration(milliseconds: 16));
     await tester.tapAt(tester.getTopLeft(key(mobile)) + const Offset(24, 24));

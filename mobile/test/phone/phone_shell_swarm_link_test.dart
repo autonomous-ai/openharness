@@ -206,26 +206,131 @@ void main() {
       expect(find.byType(SwarmProjectPage), findsOneWidget);
     });
 
-    testWidgets('a link whose first copy of the Swarm is older than its '
-        'project reads once more, and opens the project', (tester) async {
+    /// A Swarm whose first copy has no project yet; its change reads answer
+    /// as [_Changes.next] says when each is sent, and each waits for
+    /// [_Changes.gate] when one is set.
+    ({FakeSwarm fake, _Changes changes}) olderCopy() {
       final fake = swarm();
       final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      final control = _Changes();
       fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
         ...(await load(body) as Map<String, dynamic>),
         'head': part('head', 1, headData(projects: const [])),
       };
-      var newer = false;
-      fake.routes['/api/super-tabs/$tab/changes'] = (_) => newer
-          ? {...changes(cursor: 'c3'), 'head': part('head', 2, headData())}
-          : changes(cursor: 'c2');
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) async {
+        // What the server answers is fixed when the read is sent.
+        final next = control.next;
+        await control.gate?.future;
+        return switch (next) {
+          'fail' => throw const SuperTabFailure(
+            'TIMEOUT',
+            'The Swarm did not answer.',
+          ),
+          'newer' => {
+            ...changes(cursor: 'c3'),
+            'head': part('head', 2, headData()),
+          },
+          _ => changes(cursor: 'c2'),
+        };
+      };
+      return (fake: fake, changes: control);
+    }
+
+    SwarmHost host(WidgetTester tester) =>
+        tester.widget<SwarmScope>(find.byType(SwarmScope).first).notifier!;
+
+    testWidgets('a link whose first copy of the Swarm is older than its '
+        'project reads once more, and opens the project', (tester) async {
+      final (:fake, :changes) = olderCopy();
       (app as _LinkApp).swarm = fake;
       await start(tester);
       await frames(tester);
       expect(find.text('Mobile', skipOffstage: false), findsNothing);
 
-      newer = true;
+      changes.next = 'newer';
       await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
       await frames(tester);
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('a read that fails decides nothing: once one gets through, '
+        'the project opens', (tester) async {
+      final (:fake, :changes) = olderCopy();
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+
+      changes.next = 'fail';
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+      expect(find.byType(SwarmProjectPage), findsNothing, reason: 'offline');
+      final sent = fake.paths.where((p) => p.contains('/changes?')).length;
+      await frames(tester);
+      expect(
+        fake.paths.where((p) => p.contains('/changes?')).length,
+        lessThanOrEqualTo(sent + 1),
+        reason:
+            'no read asked again and again while it fails: the '
+            "reader's own poll, every 5 s, at most",
+      );
+
+      changes.next = 'newer';
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await frames(tester);
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('a read already under way when it opened does not decide: '
+        'one more is read, and opens the project', (tester) async {
+      final (:fake, :changes) = olderCopy();
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+
+      // Sent before the link opened: it answers the older copy.
+      changes.gate = Completer<void>();
+      final early = host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+      changes.next = 'newer';
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      changes.gate!.complete();
+      changes.gate = null;
+      await early;
+      await frames(tester);
+
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('a new reader for the Swarm starts the wait again: the old '
+        "one's read, ending after, decides nothing", (tester) async {
+      final (:fake, :changes) = olderCopy();
+      (app as _LinkApp).swarm = fake;
+      final list = fake.routes['/api/super-tabs/list']!;
+      await start(tester);
+      await frames(tester);
+
+      // The link's read, held, on the first reader.
+      changes.gate = Completer<void>();
+      final held = changes.gate!;
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      final old = host(tester).session!.inbox.reader(tab)!;
+
+      // The Swarm leaves the list and comes back with a new reader, whose
+      // first copy is still without the project; its change reads bring it.
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host(tester).session!.inbox.refresh();
+      changes.gate = null;
+      changes.next = 'newer';
+      fake.routes['/api/super-tabs/list'] = list;
+      await host(tester).session!.inbox.refresh();
+      expect(identical(host(tester).session!.inbox.reader(tab), old), isFalse);
+      // The old reader's read ends only now, answering the older copy.
+      held.complete();
+      await frames(tester);
+
       expectProjectAt(tester, 'm7');
     });
 
@@ -382,4 +487,10 @@ class _LinkApp extends DevicesApp {
 
   @override
   void handleAppResumed() {}
+}
+
+/// How [olderCopy]'s change reads answer.
+class _Changes {
+  String next = 'old';
+  Completer<void>? gate;
 }
