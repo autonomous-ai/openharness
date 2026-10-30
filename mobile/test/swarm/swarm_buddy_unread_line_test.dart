@@ -108,6 +108,7 @@ void main() {
     WidgetTester tester,
     FakeSwarm fake, {
     bool settle = true,
+    ValueNotifier<String?>? signedIn,
     Widget home = const SwarmConversationPage(
       swarmId: tab,
       conversationId: chat,
@@ -115,7 +116,7 @@ void main() {
   }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    final account = signedIn ?? ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -449,6 +450,58 @@ void main() {
       expect(onScreen(tester, find.text('Update 40.')), isFalse);
       expect(jump, findsNothing);
       expect(marksSent(fake, 'g1'), isNotEmpty, reason: 'read, once known');
+    });
+
+    testWidgets('a chat left behind, still reading, does not mark the new '
+        'one read: its line is placed from its own read', (tester) async {
+      final fake = backend([for (var i = 1; i <= 4; i++) said(i)], mark: 2);
+      final asked = <Completer<Object?>>[];
+      final page = fake.routes[messages]!;
+      fake.routes[messages] = (body) {
+        asked.add(Completer<Object?>());
+        return asked.last.future;
+      };
+      final parts = '/api/super-tabs/$tab/parts';
+      final answer = fake.routes[parts]!;
+      var down = false;
+      fake.routes[parts] = (body) {
+        if (down) {
+          throw const SuperTabFailure('INTERNAL', 'Swarm temporarily down.');
+        }
+        return answer(body);
+      };
+      final signedIn = ValueNotifier<String?>(me);
+      final host = await pump(tester, fake, settle: false, signedIn: signedIn);
+      expect(asked, hasLength(1), reason: 'the first session is reading');
+
+      down = true;
+      signedIn.value = null;
+      await tester.pump();
+      // A session made while the app is in front reads its Swarms at once.
+      host.foreground = true;
+      signedIn.value = me;
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      host.foreground = false;
+      final reader = host.session!.inbox.reader(tab)!;
+      expect(
+        reader.snapshot,
+        isNull,
+        reason: "the new session's Swarm is down",
+      );
+      expect(asked, hasLength(2), reason: 'and its chat is reading too');
+
+      asked[0].complete(page(null));
+      await tester.pump();
+      down = false;
+      await reader.refresh();
+      await tester.pump();
+      asked[1].complete(page(null));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Update 4.'), findsOneWidget);
+      expect(line, findsOneWidget);
     });
   });
 }

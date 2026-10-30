@@ -329,9 +329,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _watch();
     unawaited(
       c.load().then((_) {
+        // A chat left behind may finish reading after its replacement began.
+        if (!mounted || _conversation != c) return;
         _firstRead = true;
         _placeLine(c);
-        if (!mounted || _conversation != c || _noticeHandled) return;
+        if (_noticeHandled) return;
         if (widget.messageId case final messageId?) {
           _noticeHandled = true;
           unawaited(_jumpTo(c, messageId));
