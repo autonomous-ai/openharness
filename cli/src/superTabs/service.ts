@@ -37,7 +37,11 @@ import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
-const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty. TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<\'MSG\' … MSG); an empty stdin is refused and nothing is posted.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
+const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
+/** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
+ *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
+const BUDDY_POST_HELP = `${POST_ABOUT} TEXT is one argument, the message itself in quotes: 'your message', or "it's done" when it holds an apostrophe. A Buddy never passes - for TEXT: its message is checked for secrets, so one read from stdin is refused and nothing is posted.`
 /** Done or Stopped from an agent finishing its own work carries its session's token totals by model, read from its transcript
  *  now (core `usageFresh`): its attempt ends with every token it used, not a machine report up to a beat old (backend
  *  superTabs/costs/attempts.ts endRun; review of #2106). Counts only. No reading, and the status goes without them. */
@@ -123,6 +127,8 @@ const LEAD_HELP = { ...HELP, post: `post GROUP TEXT|- OPERATION_ID [--reply-to M
   commands: [...HELP.commands, { type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON', questions: [{ question: 'One question a person decides',
     options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' }] },
     { type: 'person.tell', personId: 'PERSON', text: 'A line for one person, in their Buddy chat; members watching your terminal see it too' }] }
+/** A Buddy's help: the same, with its post passing the message as TEXT itself (BUDDY_POST_HELP). */
+const BUDDY_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: ${BUDDY_POST_HELP}` }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
 /** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
 const POOLS_FRESH_MS = 5_000
@@ -336,6 +342,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   const requests: ServiceRequests = {
     super_tabs: async (payload, asker, closed) => {
+      // Help when the caller cannot be read from the roster (no tab, offline, not listed): a harness this computer started as a
+      // Buddy still gets a Buddy's help, so a failed read never offers it the stdin its guard refuses.
+      const plainHelp = () => asker.local && identifier(payload.harnessId) && core.agents.byAgent(payload.harnessId)?.swarmSkill?.role === 'buddy' ? BUDDY_HELP : HELP
       try {
         // Existing machine access routes the frame. Waking reads this host's own
         // registered contributions only, and grants the caller no account access.
@@ -461,7 +470,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         const named = identifier(payload.agentId) ? payload.agentId : null
         const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
-        if (payload.action === 'help' && (!identifier(payload.tabId) || !(named ?? hashed))) return { ok: true, help: HELP }
+        if (payload.action === 'help' && (!identifier(payload.tabId) || !(named ?? hashed))) return { ok: true, help: plainHelp() }
         // An agent speaks through its own computer's Harness alone: the second review of #2087 sent a Buddy's request with
         // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
         // always name this computer.
@@ -479,7 +488,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         const caller = callerIn((await feed.refresh()).roster)
         const agent = object(caller?.agent)
-        if (payload.action === 'help' && (!caller || !identifier(agent.id))) return { ok: true, help: HELP }
+        if (payload.action === 'help' && (!caller || !identifier(agent.id))) return { ok: true, help: plainHelp() }
         // The server leaves an agent off the roster when this machine has no access or billing for it; it gives no reason,
         // and the server enforces the grant anyway, so the text says where to look (Lead's ruling, #1726 G5).
         if (!caller || !identifier(agent.id)) return { error: 'AGENT_UNAVAILABLE', detail: OFF_ROSTER }
@@ -488,13 +497,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { error: 'AGENT_MISMATCH', detail: 'This harness may speak only as its own Swarm agent. Run the command without --agent, or with its own id.' }
         }
         if (typeof agent.harnessId !== 'string' || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
-          return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
+          return payload.action === 'help' ? { ok: true, help: plainHelp() } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
         const agentId = agent.id
         const path = `/api/super-tabs/${payload.tabId}`
         const identity = `asAgentId=${agentId}`
         const swarm = () => reads.read(String(payload.tabId), agentId)
-        if (payload.action === 'help') return { ok: true, help: caller.lead === true ? LEAD_HELP : HELP }
+        // A Buddy as the server records it (buddyOf) or as this computer started it, which is what turns its guard on.
+        const buddy = identifier(object(agent.buddyOf).personId) || core.agents.byAgent(agent.harnessId)?.swarmSkill?.role === 'buddy'
+        if (payload.action === 'help') return { ok: true, help: buddy ? BUDDY_HELP : caller.lead === true ? LEAD_HELP : HELP }
         wake()
         if (payload.action === 'startStatus' && identifier(payload.startId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
@@ -650,7 +661,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         return { error: 'INVALID_REQUEST' }
       } catch (error) {
         // Help never fails for an unreadable caller: it is then the plain help.
-        if (payload.action === 'help') return { ok: true, help: HELP }
+        if (payload.action === 'help') return { ok: true, help: plainHelp() }
         return error instanceof SuperTabHostError
           ? { error: error.code, detail: error.message, status: error.status }
           : { error: 'SUPER_TAB_UNAVAILABLE', detail: error instanceof Error ? error.message : 'This Super Tab is unavailable.' }

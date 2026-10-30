@@ -1206,6 +1206,72 @@ describe('mentions on a post', () => {
   })
 })
 
+// #2358: a Buddy's guard refuses a post whose TEXT is -, as its message on stdin would skip the secret check. Its help then
+// still offered - and stdin, so a Buddy that followed it was refused and tried again: a Buddy's help passes TEXT in quotes.
+describe('a Buddy\'s help', () => {
+  const STDIN_HINT = "put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG)"
+  const QUOTED = 'TEXT is one argument, the message itself in quotes: \'your message\', or "it\'s done" when it holds an apostrophe. A Buddy never passes - for TEXT'
+  const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>, asker: Parameters<ReturnType<typeof setup>['ask']>[1] = owner) =>
+    object(object(await t.ask({ action: 'help', ...payload }, asker)).help)
+  const expectBuddy = (each: Record<string, unknown>) => {
+    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\.: /)
+    expect(String(each.post)).toContain(QUOTED)
+    expect(String(each.post)).not.toContain('TEXT|-')
+    expect(String(each.post)).not.toContain(STDIN_HINT)
+  }
+  const expectStdin = (each: Record<string, unknown>) => {
+    expect(String(each.post)).toContain('post GROUP TEXT|- OPERATION_ID')
+    expect(String(each.post)).toContain(STDIN_HINT)
+    expect(String(each.post)).not.toContain(QUOTED)
+  }
+  const localBuddy = (t: ReturnType<typeof setup>) => vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'native', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+
+  it('passes TEXT in quotes for a Buddy the server records, and keeps the stdin hint for a Builder and a Lead', async () => {
+    const builder = setup()
+    const plain = await help(builder, { tabId: 'tab', agentId: builder.agentId })
+    expectStdin(plain)
+    const t = setup()
+    Object.assign(t.agent, { buddyOf: { personId: 'peer', generation: 'g' } })
+    const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
+    expectBuddy(buddy)
+    expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(buddy)
+    // Only the post line differs: a Buddy reads the same help otherwise, and no Lead option.
+    expect({ ...buddy, post: null }).toEqual({ ...plain, post: null })
+    const lead = setup()
+    lead.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(lead.agent, path,
+      { agents: [lead.agent], projects: [{ id: 'pilot', leadConversationId: 'pilot' }], conversations: [{ id: 'pilot', leadId: lead.agentId, agentIds: [lead.agentId] }] }) } }))
+    const leadHelp = await help(lead, { tabId: 'tab', agentId: lead.agentId })
+    expectStdin(leadHelp)
+    expect(String(leadHelp.post)).toContain('--mention')
+  })
+
+  it('is a Buddy\'s help for a harness this computer started as a Buddy, as its guard is', async () => {
+    const t = setup()
+    localBuddy(t)
+    expectBuddy(await help(t, { tabId: 'tab', agentId: t.agentId }))
+    // A Builder's own launch record keeps the plain help.
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'native', swarmSkill: { role: 'dev', key: 'k' } } as never)
+    expectStdin(await help(t, { tabId: 'tab', agentId: t.agentId }))
+  })
+
+  it('stays a Buddy\'s help when its roster cannot be read, and is the plain help for anyone else', async () => {
+    const t = setup()
+    localBuddy(t)
+    t.call.mockRejectedValue(new Error('Offline'))
+    expectBuddy(await help(t, { tabId: 'tab', harnessId: 'native' }))
+    // Off the roster, or not listed on this machine.
+    t.call.mockResolvedValue({ status: 200, body: { success: true, data: hostForm([], { tabs: ['tab'] }) } })
+    expectBuddy(await help(t, { tabId: 'tab', harnessId: 'native' }))
+    expectBuddy(await help(t, { harnessId: 'native' }))
+    // Without a harness, or from another computer, nothing tells a Buddy apart: the plain help, never an error.
+    expectStdin(await help(t, { tabId: 'tab' }))
+    expectStdin(await help(t, {}))
+    expectStdin(await help(t, { tabId: 'tab', harnessId: 'native' }, { local: false, owner: true, accountOwner: true, machine: { machineId: 'studio', label: 'Studio' } }))
+    vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
+    expectStdin(await help(t, { tabId: 'tab', harnessId: 'native' }))
+  })
+})
+
 // A Buddy reads its project's work as its person (Ken, 10-29): its status is a bounded task summary, never the whole Swarm,
 // with pull requests read through its person's own GitHub on their machine; archived tasks and older messages on request.
 describe('a Buddy\'s status', () => {
