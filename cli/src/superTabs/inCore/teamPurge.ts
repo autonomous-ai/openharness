@@ -155,25 +155,76 @@ export async function recordsOtherFolder(file: string, folder: string): Promise<
   } finally { lines.close() }
 }
 
-/** [dir], the transcript folder Claude Code names for [folder]: whole when no transcript in it is another folder's; else only
- *  [folder]'s own transcripts, each with its folder of subagents and tool results, and [onShared] is told. */
+/** Whether the transcript [file] records [folder] or a folder inside it as its working folder (`own`), and another (`other`). */
+async function foldersOf(file: string, folder: string): Promise<{ own: boolean; other: boolean }> {
+  const found = { own: false, other: false }
+  const lines = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
+  try {
+    for await (const line of lines) {
+      if (!line.includes('"cwd"')) continue
+      let cwd: unknown
+      try { cwd = (JSON.parse(line) as { cwd?: unknown } | null)?.cwd } catch { continue }
+      if (typeof cwd === 'string') found[cwd === folder || cwd.startsWith(`${folder}/`) ? 'own' : 'other'] = true
+    }
+  } finally { lines.close() }
+  return found
+}
+
+/**
+ * [dir], the transcript folder Claude Code names for [folder]: whole when no transcript in it is another folder's; else only
+ * the transcripts that record [folder] and no other, each with its folder of subagents and tool results, and [onShared] is
+ * told. Its memory folder then stays whole: which of its files are the session's no transcript proves (security reviews 1
+ * and 2 of #2385: a Bash append, a subagent, a transcript Claude Code pruned, `Notes.md` on a Mac), and the Team purge's
+ * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
+ */
 async function removeTranscripts(dir: string, folder: string, onShared?: () => void): Promise<void> {
-  const transcripts = (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.jsonl'))
-  const others = new Set<string>()
-  for (const name of transcripts) if (await recordsOtherFolder(join(dir, name), folder)) others.add(name)
-  if (!others.size) { await rm(dir, { recursive: true, force: true }); return }
+  const transcripts = new Map<string, { own: boolean; other: boolean }>()
+  for (const name of (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.jsonl'))) {
+    transcripts.set(name, await foldersOf(join(dir, name), folder))
+  }
+  if (![...transcripts.values()].some(transcript => transcript.other)) { await rm(dir, { recursive: true, force: true }); return }
   onShared?.()
-  for (const name of transcripts) {
-    if (others.has(name)) continue
+  for (const [name, { own, other }] of transcripts) {
+    if (!own || other) continue
     await rm(join(dir, name), { force: true })
     await rm(join(dir, name.slice(0, -'.jsonl'.length)), { recursive: true, force: true })
   }
 }
 
+/** What in [dir], the transcript folder Claude Code names for [folder], may still be the session's, by its kind only: a path
+ *  would name another folder's file (security review 1 of #2385). Null when it holds only transcripts that record other
+ *  folders and never [folder], their own folders, and an empty memory folder or none; anything else, a memory file above all,
+ *  or the folder itself once no other folder's transcript is left, fails it, closed. */
+async function leftInSharedFolder(dir: string, folder: string): Promise<string | null> {
+  const entries = (await readdir(dir, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))
+  const transcripts = new Set<string>()
+  for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) {
+    const { own, other } = await foldersOf(join(dir, entry.name), folder)
+    if (own || !other) return SHARED_LEFT.transcript
+    transcripts.add(entry.name.slice(0, -'.jsonl'.length))
+  }
+  if (!transcripts.size) return SHARED_LEFT.folder
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) continue
+    if (entry.isDirectory() && entry.name === 'memory') {
+      if ((await readdir(join(dir, entry.name))).length) return SHARED_LEFT.memory
+    } else if (!entry.isDirectory() || !transcripts.has(entry.name)) return SHARED_LEFT.other
+  }
+  return null
+}
+/** What a failed sweep says of its shared transcript folder, in place of a path. */
+export const SHARED_LEFT = {
+  transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
+  memory: 'a memory file in its transcript folder, which another folder shares: its owner checks it and removes what is not the other folder\'s',
+  other: 'something in its transcript folder, which another folder shares, that is not another folder\'s transcript',
+  folder: 'its transcript folder',
+}
+
 /**
  * Removes from the Team user's shared Claude Code home ([home]/.claude, [home]/.claude.json and its backups) what Claude
  * Code keeps of the session: its prompt history lines and the pastes they kept ([pastes] from an earlier attempt too), its
- * project folder with its transcripts and memory (only its own transcripts when another folder's share it, [onShared]),
+ * project folder with its transcripts and memory (only the transcripts that record its folder alone when another folder's
+ * share it, [onShared]),
  * its file history, todos, session environment and debug log, and its folder's entry and repository paths in the config
  * and in every backup of it. The pastes its history named, for the record.
  */
@@ -226,7 +277,8 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
  * What still names the session where Claude Code and Codex write its own data, or null: a line of the shared prompt history
  * (Claude Code's or Codex's) naming its session or folder; a paste it kept; its folder in the config or a backup of it; and
  * anywhere under their homes, a file or folder named for its session or its folder. Never the contents of other sessions'
- * transcripts: another agent that read the Product Manager's status names both there, and is not its to delete.
+ * transcripts: another agent that read the Product Manager's status names both there, and is not its to delete. Its transcript
+ * folder, when another folder's transcripts share it, only by the working folders they record.
  */
 export async function sweepForSession(home: string, target: PurgeTarget, pastes: readonly string[]): Promise<string | null> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
@@ -243,13 +295,18 @@ export async function sweepForSession(home: string, target: PurgeTarget, pastes:
     const configs = [join(home, '.claude.json'), ...(await readdir(join(claude, 'backups')).catch(() => [] as string[])).map(name => join(claude, 'backups', name))]
     for (const config of configs) if ((await readFile(config, 'utf8').catch(() => '')).includes(`"${folder}"`)) return config
   }
-  const slug = folder ? claudeSlug(folder) : null
-  const named = (name: string) => (!!sessionId && name.includes(sessionId)) || (!!slug && name === slug)
+  const slug = folder ? claudeSlug(folder) : null, projects = join(claude, 'projects')
   const walk = async (path: string): Promise<string | null> => {
     const entries = await readdir(path, { withFileTypes: true }).catch(() => [])
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const child = join(path, entry.name)
-      if (named(entry.name)) return child
+      if (sessionId && entry.name.includes(sessionId)) return child
+      if (entry.name === slug) {
+        // Its transcript folder outlives the scrub when another folder's transcripts share it ('/' and '.' both become '-'),
+        // and its name alone held the account for good (follow-up to security review 2 of #2375).
+        const left = path === projects && entry.isDirectory() ? await leftInSharedFolder(child, folder!) : child
+        if (left) return left
+      }
       if (entry.isDirectory()) { const found = await walk(child); if (found) return found }
     }
     return null
