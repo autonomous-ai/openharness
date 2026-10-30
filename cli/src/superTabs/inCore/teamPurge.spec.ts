@@ -1,9 +1,9 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 // A confidential session the Swarm ended for good in a Harness Team account (#895): its data in the Team user's shared
 // engine homes goes, and the account stays held until a sweep finds nothing of it (security re-checks of #2089).
@@ -38,6 +38,20 @@ function teamHome() {
   return { home, claude }
 }
 
+/** A removed worktree whose Claude Code transcript folder an unrelated folder ([OTHER]) shares: '/' and '.' both become '-'. */
+const OTHER = '/Users/me/harnesses/worktrees-old/notes'
+function sharedFolder() {
+  const home = dir(), claude = join(home, '.claude'), folder = '/Users/me/harnesses/worktrees/old/notes'
+  const shared = join(claude, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-')), memory = join(shared, 'memory')
+  mkdirSync(join(memory, 'deep'), { recursive: true })
+  return { home, claude, shared, memory, folder }
+}
+/** A transcript as Claude Code writes it: a working folder on every turn, and the tool calls of its assistant turns. */
+const transcript = (cwd: string, ...calls: Array<[string, string, string?]>) => [JSON.stringify({ type: 'summary' }), JSON.stringify({ type: 'user', cwd }),
+  ...calls.map(([name, path, key = 'file_path']) => JSON.stringify({ type: 'assistant', cwd, message: { content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', name, input: { [key]: path } }] } })),
+  JSON.stringify({ type: 'assistant', cwd, message: { content: 'no parts' } }), JSON.stringify({ message: { content: [null, { type: 'tool_use', name: 'Write', input: {} }] } }),
+  JSON.stringify(null), 'not json "tool_use"'].join('\n')
+
 describe('scrubbing a Claude Code session from the Team user\'s shared home', () => {
   // Security review 2 of #2375: Claude Code's transcript folder name makes every '/' and '.' a dash, so a removed worktree
   // `<worktrees>/old/notes` shares it with an unrelated `~/harnesses/worktrees-old/notes`. Only transcripts that record no
@@ -59,6 +73,38 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }), [], undefined, shares)
     expect(existsSync(shared)).toBe(false)
     expect(shares).toHaveBeenCalledTimes(1)
+  })
+
+  // Follow-up to security review 2 of #2375: in a shared transcript folder its memory folder was left whole and only logged.
+  // A memory file is the session's when one of its own transcripts wrote it and no other folder's did; one both wrote is kept
+  // and named, one neither wrote stays.
+  it('removes the memory files its own transcripts wrote from a shared transcript folder, never another folder\'s', async () => {
+    const { home, shared, memory, folder } = sharedFolder()
+    for (const name of ['ours.md', 'theirs.md', 'both.md', 'unknown.md', 'deep/ours.md', 'read.md']) writeFileSync(join(memory, name), name)
+    symlinkSync(join(home, 'elsewhere.md'), join(memory, 'link.md'))
+    writeFileSync(join(home, 'elsewhere.md'), 'not in the memory folder')
+    writeFileSync(join(shared, 'own.jsonl'), transcript(folder, ['Write', join(memory, 'ours.md')], ['Edit', join(memory, 'both.md')],
+      ['MultiEdit', join(memory, 'deep', 'ours.md')], ['NotebookEdit', join(memory, 'link.md'), 'notebook_path'], ['Read', join(memory, 'read.md')],
+      ['Write', `${memory}/../memory/unknown.md`], ['Write', join(home, 'elsewhere.md')]))
+    writeFileSync(join(shared, 'theirs.jsonl'), transcript(OTHER, ['Write', join(memory, 'theirs.md')], ['Write', join(memory, 'both.md')]))
+    const shares = vi.fn()
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }), [], undefined, shares)
+    const left = ['ours.md', 'deep/ours.md', 'link.md', 'theirs.md', 'both.md', 'unknown.md', 'read.md'].map(name => existsSync(join(memory, name)))
+    expect(left).toEqual([false, false, false, true, true, true, true])
+    expect(existsSync(join(home, 'elsewhere.md'))).toBe(true)
+    expect(shares).toHaveBeenCalledWith([join(memory, 'both.md')])
+    expect(['own.jsonl', 'theirs.jsonl'].map(name => existsSync(join(shared, name)))).toEqual([false, true])
+  })
+
+  it('tells a Buddy\'s session id from another folder\'s by the working folders its transcript records (host.ts)', async () => {
+    const { shared, folder } = sharedFolder()
+    writeFileSync(join(shared, 'own.jsonl'), transcript(folder))
+    writeFileSync(join(shared, 'theirs.jsonl'), `${transcript(folder)}\nnot json "cwd"\n${JSON.stringify({ cwd: OTHER })}`)
+    expect([await recordsOtherFolder(join(shared, 'own.jsonl'), folder), await recordsOtherFolder(join(shared, 'theirs.jsonl'), folder)]).toEqual([false, true])
+    // A shared folder with no memory folder: its own transcript goes, the other's stays.
+    rmSync(join(shared, 'memory'), { recursive: true })
+    await scrubClaudeSession(dirname(dirname(dirname(shared))), target({ sessionId: null, cwd: folder }))
+    expect(['own.jsonl', 'theirs.jsonl'].map(name => existsSync(join(shared, name)))).toEqual([false, true])
   })
 
   // Security review 2 of #2375: todos were matched by prefix, so a one-character session id removed every todo starting with it.
@@ -132,6 +178,54 @@ describe('the sweep for what a scrub left', () => {
     writeFileSync(join(home, '.codex', 'history.jsonl'), '{"session_id":"pm-session"}')
     expect(await sweepForSession(home, target({ cwd: null }), [])).toBe(join(home, '.codex', 'history.jsonl'))
     expect(await sweepForSession(dir(), target(), [])).toBeNull()
+  })
+
+  // Follow-up to security review 2 of #2375: a transcript folder another folder's transcripts share outlives the scrub, and
+  // the sweep took its name alone for the session's, so the purge never finished and the account stayed held.
+  it('passes a shared transcript folder that holds only other folders\' transcripts, and fails on anything that may be the session\'s', async () => {
+    const { home, claude, shared, memory, folder } = sharedFolder()
+    const ours = target({ cwd: folder })
+    mkdirSync(join(shared, 'theirs', 'subagents'), { recursive: true })
+    writeFileSync(join(shared, 'theirs', 'subagents', 'agent-1.jsonl'), '')
+    writeFileSync(join(shared, 'theirs.jsonl'), transcript(OTHER, ['Write', join(memory, 'theirs.md')], ['Write', join(memory, 'deep', 'both.md')]))
+    writeFileSync(join(memory, 'theirs.md'), 'theirs')
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    // A memory file only the session wrote too (kept by the scrub as both wrote it), or one no transcript left wrote.
+    writeFileSync(join(memory, 'deep', 'both.md'), 'both')
+    expect(await sweepForSession(home, target({ cwd: folder, sharedMemory: [join(memory, 'deep', 'both.md')] }), [])).toBe(join(memory, 'deep', 'both.md'))
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    writeFileSync(join(memory, 'unknown.md'), 'unknown')
+    expect(await sweepForSession(home, ours, [])).toBe(join(memory, 'unknown.md'))
+    rmSync(join(memory, 'unknown.md'))
+    // A transcript of its folder, one of both folders, or one that records none; anything else in the folder.
+    for (const [name, text] of [['a.jsonl', transcript(folder)], ['b.jsonl', `${transcript(OTHER)}\n${JSON.stringify({ cwd: `${folder}/src` })}`], ['c.jsonl', '{}']]) {
+      writeFileSync(join(shared, name), text)
+      expect(await sweepForSession(home, ours, []), name).toBe(join(shared, name))
+      rmSync(join(shared, name))
+    }
+    for (const name of ['notes.txt', 'stray']) {
+      if (name === 'stray') mkdirSync(join(shared, name)); else writeFileSync(join(shared, name), '')
+      expect(await sweepForSession(home, ours, []), name).toBe(join(shared, name))
+      rmSync(join(shared, name), { recursive: true })
+    }
+    // Its session's name inside the folder still fails it; so does a file of the folder's name, or the folder once no other is left.
+    writeFileSync(join(shared, 'theirs', 'pm-session.txt'), '')
+    expect(await sweepForSession(home, ours, [])).toBe(join(shared, 'theirs', 'pm-session.txt'))
+    rmSync(join(shared, 'theirs'), { recursive: true })
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    rmSync(join(shared, 'theirs.jsonl'))
+    rmSync(memory, { recursive: true })
+    expect(await sweepForSession(home, ours, [])).toBe(shared)
+    rmSync(shared, { recursive: true })
+    writeFileSync(shared, '')
+    expect(await sweepForSession(home, ours, [])).toBe(shared)
+    rmSync(shared)
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    // One it cannot read is no answer: it fails, closed.
+    mkdirSync(shared, { mode: 0o000 })
+    expect(await sweepForSession(home, ours, [])).toBe(shared)
+    chmodSync(shared, 0o700)
+    expect(existsSync(claude)).toBe(true)
   })
 })
 
@@ -233,6 +327,29 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toEqual([])
   })
 
+  // Follow-up to security review 2 of #2375: with another folder's transcripts in its transcript folder, the purge never
+  // finished. It does once only theirs is left; a memory file both sessions wrote is kept in the record, and holds the account
+  // until its owner removes it, after a restart too.
+  it('finishes when another folder\'s transcripts share its transcript folder, held only by a memory file both sessions wrote', async () => {
+    const { home, claude } = teamHome()
+    const shared = join(claude, 'projects', SLUG), memory = join(shared, 'memory'), other = '/Users/team/swarm/app./worktrees/pm'
+    expect(other.replace(/[^A-Za-z0-9]/g, '-')).toBe(SLUG)
+    writeFileSync(join(shared, 'pm-session.jsonl'), transcript(CWD, ['Write', join(memory, 'MEMORY.md')], ['Edit', join(memory, 'both.md')]))
+    writeFileSync(join(shared, 'theirs.jsonl'), transcript(other, ['Write', join(memory, 'theirs.md')], ['Edit', join(memory, 'both.md')]))
+    for (const name of ['theirs.md', 'both.md']) writeFileSync(join(memory, name), name)
+    const s = service(home)
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    expect(await ended('pm')).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${join(memory, 'both.md')}` })
+    expect(['pm-session.jsonl', 'memory/MEMORY.md', 'theirs.jsonl', 'memory/theirs.md'].map(name => existsSync(join(shared, name)))).toEqual([false, false, true, true])
+    expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).get('pm')?.sharedMemory).toEqual([join(memory, 'both.md')])
+    // A retry, after a restart: its own transcript gone, only the record still knows the session wrote it.
+    const restarted = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: purgeRecord(join(home, 'super-tabs', 'team-purges.json')) })
+    expect(await restarted('pm')).toMatchObject({ error: 'SCRUB_INCOMPLETE' })
+    rmSync(join(memory, 'both.md'))
+    expect(await restarted('pm')).toEqual({ ok: true })
+    expect(['theirs.jsonl', 'memory/theirs.md'].map(name => existsSync(join(shared, name)))).toEqual([true, true])
+  })
+
   // Security re-check 2 of 9e49723b8: the paste names reached the record only after the history lines naming them were gone,
   // so a scrub that died between the two lost them, and a paste left behind passed the sweep.
   it('saves the pastes its history names before rewriting it, so a scrub that dies after the rewrite still finds them', async () => {
@@ -321,9 +438,9 @@ describe('the record of purges still to finish', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const record = purgeRecord(file)
     record.put(target())
-    record.put(target({ pastes: ['abc'] }))
-    expect(purgeRecord(file).pending()).toEqual([target({ pastes: ['abc'] })])
-    expect(purgeRecord(file).get('pm')).toEqual(target({ pastes: ['abc'] }))
+    record.put(target({ pastes: ['abc'], sharedMemory: ['/m.md'] }))
+    expect(purgeRecord(file).pending()).toEqual([target({ pastes: ['abc'], sharedMemory: ['/m.md'] })])
+    expect(purgeRecord(file).get('pm')).toEqual(target({ pastes: ['abc'], sharedMemory: ['/m.md'] }))
     record.drop('pm')
     expect(purgeRecord(file).pending()).toEqual([])
     expect(purgeRecord(file).unknown()).toBe(false)
@@ -353,7 +470,8 @@ describe('the record of purges still to finish', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const entry = JSON.stringify(target())
     for (const saved of ['3', 'null', '[]', '{"pm": 3}', `{"other": ${entry}}`, `{"pm": ${entry.replace('"engine":"claude"', '"engine":4')}}`,
-      `{"pm": ${entry.replace('"cwd":', '"cwd":7,"was":')}}`, `{"pm": ${entry.replace('}', ',"pastes":[1]}')}}`]) {
+      `{"pm": ${entry.replace('"cwd":', '"cwd":7,"was":')}}`, `{"pm": ${entry.replace('}', ',"pastes":[1]}')}}`,
+      `{"pm": ${entry.replace('}', ',"sharedMemory":"x"}')}}`, `{"pm": ${entry.replace('}', ',"sharedMemory":[null]}')}}`]) {
       writeFileSync(file, saved)
       expect([purgeRecord(file).unknown(), readFileSync(`${file}.unreadable`, 'utf8')]).toEqual([true, saved])
       rmSync(`${file}.unreadable`)
