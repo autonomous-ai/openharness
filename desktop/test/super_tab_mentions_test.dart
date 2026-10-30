@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -83,15 +85,20 @@ Future<void> shot(WidgetTester tester, String name) async {
 
 Future<SuperTabController> showView(
   WidgetTester tester,
-  ConversationServer server,
-) async {
+  ConversationServer server, {
+  String account = 'owner',
+  Brightness brightness = Brightness.dark,
+}) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  final c = server.controller();
+  final before = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = before);
+  final c = server.controller(account: account);
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      theme: grid.buildAppTheme(brightness: brightness),
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
@@ -114,6 +121,65 @@ String minutesAgo(int minutes) => DateTime.now()
     .subtract(Duration(minutes: minutes))
     .toIso8601String();
 
+/// The texts painted as tags, in order.
+List<String> tagRuns(WidgetTester tester) => [
+  for (final (text, _) in tagStyles(tester)) text,
+];
+
+/// Each tag painted, with its ink.
+List<(String, Color?)> tagStyles(WidgetTester tester) => [
+  for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
+    ..._tagRuns(rich.text, null),
+];
+
+Iterable<(String, Color?)> _tagRuns(
+  InlineSpan span,
+  TextStyle? inherited,
+) sync* {
+  if (span is! TextSpan) return;
+  final style = inherited?.merge(span.style) ?? span.style;
+  if (span.text case final text?
+      when style?.backgroundColor == grid.AppSurface.accentWash &&
+          style?.fontWeight == FontWeight.w600) {
+    yield (text, style?.color);
+  }
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    yield* _tagRuns(child, style);
+  }
+}
+
+/// WCAG contrast of [a] on [b].
+double contrast(Color a, Color b) {
+  final (x, y) = (a.computeLuminance(), b.computeLuminance());
+  return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+}
+
+/// The table of tags and non-tags the backend and the phone pass too.
+final tagTable = jsonDecode(
+  File('test/fixtures/tag_fixture.json').readAsStringSync(),
+) as Map<String, dynamic>;
+
+/// A Swarm with diego and ken in it, and two messages from its owner: one
+/// that tags diego, one that tags nobody.
+ConversationServer taggedChat() {
+  final server = ConversationServer();
+  for (final name in ['diego', 'ken']) {
+    (server.state['people'] as List).add({
+      'id': name,
+      'email': '$name@example.com',
+      'role': 'collaborator',
+      'username': name,
+    });
+  }
+  server
+    ..append(
+      '@diego can you free some memory on your Pro-10? Reviews are waiting on it.',
+    )
+    ..append('Thanks, the review queue is moving again.');
+  server.messages.first['mentions'] = ['diego'];
+  return server;
+}
+
 /// The styles of every run of [text] painted in the tree.
 List<TextStyle?> runsOf(WidgetTester tester, String text) => [
   for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
@@ -133,13 +199,19 @@ Iterable<TextStyle?> _runs(
   }
 }
 
-Future<void> showText(WidgetTester tester, String text, List<String> names) =>
-    tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(body: SuperTabMessageText(text, mentions: names)),
-      ),
-    );
+Future<void> showText(
+  WidgetTester tester,
+  String text,
+  List<String> names, {
+  Map<String, String> addresses = const {},
+}) => tester.pumpWidget(
+  MaterialApp(
+    theme: grid.buildAppTheme(brightness: Brightness.dark),
+    home: Scaffold(
+      body: SuperTabMessageText(text, mentions: names, addresses: addresses),
+    ),
+  ),
+);
 
 Finder notificationsEntry() =>
     find.byKey(const ValueKey('super-notifications'));
@@ -990,6 +1062,140 @@ void main() {
       await showText(tester, 'Run `ping @dee` now.', ['dee']);
       expect(runsOf(tester, 'ping @dee'), isNotEmpty);
     });
+
+    for (final row in (tagTable['cases'] as List).cast<Map>()) {
+      testWidgets('finds the tags in ${jsonEncode(row['text'])}', (
+        tester,
+      ) async {
+        final names = (tagTable['names'] as List).cast<String>();
+        final tags = (row['tags'] as List).cast<String>();
+        await showText(tester, row['text'] as String, names);
+        // A tagged name the text does not say opens it (withTags), so each
+        // name the table has no tag for in this text is shown first.
+        final said = {for (final tag in tags) tag.split('@').first};
+        expect(
+          [for (final tag in tagRuns(tester)) tag.substring(1).toLowerCase()],
+          [
+            for (final name in names)
+              if (!said.contains(name)) name,
+            ...tags,
+          ],
+        );
+      });
+    }
+
+    test('reads a 32,000-character text of unclosed link brackets in '
+        'linear time', () {
+      // Each `](` without a `)` once scanned to the end: about 3 s to draw.
+      final watch = Stopwatch()..start();
+      expect(SuperTabMessageText.tagsIn('${'](' * 15995}@dee.'), ['dee']);
+      expect(watch.elapsedMilliseconds, lessThan(50));
+    });
+
+    testWidgets('a tag by its full address is said, and is its pill', (
+      tester,
+    ) async {
+      await showText(
+        tester,
+        '@diego.n@x.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego.n@x.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
+
+    testWidgets('another address is no tag of them', (tester) async {
+      await showText(
+        tester,
+        '@diego@other.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego @diego@other.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego']);
+    });
+
+    testWidgets('the conversation knows the address of each person tagged', (
+      tester,
+    ) async {
+      final server = taggedChat();
+      (server.state['people'] as List).cast<Map>().firstWhere(
+        (p) => p['id'] == 'diego',
+      )['email'] = 'diego.n@x.com';
+      server.messages.first['text'] = '@diego.n@x.com can you look?';
+      await showView(tester, server, account: 'ken');
+      expect(
+        find.text('@diego.n@x.com can you look?', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
+
+    for (final brightness in Brightness.values) {
+      testWidgets('a message that tags you stands out, for you alone '
+          '(${brightness.name})', (tester) async {
+        Finder tagged(String id) =>
+            find.byKey(ValueKey('super-tagged-you-$id'));
+        final server = taggedChat();
+        await showView(
+          tester,
+          server,
+          account: 'diego',
+          brightness: brightness,
+        );
+        await shot(tester, 'tagged-you-${brightness.name}');
+        expect(tagged('message-1'), findsOneWidget);
+        expect(tagged('message-2'), findsNothing);
+        final row = tester.widget<DecoratedBox>(tagged('message-1'));
+        expect(
+          (row.decoration as BoxDecoration).color,
+          grid.AppSurface.accentWash,
+        );
+        final bar = tester.getSize(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+        );
+        expect(bar.width, 3);
+        expect(bar.height, greaterThan(20));
+        expect(
+          tester
+              .widget<ColoredBox>(
+                find.byKey(const ValueKey('super-tagged-bar-message-1')),
+              )
+              .color,
+          grid.AppPalette.accentOnSurface,
+        );
+        // The tag in the text stays its pill, its ink readable on the pill
+        // over the wash (WCAG AA for text, 4.5:1).
+        final (tag, ink) = tagStyles(tester).single;
+        expect(tag, '@diego');
+        final behind = Color.alphaBlend(
+          grid.AppSurface.accentWash,
+          Color.alphaBlend(
+            grid.AppSurface.accentWash,
+            grid.AppTheme.surfacePalette.background,
+          ),
+        );
+        expect(contrast(ink!, behind), greaterThanOrEqualTo(4.5));
+
+        // The same message, read by someone else: plain.
+        await showView(tester, server, account: 'ken', brightness: brightness);
+        await shot(tester, 'tagged-other-${brightness.name}');
+        expect(tagged('message-1'), findsNothing);
+        // A tag in a message that is not yours keeps the pill it had.
+        expect(tagStyles(tester).single.$2, grid.AppPalette.accentOnSurface);
+        expect(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+          findsNothing,
+        );
+      });
+    }
 
     testWidgets('the conversation highlights the people a message tags', (
       tester,
