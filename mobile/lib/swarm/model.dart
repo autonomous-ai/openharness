@@ -291,9 +291,17 @@ class SuperTabRole {
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       kind = _text(row, 'kind'),
-      version = _text(row, 'version');
+      version = _text(row, 'version'),
+      defaults = row['defaults'] is Map
+          ? Map.unmodifiable(superTabMap(row['defaults']))
+          : null;
 
   final String id, name, kind, version;
+
+  /// The engine, model and effort its agents start on when a start names
+  /// none (backend projects.ts RoleDefaults). Read and kept as the desktop's
+  /// model does; the phone shows none of it.
+  final Map<String, dynamic>? defaults;
 }
 
 class SuperTabProject {
