@@ -14,7 +14,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
-import type { SaidOnCard, SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import { leadsOf, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
+import { createSuperTabCards } from '../superTabs/inCore/cards.js'
 import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
@@ -4744,18 +4745,35 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
-    it('a tap opens a tile as today from an older dial, and when the id is claimed twice or not by this computer', async () => {
-      for (const hello of [ROUND, PRO]) {
+    it('a tap on the Buddy or a Lead opens its Swarm chat from any round dial, older ones too', async () => {
+      // A round dial from before swarmBuddy, and one from before the Swarm cards altogether (the core may still hold cards
+      // another device asked for): the tap is a round dial's, whatever its swipes can do (PM ruling, 10-30).
+      for (const hello of [ROUND, { t: 'hello', product: 'harness', mac: 'ee:ff' }]) {
         const host = cardHost({ cards: [card('st1', twoProjects())] })
         const { session, port } = await connect(host)
         try {
           port.say(hello)
-          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await vi.waitFor(() => expect(port.types()).toContain('welcome'))
           port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
-          expect(host.superTabSelected).not.toHaveBeenCalled()
-          expect(vi.mocked(host.openAgent).mock.calls).toEqual([['h-buddy', undefined]])
+          port.say({ t: 'agent.open', agentId: 'h-lead2' }); await settle()
+          port.say({ t: 'agent.open', agentId: 'a1' }); await settle()
+          expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'buddy'], ['st1', 'proj2', 'pm']])
+          expect(vi.mocked(host.openAgent).mock.calls).toEqual([['a1', undefined]])
         } finally { await session.stop() }
       }
+    })
+
+    it('a tap opens a tile as today from the Pro, and when the id is claimed twice or not by this computer', async () => {
+      // The Pro picks Leads on its own cards and has no Buddy screen; the ruling and Diego's proposal are the round dial's.
+      const pro = cardHost({ cards: [card('st1', twoProjects())] })
+      const proSession = await connect(pro)
+      try {
+        proSession.port.say(PRO)
+        await vi.waitFor(() => expect(ofType(proSession.port, 'supertab')).toHaveLength(1))
+        proSession.port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        expect(pro.superTabSelected).not.toHaveBeenCalled()
+        expect(vi.mocked(pro.openAgent).mock.calls).toEqual([['h-buddy', undefined]])
+      } finally { await proSession.session.stop() }
       // The same session id in two Swarms' cards is no one Swarm's: nothing is guessed. A Lead not here has no session id.
       const host = cardHost({ cards: [card('st1', twoProjects()), card('st2', [lead(7, { local: 'h-lead2' }), lead(8, { local: '' })])] })
       const { session, port } = await connect(host)
@@ -4766,6 +4784,34 @@ describe('swarm cards', () => {
         port.say({ t: 'agent.open', agentId: 'lead8' }); await settle()
         expect(host.superTabSelected).not.toHaveBeenCalled()
         expect(vi.mocked(host.openAgent).mock.calls).toEqual([['h-lead2', undefined], ['lead8', undefined]])
+      } finally { await session.stop() }
+    })
+
+    it('a tap on the reader\'s Buddy opens its chat with cards generated from a Swarm and passed through the core', async () => {
+      // The cards as production makes them: read from a Swarm (superTabs/cards.ts) and checked on their way into the core
+      // (superTabs/inCore/cards.ts), which once dropped the Buddy's session id and left every Buddy tap on a terminal tab.
+      const agent = (id: string, over: Record<string, unknown> = {}) =>
+        ({ id, harnessId: `h-${id}`, machineId: 'm1', machineOwnerId: 'me', configuration: { engine: 'claude' }, ...over })
+      const state = {
+        name: 'openharness', buddies: true, people: [{ id: 'me', email: 'me@x.io' }],
+        projects: [{ id: 'web', name: 'web', leadConversationId: 'lead-web' }],
+        agents: [agent('a1'), agent('y1', { name: "me's Buddy", buddyOf: { personId: 'me', generation: 'g1' } })],
+        conversations: [{ id: 'lead-web', projectId: 'web', leadId: 'a1', archived: false },
+          { id: 'pm-web', projectId: 'web', kind: 'buddy', buddyOwnerId: 'me', agentIds: ['y1'], archived: false }],
+      }
+      let forwarded: SwarmCard[] | null = null
+      const core = createSuperTabCards({ swarmCards: (items) => { forwarded = items }, swarmCardRecap: vi.fn() })
+      core.cards([{ id: 'st1', name: 'openharness', ...leadsOf(state, 'm1', () => ({ inTurn: false }), 'me') }])
+      const host = cardHost({ cards: null }, { swarmCards: () => forwarded })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'agent.open', agentId: 'h-y1' }); await settle()
+        expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'web', 'buddy']])
+        expect(host.openAgent).not.toHaveBeenCalled()
+        // …and the id still never reaches the dial.
+        expect(JSON.stringify(ofType(port, 'supertab'))).not.toContain('h-y1')
       } finally { await session.stop() }
     })
 

@@ -3053,12 +3053,14 @@ export class CableSession {
   }
 
   /**
-   * The Swarm session a swarmBuddy dial's tap names: the reader's Buddy ('buddy') or a Lead ('pm') whose session runs on
-   * this computer, by the session id the cards hold for it. An id the cards hold twice is no one session's, and opens a
-   * tile as before; so does every other agent, and any tap from another device.
+   * The Swarm session a round dial's tap names: the reader's Buddy ('buddy') or a Lead ('pm') whose session runs on this
+   * computer, by the session id the cards hold for it. Any round dial, older ones too (PM ruling, 10-30): the tap is a
+   * notification's, not a Buddy screen's. The Pro keeps its tile: it picks Leads on its own cards, has no Buddy screen,
+   * and Diego's proposal and the ruling are the round dial's. An id the cards hold twice is no one session's, and opens a
+   * tile as before; so does every other agent.
    */
   private swarmSessionOf(agentId: string): { tab: string; projectId: string; chat: CardSide } | null {
-    if (!this.swarmBuddy) return null
+    if (this.greetedBoard === 'pro') return null
     const found: Array<{ tab: string; projectId: string; chat: CardSide }> = []
     for (const card of this.host.swarmCards?.() ?? []) {
       for (const lead of card.leads) {
