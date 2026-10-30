@@ -355,6 +355,7 @@ export function accountOf(p: Probe): string {
 
 const AVOIDED = 'Its account lost this task before (a model that kept failing, a limit or a stall), and another account is free.'
 const AVOIDED_ONLY = 'Every candidate runs on the account that lost this task before; check it is answering before you assign.'
+export const ELSEWHERE = 'It works in another repository, so it would build this in that repository\'s worktree. A new agent starts in this one.'
 
 /** How the probe's account would carry a task of this size (phase 1 §2–3). */
 function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Commitment[]): Sized {
@@ -402,9 +403,12 @@ export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid.
 /** The fixed order: the owner's preferred engine, a model on the Swarm's grid for simple work, an idle member before a new
  * agent and a less busy machine first when the owner prefers idle agents; then the policy order: cheaper in effect,
  * stronger, a model that runs on a machine before one reached through a shared API or another grid, more room on the
- * tightest window, an idle member in the task's repository before a new agent, then by title. */
+ * tightest window, an idle member in the task's repository before a new agent and one in another repository after it, then by
+ * title. */
 function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
-  const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
+  // A member in another repository ranked as a new agent did, so its name sorting before "New agent" decided whether it took
+  // the task (Diego, 2026-10-30). A build leaves it out (choose); a review, which needs no worktree, ranks it after a new agent.
+  const placed = (p: Probe) => p.kind !== 'member' ? 1 : p.repo === 'different' ? 2 : p.repo === 'unknown' ? 1 : 0
   const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
   const subscription = (p: Probe) => soft.grid && !p.gridModel ? 1 : 0
   const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0
@@ -445,6 +449,11 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
     .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
+    // A member builds in its own worktree, so one in another repository would build there (Diego, 2026-10-30). Ranking it
+    // after a new agent was not enough: the owner's reuse rule and quota room both rank before placement (review of #2377).
+    // Both checkouts are compared as host and path (repoMatch), so the same repository over SSH and HTTPS is not "different".
+    // A review reads the pull request and needs no worktree, so it keeps its Reviewer; an unknown repository says nothing.
+    .map(p => a.kind !== 'review' && p.kind === 'member' && p.repo === 'different' ? { ...p, refusals: [...p.refusals, ELSEWHERE] } : p)
   const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
