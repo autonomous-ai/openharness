@@ -942,13 +942,15 @@ class SuperTabDelivery {
   bool get pending => status == 'queued' || status == 'claimed';
   bool get delivered => status == 'delivered' || status == 'confirmed';
 
-  // One line cannot promise arrival while another recipient still waits.
+  // One line cannot promise arrival while another recipient still waits, and
+  // one agent's cancelled copy is no Not sent while another got the message
+  // (10-30): Not sent only when no recipient got it.
   int get receiptOrder => switch (status) {
     'uncertain' => 0,
     'queued' || 'claimed' => 1,
-    'cancelled' => 2,
-    'delivered' || 'confirmed' => 3,
-    'answered' => 4,
+    'delivered' || 'confirmed' => 2,
+    'answered' => 3,
+    'cancelled' => 4,
     _ => 5,
   };
 }
