@@ -1655,7 +1655,7 @@ describe('Reviewer role', () => {
       const said = markReady(`Ready: yes.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')
       expect(said).toMatchObject([{ conversationId: f.state.projects![0]!.leadConversationId, recipients: [], mentions: ['owner'] }])
       expect(said[0]!.text).toBe('Reviews of Codex builds cannot start a new Reviewer: Claude Code is unavailable on every machine this project may use (Studio: out of quota). '
-        + 'More Claude Code quota, Claude Code signed in on another machine, or another machine in the Swarm would unblock them. @owner can fix it.')
+        + 'More Claude Code quota, Claude Code signed in on another machine, a paused machine resumed, or another machine in the Swarm would unblock them. @owner can fix it.')
       expect(markReady(`Ready: yes, again.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')).toEqual([])
     })
 

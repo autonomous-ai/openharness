@@ -143,7 +143,7 @@ export type MayRun = (target: RunTarget, contributorId: string) => boolean
  *  that engine runs on that is up and not held by a usage limit past it. Busy still counts: a Reviewer frees up. One out of
  *  quota for days, offline or left out by the owner's machines does not (2026-10-30: reviews of Claude builds waited all
  *  morning on Codex machines out of weekly quota). */
-function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy, mayRun: MayRun, now: number): boolean {
+export function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy, mayRun: MayRun, now: number): boolean {
   const pool = (machineId: string) => state.machines?.find(m => m.machineId === machineId)
   const soon = (agent: Agent) => !downSince(state, agent, now) && !(agent.limitedUntil && Date.parse(agent.limitedUntil) - now > REVIEW_START_MS)
   const places = [...state.agents.filter(a => !a.gridModel && !a.buddyOf && soon(a)).map(a => ({ machineId: a.machineId, contributorId: a.contributorId, engines: [a.configuration.engine] })),
