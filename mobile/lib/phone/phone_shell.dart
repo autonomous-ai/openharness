@@ -10,11 +10,11 @@ import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
-import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
+import '../swarm/swarm_project_page.dart' show swarmChatRoute;
 import '../swarm/swarm_session.dart';
 import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
@@ -397,16 +397,14 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
+    // A project's own chat opens as its project, on Swarm Home C's tabs.
     unawaited(
       navigator.push(
-        phoneRoute(
-          (_) => SwarmConversationPage(
-            swarmId: target.swarmId,
-            conversationId: target.conversationId,
-            messageId: target.messageId,
-            decisionId: target.decisionId,
-          ),
-          listensForItself: true,
+        swarmChatRoute(
+          swarmId: target.swarmId,
+          conversationId: target.conversationId,
+          messageId: target.messageId,
+          decisionId: target.decisionId,
         ),
       ),
     );

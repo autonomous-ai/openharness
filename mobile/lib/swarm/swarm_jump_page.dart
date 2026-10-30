@@ -51,13 +51,11 @@ class _SwarmJumpPageState extends State<SwarmJumpPage> {
 
   void _open(SwarmSession session, String swarmId, String projectId) {
     if (!swarmHomeListed(session.inbox, swarmId, projectId)) return;
-    unawaited(
-      Navigator.of(context).pushReplacement(
-        phoneRoute(
-          (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
-          listensForItself: true,
-        ),
-      ),
+    openSwarmProject(
+      context,
+      swarmId: swarmId,
+      projectId: projectId,
+      replace: true,
     );
   }
 

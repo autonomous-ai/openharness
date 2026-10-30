@@ -226,6 +226,12 @@ class SuperTabLaunch {
               await launch.persist();
             },
             complete: (machine, harnessId) async {
+              if (integration.launchModelRefused case final refused?) {
+                saved['launchRefused'] = {
+                  'model': refused.model,
+                  'effort': refused.effort,
+                };
+              }
               try {
                 await launch.join(machine, harnessId);
               } catch (_) {
@@ -680,6 +686,8 @@ class SuperTabLaunch {
         'type': 'lead.start',
         'projectId': saved['projectId'],
         'machineId': start.machineId,
+        // No model: the Swarm fills its role's default where the owner's
+        // model list and rules allow it (backend commands.ts lead.start).
         'engine': start.engine,
         'repositoryUrl': ?start.repositoryUrl,
       },
@@ -939,14 +947,35 @@ class SuperTabLaunch {
       },
       if ((saved['initialMessage'] as String? ?? '').isNotEmpty)
         'initialMessage': saved['initialMessage'],
+      // Its chat says it runs its engine's own model (backend agent.add).
+      if (saved['lead'] == true && saved['launchRefused'] is Map)
+        'launchRefused': saved['launchRefused'],
     };
     await persist();
     final tabId = saved['tabId'] as String;
-    await app.superTabs.map(
-      'POST',
-      '/api/super-tabs/$tabId/commands',
-      body: {'operationId': saved['joinId'], 'command': saved['command']},
-    );
+    try {
+      await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/$tabId/commands',
+        body: {'operationId': saved['joinId'], 'command': saved['command']},
+      );
+    } on SuperTabFailure catch (failure) {
+      final command = saved['command'] as Map;
+      if (failure.code != 'VALIDATION_ERROR' ||
+          !command.containsKey('launchRefused')) {
+        rethrow;
+      }
+      // A backend from before the note refuses the whole join for it, having
+      // committed nothing: the join again without it, as a new operation.
+      saved['command'] = Map.of(command)..remove('launchRefused');
+      saved['joinId'] = '${saved['joinId']}-plain';
+      await persist();
+      await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/$tabId/commands',
+        body: {'operationId': saved['joinId'], 'command': saved['command']},
+      );
+    }
     // Waking the exact host starts only its authorized contributions. It is
     // safe to retry, and never grants machine access to the tab's members.
     await app.wakeSuperTabHost(machine);

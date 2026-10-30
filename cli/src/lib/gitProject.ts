@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
 import { redactSecretsInText } from './logBundle.js'
@@ -56,6 +56,17 @@ function parseWorktrees(output: string): Worktree[] {
     }]
   })
 }
+/** Whether `path` is a worktree Harness made in `root`'s worktrees folder: a linked worktree there whose branch carries
+ *  Harness's `branch.<name>.harness` mark. A person's own checkout or worktree, anywhere, is not. */
+export async function harnessMadeWorktree(path: string, root: string): Promise<boolean> {
+  try {
+    const [here, home] = await Promise.all([realpath(path), realpath(join(root, 'worktrees'))])
+    if (dirname(here) === here || !here.startsWith(`${home}${sep}`) || !(await lstat(join(here, '.git'))).isFile()) return false
+    const branch = (await git(here, ['branch', '--show-current'])).trim()
+    return !!branch && (await git(here, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`])).trim() !== ''
+  } catch { return false }
+}
+
 /** `branch.<name>.harness` in the repository's config marks a branch Harness made: `placeholder` while
  *  its name waits for the session's, `created` once it has one or was named at Start. */
 export const HARNESS_BRANCH_KEY = 'harness'

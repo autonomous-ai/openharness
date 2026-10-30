@@ -136,12 +136,22 @@ void main() {
     String account = 'owner',
     String? skillMode,
     bool custom = false,
+    Map<String, Map<String, String>> roleDefaults = const {},
   }) async {
     final server = _RolesServer();
     final project = projectFixture('lead', 'Pilot', 'lead');
     if (skillMode != null) project['skillMode'] = skillMode;
     server.state['projects'] = [project];
     if (custom) server.seedRoles();
+    if (roleDefaults.isNotEmpty) {
+      project['roles'] = [
+        for (final role in project['roles'] as List)
+          <String, dynamic>{
+            ...role as Map,
+            'defaults': ?roleDefaults[role['id']],
+          },
+      ];
+    }
     if (account != 'owner') {
       (server.state['people'] as List).add({
         'id': account,
@@ -405,6 +415,39 @@ void main() {
       },
     });
     expect(find.text('Research Engineer'), findsOneWidget);
+  });
+
+  testWidgets('editing a role keeps its default engine, model and effort', (
+    tester,
+  ) async {
+    // Set elsewhere: this editor shows no defaults, and must not drop them
+    // (review of #2274).
+    final server = await mount(
+      tester,
+      custom: true,
+      roleDefaults: {
+        'dev': {'engine': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'high'},
+      },
+    );
+    await openInstructions(tester);
+    await tester.tap(find.text('Edit custom roles'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('role-edit-dev')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('role-text')),
+      '# Research work',
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save role'));
+    await tester.pumpAndSettle();
+    expect((server.posts.last['command'] as Map)['role'], {
+      'id': 'dev',
+      'name': 'Engineer',
+      'kind': 'builder',
+      'text': '# Research work',
+      'defaults': {'engine': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'high'},
+    });
   });
 
   testWidgets('owner adds a named reviewer role with a stable id', (

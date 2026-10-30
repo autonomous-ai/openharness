@@ -224,11 +224,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// [swarm]'s project Mobile, from Home, on its Tasks tab.
+  /// [swarm]'s project Mobile, from Home, on its Team tab, its tasks on top
+  /// (Swarm Home C).
   Future<void> openTasks(WidgetTester tester, {String swarm = tab}) async {
     await tester.tap(key('swarm-project-$swarm-$project'));
     await tester.pumpAndSettle();
-    await tester.tap(key('swarm-project-tab-tasks'));
+    await tester.tap(key('swarm-project-tab-team'));
     await tester.pumpAndSettle();
   }
 
