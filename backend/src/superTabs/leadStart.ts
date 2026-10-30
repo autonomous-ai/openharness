@@ -5,7 +5,7 @@
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf,
-  teamWorkRefusal, type ContributedMachine } from './machines.js'
+  slotCounter, teamWorkRefusal, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -32,6 +32,8 @@ export interface LeadContext {
   teamMachines?: readonly string[]
   otherWorkspaceMachines?: readonly string[]
   teamAccountsIdle?: boolean
+  /** The slots of each pool, counted once for a read that admits many (machines.ts slotCounter). */
+  slots?: (pool: ContributedMachine) => number
 }
 
 /** The engines a Product Manager runs on, as people read them. */
@@ -42,7 +44,7 @@ function admitLead(state: SuperTabState, project: SwarmProject, pool: Contribute
   if (!contributedEngines(pool).includes(start.engine)) {
     fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
   }
-  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project)
+  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project, context.slots)
   // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
   if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
     fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${LEAD_NAME} now.`, 409)
@@ -115,6 +117,9 @@ export function leadChoices(state: SuperTabState, personId: string, context: Lea
   const project = { id: '', name: '', ownerId: personId, leadConversationId: '', visibility: 'private', members: [], updateMinutes: 5,
     skillMode: 'default' } as unknown as SwarmProject
   const leadFor = { projectId: '', personId, generation: by.generation }
+  // Every teammate's machine and engine is admitted against this one state: its slots are counted once (prod 10-31: a quarter
+  // of a change read's CPU, each admission grouping the Swarm's 543 released harnesses again).
+  context = { ...context, slots: context.slots ?? slotCounter(state) }
   const choices: Record<string, Record<string, { machineId: string } | { refused: string }>> = {}
   for (const machine of state.machines ?? []) {
     if (machine.hostMachineId || machine.removal || machine.contributorId === personId) continue
