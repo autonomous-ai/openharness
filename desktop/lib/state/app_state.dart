@@ -304,6 +304,11 @@ class AgentCreationAttempt {
   final ({String model, String effort})? launchModel;
   bool _launchModelDropped = false;
 
+  /// The [launchModel] the machine refused, once the agent started on its
+  /// engine's own model instead; null when it launched with it.
+  ({String model, String effort})? get launchModelRefused =>
+      _launchModelDropped ? launchModel : null;
+
   /// How long a request the machine holds is waited for before the create
   /// answers ([AppNotifier._createFollowingHold]). Null answers at once with
   /// what it waits for, as a form wants: the person reads it and may cancel.

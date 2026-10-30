@@ -170,6 +170,11 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   return other ? `${started} ${other}` : started
 }
 
+/** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its
+ *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). */
+export const launchRefusedLine = (asked: { model: string; effort?: string }) =>
+  `${LEAD_NAME} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
+
 /** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as routing rates it (rules.ts policyQuality). */
 const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()
 /** What a started agent runs when it is known to differ from the model or effort its start asked for, said for its chat; null

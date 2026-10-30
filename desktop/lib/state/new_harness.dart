@@ -4454,6 +4454,7 @@ class NewHarnessController extends ChangeNotifier {
       destination.pending = true;
       try {
         if (!destination.completed) {
+          destination.launchModelRefused = attempt.launchModelRefused;
           await destination.complete(_machineId, attempt.agentId!);
           destination.completed = true;
         }

@@ -1068,6 +1068,21 @@ it('records the lead project once and accepts only Claude Code and Codex contrib
     expect(commandSchema.safeParse({ ...command, engines: ['claude', engine] }).success).toBe(false)
   }
 })
+it('says in the project chat when a Product Manager on its person\'s own Mac could not launch on the model its role asks for', () => {
+  const join = (extra: Record<string, unknown>, lead = true) => {
+    const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+    const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead, project, ...extra } as Command, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text)
+  }
+  expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } })).toEqual(
+    ['Product Manager started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.'])
+  expect(join({})).toEqual([])
+  // Only a Product Manager's start says it.
+  expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } }, false)).toEqual([])
+  expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
+    launchRefused: { model: 'opus', other: 1 } }).success).toBe(false)
+})
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
   for (const cwd of ['/repo', 'C:\\Users\\dev\\data', 'c:/Users/dev/data', 'D:\\', '\\\\server\\share\\x']) expect(contribute(cwd).success, cwd).toBe(true)

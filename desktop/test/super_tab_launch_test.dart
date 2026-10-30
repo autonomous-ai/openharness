@@ -1513,7 +1513,39 @@ void main() {
       expect(sent.last.containsKey('effort'), isFalse);
       // The same request, so the same harness: nothing launched the first time.
       expect(sent.last['creationId'], sent.first['creationId']);
+      // Its project chat is told, as for a PM the Swarm starts.
+      expect(commandsOf(f, 'agent.add').single['launchRefused'], {
+        'model': 'opus',
+        'effort': 'xhigh',
+      });
     });
+
+    test(
+      'a PM that launched on Opus 5.5 at xhigh joins without a note',
+      () async {
+        final f = SuperTabLaunchFixture();
+        await creates(f, engine: 'claude', newProject: true);
+        expect(
+          commandsOf(f, 'agent.add').single.containsKey('launchRefused'),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'a backend from before the note still joins the PM, without it',
+      () async {
+        final f = SuperTabLaunchFixture()..connection.refuseLaunchModel = true;
+        f.connection.server.unknownCommand = (command) =>
+            command['type'] == 'agent.add' &&
+            command.containsKey('launchRefused');
+        await creates(f, engine: 'claude', newProject: true);
+        final joins = commandsOf(f, 'agent.add');
+        expect(joins, hasLength(2));
+        expect(joins.first['launchRefused'], isNotNull);
+        expect(joins.last.containsKey('launchRefused'), isFalse);
+      },
+    );
 
     test('a Claude PM the Swarm starts asks for Opus 5.5 at xhigh', () async {
       final f = SuperTabLaunchFixture();
