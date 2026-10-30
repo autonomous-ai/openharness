@@ -402,9 +402,13 @@ export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid.
 /** The fixed order: the owner's preferred engine, a model on the Swarm's grid for simple work, an idle member before a new
  * agent and a less busy machine first when the owner prefers idle agents; then the policy order: cheaper in effect,
  * stronger, a model that runs on a machine before one reached through a shared API or another grid, more room on the
- * tightest window, an idle member in the task's repository before a new agent, then by title. */
+ * tightest window, an idle member in the task's repository before a new agent and one in another repository after it, then by
+ * title. */
 function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
-  const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
+  // A member in another repository would do the task in that repository's worktree. It ranked as a new agent did, so its name
+  // sorting before "New agent" decided whether it took the task (Diego, 2026-10-30). Ranked, not left out: remotes are compared
+  // as written, so the same repository over SSH and HTTPS reads as different, and the Lead can still choose it.
+  const placed = (p: Probe) => p.kind !== 'member' ? 1 : p.repo === 'different' ? 2 : p.repo === 'unknown' ? 1 : 0
   const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
   const subscription = (p: Probe) => soft.grid && !p.gridModel ? 1 : 0
   const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0

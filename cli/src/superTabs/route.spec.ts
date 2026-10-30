@@ -120,15 +120,34 @@ describe('choose', () => {
     ], policy, a(), NOW)
     if ('error' in r) throw new Error('unexpected')
     expect(r.belowFloor).toBe(false)
-    // A member in another repository saves no start, so it ranks as a new agent would.
+    // A member in another repository would work in that repository's worktree, so it ranks after a new agent.
     expect(r.shown.map(s => s.title)).toEqual([
       'New agent · Claude sonnet medium · mac',
       'Multiply · Claude sonnet medium · remote-1',
-      'Elsewhere · Claude sonnet medium · remote-1',
       'New agent · Claude sonnet medium · remote-1',
+      'Elsewhere · Claude sonnet medium · remote-1',
       'New agent · Claude opus high · remote-1',
     ])
     expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4'])
+  })
+  // Diego, 10-30: a member in another repository tied a new agent and the title decided, so Ada took the task in her own
+  // repository's worktree and Zed did not. Where it works now decides, and the name only breaks ties between equals.
+  it('ranks a member in another repository after a new agent whatever its name; one in the repository before; an unknown one as before', () => {
+    const order = (member: Partial<Probe>) => ok(choose([probe(), probe({ kind: 'member', agentId: 'a1', activity: 'idle', ...member })], policy, a(), NOW))
+      .shown.map(s => s.kind)
+    expect(order({ name: 'Ada', repo: 'different' })).toEqual(['new', 'member'])
+    expect(order({ name: 'Zed', repo: 'different' })).toEqual(['new', 'member'])
+    expect(order({ name: 'Ada', repo: 'same' })).toEqual(['member', 'new'])
+    expect(order({ name: 'Zed', repo: 'same' })).toEqual(['member', 'new'])
+    // No folder named: nothing to be in or out of, so a member saves a start as before.
+    expect(order({ name: 'Zed' })).toEqual(['member', 'new'])
+    // A repository that could not be told keeps its rank beside a new agent: the title still decides between them.
+    expect(order({ name: 'Ada', repo: 'unknown' })).toEqual(['member', 'new'])
+    expect(order({ name: 'Zed', repo: 'unknown' })).toEqual(['new', 'member'])
+    // Placement comes last: a cheaper member in another repository still goes first, and the owner's soft rules still lead.
+    expect(order({ name: 'Zed', repo: 'different', cost: 1 })).toEqual(['member', 'new'])
+    expect(ok(choose([probe(), probe({ kind: 'member', agentId: 'a1', name: 'Zed', activity: 'idle', repo: 'different' })], policy, a(), NOW,
+      [], [{ rule: { kind: 'preferIdle' }, text: 'Reuse idle agents first.' }])).shown.map(s => s.kind)).toEqual(['member', 'new'])
   })
   it('marks belowFloor when nobody meets it, and shows those that fit before the unknown and the short', () => {
     const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
