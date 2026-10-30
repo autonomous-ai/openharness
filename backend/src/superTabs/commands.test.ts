@@ -4058,3 +4058,79 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(commandSchema.safeParse({ ...resume, engine: 'Not An Engine' }).success).toBe(false)
   })
 })
+
+// Scholes, 2026-10-30: the sidebar's Models showed "Codex, model not reported". A Codex agent at its own default reported its
+// model only after the work it was assigned 30 s after its start was recorded; the start now settles with what it saw.
+describe('a settling start names the model its agent runs', () => {
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const reported = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto', contextWindow: null, engineVersion: '0.165.0' }
+  const setup = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const start = (harnessId: string) => {
+      const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
+      f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
+      f.state.starts!.find(s => s.id === startId)!.poolGeneration = 'pool-1'
+      // Codex at its own default reports no model when it joins.
+      const agentId = f.run({ type: 'agent.started', startId, harnessId, configuration: { ...reported, model: null, effort: null } }, actor, { contribution })
+        .result.agentId as string
+      return { startId, agentId }
+    }
+    const settle = (startId: string, configuration?: AgentConfiguration, context: Partial<CommandContext> = { contribution }) =>
+      f.run({ type: 'agent.startSettled', startId, warning: null, ...(configuration ? { configuration } : {}) }, actor, context)
+    const worker = (agentId: string) => f.state.agents.find(a => a.id === agentId)!
+    const assign = (agentId: string) => f.run({ type: 'work.assign', conversationId: group, agentId }).result.assignmentId as string
+    const run = () => f.state.conversations.find(c => c.id === group)!.ledger!.runs!.at(-1)!
+    return { f, group, start, settle, worker, assign, run }
+  }
+
+  it('records the model the start saw on the agent, so the work assigned after the settle names it', () => {
+    const t = setup(), { startId, agentId } = t.start('codex-1')
+    const ready = t.settle(startId, reported).messages
+    expect(ready.map(m => m.text)).toEqual(['Builder is ready for an assignment.'])
+    expect(t.worker(agentId).configuration).toEqual(reported)
+    t.assign(agentId)
+    expect(t.run()).toMatchObject({ engine: 'codex', model: 'gpt-6.1-sol', agentId, harnessId: 'codex-1' })
+  })
+
+  it('settles without a model when the agent reported none in time, and its first report later fills the attempt', () => {
+    const t = setup(), { startId, agentId } = t.start('codex-2')
+    expect(t.settle(startId).messages.map(m => m.text)).toEqual(['Builder is ready for an assignment.'])
+    const assignmentId = t.assign(agentId)
+    expect(t.run().model).toBeNull()
+    // Its work ended before the agent's first report.
+    t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId, reason: 'Not needed any more.' })
+    expect(activeWork(t.f.state.conversations.find(c => c.id === t.group)!)).toBe(false)
+    const agent = t.worker(agentId)
+    t.f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: reported },
+      { kind: 'agent', agentId, machineOwnerId: 'target-owner' })
+    expect(t.run()).toMatchObject({ assignmentId, model: 'gpt-6.1-sol' })
+  })
+
+  it('takes no reading from another machine grant, for another engine, for a grid model, or once settled', () => {
+    const t = setup()
+    const other = t.start('codex-3')
+    t.settle(other.startId, reported, { contribution: { ...contribution, hostGrant: 'grant-2' } })
+    expect(t.worker(other.agentId).configuration.model).toBeNull()
+    const engine = t.start('codex-4')
+    t.settle(engine.startId, { ...reported, engine: 'claude', model: 'opus' })
+    expect(t.worker(engine.agentId).configuration).toMatchObject({ engine: 'codex', model: null })
+    const grid = t.start('codex-5')
+    t.worker(grid.agentId).gridModel = 'moonshotai/kimi-k3'
+    t.settle(grid.startId, reported)
+    expect(t.worker(grid.agentId).configuration.model).toBeNull()
+    // A settle already made is a replay: it changes nothing, whatever it carries.
+    const settled = t.start('codex-6')
+    t.settle(settled.startId)
+    t.settle(settled.startId, reported)
+    expect(t.worker(settled.agentId).configuration.model).toBeNull()
+  })
+
+  it('a host from before the field still settles, and an unknown field is still refused', () => {
+    const t = setup(), { startId } = t.start('codex-7')
+    expect(t.settle(startId).messages).toHaveLength(1)
+    expect(() => commandSchema.parse({ type: 'agent.startSettled', startId, warning: null, model: 'gpt-6.1-sol' })).toThrow()
+  })
+})

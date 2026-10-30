@@ -607,8 +607,9 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const f = fixture()
     f.at(5_000)
     const id = f.create(owner, { checks: independent })
-    const { assignmentId } = f.assign(id)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000 }])
+    const { assignmentId, worker } = f.assign(id)
+    const harnessId = f.state.agents.find(a => a.id === worker)!.harnessId
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId }])
   })
 
   it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
@@ -637,9 +638,10 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     report(worker, 'gpt-6.1-sol')
     report(earlier, 'gpt-6.1-sol')
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000 }])
-    // A finished task's attempt is history: what its agent reports afterwards is another task's.
-    expect(f.group(done).ledger!.runs![0]!.model).toBeNull()
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000,
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
+    // A task finished before its agent's first report still takes it (Scholes, 2026-10-30): the agent ran that model all along.
+    expect(f.group(done).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
     // A model on record is never rewritten by a later report.
     report(worker, 'gpt-6.1-luna')
     expect(f.group(id).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
@@ -681,6 +683,45 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect([run(grid!.id), run(other!.id)].map(r => r.engine)).toEqual(['codex', 'codex'])
   })
 
+  it('names the reported model on an attempt handed on before the report, and only on that agent\'s own (Scholes, 2026-10-30)', () => {
+    const f = fixture()
+    const [task] = codexTasks(f, 1)
+    f.run({ type: 'work.cancel', conversationId: task!.id, assignmentId: task!.assignmentId, reason: 'Handing it on.' })
+    const next = f.add('claude-next', task!.id)
+    f.assign(task!.id, next)
+    reportModel(f, task!.worker, { model: 'gpt-6.1-sol' })
+    const runs = f.group(task!.id).ledger!.runs!
+    expect(runs.map(r => [r.agentId, r.model])).toEqual([[task!.worker, 'gpt-6.1-sol'], [next, 'opus']])
+    // Each attempt once: a later report adds no attempt and rewrites none.
+    reportModel(f, task!.worker, { model: 'gpt-6.1-luna' })
+    expect(f.group(task!.id).ledger!.runs!.map(r => r.model)).toEqual(['gpt-6.1-sol', 'opus'])
+  })
+
+  it('names no model on an attempt of the agent\'s earlier terminal: a replacement may run another', () => {
+    const f = fixture()
+    const [task] = codexTasks(f, 1)
+    f.state.agents.find(a => a.id === task!.worker)!.harnessId = 'replacement-terminal'
+    reportModel(f, task!.worker, { model: 'gpt-6.1-sol' })
+    expect(f.group(task!.id).ledger!.runs![0]!.model).toBeNull()
+  })
+
+  it('matches an attempt recorded before attempts named their agent only as its group\'s current one', () => {
+    const f = fixture()
+    const [current, handedOn] = codexTasks(f, 2)
+    for (const id of [current!.id, handedOn!.id]) {
+      const run = f.group(id).ledger!.runs![0]!
+      delete run.agentId
+      delete run.harnessId
+    }
+    // The second agent's attempt was handed on, so its group's current assignment is another agent's.
+    f.run({ type: 'work.cancel', conversationId: handedOn!.id, assignmentId: handedOn!.assignmentId, reason: 'Handing it on.' })
+    f.assign(handedOn!.id, f.add('claude-next', handedOn!.id))
+    reportModel(f, current!.worker, { model: 'gpt-6.1-sol' })
+    reportModel(f, handedOn!.worker, { model: 'gpt-6.1-sol' })
+    expect(f.group(current!.id).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
+    expect(f.group(handedOn!.id).ledger!.runs![0]!.model).toBeNull()
+  })
+
   it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
@@ -691,7 +732,8 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
         gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
         requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
     const { assignmentId } = f.assign(id, worker)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000 }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000,
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
   })
 
   it('keeps the first verdict on an independent check as the assignment\'s first review, and ignores later and other checks', () => {

@@ -2,7 +2,7 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import { activeWork, isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS, weekStart } from './week.js'
 import { agentTarget } from '../rules.js'
@@ -17,6 +17,9 @@ export interface Unblock { personId: string; at: number; waitedMs: number; kind?
  *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
  *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
 export interface Run extends RanOn { assignmentId: string; at: number
+  /** The agent and its terminal that ran it, so the model that terminal reports later fills this attempt only (record
+   *  ReportedModel). Absent from attempts recorded before them. */
+  agentId?: string; harnessId?: string
   firstVerdicts?: Record<string, boolean>; firstReview?: boolean
   /** The step up from a cheaper model this attempt is (stepUp.ts): its attempt number and why. */
   stepUp?: { attempt: number; reason: string }
@@ -112,7 +115,8 @@ function shipOn(group: Conversation, run?: Run): void {
 function shipAttempt(ledger: GroupLedger, run?: Run): void {
   const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1) ?? ledger.runs?.[0]
   if (!shipping) return
-  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, ...shippedBy } = shipping
+  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, agentId: _agent, harnessId: _harness,
+    ...shippedBy } = shipping
   ledger.shippedBy = shippedBy
 }
 
@@ -234,6 +238,7 @@ export function waitsNow(group: Conversation): boolean {
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
   const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
+    agentId: worker.id, harnessId: worker.harnessId,
     ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
     ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}
@@ -241,18 +246,29 @@ export function recordRun(state: SuperTabState, group: Conversation, assignment:
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
 }
 
-/** An agent started on its engine's own model reports which one only once it runs (Codex): its open task's attempt, recorded
- *  with none, takes the model it reports, so the board names it and step-ups rate it by it rather than by the engine alone
- *  (Dee, 2026-10-30). A model on record is never rewritten, and a finished task's attempt is history. */
+/** An agent started on its engine's own model reports which one only once it runs (Codex): its attempts recorded before
+ *  then, with none, take the model it reports, so the board names it and step-ups rate it by it rather than by the engine
+ *  alone (Dee, 2026-10-30). That holds for a finished or handed-on attempt too (Scholes, 2026-10-30: a review done before
+ *  its agent's first report stayed "model not reported"). Only this agent's own attempts in its current terminal: a
+ *  replacement terminal (agent.rebind) may run another model. An attempt recorded before attempts named their agent is
+ *  matched as its group's current one. A model on record is never rewritten, nor a grid model's, nor another engine's. */
 export function recordReportedModel(state: SuperTabState, worker: Agent): void {
   const model = worker.configuration.model
   if (!model || worker.gridModel) return
+  const fill = (on: RanOn | undefined) => {
+    if (on && on.model === null && !on.grid && on.engine === worker.configuration.engine) on.model = model
+  }
   for (const group of state.conversations) {
-    const assignment = group.assignment
-    if (!assignment || assignment.agentId !== worker.id || !activeWork(group)) continue
-    // The attempt, and the copy of it kept when its merge was recorded while it still ran.
-    for (const on of [group.ledger?.runs?.find(r => r.assignmentId === assignment.id), group.ledger?.shippedBy]) {
-      if (on?.assignmentId === assignment.id && on.model === null && !on.grid && on.engine === worker.configuration.engine) on.model = model
+    const ledger = group.ledger
+    if (!ledger?.runs?.length) continue
+    const current = group.assignment
+    const legacy = current?.agentId === worker.id && current.execution.harnessId === worker.harnessId ? current.id : null
+    for (const run of ledger.runs) {
+      const own = run.agentId !== undefined ? run.agentId === worker.id && run.harnessId === worker.harnessId : run.assignmentId === legacy
+      if (!own) continue
+      fill(run)
+      // The copy kept when its merge was recorded while it still ran.
+      if (ledger.shippedBy?.assignmentId === run.assignmentId) fill(ledger.shippedBy)
     }
   }
 }
