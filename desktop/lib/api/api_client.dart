@@ -277,6 +277,20 @@ class ApiClient {
     ),
   );
 
+  /// One Swarm call ([method] on [path], `/api/super-tabs…`) straight to the
+  /// backend with this browser's sign-in, answered whole: the web's Swarm
+  /// transport (super_tabs/backend_transport.dart) reads the envelope, as a
+  /// machine's relay reads it for a computer.
+  Future<Response<dynamic>> superTabCall(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _dio.request<dynamic>(
+    path,
+    data: body,
+    options: Options(method: method),
+  );
+
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;
