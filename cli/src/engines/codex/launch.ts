@@ -61,6 +61,15 @@ export const launch: EngineLaunch = {
    */
   ownProvider: { home: 'CODEX_HOME', file: 'config.toml', key: 'model_provider', fallback: 'openai', args: ['-c', 'model_provider="{value}"'] },
   /**
+   * From codex-cli 0.166.0 that argv no longer outranks the stored row: `thread/resume` checks the thread's saved
+   * provider against the one it is given and refuses a difference (app-server config_manager.rs `load_for_resume`,
+   * ModelProviderMismatch: "This chat uses openai, but your current provider is grid"), and the restart fell back to a
+   * new conversation without its history. No app-server method changes a thread's provider (`thread/metadata/update`
+   * and `thread/settings/update` carry none); `thread/fork` builds its config as a new thread's, so a move between a
+   * grid and the own login continues the conversation in a fork, history included, on every version.
+   */
+  providerBoundConversations: true,
+  /**
    * Codex keeps its folder trust in `<CODEX_HOME>/config.toml` as a `[projects."<path>"]` table with
    * `trust_level = "trusted"`, read from the agent's own profile or a CODEX_HOME the person moved, exact
    * folders only. Copied from the former lib/claudeTrust.ts.

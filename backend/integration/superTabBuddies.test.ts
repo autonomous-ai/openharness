@@ -943,3 +943,73 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect(await a.store.otherWorkspaceMachines(db, stateA)).toEqual([])
   })
 })
+
+describe('the person\'s own browser, reading and writing the Swarm straight from the web (docs/specs/2026-10-30-web-swarm-direct.md)', () => {
+  // A browser signed in by a computer's QR holds a viewer session; one signed in with Autonomous holds the person's own
+  // token (`peer` here). Either is the person, as their own Mac's sign-in that relayed the web's requests until now.
+  const peerWeb: AuthUser = { ...peer, harnessSessionId: 'peer-web-session', harnessSessionKind: 'viewer' }
+  const ownerWeb: AuthUser = { ...owner, harnessSessionId: 'owner-web-session', harnessSessionKind: 'viewer' }
+  const refusal = (read: Promise<unknown>) => read.then(() => null, (error: { code?: string; status?: number; message?: string }) =>
+    ({ code: error.code, status: error.status, message: error.message }))
+
+  it('reads the Swarm list, the Swarm and its person\'s Buddy chat, and posts there, exactly as their own Mac does', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    await f.execute({ type: 'message.send', conversationId: chat, text: 'From the browser', replyTo: null, recipientIds: [] }, peerWeb)
+    await f.execute({ type: 'message.send', conversationId: chat, text: 'From the Mac', replyTo: null, recipientIds: [] }, peerMac)
+    const reads = new SwarmReads(f.store)
+    for (const signIn of [peerWeb, peer]) {
+      expect((await reads.list(signIn)).tabs.map(t => t.id)).toEqual((await reads.list(peerMac)).tabs.map(t => t.id))
+      const keys = (await reads.firstLoad(signIn, f.tab)).groups.map(g => g.key).sort()
+      expect(keys).toEqual((await reads.firstLoad(peerMac, f.tab)).groups.map(g => g.key).sort())
+      expect(keys).toContain(chat)
+      expect((await f.store.messages(signIn, f.tab, chat, {})).messages.map(m => m.text))
+        .toEqual((await f.store.messages(peerMac, f.tab, chat, {})).messages.map(m => m.text))
+    }
+    expect((await f.store.messages(peerWeb, f.tab, chat, {})).messages.map(m => m.text))
+      .toEqual(expect.arrayContaining(['From the browser', 'From the Mac']))
+  })
+
+  it('is refused another person\'s Buddy chat, a private project and another Swarm as their own Mac is, with no name', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    const hidden = (await f.execute({ type: 'project.create', name: 'Secret plan', visibility: 'private', brief: '' })).result as
+      { projectId: string; conversationId: string }
+    const task = String((await f.execute({ type: 'conversation.create', projectId: hidden.projectId, title: 'Secret task', brief: '',
+      checks: [] })).result.conversationId)
+    const madeUp = 'groups-000000000000000000000000'
+    // The owner's browser, on peer's Buddy chat.
+    const othersBuddy = await refusal(f.store.messages(ownerWeb, f.tab, chat, {}))
+    expect(othersBuddy).not.toBeNull()
+    expect(othersBuddy).toEqual(await refusal(f.store.messages(ownerWeb, f.tab, madeUp, {})))
+    expect((await new SwarmReads(f.store).firstLoad(ownerWeb, f.tab)).groups.map(g => g.key)).not.toContain(chat)
+    // peer's browser, on the owner's private project: refused as their own Mac is, and with no name. (The server says
+    // "project" here and "conversation" for an id that does not exist, for every sign-in alike; reported, not changed here.)
+    for (const id of [hidden.conversationId, task]) {
+      const refused = await refusal(f.store.messages(peerWeb, f.tab, id, {}))
+      expect(refused).toMatchObject({ code: 'NOT_FOUND', status: 404 })
+      expect(refused).toEqual(await refusal(f.store.messages(peerMac, f.tab, id, {})))
+      expect(JSON.stringify(refused)).not.toMatch(/Secret/)
+    }
+    const keys = (await new SwarmReads(f.store).firstLoad(peerWeb, f.tab)).groups.map(g => g.key)
+    for (const id of [hidden.conversationId, task]) expect(keys).not.toContain(id)
+    // Another Swarm peer is not in: refused as their own Mac is, with no name. (403 here and 404 for a Swarm that does not
+    // exist, for every sign-in alike; reported, not changed here.)
+    const other = (await f.store.create(owner, randomUUID(), 'Private Swarm', 'private')).id
+    const outside = await refusal(new SwarmReads(f.store).firstLoad(peerWeb, other))
+    expect(outside).not.toBeNull()
+    expect(outside).toEqual(await refusal(new SwarmReads(f.store).firstLoad(peerMac, other)))
+    expect(JSON.stringify(outside)).not.toContain('Private Swarm')
+  })
+
+  it('speaks as an agent only where the person\'s own Mac may, and a team sign-in is still refused', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    for (const asAgent of [agentId, f.lead]) {
+      expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, asAgent)))
+        .toEqual(await refusal(f.store.messages(peerMac, f.tab, 'lead', {}, asAgent)))
+    }
+    expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, f.lead))).toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    expect(await refusal(new SwarmReads(f.store).firstLoad(peerTeam, f.tab))).toMatchObject(LIMITED)
+  })
+})
