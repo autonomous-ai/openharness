@@ -3222,7 +3222,8 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
+      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])
@@ -3283,7 +3284,7 @@ describe('Lead mentions', () => {
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: 'Peer, see above.' }))
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 

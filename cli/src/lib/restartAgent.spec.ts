@@ -164,6 +164,37 @@ describe('restartAgent', () => {
     expect(d.calls).not.toContain('keepAbandoned')
   })
 
+  it('continues in a fork of the conversation when asked to, with its history prepared, and leaves nothing behind', async () => {
+    const argvCalls: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = deps({ buildArgv: (opts) => { argvCalls.push(opts); return ['codex'] }, prepareResume: () => {} })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(argvCalls).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }])
+    expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: true })
+    expect(d.calls).toContain('prepareResume')
+    // The fork carries the whole conversation: no stopped harness is kept for the one it came from.
+    expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  it('asks whether the fork it would launch is refused, before anything is stopped', async () => {
+    const asked: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = { ...deps(), launchRefusal: (opts: { bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }) => { asked.push(opts); return null } }
+    await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(asked).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }])
+  })
+
+  it('falls back to a fresh relaunch when the fork never comes up, keeping the conversation it could not continue', async () => {
+    let attempt = 0
+    const argvCalls: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = deps({
+      buildArgv: (opts) => { argvCalls.push(opts); return ['codex'] },
+      waitForProcess: async () => { attempt += 1; return attempt === 1 ? null : IDENTITY },
+    })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(argvCalls).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }, { bypassPermission: false }])
+    expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: false })
+    expect(d.calls.at(-1)).toBe('keepAbandoned')
+  })
+
   it('launches fresh (no resumeSessionId) when the session has none', async () => {
     const argvCalls: Array<{ bypassPermission: boolean; resumeSessionId?: string }> = []
     const d = deps({ buildArgv: (opts) => { argvCalls.push(opts); return ['claude'] } })

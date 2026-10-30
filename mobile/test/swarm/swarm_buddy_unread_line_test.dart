@@ -7,6 +7,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -263,7 +264,11 @@ void main() {
       await pump(
         tester,
         backend([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
-        home: const SwarmProjectPage(swarmId: tab, projectId: project),
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
       await tester.tap(find.byKey(const ValueKey('swarm-project-tab-buddy')));
       await tester.pumpAndSettle();

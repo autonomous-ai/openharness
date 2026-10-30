@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { fetchDefaultBranch, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { fetchDefaultBranch, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
@@ -46,6 +46,19 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra })!, options())
   const worktrees = () => join(root, 'harnesses', 'worktrees', 'project with spaces')
   const current = async (path: string) => (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
+
+  // 2026-10-30: the desktop's New Swarm makes its PM's worktree itself; the daemon trusts it for Claude Code only on this.
+  it('knows a worktree Harness made from the person\'s own checkout and worktrees', async () => {
+    const harnesses = join(root, 'harnesses')
+    const made = await prepareGitProject(repo, { root: harnesses, worktree: true, branchName: 'tidy-badger' })
+    expect(await harnessMadeWorktree(made, harnesses)).toBe(true)
+    const own = join(harnesses, 'worktrees', 'own')
+    await git('worktree', 'add', '-b', 'mine', own)
+    expect(await harnessMadeWorktree(own, harnesses)).toBe(false)
+    expect(await harnessMadeWorktree(repo, harnesses)).toBe(false)
+    expect(await harnessMadeWorktree(join(harnesses, 'worktrees'), harnesses)).toBe(false)
+    expect(await harnessMadeWorktree(join(root, 'missing'), harnesses)).toBe(false)
+  })
 
   it('encrypts Git metadata requests and replies', () => {
     expect(encryptDownFrame('git_project_info')).toBe(true)
