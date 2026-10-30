@@ -207,7 +207,10 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
   for (const entry of entries) {
     if (entry.isFile() && entry.name.endsWith('.jsonl')) continue
     if (entry.isDirectory() && entry.name === 'memory') {
-      if ((await readdir(join(dir, entry.name))).length) return SHARED_LEFT.memory
+      // One that cannot be read fails it too, by its kind: the read's own error named its path (security review of #2385).
+      const memory = await readdir(join(dir, entry.name)).catch(() => null)
+      if (!memory) return SHARED_LEFT.unreadMemory
+      if (memory.length) return SHARED_LEFT.memory
     } else if (!entry.isDirectory() || !transcripts.has(entry.name)) return SHARED_LEFT.other
   }
   return null
@@ -216,6 +219,7 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
 export const SHARED_LEFT = {
   transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
   memory: 'a memory file in its transcript folder, which another folder shares: its owner checks it and removes what is not the other folder\'s',
+  unreadMemory: 'a memory folder in its transcript folder, which another folder shares, that could not be read: its owner checks its permissions',
   other: 'something in its transcript folder, which another folder shares, that is not another folder\'s transcript',
   folder: 'its transcript folder',
 }

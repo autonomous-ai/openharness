@@ -368,6 +368,13 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(['pm-session.jsonl', 'theirs.jsonl', 'memory/MEMORY.md', 'memory/theirs.md'].map(name => existsSync(join(shared, name)))).toEqual([false, true, true, true])
     const restarted = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: purgeRecord(join(home, 'super-tabs', 'team-purges.json')) })
     expect(await restarted('pm')).toMatchObject({ error: 'SCRUB_INCOMPLETE' })
+    // A memory folder that cannot be read holds it too, named by its kind: the read's own error carried the folder's path into
+    // the daemon's log (security review of #2385).
+    chmodSync(memory, 0o000)
+    const unread = await restarted('pm').finally(() => chmodSync(memory, 0o700))
+    expect(unread).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${left('unreadMemory')}` })
+    expect(JSON.stringify(unread)).not.toContain(home)
+    expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toHaveLength(1)
     rmSync(memory, { recursive: true })
     expect(await restarted('pm')).toEqual({ ok: true })
     expect(existsSync(join(shared, 'theirs.jsonl'))).toBe(true)

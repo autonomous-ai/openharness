@@ -121,3 +121,20 @@ it('finds the pane\'s harness and asks whether it is a Buddy, the one way the gu
   // A request that fails is the caller's to read: the guard refuses, the usage wording reads it as no Buddy.
   await expect(paneBuddy(daemon(() => { throw new Error('daemon gone') }), '%42', 'machine', ancestors)).rejects.toThrow('daemon gone')
 })
+
+// Security review of #2384: nothing pinned that a failed read of this computer's harnesses in the pane check refuses; read as
+// "no harness here", it would let a Buddy's pane go on. It rejects, and the CLI runs nothing (cli.ts unlessBuddy).
+it('refuses when the pane check cannot read this computer\'s harnesses, and lets go of the daemon', async () => {
+  const d = daemon(swarm(true))
+  const request = d.request.getMockImplementation()!
+  d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type === 'agents_list') throw new Error('Harness did not answer agents_list in time. Try again.')
+    return request(type, payload)
+  })
+  await expect(buddyRefusal(d.deps, 'darwin')).rejects.toThrow('Harness did not answer agents_list in time.')
+  expect(d.request).not.toHaveBeenCalledWith('super_tabs', expect.objectContaining({ harnessId: expect.anything() }), expect.anything())
+  expect(d.close).toHaveBeenCalledOnce()
+  // An answer that lists no harnesses is no failure: that pane is nobody's.
+  d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? {} : request(type, payload))
+  expect(await buddyRefusal(d.deps, 'darwin')).toBeNull()
+})
