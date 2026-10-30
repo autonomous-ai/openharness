@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { lstat, readdir, rmdir, stat } from 'node:fs/promises'
 import { basename, dirname, join, normalize, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 
 const exec = promisify(execFile)
 
@@ -79,6 +80,8 @@ export async function sweepOne(path: string, now: number, idleMs: number): Promi
       .map(file => stat(file).then(info => info.mtimeMs, () => 0)),
   )
   if (now - Math.max(...touched) < idleMs) return false
+  // An older Harness's own ignore file, untracked, kept every worktree (#2266): upgraded first, only when git does not track it.
+  if (await git(path, ['ls-files', '--', '.harness/.gitignore']).catch(() => null) === '') upgradeOlderRuntimeIgnore(path)
   if (await git(path, ['status', '--porcelain']) !== '') return false
   const branch = await git(path, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
   if (!branch && await git(path, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']) !== '0') return false

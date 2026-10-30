@@ -177,6 +177,8 @@ class SuperTabController extends ChangeNotifier {
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
+      buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
+      modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
@@ -736,6 +738,10 @@ class SuperTabController extends ChangeNotifier {
   bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
 
+  /// The sidebar's Buddies and Models, collapsed and remembered like Projects
+  /// and Machines (Dee, 2026-10-30: every section the same).
+  bool buddiesGroupOpen = true, modelsGroupOpen = true;
+
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
   void toggleMachineExpanded(String id) {
@@ -808,6 +814,18 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleMachinesGroup() {
     machinesGroupOpen = !machinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleBuddiesGroup() {
+    buddiesGroupOpen = !buddiesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleModelsGroup() {
+    modelsGroupOpen = !modelsGroupOpen;
     _saveSoon();
     _changed();
   }
@@ -1851,6 +1869,8 @@ class SuperTabController extends ChangeNotifier {
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
+    'buddiesGroupOpen': buddiesGroupOpen,
+    'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),

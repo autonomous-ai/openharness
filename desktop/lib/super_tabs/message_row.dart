@@ -42,6 +42,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.mentionAddresses = const {},
     this.readerId = '',
     this.reactorName,
     this.onReact,
@@ -81,6 +82,10 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// The names of the people [message] tags.
   final List<String> mentions;
+
+  /// Their addresses, by name: a tag by full address is theirs only when it
+  /// is this one.
+  final Map<String, String> mentionAddresses;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
   final String author;
@@ -252,6 +257,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     grid.AppTheme.watch(context);
     final message = widget.message;
     final active = _hovered || _focused;
+    // A message that tags the reader stands out, as Slack marks one that
+    // names you: an accent bar on its edge over a wash of the accent.
+    final taggedYou =
+        widget.readerId.isNotEmpty &&
+        message.mentions.contains(widget.readerId);
     final authorStyle = DesktopChrome.text(medium: true)
         .copyWith(fontWeight: FontWeight.w600);
     // A phone's author is a finger tall, 44 over its 20 px line. The gap
@@ -297,8 +307,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
             container: true,
             label: widget.grouped ? widget.author : null,
             child: DecoratedBox(
+              key: taggedYou
+                  ? ValueKey('super-tagged-you-${message.id}')
+                  : null,
               decoration: BoxDecoration(
-                color: active ? grid.AppSurface.hoverFill : Colors.transparent,
+                color: taggedYou
+                    ? (active
+                          ? grid.AppSurface.accentWashHover
+                          : grid.AppSurface.accentWash)
+                    : active
+                    ? grid.AppSurface.hoverFill
+                    : Colors.transparent,
                 border: Border.all(
                   color: _focus.hasPrimaryFocus
                       ? DesktopChrome.focusRing
@@ -468,6 +487,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       references: widget.references,
                                       onOpenGroup: widget.onOpenGroup,
                                       mentions: widget.mentions,
+                                      addresses: widget.mentionAddresses,
+                                      taggedYou: taggedYou,
                                     ),
                                   ),
                                 ),
@@ -577,6 +598,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                       ),
                     ),
                   ),
+                  if (taggedYou)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: ColoredBox(
+                        key: ValueKey('super-tagged-bar-${message.id}'),
+                        color: grid.AppPalette.accentOnSurface,
+                        child: const SizedBox(width: 3),
+                      ),
+                    ),
                 ],
               ),
             ),

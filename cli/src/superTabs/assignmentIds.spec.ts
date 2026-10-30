@@ -33,6 +33,18 @@ describe('assignment ids', () => {
     expect(withCurrentAssignment(none, state, 'builder')).toBe(none)
   })
 
+  it('fills a missing group for a status or check from the one task the agent holds', () => {
+    const two = { conversations: [...state.conversations, { id: 'g3', assignment: { id: 'a3', agentId: 'builder', status: 'working' } }] }
+    const ended = { conversations: [state.conversations[0], { id: 'g3', assignment: { id: 'a3', agentId: 'builder', status: 'done' } }] }
+    const check = { type: 'work.check', assignmentId: 'current', checkId: 'c1', passed: true }
+    expect(withCurrentAssignment(check, state, 'builder')).toEqual({ ...check, conversationId: 'g1', assignmentId: '58c2d5f2bdc100771bc57de7' })
+    expect(withCurrentAssignment(check, ended, 'builder')).toMatchObject({ conversationId: 'g1' })
+    expect(withCurrentAssignment(check, two, 'builder')).toBe(check)
+    expect(withCurrentAssignment(check, state, 'lead')).toBe(check)
+    const cancel = { type: 'work.cancel', assignmentId: 'current' }
+    expect(withCurrentAssignment(cancel, state, 'builder')).toBe(cancel)
+  })
+
   it('names the id to use when a stale one is refused', () => {
     const stale = { type: 'work.status', conversationId: 'g1', assignmentId: '9887f5667a24ace0b589b7ff' }
     expect(staleAssignmentHint(stale, state, 'builder')).toContain('"assignmentId": "58c2d5f2bdc100771bc57de7"')
