@@ -8,7 +8,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show kIsWeb, LicenseRegistry, LicenseEntryWithLineBreaks;
+    show kIsWeb, LicenseEntry, LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -87,11 +87,7 @@ Future<void> startHarness({
   // erase the share's pinned identity on the first navigation or window resize.
   if (kIsWeb) setUrlStrategy(null);
   WidgetsFlutterBinding.ensureInitialized();
-  LicenseRegistry.addLicense(() async* {
-    yield LicenseEntryWithLineBreaks([
-      'Roboto Mono',
-    ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
-  });
+  LicenseRegistry.addLicense(bundledFontLicenses);
   harnessTransportPlugins = transportPlugins;
   // Before anything else can fail. The file sinks come first so CrashLog's own
   // install has somewhere to mirror to — see CrashLog.record.
@@ -199,6 +195,26 @@ class _GridTokenScope extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.brightness.value = grid.AppTheme.palette.value.brightness;
     return grid.BrightnessScope(child: child);
+  }
+}
+
+/// The licenses page's entries for the fonts this app bundles.
+Stream<LicenseEntry> bundledFontLicenses() async* {
+  yield LicenseEntryWithLineBreaks([
+    'Roboto Mono',
+  ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
+  // Nerd Fonts' MIT terms, then the glyph sets it collects and their licenses.
+  for (final file in const [
+    'LICENSE',
+    'NOTICE',
+    'CC-BY-4.0.txt',
+    'Apache-2.0.txt',
+    'OFL.txt',
+  ]) {
+    yield LicenseEntryWithLineBreaks(
+      ['Symbols Nerd Font Mono'],
+      await rootBundle.loadString('assets/fonts/symbols-nerd-font-mono/$file'),
+    );
   }
 }
 

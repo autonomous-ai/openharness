@@ -2831,6 +2831,10 @@ switch (cmd) {
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'buddy-read':
+    // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
+    import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)

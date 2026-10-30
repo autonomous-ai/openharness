@@ -176,6 +176,10 @@ class SwarmReader extends ChangeNotifier {
     _poll = Timer(pollInterval, () => unawaited(_tick()));
   }
 
+  /// A read is under way ([refresh]): one joined now may have been sent
+  /// before what asks, and answer what was so then.
+  bool get refreshing => _refreshing != null;
+
   /// One read now, joining one under way.
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
