@@ -522,6 +522,25 @@ describe('the archive pass', () => {
     expect(read.filter(url => url === PR)).toEqual([PR])
   })
 
+  // Review of #2322: a busy group whose write kept conflicting ended the pass for every group after it.
+  it('skips a group whose write fails, with a warning, and goes on to the rest', async () => {
+    const f = await swarm()
+    const second = String((await f.execute({ type: 'conversation.create', title: 'Docs', brief: 'Docs too', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const writer = await f.add(second, 'test-host', randomUUID(), 'Writer')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: writer })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: second, assignmentId: work, reason: 'Done elsewhere' })
+    // f.group went quiet first, so the pass reaches it first.
+    const failing: Pick<SuperTabStore, 'archiveFinished'> = { archiveFinished: async (tabId, groupId, checked, reviewOf) => {
+      if (groupId === f.group) throw new Error('write conflict')
+      return f.timed.archiveFinished(tabId, groupId, checked, reviewOf)
+    } }
+    f.clock.now += 40 * MINUTE
+    await expect(archiveFinishedGroups(db, failing, { state: async () => null, done: async () => {} }, f.clock.now)).resolves.toBeGreaterThanOrEqual(1)
+    const archivedOf = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).archived
+    expect(await archivedOf(f.group)).toBe(false)
+    expect(await archivedOf(second)).toBe(true)
+  })
+
   it('finds a finished group written before the finished mark once the worker marks it at startup', async () => {
     const f = await swarm()
     const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })

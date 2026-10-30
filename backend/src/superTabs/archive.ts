@@ -79,6 +79,16 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
   // One read per pull request a pass, however many groups link it.
   const states = new Map<string, Promise<PullRequestState>>()
   const stateOf = (url: string) => { if (!states.has(url)) states.set(url, prs.state(url)); return states.get(url)! }
+  // One group's failed write (a busy group's conflicts outlasting its retries, a GitHub error) skips that group for this
+  // pass, with a warning, instead of ending the pass for every group after it (review of #2322).
+  const archive = async (row: { tabId: string; key: string }, checked: Record<string, 'merged' | 'closed'>, reviewOf?: string) => {
+    try {
+      return await store.archiveFinished(row.tabId, row.key, checked, reviewOf)
+    } catch (error) {
+      logger.warn('[swarm-archive] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  }
   let archived = 0, after: { at: Date; id: string } | null = null
   try {
     for (;;) {
@@ -100,11 +110,11 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
           return true
         }
         const own = group.pullRequestUrls ?? []
-        if (finished && await settled(own) && await store.archiveFinished(row.tabId, row.key, checked)) { archived++; continue }
+        if (finished && await settled(own) && await archive(row, checked)) { archived++; continue }
         if (!review) continue
         const reviewed = (await db.swarmGroup.findUnique({ where: { tabId_key: { tabId: row.tabId, key: group.reviewOf! } }, select: { data: true } }))?.data as unknown as Conversation | undefined
         const urls = [...new Set([...own, ...reviewed?.pullRequestUrls ?? []])]
-        if (urls.length && await settled(urls) && await store.archiveFinished(row.tabId, row.key, checked, group.reviewOf)) archived++
+        if (urls.length && await settled(urls) && await archive(row, checked, group.reviewOf)) archived++
       }
       if (rows.length < BATCH) return archived
       after = { at: rows.at(-1)!.lastActivityAt, id: rows.at(-1)!.id }
