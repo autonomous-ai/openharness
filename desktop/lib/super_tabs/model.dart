@@ -78,8 +78,11 @@ String superTabDefaultUsername(String email) {
       .first
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceAll(RegExp(r'\.{2,}'), '.')
       .replaceFirst(RegExp(r'^[._-]+'), '');
   if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  // Never a dot at the end, so `@name` in a message tags them.
+  prefix = prefix.replaceFirst(RegExp(r'\.+$'), '');
   if (prefix.isEmpty) return 'user';
   return prefix.length < 2 ? '${prefix}1' : prefix;
 }

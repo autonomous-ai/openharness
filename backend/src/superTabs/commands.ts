@@ -13,7 +13,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { checkMentions, MAX_MENTIONS, namedIn, textTags, withTags, type MentionTarget } from './mentions.js'
+import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
@@ -1948,7 +1948,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Every username is worked out at once, and only for a post that names or picks someone.
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
-      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${names.get(id)}`), command.text)
+      const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
+      const text = withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
