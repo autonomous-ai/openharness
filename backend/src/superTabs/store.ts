@@ -16,7 +16,7 @@ import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { agentOpenDeliveries, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, EXPIRED_UPLOAD, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -1775,6 +1775,7 @@ export class SuperTabStore {
       if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
+      if (row.usedBy === EXPIRED_UPLOAD) fail('ATTACHMENT_EXPIRED', 'This file was not sent within a day and was removed. Attach it again.', 410)
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
@@ -1794,7 +1795,8 @@ export class SuperTabStore {
     const ids = [...new Set(command.attachmentIds)]
     const rows = await tx.superTabAttachment.findMany({ where: { tabId: state.id, id: { in: ids }, conversationId: command.conversationId } })
     const own = rows.filter(r => !r.purpose && r.actorKey === actorKey(actor) && !r.usedBy)
-    const handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy)
+    // A file the expiry sweep took (lib/attachmentSweep.ts) is being removed: it was never sent, so it was never handed.
+    const handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy && r.usedBy !== EXPIRED_UPLOAD)
     return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }

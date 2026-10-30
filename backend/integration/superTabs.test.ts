@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { Readable } from 'node:stream'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -11,7 +12,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
+import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -2508,6 +2510,194 @@ describe('Super Tab chat attachments', () => {
     const before = files.objects.size
     expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
     expect(files.objects.size).toBe(before)
+  })
+
+  // Diego, 10-30: uploads nobody sends within a day are removed, row and stored file, so the bucket stops growing.
+  describe('unsent files expire after a day', () => {
+    const HOUR = 3_600_000
+    const pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const bucket = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures, avatarPrefix: 'super-tabs' }
+    // Two a chunk, so a run takes several chunks.
+    const sweep = (database: PrismaClient = db) => sweepUnsentAttachments(database, bucket, new Date(), { chunk: 2, chunks: 5, pauseMs: 0 })
+    const aged = (id: string, hours: number) => db.superTabAttachment.update({ where: { id }, data: { createdAt: new Date(Date.now() - hours * HOUR) } })
+    const row = (id: string) => db.superTabAttachment.findUnique({ where: { id } })
+    const stored = (url: string) => files.objects.has(objectKey(url))
+    const picture = async (tab: string) => {
+      const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24)])
+      const { avatar } = await new SuperTabStore(db, Date.now, bucket).uploadAvatar(owner, tab, { body: Readable.from([bytes]) })
+      return { id: avatar.id, key: (await row(avatar.id))!.objectKey }
+    }
+    const useAvatar = (tab: string, id: string) => new SuperTabStore(db, Date.now, bucket).execute(owner, tab,
+      { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id } } })
+
+    it('removes a file nobody sent within a day, row and object, and keeps a sent one and a young one', async () => {
+      const { tab } = await fixture()
+      const [old, older, sent, young] = [(await file(tab, 'old.txt')).attachment, (await file(tab, 'older.txt')).attachment,
+        (await file(tab, 'sent.txt')).attachment, (await file(tab, 'young.txt')).attachment]
+      const messageId = String((await send(tab, [sent.id])).result.messageId)
+      const [unusedPicture, usedPicture] = [await picture(tab), await picture(tab)]
+      await useAvatar(tab, usedPicture.id)
+      for (const [id, hours] of [[old.id, 25], [older.id, 48], [sent.id, 25], [young.id, 1], [unusedPicture.id, 25], [usedPicture.id, 25]] as const) await aged(id, hours)
+
+      await sweep()
+      expect([await row(old.id), await row(older.id), stored(old.url), stored(older.url)]).toEqual([null, null, false, false])
+      expect(await row(sent.id)).toMatchObject({ usedBy: messageId })
+      expect(await row(young.id)).toMatchObject({ usedBy: null })
+      expect([stored(sent.url), stored(young.url)]).toEqual([true, true])
+      // The sent message still links its file.
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([sent])
+      // Pictures alike: one never used is removed from the avatar store, the one in use stays.
+      expect([await row(unusedPicture.id), pictures.objects.has(unusedPicture.key)]).toEqual([null, false])
+      expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
+      // A young file is still sent as usual.
+      expect((await send(tab, [young.id])).result.messageId).toBeTruthy()
+    })
+
+    it('keeps a file whose object could not be deleted for the next run, and nothing can use it meanwhile', async () => {
+      const { tab } = await fixture()
+      const [stuck, other] = [(await file(tab, 'stuck.txt')).attachment, (await file(tab, 'other.txt')).attachment]
+      const stuckPicture = await picture(tab)
+      for (const id of [stuck.id, other.id, stuckPicture.id]) await aged(id, 25)
+      const failing = new Set([objectKey(stuck.url), stuckPicture.key])
+      const unavailable = async function (this: MemoryAttachmentStore, key: string) {
+        if (failing.has(key)) throw new Error('bucket unavailable')
+        this.objects.delete(key)
+      }
+      const chat = vi.spyOn(files, 'delete').mockImplementation(unavailable)
+      const avatars = vi.spyOn(pictures, 'delete').mockImplementation(unavailable)
+      try {
+        await sweep()
+      } finally {
+        chat.mockRestore()
+        avatars.mockRestore()
+      }
+      expect([await row(other.id), stored(other.url)]).toEqual([null, false])
+      expect([(await row(stuck.id))?.id, stored(stuck.url), (await row(stuckPicture.id))?.id, pictures.objects.has(stuckPicture.key)])
+        .toEqual([stuck.id, true, stuckPicture.id, true])
+      await expect(send(tab, [stuck.id])).rejects.toMatchObject({ code: 'ATTACHMENT_EXPIRED', status: 410 })
+      // Nobody else learns it existed: another member, or its owner from another Swarm, is refused as for an id that never was.
+      await invite(tab)
+      const never = await send(tab, ['0'.repeat(24)], peer).catch((error: unknown) => error as { code: string; message: string; status: number })
+      expect(never.code).toBe('ATTACHMENT_UNAVAILABLE')
+      const unknown = { code: never.code, message: never.message, status: never.status }
+      await expect(send(tab, [stuck.id], peer)).rejects.toMatchObject(unknown)
+      await expect(send((await fixture()).tab, [stuck.id])).rejects.toMatchObject(unknown)
+      await expect(useAvatar(tab, stuckPicture.id)).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+
+      await sweep()
+      expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
+    })
+
+    it('logs a failed delete by its code alone, never the stored file\'s address, name or link key', async () => {
+      const { tab } = await fixture()
+      const [offline, refused, odd] = [(await file(tab, 'offline-secret-plan.txt')).attachment, (await file(tab, 'refused-secret-plan.txt')).attachment,
+        (await file(tab, 'odd-secret-plan.txt')).attachment]
+      for (const id of [offline.id, refused.id, odd.id]) await aged(id, 25)
+      const keys = [offline, refused, odd].map(upload => objectKey(upload.url))
+      // As @google-cloud/storage fails: a network error's text is "request to <the object's address> failed" with a
+      // system code, a refused call's text names the object with an HTTP status code; some errors carry neither.
+      const address = (key: string) => `https://storage.googleapis.com/storage/v1/b/attachments/o/${encodeURIComponent(key)}`
+      const errors = new Map<string, Error>([
+        [keys[0], Object.assign(new Error(`request to ${address(keys[0])} failed, reason: socket hang up`), { code: 'ECONNRESET' })],
+        [keys[1], Object.assign(new Error(`Permission denied on attachments/${keys[1]}`), { code: 403 })],
+        [keys[2], new Error(`Could not reach ${address(keys[2])}`)],
+      ])
+      const chat = vi.spyOn(files, 'delete').mockImplementation(async (key: string) => { throw errors.get(key) ?? new Error('unexpected key') })
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) }
+      try {
+        expect(await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0, log })).toEqual({ removed: 0, failed: 3 })
+      } finally {
+        chat.mockRestore()
+      }
+      const text = JSON.stringify(said)
+      // Each key is <prefix>/<Swarm>/<link key>/<file name>; the link key alone opens the file on the CDN.
+      const linkKeys = keys.map(key => key.split('/').at(-2)!)
+      expect(linkKeys.every(linkKey => /^[0-9a-f]{32}$/.test(linkKey))).toBe(true)
+      for (const secret of [...keys, ...linkKeys, 'secret-plan', 'storage.googleapis.com', 'socket hang up', 'Permission denied']) expect(text).not.toContain(secret)
+      const line = '[attachment-sweep] could not remove a stored file; its row stays for the next run'
+      expect(said).toEqual(expect.arrayContaining([[line, { attachmentId: offline.id, code: 'ECONNRESET' }], [line, { attachmentId: refused.id, code: '403' }],
+        [line, { attachmentId: odd.id, code: 'unknown' }]]))
+      await sweep()
+      expect([await row(offline.id), await row(refused.id), await row(odd.id)]).toEqual([null, null, null])
+    })
+
+    it('runs a pass as the worker starts it, then hourly, and says once that it is on and what it removed', async () => {
+      const { tab } = await fixture()
+      const stale = (await file(tab, 'stale.txt')).attachment
+      await aged(stale.id, 25)
+      const said: unknown[] = []
+      const stop = startAttachmentSweepFrom(db, () => bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
+      try {
+        await vi.waitFor(async () => expect(await row(stale.id)).toBeNull())
+        expect(stored(stale.url)).toBe(false)
+        await vi.waitFor(() => expect(said).toContainEqual(['[attachment-sweep] pass', { removed: 1, failed: 0 }]))
+        expect(said.filter(line => (line as unknown[])[0] === '[attachment-sweep] on')).toEqual([['[attachment-sweep] on', { everyMinutes: 60 }]])
+      } finally {
+        stop()
+      }
+    })
+
+    it('says once when the worker has no bucket, and a settings error turns off only the sweep', async () => {
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(['info', ...line]), warn: (...line: unknown[]) => said.push(['warn', ...line]) }
+      const settings = { NODE_ENV: 'production', SUPER_TAB_ATTACHMENTS_BUCKET: '', SUPER_TAB_ATTACHMENTS_CREDENTIALS: '', SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs',
+        SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test', SUPER_TAB_AVATARS_BUCKET: '' }
+      startAttachmentSweepFrom(db, () => attachmentsFromEnv(settings), { log })()
+      expect(said).toEqual([['info', '[attachment-sweep] off: no attachments bucket is set (SUPER_TAB_ATTACHMENTS_BUCKET)']])
+      said.length = 0
+      // Settings the API would refuse too: the worker's other jobs still start, and the log says why the sweep did not.
+      const broken = { ...settings, SUPER_TAB_ATTACHMENTS_BUCKET: 'attachments', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'http://cdn.example.test' }
+      expect(() => attachmentsFromEnv(broken)).toThrow()
+      let stop: (() => void) | undefined
+      expect(() => { stop = startAttachmentSweepFrom(db, () => attachmentsFromEnv(broken), { log }) }).not.toThrow()
+      stop!()
+      expect(said).toEqual([['warn', '[attachment-sweep] off: the attachment settings are invalid',
+        { error: 'SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.' }]])
+    })
+
+    it('lets a send racing the sweep either take the file or be refused, never post a message linking a removed file', async () => {
+      const { tab } = await fixture()
+      // The sweep runs inside the send's transaction, after it read the file and just before it takes it. The send's
+      // write then conflicts, and its retry finds the file gone.
+      const late = (await file(tab, 'late.txt')).attachment
+      await aged(late.id, 25)
+      let attempts = 0
+      const racing = new SuperTabStore(new Proxy(db, { get(target, key, receiver) {
+        if (key !== '$transaction') return Reflect.get(target, key, receiver)
+        return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) => target.$transaction(tx => body(new Proxy(tx, { get(client, name, clientReceiver) {
+          const model = Reflect.get(client, name, clientReceiver)
+          if (name !== 'superTabAttachment') return model
+          return new Proxy(model, { get(delegate, method, delegateReceiver) {
+            const original = Reflect.get(delegate, method, delegateReceiver)
+            if (method !== 'updateMany') return original
+            return async (...args: unknown[]) => { if (!attempts++) await sweep(); return original.apply(delegate, args) }
+          } })
+        } }) as PrismaClient), options as never)
+      } }), Date.now, bucket)
+      await expect(racing.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'late',
+        replyTo: null, recipientIds: [], attachmentIds: [late.id] } })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+      expect(attempts).toBe(1)
+      expect([await row(late.id), stored(late.url)]).toEqual([null, false])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.attachments?.some(a => a.id === late.id))).toEqual([])
+
+      // The send commits after the sweep picked the file, before the sweep's claim: the claim checks again and leaves it.
+      const onTime = (await file(tab, 'on-time.txt')).attachment
+      await aged(onTime.id, 25)
+      let messageId = ''
+      const sentBeforeClaim = new Proxy(db, { get(target, key, receiver) {
+        const original = Reflect.get(target, key, receiver)
+        if (key !== '$runCommandRaw') return original
+        return async (command: Record<string, unknown>) => {
+          if ('update' in command && !messageId) messageId = String((await send(tab, [onTime.id])).result.messageId)
+          return original.call(target, command)
+        }
+      } })
+      await sweep(sentBeforeClaim)
+      expect(messageId).not.toBe('')
+      expect([(await row(onTime.id))?.usedBy, stored(onTime.url)]).toEqual([messageId, true])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([onTime])
+    })
   })
 })
 

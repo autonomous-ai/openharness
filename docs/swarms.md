@@ -586,7 +586,8 @@ roster, machine rows and mentions. A person sets theirs from their own row in
 the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP.
 Desktop and the web app crop the upload square and resize it to 256 pixels
 before sending it. The server accepts only those three formats, judged by the
-file's own bytes, and at most 1 MB. Each upload can be used once. Without a picture, a person shows their initial. An
+file's own bytes, and at most 1 MB. Each upload can be used once. An upload not used within a day is removed, and so is
+a chat file attached but never sent: attach it again to send it. Without a picture, a person shows their initial. An
 agent shows a pattern made from its name, the same on every computer, with a
 small Claude or Codex badge. Its contributor changes it from the agent's
 details, and the project's product manager can change it with `agent.avatar`.

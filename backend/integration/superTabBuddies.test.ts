@@ -5,12 +5,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { crc32, deflateSync, inflateSync } from 'node:zlib'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
+import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -407,6 +408,29 @@ describe('a Buddy through the store', () => {
     const loose = await upload('loose.md', 'text/markdown', Buffer.from('x'))
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
       .rejects.toThrow('Attach this file again')
+  })
+  it('never carries a file the expiry sweep took, its owner\'s or its own (Diego, 10-30)', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    const bucket = { store: f.files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' }
+    const upload = async (name: string, asBuddy: boolean) =>
+      (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
+    // One its owner uploaded in their chat and never sent, one of its own; the sweep took both a day later, and their files
+    // are not gone yet (the bucket failed), so the rows are still there.
+    const [owners, own] = [await upload('draft.txt', false), await upload('notes.txt', true)]
+    await db.superTabAttachment.updateMany({ where: { id: { in: [owners, own] } }, data: { createdAt: new Date(Date.now() - 25 * 3_600_000) } })
+    const remove = vi.spyOn(f.files, 'delete').mockRejectedValue(new Error('bucket unavailable'))
+    try {
+      await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0 })
+    } finally {
+      remove.mockRestore()
+    }
+    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync',
+      scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
+    await expect(propose([owners])).rejects.toThrow('Upload this file again')
+    await expect(propose([own])).rejects.toThrow('Upload this file again')
+    expect((await db.superTabAttachment.findMany({ where: { id: { in: [owners, own] } } })).map(r => r.proposedBy ?? null)).toEqual([null, null])
   })
   it('never hears of a machine removed from the Swarm in its change feed, though the PM does (security review 2 of #2115)', async () => {
     const f = await swarm()

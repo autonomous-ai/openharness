@@ -13,6 +13,11 @@ export const MAX_AVATAR_BYTES = 1024 * 1024
 export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
 /** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
 export const AVATAR_PURPOSE = 'avatar'
+/** How long an upload may wait to be sent. */
+export const UNSENT_LIFE_MS = 24 * 3_600_000
+/** `usedBy` of an upload the expiry sweep took (lib/attachmentSweep.ts): its file is being removed and nothing may use it.
+ *  Message and receipt ids are 24 hex characters (model.ts stableId), so the colon keeps it from ever matching one. */
+export const EXPIRED_UPLOAD = 'expired:unsent'
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: a name that hides its real shape.
 export const attachmentName = z.string().trim().min(1).max(255).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), 'Use a printable file name.')
@@ -26,6 +31,8 @@ export class AttachmentTooLarge extends Error {
 export interface AttachmentStore {
   /** Streams `body` into the object and answers its size. Past `cap` bytes it throws AttachmentTooLarge and leaves no object. */
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number): Promise<number>
+  /** Removes the object. One that is already gone counts as removed. */
+  delete(objectKey: string): Promise<void>
 }
 /** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
 export interface AvatarStore extends AttachmentStore {
@@ -144,6 +151,9 @@ export class GcsAttachmentStore implements AttachmentStore {
       metadata: { contentDisposition, cacheControl: this.cacheControl } })
     return capped(body, cap, sink)
   }
+  async delete(objectKey: string) {
+    await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
+  }
 }
 
 /** Avatars in a bucket that grants nobody read access: each read hands out V4 signed links instead (avatarLinks.ts). */
@@ -159,6 +169,7 @@ export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
 export class CdnAvatarStore implements AvatarStore {
   constructor(readonly store: AttachmentStore, private readonly publicBase: string) {}
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
+  delete(objectKey: string) { return this.store.delete(objectKey) }
   async signedUrl(objectKey: string) { return publicUrl(this.publicBase, objectKey) }
 }
 
@@ -170,6 +181,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
     this.objects.set(objectKey, { bytes: Buffer.concat(chunks), ...served(file.name, file.mime) })
     return size
   }
+  async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 
 /** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */
