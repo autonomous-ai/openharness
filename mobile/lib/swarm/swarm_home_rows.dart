@@ -9,6 +9,7 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'model.dart';
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
@@ -16,10 +17,10 @@ import 'swarm_style.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
-/// The rows of Swarm Home: a project with its team in coloured dots and
-/// when it last moved, as Tony's prototype B1 drew them (2026-10-29), its
-/// tile now a dot and its name a channel's, as C1 draws them (2026-10-30);
-/// the projects quiet for a day folded in one row.
+/// The rows of Swarm Home: a project with its people's faces, how many agents
+/// are running and when it last moved, its tile a dot and its name a
+/// channel's, as C1 draws them (2026-10-30); the projects quiet for a day
+/// folded in one row.
 
 /// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
 /// waiting", each dot in its state's colour ([swarmStateColor]), who is down
@@ -74,6 +75,88 @@ class SwarmTeamDots extends StatelessWidget {
   }
 }
 
+/// A project's people and its team on Home: up to [shown] faces, each over the
+/// one before it, then how many agents are running ([SwarmTeamGlance.running]).
+class SwarmTeamFaces extends StatelessWidget {
+  const SwarmTeamFaces(
+    this.glance, {
+    super.key,
+    required this.people,
+    this.swarmName,
+  });
+
+  /// The most faces a row draws.
+  static const shown = 5;
+
+  /// As tall as the words beside it, so the row is as tall as its skeleton.
+  static const _size = 18.0;
+
+  /// From one face to the next: less than [_size], so they overlap, yet each
+  /// initial stays whole.
+  static const _step = 15.0;
+
+  final SwarmTeamGlance glance;
+
+  /// The project's people ([swarmProjectPeople]), in the order to draw them.
+  final List<SuperTabPerson> people;
+
+  /// Words after the count, the first to go when the row is short: the Swarm,
+  /// where Home shows several.
+  final String? swarmName;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final faces = people.take(shown).toList();
+    final words = [glance.running, ?swarmName].join(' · ');
+    return Semantics(
+      label: [for (final person in faces) person.username, words].join(', '),
+      excludeSemantics: true,
+      child: Row(
+        children: [
+          if (faces.isNotEmpty) ...[
+            SizedBox(
+              key: const ValueKey('swarm-team-faces'),
+              width: _size + _step * (faces.length - 1),
+              height: _size,
+              child: Stack(
+                children: [
+                  for (final (i, person) in faces.indexed)
+                    Positioned(
+                      left: _step * i,
+                      child: SwarmAvatar(
+                        key: ValueKey('swarm-team-face-${person.id}'),
+                        id: person.id,
+                        name: person.username,
+                        picture: person.avatar,
+                        size: _size,
+                        // The row's own colour, so each face cuts into the
+                        // one under it.
+                        ring: AppGlass.rowFill,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpace.s),
+          ],
+          Flexible(
+            child: Text(
+              words,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.caption(
+                color: AppPalette.textSecondary,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// What a need asks, as its Home row's title: a decision's question, a tag's
 /// words, the question work waits on (or the work itself).
 String swarmNeedAsk(SwarmNeed need) => switch (need) {
@@ -85,8 +168,8 @@ String swarmNeedAsk(SwarmNeed need) => switch (need) {
 
 /// One project on Home, as C1 draws it: a dot in the colour of how its team
 /// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
-/// and bright with something new in it, quiet otherwise — and, as B1 draws
-/// them, its team in coloured dots ([SwarmTeamDots]), and at its right how
+/// and bright with something new in it, quiet otherwise — its people's faces
+/// and how many agents are running ([SwarmTeamFaces]), and at its right how
 /// long ago it last moved, over the tags waiting in it ("@2", filled) or,
 /// unread, a dot. A tap opens it; a long press offers its pin
 /// ([onLongPress]).
@@ -95,6 +178,7 @@ class SwarmHomeProjectRow extends StatelessWidget {
     super.key,
     required this.project,
     required this.glance,
+    required this.people,
     required this.now,
     this.swarmName,
     required this.onTap,
@@ -103,6 +187,9 @@ class SwarmHomeProjectRow extends StatelessWidget {
 
   final SwarmHomeProject project;
   final SwarmTeamGlance glance;
+
+  /// Its people ([swarmProjectPeople]).
+  final List<SuperTabPerson> people;
   final DateTime now;
 
   /// Its Swarm, where Home shows several.
@@ -167,7 +254,7 @@ class SwarmHomeProjectRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 3),
-                    SwarmTeamDots(glance, lead: swarmName),
+                    SwarmTeamFaces(glance, people: people, swarmName: swarmName),
                   ],
                 ),
               ),

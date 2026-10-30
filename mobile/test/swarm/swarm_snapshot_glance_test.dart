@@ -72,7 +72,7 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets("the project's header draws the read's one glance", (
+  testWidgets("a project's row on Home draws the read's one glance", (
     tester,
   ) async {
     final host = await pump(tester);
@@ -81,18 +81,16 @@ void main() {
     final glance = swarmTeamGlance(read, projectId: project);
     expect(glance.line, '1 waiting');
 
-    await tester.tap(key('swarm-project-$tab-$project'));
-    await tester.pumpAndSettle();
-    final page = tester
-        .widget<SwarmTeamDots>(
+    final row = tester
+        .widget<SwarmTeamFaces>(
           find.descendant(
-            of: key('swarm-project-team-line'),
-            matching: find.byType(SwarmTeamDots),
+            of: key('swarm-project-$tab-$project'),
+            matching: find.byType(SwarmTeamFaces),
           ),
         )
         .glance;
 
     expect(reader.snapshot, same(read), reason: 'still the same read');
-    expect(page, same(glance));
+    expect(row, same(glance));
   });
 }

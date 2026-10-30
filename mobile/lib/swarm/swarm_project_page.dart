@@ -483,8 +483,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// The header: back, [project]'s name over its team — "Updating…" while
   /// counted from the Home kept, and with several Swarms which one — and the
   /// team at its end, after Remove Buddy on the Buddy tab. Swarm Home C
-  /// writes the name as a channel's, #name, puts how many humans and agents
-  /// before the team's dots, and has ☰ in the team's place.
+  /// writes the name as a channel's, #name, over only how many humans and
+  /// agents, and has ⋮ in the team's place.
   Widget _header(
     SwarmSession session,
     SwarmReader reader,
@@ -494,33 +494,27 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   ) {
     final kept = swarmHomeKept(reader);
     final glance = swarmTeamGlance(snapshot, projectId: project.id);
-    final heads = _homeC
-        ? swarmProjectHeads(
-            humans: swarmProjectPeople(snapshot, project).length,
-            agents: glance.agents.length,
-          )
-        : null;
+    Widget words(String text) => Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: AppType.caption(color: AppPalette.textSecondary, height: 1.35),
+    );
     return SwarmTopBar(
       leading: back,
       title: _homeC ? '#${project.name}' : project.name,
       line: KeyedSubtree(
         key: const ValueKey('swarm-project-team-line'),
-        child: kept
-            ? Text(
-                'Updating…',
-                maxLines: 1,
-                style: AppType.caption(
-                  color: AppPalette.textSecondary,
-                  height: 1.35,
+        child: _homeC
+            ? words(
+                swarmProjectHeads(
+                  humans: swarmProjectPeople(snapshot, project).length,
+                  agents: glance.agents.length,
                 ),
               )
-            : SwarmTeamDots(
-                glance,
-                lead: switch ([if (_several) snapshot.name, ?heads]) {
-                  final words when words.isNotEmpty => words.join(' · '),
-                  _ => null,
-                },
-              ),
+            : kept
+            ? words('Updating…')
+            : SwarmTeamDots(glance, lead: _several ? snapshot.name : null),
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -725,7 +719,7 @@ class _Frame extends StatelessWidget {
   }
 }
 
-/// ☰ at the end of a Swarm Home C project's header: a small menu, on the
+/// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
 /// design system's menu surface (the theme's), of its Leaderboard and its Team.
 /// It goes with the header: losing the project closes it.
 class _ProjectMenu extends StatelessWidget {
@@ -756,7 +750,7 @@ class _ProjectMenu extends StatelessWidget {
       ],
       builder: (context, menu, _) => SwarmIconButton(
         key: const ValueKey('swarm-project-menu'),
-        icon: LucideIcons.menu300,
+        icon: LucideIcons.ellipsisVertical300,
         label: 'Menu',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),

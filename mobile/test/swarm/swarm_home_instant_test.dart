@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -11,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
 import 'package:harness_mobile/swarm/waiting_work.dart';
@@ -134,10 +136,10 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
-          matching: find.textContaining('1 waiting', findRichText: true),
+          matching: find.text('No agents running'),
         ),
         findsOneWidget,
-        reason: 'its team',
+        reason: 'its team, Nova waiting on the person',
       );
       expect(
         [for (final need in host.session!.inbox.needs) need.conversationId],
@@ -191,182 +193,162 @@ void main() {
       'Connect one of your computers to open Swarm.',
     );
 
-    testWidgets(
-      'every computer offline: the Home kept stays, with a line that says '
-      'so, never a screen in its place',
-      (tester) async {
+    /// Nothing on Home says what the computers are doing.
+    void saysNothing() {
+      for (final words in [
+        'No computer online',
+        'Your computers are offline.',
+        'Connecting to your computers…',
+        'Showing your last update.',
+        'Turn one on and open Harness.',
+        'Try again',
+        'Looking…',
+        'Connect one of your computers to open Swarm.',
+      ]) {
+        expect(find.text(words), findsNothing, reason: words);
+      }
+    }
+
+    for (final (name, computer) in [
+      ('every computer offline', macAway),
+      ('a computer still connecting', mac),
+    ]) {
+      testWidgets('$name: the Home kept stays, with no card and no line', (
+        tester,
+      ) async {
         final (:host, fake: _) = await coldStart(
           tester,
-          computers: FakeComputers([macAway]),
+          computers: FakeComputers([computer]),
           list: unavailable,
         );
 
-        expect(find.text('No computer online'), findsNothing);
-        expect(
-          find.byKey(const ValueKey('swarm-project-$tab-$project')),
-          findsOneWidget,
-        );
-        final notice = key('swarm-connection');
-        expect(
-          find.descendant(
-            of: notice,
-            matching: find.text('Your computers are offline.'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: notice,
-            matching: find.text('Showing your last update.'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: notice, matching: find.text('Try again')),
-          findsOneWidget,
-        );
-        expect(
-          find.text('Connect one of your computers to open Swarm.'),
-          findsNothing,
-          reason: 'the notice says it, not a red line besides',
-        );
+        expect(host.session!.inbox.noComputer, isTrue);
+        expect(key('swarm-project-$tab-$project'), findsOneWidget);
+        saysNothing();
         stopReads(host);
-      },
-    );
+      });
+    }
 
-    testWidgets(
-      'a computer still connecting: the Home kept stays, and the line says '
-      'it is connecting',
-      (tester) async {
-        final (:host, fake: _) = await coldStart(
-          tester,
-          computers: FakeComputers([mac]),
-          list: unavailable,
-        );
-
-        expect(find.text('No computer online'), findsNothing);
-        expect(
-          find.byKey(const ValueKey('swarm-project-$tab-$project')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: key('swarm-connection'),
-            matching: find.text('Connecting to your computers…'),
-          ),
-          findsOneWidget,
-        );
-        stopReads(host);
-      },
-    );
-
-    testWidgets(
-      'nothing kept and every computer offline: Home on its way, with the '
-      'line, never a screen in its place',
-      (tester) async {
-        final (:host, fake: _) = await coldStart(
-          tester,
-          keep: false,
-          computers: FakeComputers([macAway]),
-          list: unavailable,
-        );
-
-        expect(find.text('No computer online'), findsNothing);
-        expect(key('swarm-projects-loading'), findsOneWidget);
-        expect(
-          find.descendant(
-            of: key('swarm-connection'),
-            matching: find.text('Your computers are offline.'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: key('swarm-connection'),
-            matching: find.text('Turn one on and open Harness.'),
-          ),
-          findsOneWidget,
-        );
-        stopReads(host);
-      },
-    );
-
-    testWidgets(
-      'Try again looks for the computers, says so, then reads the Swarms; '
-      'once they answer the line goes',
-      (tester) async {
-        var away = true;
-        final computers = FakeComputers([macAway])
-          ..held = Completer<void>()
-          ..found = [mac];
-        final (:host, fake: _) = await coldStart(
-          tester,
-          computers: computers,
-          list: (_) => away
-              ? unavailable(null)
-              : {
-                  'tabs': [
-                    {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-                  ],
-                  'next': null,
-                },
-        );
-
-        await tester.tap(
-          find.descendant(
-            of: key('swarm-connection'),
-            matching: find.text('Try again'),
-          ),
-        );
-        await tester.pump();
-        expect(computers.rechecks, 1);
-        expect(find.text('Looking…'), findsOneWidget);
-
-        away = false;
-        computers.held!.complete();
-        await tester.pump();
-        await tester.pump();
-        await tester.pump();
-
-        expect(key('swarm-connection'), findsNothing);
-        expect(
-          find.byKey(const ValueKey('swarm-project-$tab-$project')),
-          findsOneWidget,
-        );
-        stopReads(host);
-      },
-    );
-
-    testWidgets('a Try again that finds nothing keeps the line, ready to try '
-        'again', (tester) async {
-      final computers = FakeComputers([macAway]);
+    testWidgets('nothing kept and every computer offline: Home on its way, '
+        'with no card, never a screen in its place', (tester) async {
       final (:host, fake: _) = await coldStart(
+        tester,
+        keep: false,
+        computers: FakeComputers([macAway]),
+        list: unavailable,
+      );
+
+      expect(key('swarm-projects-loading'), findsOneWidget);
+      expect(find.byType(SwarmStartView), findsNothing);
+      saysNothing();
+      stopReads(host);
+    });
+
+    /// A pull on Home, up to the read it starts.
+    Future<void> pull(WidgetTester tester) async {
+      await tester.fling(
+        key('swarm-project-$tab-$project'),
+        const Offset(0, 400),
+        1000,
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets('a pull looks for the computers, then reads the Swarms', (
+      tester,
+    ) async {
+      var away = true;
+      final computers = FakeComputers([macAway])
+        ..held = Completer<void>()
+        ..found = [mac];
+      final (:host, :fake) = await coldStart(
+        tester,
+        computers: computers,
+        list: (_) => away
+            ? unavailable(null)
+            : {
+                'tabs': [
+                  {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+                ],
+                'next': null,
+              },
+      );
+      final inbox = host.session!.inbox;
+      // The quick reads stopped: only the pull's is counted.
+      stopReads(host);
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
+
+      await pull(tester);
+      expect(computers.rechecks, 1);
+      expect(lists(), before, reason: 'not before the look ends');
+
+      away = false;
+      computers.held!.complete();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(lists(), before + 1);
+      expect(inbox.noComputer, isFalse);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    testWidgets('a look that fails is logged, and the Swarms are read still', (
+      tester,
+    ) async {
+      final log = _Log();
+      final logged = appLog;
+      appLog = log;
+      addTearDown(() => appLog = logged);
+      final computers = _BrokenComputers([macAway]);
+      final (:host, :fake) = await coldStart(
         tester,
         computers: computers,
         list: unavailable,
       );
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
 
-      await tester.tap(
-        find.descendant(
-          of: key('swarm-connection'),
-          matching: find.text('Try again'),
-        ),
-      );
-      await tester.pump();
-      await tester.pump();
+      await pull(tester);
 
       expect(computers.rechecks, 1);
-      expect(
-        find.descendant(
-          of: key('swarm-connection'),
-          matching: find.text('Try again'),
-        ),
-        findsOneWidget,
+      expect(log.messages, contains('Computers not looked for'));
+      expect(lists(), greaterThan(before));
+      expect(tester.takeException(), isNull);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      stopReads(host);
+    });
+
+    testWidgets('with the computers answering, a pull only reads the Swarms', (
+      tester,
+    ) async {
+      final computers = FakeComputers([mac]);
+      final (:host, :fake) = await coldStart(
+        tester,
+        computers: computers,
+        list: (_) => {
+          'tabs': [
+            {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          ],
+          'next': null,
+        },
       );
-      expect(
-        find.byKey(const ValueKey('swarm-project-$tab-$project')),
-        findsOneWidget,
-      );
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
+
+      await pull(tester);
+
+      expect(computers.rechecks, 0);
+      expect(lists(), greaterThan(before));
       stopReads(host);
     });
   });
@@ -382,7 +364,6 @@ void main() {
 
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
       expect(updating(), findsNothing, reason: 'the kept rows are enough');
-      expect(key('swarm-connection'), findsNothing);
 
       answer.complete({
         'tabs': [
@@ -400,7 +381,8 @@ void main() {
     },
   );
   testWidgets("a project opened from the Home kept: its header's team line "
-      'reads Updating… until its Swarm is read again', (tester) async {
+      'counts its humans and agents, before and after its Swarm is read '
+      'again, with no Updating…', (tester) async {
     final (:host, :fake) = await coldStart(tester);
     final read = Completer<void>();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
@@ -415,11 +397,12 @@ void main() {
     Finder inLine(Finder matching) =>
         find.descendant(of: line, matching: matching);
     // Kept: Nova waiting on the person in Fix login.
-    expect(inLine(find.text('Updating…')), findsOneWidget);
+    expect(inLine(find.text('Updating…')), findsNothing);
+    expect(inLine(find.textContaining('agent')), findsOneWidget);
     expect(
       inLine(find.textContaining('waiting')),
       findsNothing,
-      reason: 'neither the team nor what waits on the person is now',
+      reason: 'the line counts heads, not what they are doing',
     );
 
     read.complete();
@@ -427,9 +410,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // Read again: nobody holds work.
+    // Read again: still only the count, whatever the team is doing.
     expect(inLine(find.text('Updating…')), findsNothing);
-    expect(inLine(find.textContaining('All idle')), findsOneWidget);
+    expect(inLine(find.textContaining('human')), findsOneWidget);
+    expect(inLine(find.textContaining('All idle')), findsNothing);
     stopReads(host);
   });
 
@@ -473,6 +457,30 @@ void main() {
 }
 
 Finder key(String value) => find.byKey(ValueKey(value));
+
+class _Log implements AppLog {
+  final messages = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => messages.add(message);
+}
+
+/// Computers a look for them fails on.
+class _BrokenComputers extends FakeComputers {
+  _BrokenComputers(super.computers);
+
+  @override
+  Future<void> recheck() async {
+    rechecks++;
+    throw StateError('Nothing to look through');
+  }
+}
 
 /// Harness behind: [host]'s polls, and its quick retries while no computer
 /// answers, stop.
