@@ -715,6 +715,9 @@ export class SuperTabStore {
       if (!workspaceLeave) await requireWorkspaceAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
+    // Someone neither in the Swarm nor hosting any of its agents learns nothing of it from an agent id, real, made up or
+    // another Swarm's: they are refused as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    if (!state.people.some(p => p.id === user.sub) && !state.agents.some(a => a.machineOwnerId === user.sub)) person(state, user.sub)
     const target = agent(state, agentId)
     if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.

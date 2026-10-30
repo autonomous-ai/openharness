@@ -467,7 +467,9 @@ export interface CommandEffects {
   decisionAnswer?: import('./decisions.js').DecisionAnswer
 }
 export class SuperTabError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 409) {
+  /** `unreachable`: the caller cannot reach this Swarm at all (not, or no longer, a member). The person routes answer it as
+   *  they answer a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE), so the answer never says which. */
+  constructor(readonly code: string, message: string, readonly status = 409, readonly unreachable = false) {
     super(message)
     this.name = 'SuperTabError'
   }
@@ -516,7 +518,9 @@ export function reviewing(state: SuperTabState, agentId: string): boolean {
 }
 
 export function person(state: SuperTabState, id: string): Person {
-  return state.people.find(p => p.id === id) ?? fail('FORBIDDEN', 'You no longer have access to this Super Tab.', 403)
+  const found = state.people.find(p => p.id === id)
+  if (!found) throw new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true)
+  return found
 }
 export function agent(state: SuperTabState, id: string): Agent {
   const found = state.agents.find(a => a.id === id) ?? fail('AGENT_UNAVAILABLE', 'This agent is no longer in the Super Tab.')
