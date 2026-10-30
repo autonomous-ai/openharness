@@ -577,7 +577,10 @@ describe('a linked machine\'s daemon restarts', () => {
 
   // Security review 2 on #2356.
   it('a refusal within the limit is still reported, and the session renewed once the limit allows', async () => {
-    const { server, seal, link } = await lane({ renewEveryMs: 300 })
+    // The limit is read from this clock, so a slow machine running the suite cannot push the second refusal
+    // outside it; the deferred renewal's timer still runs on real time (300 ms).
+    let now = 1_000_000
+    const { server, seal, link } = await lane({ renewEveryMs: 300, now: () => now })
     const undelivered: Array<Record<string, unknown>> = []
     link.onUndelivered((what) => { undelivered.push({ ...what }) })
     await link.online()
@@ -592,13 +595,16 @@ describe('a linked machine\'s daemon restarts', () => {
     await until('the second report', () => undelivered.length === 2)
     expect(undelivered[1]).toEqual({ machineId: LINKED, type: 'message', agentId: 'a2' })
     expect(seal.drop).toHaveBeenCalledTimes(1)
+    now += 300
     await until('the deferred drop', () => seal.drop.mock.calls.length === 2)
     await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a3', content: 'three' } })
     await until('the third hello', () => seal.hello.mock.calls.length === 3)
   })
 
   it('a new epoch within the limit is held, not dropped, and read after the deferred renewal', async () => {
-    const { server, seal, link, heard } = await lane({ renewEveryMs: 300 })
+    // The limit is read from this clock (see the test above); the deferred renewal's timer runs on real time.
+    let now = 1_000_000
+    const { server, seal, link, heard } = await lane({ renewEveryMs: 300, now: () => now })
     await link.online()
     await link.establish(LINKED)
     seal.open.mockResolvedValueOnce({ unknownEpoch: true })
@@ -610,6 +616,7 @@ describe('a linked machine\'s daemon restarts', () => {
     server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a2', payload: { __e2e: { n: 0, k: 'g' } } })
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(seal.hello).toHaveBeenCalledTimes(2)
+    now += 300
     await until('the second replay', () => heard.length === 2)
     expect(seal.hello).toHaveBeenCalledTimes(3)
     expect(heard[1]).toMatchObject({ type: 'commander_question', agentId: 'a2' })
@@ -621,14 +628,15 @@ describe('a linked machine\'s daemon restarts', () => {
     await link.online()
     for (let n = 0; n < 64; n++) server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n, k: 'g' } } })
     await until('the hello', () => seal.hello.mock.calls.length === 1)
-    now += 31_000
+    // Past the hold time: the renewal limit, the hello's timeout and some slack (41 s here).
+    now += 41_000
     server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 64, k: 'g' } } })
     await until('the eviction said', () => lines.some((line) => line.includes('64 held frame(s) from linked-machine waited too long')))
     expect(lines.some((line) => line.includes('held too many'))).toBe(false)
     // The hello is never answered: what was held goes with it.
     await until('the timeout drop', () => lines.some((line) => line.includes('dropped 1 held frame(s) from linked-machine')))
     // Denied: held frames go too.
-    now += 31_000
+    now += 41_000
     server.send({ type: 'commander_event', machineId: LINKED_2, agentId: 'b1', payload: { __e2e: { n: 0, k: 'g' } } })
     await until('the second hello', () => seal.hello.mock.calls.length === 2)
     server.send({ type: 'e2e_denied', machineId: LINKED_2, payload: {} })
@@ -674,5 +682,82 @@ describe('a linked machine\'s daemon restarts', () => {
     link.stop()
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(heard).toHaveLength(64)
+  })
+})
+
+// Security review 2 on #2356, its two follow-ups.
+describe('the lane\'s own bounds', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('keeps its linked-or-not cache bounded however many made-up machine ids a relay names', async () => {
+    let now = 1_000_000
+    const { server, link, heard, peerReads } = await lane({ now: () => now })
+    await link.online()
+    const cache = (link as unknown as { linkedCache: Map<string, unknown> }).linkedCache
+    for (let n = 0; n < 1_000; n++) server.send({ type: 'commander_event', machineId: `made-up-${n}`, agentId: 'x', payload: { __e2e: { n, k: 'g' } } })
+    await until('the thousand passed on', () => heard.length === 1_000, 10_000)
+    expect(cache.size).toBeLessThanOrEqual(256)
+    // Entries past their time go first: a few seconds on, the cache holds only what was read since.
+    now += 6_000
+    server.send({ type: 'commander_event', machineId: 'made-up-late', agentId: 'x', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the late one', () => heard.length === 1_001)
+    expect(cache.size).toBe(1)
+    // A machine read again is read fresh, never answered from an evicted entry.
+    expect(peerReads.filter((machineId) => machineId === 'made-up-0')).toHaveLength(1)
+    server.send({ type: 'commander_event', machineId: 'made-up-0', agentId: 'x', payload: { __e2e: { n: 1, k: 'g' } } })
+    await until('made-up-0 again', () => heard.length === 1_002)
+    expect(peerReads.filter((machineId) => machineId === 'made-up-0')).toHaveLength(2)
+    // And the lane stopping (a revoked dial, a sign-out) forgets every machine it was told about.
+    link.stop()
+    expect(cache.size).toBe(0)
+  })
+
+  it('acts on a refused key only for a machine it is linked to or has a session with: made-up ids grow nothing', async () => {
+    // Security review 1 on #2357: every e2e_denied recorded a quiet time for whatever id it named, never removed.
+    const { server, link, lines, seal } = await lane()
+    await link.online()
+    const startedAt = (link as unknown as { startedAt: Map<string, unknown> }).startedAt
+    for (let n = 0; n < 1_000; n++) server.send({ type: 'e2e_denied', machineId: `made-up-${n}`, payload: {} })
+    // A frame the lane does act on, sent after them, marks when they have all been read.
+    await link.establish(LINKED)
+    server.send({ type: 'e2e_denied', machineId: LINKED, payload: {} })
+    await until('the linked machine\'s denial', () => lines.some((line) => line.includes(`e2e denied ${LINKED}`)))
+    expect(startedAt.size).toBe(1)
+    expect(startedAt.has(LINKED)).toBe(true)
+    expect(lines.filter((line) => line.includes('e2e denied made-up-'))).toHaveLength(0)
+    expect(seal.drop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a frame held just after a renewal until the delayed renewal reads it, however slow its welcome', async () => {
+    // Held at the start of the per-machine limit (30 s), renewed when it ends, welcomed just inside the hello's
+    // 15 s: read 45 s after it was held. A hold time of 30 s threw it away before the renewal could read it.
+    let now = 1_000_000
+    const { server, seal, link, heard, lines } = await lane({ welcome: false, now: () => now })
+    await link.online()
+    const first = link.establish(LINKED)
+    await until('the hello', () => seal.hello.mock.calls.length === 1)
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await first
+    // A restart: renewed at once.
+    seal.open.mockResolvedValueOnce({ unknownEpoch: true })
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the renewal hello', () => seal.hello.mock.calls.length === 2)
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await until('the first replay', () => heard.some((frame) => frame.agentId === 'a1'))
+    // Another restart moments later: held, and the renewal waits for the limit.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    now += 100
+    seal.open.mockResolvedValueOnce({ unknownEpoch: true })
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a2', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the limit said', () => lines.some((line) => line.includes('held until it may renew again')))
+    now += 30_000
+    vi.advanceTimersByTime(30_000)
+    await until('the delayed renewal hello', () => seal.hello.mock.calls.length === 3)
+    // Its welcome comes just inside the hello's own timeout.
+    now += 14_900
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await until('the second replay', () => heard.some((frame) => frame.agentId === 'a2') || lines.some((line) => line.includes('waited too long')))
+    expect(lines.some((line) => line.includes('waited too long'))).toBe(false)
+    expect(heard.find((frame) => frame.agentId === 'a2')).toMatchObject({ type: 'commander_question' })
   })
 })
