@@ -10,7 +10,7 @@ import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } fro
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { MachineListCache } from './machineList.js'
-import { SESSION_GONE, type DeviceFrame, type DeviceLink, type Undelivered } from './deviceLink.js'
+import { SELECT_SUPERSEDED, SESSION_GONE, type DeviceFrame, type DeviceLink, type Undelivered } from './deviceLink.js'
 
 /** How long the socket lingers after the dial goes back to local, so flicking between two machines does
  *  not pay a full dial each way. Mirrors RemoteRelayPool's own linger for the same reason. */
@@ -472,6 +472,8 @@ export class DeviceFleet implements MachineFleet {
 
   /** Map the far end's words onto a code the dial can act on. Unknown reasons stay unreachable. */
   private codeFor(message: string): string {
+    // Replaced by a select of another machine: nothing is wrong with this one (deviceLink.ts SELECT_SUPERSEDED).
+    if (message === SELECT_SUPERSEDED) return 'SUPERSEDED'
     if (message.includes('NOT_YOUR_MACHINE')) return 'NOT_YOURS'
     if (message.includes('MACHINE_ENV_MISMATCH')) return 'NOT_YOURS'
     if (message.includes('PAYMENT') || message.includes('SUBSCRIPTION')) return 'BILLING'
@@ -480,6 +482,7 @@ export class DeviceFleet implements MachineFleet {
   }
 
   private messageFor(message: string, name: string): string {
+    if (message === SELECT_SUPERSEDED) return 'Another machine was chosen'
     if (message.includes('NOT_YOUR_MACHINE') || message.includes('MACHINE_ENV_MISMATCH')) {
       return `${name} is not on this account`
     }

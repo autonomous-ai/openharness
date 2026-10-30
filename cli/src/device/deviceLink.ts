@@ -46,6 +46,12 @@ export interface DeviceFrame {
 
 const RPC_TIMEOUT_MS = 15_000
 /**
+ * What a select replaced by a select of another machine fails with, at once. Not "the machine did not answer": the
+ * backend answers only the newest select on a socket, so the older one would otherwise wait out its 15 s and read as
+ * a machine nobody could reach. Callers say nothing of it as a failure (deviceFleet.ts, cableHost.ts).
+ */
+export const SELECT_SUPERSEDED = 'SELECT_SUPERSEDED'
+/**
  * How long an agent list may take: a background read nobody is watching a spinner for, refreshed every few seconds
  * (fleetRouter.ts). Diego, 10-30: a slow but working Mac answered its lists 5 to 25 s after the 15 s every request had,
  * so each answer arrived with nobody waiting and the machine was counted dead (20 such answers in a day). A dead machine
@@ -162,8 +168,14 @@ export class DeviceLink {
   private readonly undeliveredListeners = new Set<(what: Undelivered) => void>()
   private readonly aliveListeners = new Set<(machineId: string) => void>()
   private readonly goneListeners = new Set<(machineId: string) => void>()
-  /** Resolves when `machine_selected` lands, so callers can await the attach rather than poll for it. */
-  private selectWaiter: { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout } | null = null
+  /**
+   * The select in flight, for the machine it asked: settled when `machine_selected` or `machine_select_error` for that
+   * machine lands, so callers can await the attach rather than poll for it. One at a time, because the backend answers
+   * only the newest select on a socket (deviceWs.ts bindMachine): a second select of the same machine JOINS this one
+   * (as `establish()` joins handshakes) and sends nothing, and a select of another machine replaces it, failing it with
+   * SELECT_SUPERSEDED at once. Each timer clears only its own select.
+   */
+  private selecting: { machineId: string; done: Promise<void>; resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout } | null = null
   /**
    * One session PER MACHINE, keyed by machineId.
    *
@@ -277,8 +289,11 @@ export class DeviceLink {
   async attach(machineId: string): Promise<void> {
     if (!machineId) throw new Error('no machine to attach to')
     this.wanted = machineId
-    if (this.attached === machineId && this.ws?.readyState === WebSocket.OPEN) return
+    // Not while a select of another machine is in flight: the backend ends on that one unless this is sent after it.
+    if (this.attached === machineId && !this.selecting && this.ws?.readyState === WebSocket.OPEN) return
     await this.connect()
+    // Another attach came while this one waited for the socket: it is the newer choice, and this one sends nothing.
+    if (this.wanted !== machineId) throw new Error(SELECT_SUPERSEDED)
     await this.select(machineId)
     await this.establish(machineId)
   }
@@ -681,14 +696,47 @@ export class DeviceLink {
   }
 
   private select(machineId: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.selectWaiter = null
+    const current = this.selecting
+    if (current?.machineId === machineId) return current.done
+    if (current) {
+      this.opts.log(`device: machine_select ${current.machineId} replaced by ${machineId}`)
+      this.settleSelect(new Error(SELECT_SUPERSEDED))
+    }
+    let resolve!: () => void
+    let reject!: (e: Error) => void
+    const done = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+    const entry = {
+      machineId, done, resolve, reject,
+      timer: setTimeout(() => {
+        if (this.selecting === entry) this.selecting = null
         reject(new Error('the machine did not answer'))
-      }, RPC_TIMEOUT_MS)
-      this.selectWaiter = { resolve, reject, timer }
-      this.send({ type: 'machine_select', payload: { machineId } })
-    })
+      }, RPC_TIMEOUT_MS),
+    }
+    this.selecting = entry
+    this.send({ type: 'machine_select', payload: { machineId } })
+    return done
+  }
+
+  /** Settle the select in flight, if any: resolved, or failed with [err]. */
+  private settleSelect(err?: Error): void {
+    const entry = this.selecting
+    if (!entry) return
+    this.selecting = null
+    clearTimeout(entry.timer)
+    if (err) entry.reject(err)
+    else entry.resolve()
+  }
+
+  /**
+   * Whether an answer to a select is the one in flight's. It names the machine it answers; one for another machine is
+   * the answer to a select already replaced (sent before the backend read the newer one), and settles nothing. One
+   * that names none, from a backend older than the name, is taken as the select in flight's, as before.
+   */
+  private answersSelect(type: string, machineId: string): boolean {
+    if (!this.selecting) return false
+    if (!machineId || machineId === this.selecting.machineId) return true
+    this.opts.log(`device: ${type} ${machineId} for a select no longer waited on — the one in flight is ${this.selecting.machineId}`)
+    return false
   }
 
   /**
@@ -805,7 +853,7 @@ export class DeviceLink {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)) }
     this.pending.clear()
-    if (this.selectWaiter) { clearTimeout(this.selectWaiter.timer); this.selectWaiter.reject(new Error(why)); this.selectWaiter = null }
+    this.settleSelect(new Error(why))
     // EVERY session, not just the attached machine's. The socket is what carried all of them; a session
     // left in the map after it dies would encrypt the first frame of the next connection with a key the
     // far end has already forgotten, and that frame is dropped in silence at the other end.
@@ -846,7 +894,8 @@ export class DeviceLink {
       // Re-select only if a machine was selected. A socket held open purely for presence comes back the
       // same way it went up — connected and attached to nothing.
       const retry = wanted ? this.attach(wanted) : this.online()
-      void retry.catch((err) => this.opts.log(`device: reconnect failed (${(err as Error).message})`))
+      // Replaced by a newer select meanwhile is not a failed reconnect: the newer one carries on.
+      void retry.catch((err) => { if ((err as Error).message !== SELECT_SUPERSEDED) this.opts.log(`device: reconnect failed (${(err as Error).message})`) })
     }, delay)
   }
 
@@ -1013,15 +1062,17 @@ export class DeviceLink {
     const payload = (frame.payload ?? {}) as Record<string, unknown>
 
     if (type === 'machine_selected') {
-      this.attached = typeof payload.machineId === 'string' ? payload.machineId : this.wanted
+      const named = typeof payload.machineId === 'string' ? payload.machineId : ''
+      this.attached = named || this.wanted
       this.opts.log(`device: machine_selected ${this.attached}`)
-      if (this.selectWaiter) { clearTimeout(this.selectWaiter.timer); this.selectWaiter.resolve(); this.selectWaiter = null }
+      if (this.answersSelect(type, named)) this.settleSelect()
       return
     }
     if (type === 'machine_select_error') {
+      const named = typeof payload.machineId === 'string' ? payload.machineId : ''
       const code = typeof payload.error === 'string' ? payload.error : 'SELECT_FAILED'
       this.opts.log(`device: machine_select_error ${code}`)
-      if (this.selectWaiter) { clearTimeout(this.selectWaiter.timer); this.selectWaiter.reject(new Error(code)); this.selectWaiter = null }
+      if (this.answersSelect(type, named)) this.settleSelect(new Error(code))
       return
     }
     if (type === 'device_revoked') {

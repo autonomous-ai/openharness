@@ -167,6 +167,11 @@ export class DaemonCableHost implements CableHost {
    * remember across a daemon restart either — that is when the registry reloads anyway.
    */
   private selected = ''
+  /**
+   * The remote machine a select is on its way to, until it settles. The announce on plug-in names it rather than
+   * `selected`: announcing the older machine would replace the newer choice at the lane (deviceLink.ts select).
+   */
+  private selecting = ''
 
   /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
   private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
@@ -233,6 +238,7 @@ export class DaemonCableHost implements CableHost {
   async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
     if (machineId === this.localId()) {
       this.selected = machineId
+      this.selecting = ''
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
@@ -243,7 +249,13 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    const selected = await this.viaFleet((r) => r.select(machineId))
+    this.selecting = machineId
+    let selected: Awaited<ReturnType<FleetRouting['select']>>
+    try {
+      selected = await this.viaFleet((r) => r.select(machineId))
+    } finally {
+      if (this.selecting === machineId) this.selecting = ''
+    }
     if (!selected.ok) return selected
     this.selected = machineId
     return { ok: true }
@@ -288,12 +300,13 @@ export class DaemonCableHost implements CableHost {
    */
   private async announceSelection(): Promise<void> {
     if (!this.viaFleet((r) => r.hasLane())) return
-    const machineId = this.selectedMachine()
+    const machineId = this.selecting || this.selectedMachine()
     if (isPlaceholder(machineId)) return
     const selected = await this.viaFleet((r) => r.select(machineId))
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
-    // one machine the cable can vouch for on its own.
-    if (!selected.ok) this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
+    // one machine the cable can vouch for on its own. Replaced by a newer select is not a failure: that
+    // one tells the backend where the dial is.
+    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
   }
 
   /**
