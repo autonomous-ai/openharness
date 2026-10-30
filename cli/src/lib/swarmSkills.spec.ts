@@ -546,14 +546,18 @@ describe('built-in Swarm skills', () => {
     })
   })
 
-  it('keeps standalone session skills out of Git, including git add -A', () => {
+  // Diego, 10-30: the ignore file itself was left untracked, so every Swarm worktree read as uncommitted work and neither
+  // the cleanup of a removed agent nor the weekly sweep ever removed one. The whole folder stays out of Git, including
+  // git add -A; every launch writes the file again, so committing it kept nothing (#1533 wanted generated skills unstaged).
+  it('keeps the whole Harness folder out of Git, including git add -A, while a file someone adds there still shows', () => {
     const workspace = fixture()
     execFileSync('git', ['init', '-q', workspace])
     prepareSwarmSkill(workspace, { role: 'dev', key: 'standalone' })
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('')
     execFileSync('git', ['add', '-A'], { cwd: workspace })
-    const staged = execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })
-    expect(staged).not.toContain('SKILL.md')
-    expect(staged.trim()).toBe('.harness/.gitignore')
+    expect(execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })).toBe('')
+    writeFileSync(join(workspace, '.harness', 'notes.md'), 'mine')
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' })).toBe('?? .harness/notes.md\n')
   })
 
   it('preserves custom ignore rules and adds the Store runtime rules only once', () => {
@@ -562,9 +566,20 @@ describe('built-in Swarm skills', () => {
     const file = join(workspace, '.harness', '.gitignore')
     writeFileSync(file, '# Mine\nprivate-data')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n.gitignore\n')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n.gitignore\n')
+  })
+
+  // A project may have committed the ignore file (git add -A staged it before). Adding a line to a committed file would
+  // itself be uncommitted work and land in every worker's pull request, so a file that has its rules is left as it is.
+  it('leaves an ignore file that already has the runtime rules byte for byte as it was', () => {
+    const workspace = fixture()
+    mkdirSync(join(workspace, '.harness'))
+    const file = join(workspace, '.harness', '.gitignore')
+    writeFileSync(file, 'runtime/\nlegacy-AGENTS.md\n')
+    prepareSwarmSkill(workspace, { role: 'dev', key: 'committed' })
+    expect(readFileSync(file, 'utf8')).toBe('runtime/\nlegacy-AGENTS.md\n')
   })
 
   it('refuses a redirected runtime ignore file without modifying its target', () => {

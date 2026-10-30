@@ -15,8 +15,14 @@ export function ignoreHarnessRuntime(workspace: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  const missing = ['runtime/', 'legacy-AGENTS.md'].filter(rule => !before.split('\n').includes(rule))
+  const rules = before.split('\n')
+  const missing = ['runtime/', 'legacy-AGENTS.md'].filter(rule => !rules.includes(rule))
+  // A file that has its rules stays byte for byte: a project may have committed it, and a line added there would be a
+  // change in every worktree and every worker's pull request.
   if (!missing.length) return
+  // Diego, 10-30: the file itself was left untracked, so every worktree read as uncommitted work and none was ever cleaned
+  // up (superTabs/machines.ts removeStoppedWorktree, lib/worktreeSweep.ts). It ignores itself; each launch writes it again.
+  if (!rules.includes('.gitignore')) missing.push('.gitignore')
   // Publish whole bytes: a killed launch must not leave session files visible to Git.
   const temporary = `${file}.${randomUUID()}.tmp`
   const fd = openSync(temporary, 'wx', mode)

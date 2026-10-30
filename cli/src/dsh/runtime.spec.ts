@@ -204,7 +204,7 @@ describe('runtime validation and file ownership', () => {
   it('keeps runtime snapshots out of Git while preserving existing ignore rules', () => {
     write(join(ws, '.harness/.gitignore'), '# User rules\nmy-data');
     prepareHarnessLaunch(pkg, ws, 'codex', 'key');
-    expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8')).toBe('# User rules\nmy-data\nruntime/\nlegacy-AGENTS.md\n');
+    expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8')).toBe('# User rules\nmy-data\nruntime/\nlegacy-AGENTS.md\n.gitignore\n');
     prepareHarnessLaunch(pkg, ws, 'codex', 'key');
     expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8').match(/runtime\//g)).toHaveLength(1);
   })
