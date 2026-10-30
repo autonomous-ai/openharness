@@ -1,5 +1,6 @@
 import '../state/harness_activity.dart';
 import 'agent_details.dart';
+import 'agent_mark.dart';
 
 /// An agent row's one line (Dee, 2026-10-27: "it's hard to monitor the team"): its state, where it runs, and on which
 /// model and effort. Read from the Swarm the person already sees, so nobody sees an agent or a machine they could not
@@ -71,7 +72,11 @@ SuperTabAgentGlance superTabAgentGlance(
             work == 'needs_human' ||
             activity == HarnessActivity.needsInput =>
       'Waiting',
-    _ when work == 'review' => 'In review',
+    _
+        when work == 'review' ||
+            (info.taskGroup != null &&
+                SuperTabAgentWork(info.taskGroup!).handedOver) =>
+      'In review',
     _ when work == 'reconciling' => 'Checking',
     _ when activity == HarnessActivity.working => 'Working',
     _ when work == 'planned' || work == 'working' => 'Assigned',

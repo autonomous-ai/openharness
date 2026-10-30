@@ -1,13 +1,15 @@
 /** Cheap first, step up on failure (Ken, 2026-10-29). Simple work runs on a model served on the Swarm's grid first (cli
  *  superTabs/route.ts softOf); when that attempt's first review says Ready no, or its grid host never starts its agent, the
- *  group steps up a tier: no grid and quality 2 (Sonnet), then quality 3 (Opus), at most twice. The server records the step,
+ *  group steps up a tier: no grid and quality 2, then quality 3, at most twice. Since 2026-10-30 a build needs quality 3 anyway
+ *  (rules.ts buildRefusal), so the first step takes the top tier too. The server records the step,
  *  closes the failed attempt and wakes the Lead; the Lead's route and start run the next attempt, since only its machine can
  *  probe the others (autoReview.ts, the same ruling for Reviewers). */
 import { activeWork, finishWorker, type Conversation, type SuperTabState } from './model.js'
 import { policyQuality, targetQuality, type RunTarget } from './rules.js'
 import type { RoutingPolicy } from './routingPolicy.js'
 
-/** Grid, then Sonnet, then Opus; after that it is the Lead's decision (Lead, 2026-10-29). */
+/** Grid, then a stronger model, then the top tier; after that it is the Lead's decision (Lead, 2026-10-29). Builds run at the
+ *  top tier since 2026-10-30, so in practice grid, then the top tier. */
 export const MAX_STEP_UPS = 2
 /** What of the failed attempt a brief keeps: conversation.create takes briefs up to 8,000 characters. */
 const CARRY_CHARS = 2000

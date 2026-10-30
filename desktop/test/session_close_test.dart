@@ -30,6 +30,11 @@ class _CloseConnection extends WsConn {
   final targetedFailures = <(String, String), Map<String, dynamic>>{};
   final requests = <String>[];
   final closedOnInspect = <String>{};
+
+  /// Swarm Buddies, as the daemon guards them (CLI closeAgentService.ts
+  /// BUDDY_PROTECTED): an inspect reads them and says they keep running, and
+  /// every close is refused, saying the same.
+  final buddies = <String>{};
   Completer<Map<String, dynamic>>? inspecting;
 
   /// Runs as the daemon takes a close, before it answers: what the window
@@ -51,6 +56,21 @@ class _CloseConnection extends WsConn {
     final mode = payload['mode'] as String;
     final agentId = payload['agentId'] as String;
     await whileClosing?.call(mode);
+    if (buddies.contains(agentId) && mode != 'cancel') {
+      if (mode == 'inspect') {
+        return {'activity': activities[agentId] ?? 'idle', 'keptRunning': true};
+      }
+      throw WsRequestFailure(
+        responseType: 'agent_close_result',
+        code: 'BUDDY_PROTECTED',
+        detail: 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+        payload: const {
+          'error': 'BUDDY_PROTECTED',
+          'detail': 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+          'keptRunning': true,
+        },
+      );
+    }
     if (targetedFailures[(agentId, mode)] ?? failures[mode]
         case final failure?) {
       // Real WsConn throws refusals; returning a map would skip the production
@@ -920,6 +940,36 @@ void main() {
     expect(app.allPanes, isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
+
+  // Diego's Buddy, 10-30: closing the tab that showed it stopped it, and two
+  // proposals waited 30 minutes. The tab closes; the Buddy, mid-answer, keeps
+  // running: no prompt to stop it, no Stop, no Stop Harness.
+  for (final activity in ['idle', 'working']) {
+    testWidgets(
+      'closing a tab holding only a Buddy ($activity) closes the tab and keeps the Buddy',
+      (tester) async {
+        connection.buddies.add('a0');
+        connection.activities['a0'] = activity;
+        app.adoptSessionForTest(terminal('a0', []));
+        final tab = app.activeSwarm;
+        await mount(tester, app);
+        // Not awaited first: a prompt to stop it would hold the close open.
+        final closing = app.requestCloseSwarm(tab.id);
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+        await closing;
+        expect(modes(), ['inspect', 'idle']);
+        expect(connection.requests, isNot(contains('agent_delete')));
+        expect(app.swarms, isNot(contains(tab)));
+        expect(app.allPanes, isEmpty);
+        expect(
+          app.stateOf('m')!.agents.where((a) => a.id == 'a0' && !a.isStopped),
+          hasLength(1),
+        );
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   testWidgets('an inspection failure stops no member of the tab', (
     tester,

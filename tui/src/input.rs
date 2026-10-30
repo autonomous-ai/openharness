@@ -815,6 +815,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 // Picker::refilter preserves the selected identity as rows arrive.
                 let mut recency: std::collections::HashMap<String,u64> = app.fleet.agents.values()
                     .map(|a| (format!("{}:{}",a.machine_id,a.id),a.recency())).collect();
+                // (One list by last activity: its harnesses not headed by where they work.)
+                for r in rows.iter_mut().filter(|r| recency.contains_key(&r.id)) { r.group = None }
                 for x in app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|s| s.external.as_ref()) {
                     let at = recency.entry(format!("external:{}:{}",x.machine,x.session_id)).or_default();
                     *at = (*at).max(x.last_at);
@@ -823,9 +825,10 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                     .then_with(|| a.label.cmp(&b.label)).then_with(|| a.id.cmp(&b.id)));
                 picker.hold = None;
             } else {
-                // Workspace navigation holds its existing rows still; typing re-ranks.
+                // Workspace navigation holds its existing rows still; typing re-ranks. A harness
+                // that comes while it is open joins its machine and folder's heading.
                 match &picker.hold {
-                    Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
+                    Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)); rows = modal::grouped_in_order(rows) }
                     None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
                 }
             }
@@ -3771,6 +3774,33 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C-b s holds its rows still while open; a harness that comes meanwhile joins its machine and
+    /// folder's heading instead of starting the same heading again at the end.
+    #[test]
+    fn a_harness_coming_while_the_list_is_open_joins_its_heading() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19813, sink, (120, 36));
+        app.fleet.local_id = "local".into();
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        let folder = |name: &str| json!({"name": name, "cwd": format!("/src/{name}")});
+        app.fleet.merge_roster("local", &[
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
+        ]);
+        let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: None, project: None };
+        let mut picker = Picker::new("", "");
+        fill(&app, &kind, &mut picker);
+        app.fleet.merge_roster("local", &[
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
+            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:55:00.000Z"}),
+        ]);
+        fill(&app, &kind, &mut picker);
+        // (Its harnesses: other tests' sessions can be listed after them.)
+        let shown: Vec<(&str, &str)> = picker.rows.iter().filter(|r| !r.id.starts_with("session:")).map(|r| (r.group.as_deref().unwrap_or(""), r.label.as_str())).collect();
+        assert_eq!(shown, [("studio · webapp", "fix login"), ("studio · webapp", "release notes"), ("studio · api", "rate limit")]);
+    }
 
     /// What the person typed into hn's own box is marked as theirs, as the desktop's composer marks
     /// its own; the same text from a command (`broadcast`, `send-task`) never is. The Store's read says

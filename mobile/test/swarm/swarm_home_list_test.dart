@@ -514,6 +514,52 @@ void main() {
       });
     });
 
+    test('when the person left the app is kept, a time only, the later '
+        'standing, and read back by the next start; telling no one', () async {
+      final store = MemoryKeyValueStore();
+      final first = await prefs(store);
+      var told = 0;
+      first.addListener(() => told++);
+      final left = DateTime(2026, 10, 30, 1, 30);
+
+      first.seen(left);
+      first.seen(left.subtract(const Duration(hours: 1)));
+      await settle();
+
+      expect(told, 0);
+      expect(first.seenAt, left);
+      expect(jsonDecode(store.values[key]!), {
+        'pins': <Object>[],
+        'seen': left.millisecondsSinceEpoch,
+      });
+      expect((await prefs(store)).seenAt, left);
+    });
+
+    test('a time left before the choices are read back: the later of it and '
+        'the one read stands', () async {
+      final store = _SlowStore();
+      final earlier = DateTime(2026, 10, 29, 20);
+      final later = DateTime(2026, 10, 30, 1);
+      store.values[key] = jsonEncode({
+        'pins': <Object>[],
+        'seen': earlier.millisecondsSinceEpoch,
+      });
+      final prefs0 = SwarmHomePrefs(accountId: me, store: store);
+      addTearDown(prefs0.dispose);
+
+      prefs0.seen(later);
+      expect(prefs0.loaded, isFalse);
+      store.answer();
+      await settle();
+
+      expect(prefs0.loaded, isTrue);
+      expect(prefs0.seenAt, later);
+      expect(
+        (jsonDecode(store.values[key]!) as Map)['seen'],
+        later.millisecondsSinceEpoch,
+      );
+    });
+
     test('another account reads none of them', () async {
       final store = MemoryKeyValueStore();
       (await prefs(store)).pin(tab, 'p1', true);

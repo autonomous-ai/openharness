@@ -1215,7 +1215,14 @@ export interface SwarmLaunch {
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
  *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
-export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
+export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
+  /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
+   *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller
+   *  holds or refuses, never launching without it; null when the launch is no longer this one's. */
+  lookup?(session: RegisteredSession, current: () => boolean): Promise<{ row: RegisteredSession; commit(): void } | 'unavailable' | null>
+  /** Whether a relaunch of this row asks the Swarm for its role first (restore's `needs`). */
+  needed?(session: RegisteredSession): boolean
+}
 
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
@@ -1254,7 +1261,10 @@ export interface SwarmChat { kind: ChatKind; id: string; name: string; working: 
 export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number }
 /** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
  *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
-export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean }
+export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean
+  /** Its session id when it runs on this computer: how a tap on its notification is told from any other agent's. Never sent
+   *  to a device. */
+  local?: string }
 /** The screen a round dial shows of each project of a Swarm: the PM's (today's face) or the reader's Buddy's. */
 export type CardSide = 'pm' | 'buddy'
 /** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or

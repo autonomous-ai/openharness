@@ -2491,6 +2491,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     label: (engine) => buildHarnessSessionLabel(engine),
   })
   const restoreLaunch = createRestoreLaunch({
+    adoptSwarmSkill,
     workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
@@ -2572,7 +2573,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : [])],
+      // An older Swarm session's role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
+      needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : []), ...(adoptSwarmSkill?.needed?.(entry) ? ['superTabs'] : [])],
       waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token ?? held.nativeToken) }),
       killPane: restoreOn.killPane,
     }
@@ -2810,6 +2812,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
   backend.onRetargetAgent = createAgentRetargeter({
     noBackendCode: createUnavailable,
+    adoptSwarmSkill,
     sessionTurnOpen,
     // A retarget swaps the engine too: not of an agent a stopped move may still run beside (`moveHeld`).
     purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId) || moveHeld.has(registry.resolve(agentId)?.agentId ?? agentId),
@@ -2894,7 +2897,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
+    // A Swarm Buddy keeps running when a window closes its view (Diego, 10-30); Stop Harness above still stops it.
+    ...(swarm ? {
+      leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId),
+      buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
+    } : {}),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

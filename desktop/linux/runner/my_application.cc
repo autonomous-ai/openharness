@@ -268,7 +268,12 @@ static void my_application_activate(GApplication* application) {
   gdk_rgba_parse(&background_color, "#000000");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  // Install the WebView host before FlView is realized: reparenting a live
+  // Flutter GL surface can leave it blank when the first viewer opens.
+  GtkWidget* viewer_overlay = gtk_overlay_new();
+  gtk_container_add(GTK_CONTAINER(viewer_overlay), GTK_WIDGET(view));
+  gtk_container_add(GTK_CONTAINER(window), viewer_overlay);
+  gtk_widget_show(viewer_overlay);
   g_signal_connect(view, "key-press-event", G_CALLBACK(super_as_meta_cb),
                    nullptr);
   g_signal_connect(view, "key-release-event", G_CALLBACK(super_as_meta_cb),

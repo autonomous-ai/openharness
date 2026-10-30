@@ -41,14 +41,27 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
-      chosenUsername = row['username'] as String?;
+      chosenUsername = row['username'] as String?,
+      username =
+          row['username'] as String? ??
+          superTabDefaultUsername(_text(row, 'email'));
+  SuperTabPerson._named(SuperTabPerson person, this.username)
+    : id = person.id,
+      email = person.email,
+      role = person.role,
+      generation = person.generation,
+      avatar = person.avatar,
+      status = person.status,
+      chosenUsername = person.chosenUsername;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
-  /// The username the person chose (desktop usernames); null for a default.
-  /// The phone still names people by their email prefix until it takes
-  /// usernames too.
+  /// How the Swarm tags them (`@username`), as the server sends it; from an
+  /// older server, their default ([superTabUsernames]). Desktop's rule.
+  final String username;
+
+  /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
 
   /// Their status while it lasts.
@@ -59,6 +72,43 @@ class SuperTabPerson {
   /// from a backend that does not send it.
   final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
+}
+
+/// The name an email's prefix makes: lowercased, only the characters a
+/// username takes, never too short. Unnumbered; [superTabUsernames] numbers
+/// it. Desktop's `superTabDefaultUsername`, byte for byte.
+String superTabDefaultUsername(String email) {
+  var prefix = email
+      .split('@')
+      .first
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceFirst(RegExp(r'^[._-]+'), '');
+  if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  if (prefix.isEmpty) return 'user';
+  return prefix.length < 2 ? '${prefix}1' : prefix;
+}
+
+/// [people], each with their username: the one the server sent, else (an
+/// older server, which sends none) their email prefix numbered (`ken2`) after
+/// the people before them, as Desktop names them.
+List<SuperTabPerson> superTabUsernames(List<SuperTabPerson> people) {
+  final taken = {for (final p in people) ?p.chosenUsername};
+  return List.unmodifiable([
+    for (final person in people)
+      if (person.chosenUsername != null)
+        person
+      else
+        SuperTabPerson._named(person, () {
+          final root = superTabDefaultUsername(person.email);
+          var name = root;
+          for (var n = 2; taken.contains(name); n++) {
+            name = '$root$n';
+          }
+          taken.add(name);
+          return name;
+        }()),
+  ]);
 }
 
 class SuperTabAgent {
@@ -85,6 +135,11 @@ class SuperTabAgent {
       ),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      workDecision = switch (row['workDecision']) {
+        final String decision when _workDecisions.contains(decision) =>
+          decision,
+        _ => null,
+      },
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -103,6 +158,13 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// What its project's Lead decided once its work was over (backend
+  /// model.ts `workDecision`): `awaiting` a decision, kept (`keep`) for more
+  /// work, or `stop`ped. Null while it has not finished any.
+  final String? workDecision;
+
+  static const _workDecisions = {'awaiting', 'keep', 'stop'};
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -279,9 +341,17 @@ class SuperTabRole {
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       kind = _text(row, 'kind'),
-      version = _text(row, 'version');
+      version = _text(row, 'version'),
+      defaults = row['defaults'] is Map
+          ? Map.unmodifiable(superTabMap(row['defaults']))
+          : null;
 
   final String id, name, kind, version;
+
+  /// The engine, model and effort its agents start on when a start names
+  /// none (backend projects.ts RoleDefaults). Read and kept as the desktop's
+  /// model does; the phone shows none of it.
+  final Map<String, dynamic>? defaults;
 }
 
 class SuperTabProject {
@@ -305,6 +375,11 @@ class SuperTabProject {
         for (final member in row['members'] as List? ?? const [])
           superTabMap(member)['id'] as String,
       ],
+      _memberGenerations = {
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String:
+              superTabMap(member)['generation'] as String?,
+      },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -315,6 +390,16 @@ class SuperTabProject {
   final List<SuperTabRole>? roles;
   final bool isPrivate;
   final List<String> memberIds;
+
+  /// Each member's Swarm membership when they were added: who left the Swarm
+  /// and joined again is not a member until added again.
+  final Map<String, String?> _memberGenerations;
+
+  /// Whether [person] is a member at their membership now, as the server
+  /// checks (`canReadProject`).
+  bool hasMember(SuperTabPerson person) =>
+      _memberGenerations.containsKey(person.id) &&
+      _memberGenerations[person.id] == person.generation;
   final int updateMinutes;
   final Map<String, dynamic>? repository;
 }
@@ -328,7 +413,7 @@ class SuperTabSnapshot {
       project = row['project'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['project'])),
-      people = _list(row['people'], SuperTabPerson.fromJson),
+      people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
       machines = _list(
         row['machines'] ?? const [],
@@ -844,11 +929,18 @@ class SuperTabDelivery {
       status = row['status'] as String? ?? '',
       holdReason = row['holdReason'] as String?,
       holdSince = _date(row['holdSince']),
+      claimFailingSince = _date(row['claimFailingSince']),
+      claimFailures = (row['claimFailures'] as num?)?.toInt(),
       deliveredAt = _date(row['deliveredAt']),
       answeredAt = _date(row['answeredAt']),
       updatedAt = _date(row['updatedAt']);
   final String? id, holdReason;
   final String agentId, status;
+
+  /// Since when the backend's claims of this delivery fail, and how many have
+  /// (prod 10-30, v1.3.71). Null from an older backend, and once a claim works.
+  final DateTime? claimFailingSince;
+  final int? claimFailures;
   final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
   static DateTime? _date(Object? value) =>
       value is String ? DateTime.tryParse(value) : null;

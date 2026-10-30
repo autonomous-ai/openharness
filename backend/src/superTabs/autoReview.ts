@@ -5,6 +5,7 @@ import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
 import { renewLease } from './liveness.js'
 import { downSince } from './machines.js'
+import { canStart, standing } from './reviewSeats.js'
 
 // Reviews start the moment work is ready (Dee, 2026-10-28). The Lead hand-opened about 30 review groups that day, and one
 // review request sat unanswered until its group was archived, so a privacy fix waited hours with no verdict. Now an
@@ -51,19 +52,31 @@ export const verdictPending = (state: SuperTabState, review: Conversation): bool
 const free = (state: SuperTabState, agent: Agent) =>
   !state.conversations.some(c => c.leadId === agent.id || (activeWork(c) && c.assignment!.agentId === agent.id))
 
+/** Whether [agent] cannot work now: a usage limit holds it, or its machine reports readings by which its engine could not start
+ *  (reviewSeats.ts standing). A machine with no readings (a host outside the contributions) is judged by the limit alone. */
+function unable(state: SuperTabState, agent: Agent, now: number): boolean {
+  if (agent.limitedUntil && Date.parse(agent.limitedUntil) > now) return true
+  const pool = state.machines?.find(m => m.machineId === agent.machineId)
+  return !!pool && !canStart(standing(state, pool, agent.configuration.engine, now))
+}
+
 /**
  * The Reviewer for [group]'s review: the one that reviewed its earlier head while it is still free (a delta review), else
- * a free Reviewer of the project, one on another engine than the Engineer's first. Never one that is stopping, waiting to
- * resume a lost task, down (its session gone or its machine silent), or (`mayWork`) not allowed to take this work: on its
- * machine, or by the owner's rules (#610 review).
+ * the strongest free Reviewer of the project ([strength]), of any engine (Ken, 2026-10-30), so one at least as strong as the
+ * Engineer goes first, as the CLI's route holds a Reviewer to the Builder's strength (review of #2274). Never one that is
+ * stopping, waiting to resume a lost task, down (its session gone or its machine silent), [unable] to work now (held by a usage
+ * limit, or its machine reports its engine out of quota, signed out, suspended or paused: review of #2313, as ties at the top
+ * tier are common and an idle Codex Reviewer out of quota came first), or (`mayWork`) not allowed to take this work: on its
+ * machine, by the owner's rules (#610 review), or as the review rule (rules.ts reviewRefusal) has it.
  */
 function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: Conversation | undefined,
-  mayWork: (agent: Agent) => boolean, now: number): Agent | null {
+  mayWork: (agent: Agent) => boolean, strength: (agent: Agent) => number, now: number): Agent | null {
   const projectId = groupProject(state, group).id
-  const candidates = state.agents.filter(a => agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
-    a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && free(state, a) && mayWork(a))
+  const candidates = state.agents.filter(a => a.id !== engineer?.id && agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
+    a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && !unable(state, a, now) && free(state, a) && mayWork(a))
   const previous = candidates.find(a => a.id === earlier?.assignment?.agentId)
-  return previous ?? candidates.find(a => a.configuration.engine !== engineer?.configuration.engine) ?? candidates[0] ?? null
+  // Strongest first; at equal strength the roster's order stands (sort is stable).
+  return previous ?? [...candidates].sort((a, b) => strength(b) - strength(a))[0] ?? null
 }
 
 function briefOf(group: Conversation, handoff: string, pullRequest: string, earlier: Conversation | undefined): string {
@@ -92,14 +105,14 @@ export interface OpenedReview { review: Conversation; reviewer: Agent | null; me
  * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
-  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean }): OpenedReview | null {
+  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
   // Only a review that gave its verdict reviewed the earlier head: one cancelled before it reviewed nothing (#610 review).
   const earlier = state.conversations.filter(c => c.reviewOf === group.id && c.assignment && verdictGiven(c)).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
   const engineer = state.agents.find(a => a.id === group.assignment?.agentId)
-  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.now)
+  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.strength, context.now)
   const id = stableId(context.operationId, 'auto-review')
   const number = nextConversationNumber(state)
   state.groupCounter = number

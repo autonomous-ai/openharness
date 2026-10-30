@@ -35,7 +35,10 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
  * usage window to run out. */
 export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
   /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
-  why?: string }
+  why?: string
+  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
+   *  the account spends (routeCommand.ts relayedReadings). */
+  from?: string }
 /** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
  * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -65,7 +68,9 @@ export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | 
 export interface Commitment { account: string; spend: Partial<Record<Window, number>>; size: Size; createdAt: number }
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
 /** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
-export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string
+/** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
+export interface Excluded { title: string; reason: string; machine?: string }
+export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: number; belowFloor: boolean; short?: string
   /** Every candidate left runs on an account the route was asked to avoid (`choose` `avoid`). */
   avoided?: string }
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
@@ -118,18 +123,32 @@ export function liftEffort(rules: SwarmRule[], engine: string, effort: string): 
 /** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
  * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
 interface Soft { engine: string | null; idle: boolean; grid: boolean }
-/** Kinds of build a quality-2 grid model takes first at medium difficulty: docs, copy, tests, fixtures, a small specified fix,
- *  a mechanical refactor. */
-export const CHEAP_KINDS = ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']
+/** The only kinds of build a model on the Swarm's grid takes, and then only at low risk (Ken, 2026-10-30; it had taken docs,
+ *  copy, tests, fixtures, fixes and refactors since 10-29, and any low-difficulty work before). A failed first review still
+ *  steps it up (backend superTabs/stepUp.ts). */
+export const CHEAP_KINDS = ['docs', 'tests', 'fixtures']
+/** Whether [kind] is one of [CHEAP_KINDS], singular or plural (review of #2314; backend superTabs/rules.ts cheapKind). */
+export const cheapKind = (kind: string | undefined) => ['doc', 'test', 'fixture'].includes((kind ?? '').replace(/s$/, ''))
+/** Why [p] may not build the task [a] (Ken and Dee, 2026-10-30: Builders run on Opus high or Astra xhigh): a model rated
+ *  below 3, Sonnet and Haiku among them, unless a person named it; a model on the Swarm's grid on anything but low-risk docs,
+ *  tests or fixtures, unless a person asked for a local model or named one. Reviews are judged apart ([reviewRefusals]). The
+ *  server judges the same (backend superTabs/rules.ts buildRefusal). */
+export function buildRefusals(p: Probe, a: Assessment): string[] {
+  if (a.kind === 'review') return []
+  if (p.gridModel) return gridBuilds(a) ? [] : [GRID_BUILDS]
+  return a.model || p.quality >= 3 ? [] : [`A build needs a model rated 3, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}. Builders run at the top tier unless a person names the model.`]
+}
+/** Whether a model on the Swarm's grid may build [a] ([buildRefusals]). */
+export const gridBuilds = (a: Assessment) => !!a.local || !!a.model || (a.risk === 'low' && cheapKind(a.kind))
+export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures, unless a person asks for a local model or names one.'
 function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
   const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
-  // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
+  // The work a grid model may build goes to it first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
   // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
-  // rarely picked. Reviews keep the other model family, and the owner can opt out.
-  // Since 2026-10-29 (Ken) also medium work of a kind a strong grid model does well, which steps up when it fails (backend
-  // superTabs/stepUp.ts); the floor still keeps a small model off it.
-  const simple = a.difficulty === 'low' || (a.difficulty === 'medium' && CHEAP_KINDS.includes(a.kind ?? ''))
+  // rarely picked. Reviews never run on one, and the owner can opt out. It steps up when it fails (backend
+  // superTabs/stepUp.ts); the floor still keeps a small model off medium work.
+  const simple = (a.difficulty === 'low' || a.difficulty === 'medium') && cheapKind(a.kind)
   const grid = simple && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
   return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
@@ -224,27 +243,18 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
 /** A small variant by its name: a mini or a nano (backend superTabs/rules.ts). */
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
-/** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
-export interface Reviewed { engine: string; gridModel?: string }
-/** A model family: a grid model's own, else its engine's. */
-const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
-/** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
- *  below 2, or the reviewed Builder's own model family while a strong Reviewer of another family can run here ([otherFamily]).
- *  With none, the Builder's own engine at its top tier (Lead, 2026-10-29). The server judges the same (backend
- *  superTabs/rules.ts reviewRefusal). */
-export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: boolean): string[] {
+/** What a reviewed Builder ran: its agent, its engine, the grid model its engine drove, and how strong that was. */
+export interface Reviewed { engine: string; gridModel?: string; quality?: number; agentId?: string }
+/** Why [p] may not review: a model served on the Swarm's grid or one rated below 2 (Ken, 2026-10-29: a small model never
+ *  reviews again), or the agent that built the work. Any engine reviews any build (Ken, 2026-10-30: reviews of Claude builds
+ *  waited all morning for Codex quota; a Reviewer is a session of its own with fresh context, so its strength is what counts).
+ *  The server judges the same (backend superTabs/rules.ts reviewRefusal). */
+export function reviewRefusals(p: Probe, builder: Reviewed | null): string[] {
   if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
-  if (!builder || familyOf(builder) !== familyOf(p)) return []
-  if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
-  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
+  if (p.kind === 'member' && builder?.agentId && p.agentId === builder.agentId) return ['A Reviewer never reviews work it built.']
+  return []
 }
-/** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
- *  another family, that the owner's [rules] let run at the effort it would start at. Busy, offline or short of quota it
- *  still counts, within its start window; the caller leaves out the machines the task or its access rules out (review of
- *  ee4ee6c9a: an engine the owner ruled out blocked the fallback). */
-export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[]) =>
-  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !breaks(rules, lifted(rules, p)))
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
@@ -269,6 +279,8 @@ function runsNamed(p: Probe, named: string): boolean {
   return words(named).every(w => name.includes(w))
 }
 const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Your models), or check its name.`
+const NAMED_OFF = (row: { engine: string; model: string }) =>
+  `The routing table turns ${ENGINE[row.engine as keyof typeof ENGINE] ?? row.engine} ${row.model} off. Turn its row on to use it.`
 
 /** How many Builders may run on one API model a member shares: the share answers four requests at once
  * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
@@ -301,6 +313,7 @@ const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - 
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
+  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }
@@ -418,9 +431,11 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
   return ranked.filter(p => keep.has(p))
 }
 
-/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
+/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first.
+ *  `reviewFloor`: a review's reviewed Builder's strength, the Reviewer role's default (Scholes's roadmap, piece 1): the floor
+ *  rises to it, and like any floor it gives way when nobody that strong can run, so a review never waits for nobody. */
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
-  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+  avoid: string[] = [], reviewFloor = 0): Choice | { error: 'NO_CANDIDATE'; excluded: Excluded[] } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   // A person asking for a local model considers local models alone, whatever their strength.
   if (a.local) probes = probes.filter(p => p.gridModel)
@@ -430,19 +445,23 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
     .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
-  const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
+  const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
   const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
   if (named && !probes.length) {
     if (heldNamed.length) excluded.push(...heldNamed.map(m => ({ title: 'Named model', reason: heldReason(m) })))
-    else excluded.push({ title: 'Named model', reason: NAMED_NONE(named) })
+    // A model the routing table turns off is not one to share (review of #2314: Sonnet, off since 2026-10-30).
+    else {
+      const off = policy.models.find(m => !m.enabled && runsNamed({ engine: m.engine, model: m.model } as Probe, named))
+      excluded.push({ title: 'Named model', reason: off ? NAMED_OFF(off) : NAMED_NONE(named) })
+    }
   } else if (a.local && !probes.length) {
     if (held.length) excluded.push(...held.map(m => ({ title: 'Local models', reason: heldReason(m) })))
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
   }
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
-  const floor = floorFor(policy, a)
+  const floor = Math.max(floorFor(policy, a), Math.min(3, reviewFloor))
   const meeting = a.local || named ? viable : viable.filter(p => p.quality >= floor)
   const byFloor = meeting.length ? meeting : viable
   // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.
@@ -451,10 +470,10 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   // An account whose model kept failing this task waits while any other account is offered.
   const fresh = strongest.filter(p => !avoid.includes(p.fit.account))
   const sized = fresh.length ? fresh : strongest
-  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED })))
+  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED, machine: p.machineName })))
   // Only the first group that has anyone is shown: those that fit, then those whose quota is not fully known, then the short.
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
-  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
+  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!), machine: p.machineName })))
   // When every candidate is short, the one expected to get furthest goes first.
   const soft = softOf(rules, a)
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
@@ -477,7 +496,9 @@ export type RecordShape = 'current' | 'unkinded' | 'v1'
 export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, shape: RecordShape = 'current'): Record<string, unknown> {
   const v1 = shape === 'v1'
   return {
-    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}) },
+    // A person's local or named model goes with it, so the server lets that model build (backend superTabs/rules.ts buildRefusal).
+    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}),
+      ...(shape === 'current' && a.local ? { local: true } : {}), ...(shape === 'current' && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),

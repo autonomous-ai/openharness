@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
@@ -369,6 +370,14 @@ class MemorySwarmHomeKey implements SwarmHomeKey {
   }
 }
 
+/// Waits until every save [cache] has under way is done: an inbox keeps its
+/// Home in the background (a temp file, then a rename), so a test that ends
+/// right after a read would have its folder deleted mid-save. The cache does
+/// one thing at a time, so a read of [account]'s Home answers after them.
+/// Real time only: under a widget test's fake clock it would never answer.
+Future<void> homeSaved(SwarmHomeCache cache, {String account = me}) =>
+    cache.read(account);
+
 /// A kept Home in a folder of its own, gone after the test.
 SwarmHomeCache memoryHomeCache() {
   final dir = Directory.systemTemp.createTempSync('swarm-home');
@@ -376,6 +385,27 @@ SwarmHomeCache memoryHomeCache() {
   return SwarmHomeCache(
     key: MemorySwarmHomeKey(),
     file: File('${dir.path}/home.bin'),
+  );
+}
+
+/// Swarm Home C's project screen is up for the project named [name]: its
+/// #name and ☰, and no tab bar: none of direction B's tabs (Buddy, Tasks,
+/// Leaderboard), nor B's team button.
+void expectHomeCProject(String name) {
+  Finder tab(String t) => find.byKey(ValueKey('swarm-project-tab-$t'));
+  expect(find.text('#$name'), findsOneWidget, reason: 'its #name');
+  expect(
+    find.byKey(const ValueKey('swarm-project-menu')),
+    findsOneWidget,
+    reason: '☰',
+  );
+  for (final b in ['chat', 'buddy', 'tasks', 'leaderboard']) {
+    expect(tab(b), findsNothing, reason: "B's $b tab");
+  }
+  expect(
+    find.byKey(const ValueKey('swarm-project-team')),
+    findsNothing,
+    reason: "B's team button",
   );
 }
 

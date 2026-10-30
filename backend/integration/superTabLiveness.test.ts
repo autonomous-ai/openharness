@@ -23,7 +23,7 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '200000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
-const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+const config = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const MINUTE = 60_000
 
 beforeAll(async () => {
@@ -46,7 +46,7 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db, hooks, independent = false }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks; independent?: boolean } = {}) {
+async function swarm({ legacy = false, client = db, hooks, independent = false, engines = ['codex'] }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks; independent?: boolean; engines?: string[] } = {}) {
   let now = 10_000_000
   const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
@@ -55,7 +55,7 @@ async function swarm({ legacy = false, client = db, hooks, independent = false }
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
-    await execute({ type: 'machine.contribute', machineId: machineId!, name: name!, cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    await execute({ type: 'machine.contribute', machineId: machineId!, name: name!, cwd: '/repo', engines, maxAgents: 4 }, host)
   }
   const generations = new Map<string, string>()
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(timed, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
@@ -665,6 +665,35 @@ describe('work waiting for its review', () => {
   })
 })
 
+// Review of #2275: the review-capacity notice took the command's own message id, which the Ready for review row already had,
+// so the real write hit a duplicate key and rolled the whole status back: no Builder could hand over during a quota shortage.
+// Since any engine reviews any build (Ken, 2026-10-30), the notice speaks only when neither engine can start a Reviewer.
+describe('a Ready for review while no Reviewer of any engine can start', () => {
+  it('saves the hand-over and tells the project chat once, through the store\'s write', async () => {
+    const f = await swarm({ engines: ['codex', 'claude'] })
+    const outForDays = ['claude', 'codex'].map(engine =>
+      ({ engine, known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: new Date(f.clock.now + 3 * 86_400_000).toISOString() }] }))
+    await f.observe('lead-host', [f.harness.lead], { quotas: outForDays })
+    await f.observe('test-host', [f.harness.worker], { quotas: outForDays })
+    const status = (status: 'review' | 'working', result: string) =>
+      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
+    const handed = await status('review', 'Ready for review: PR #7 at 4f9c2e1')
+    expect((await f.assignment()).status).toBe('review')
+    const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } })
+    const notices = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'review-capacity')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]!.text).toMatch(/^Reviews cannot start a new Reviewer: no machine this project may use can run Claude Code or Codex now/)
+    // The command's own row stays the hand-over.
+    expect(rows.find(m => m.id === handed.result.messageId)!.text).toContain('Ready for review: PR #7 at 4f9c2e1')
+    const project = (await f.timed.read(owner, f.tab)).state.projects![0]!
+    expect(project.reviewCapacity).toEqual({ any: 'out' })
+    // Handed over again, the cause is the same: said once.
+    await status('working', 'Fixing')
+    await status('review', 'Ready for review: PR #7 at 5a0d3f2')
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'review-capacity')).toHaveLength(1)
+  })
+})
+
 describe('a machine\'s report', () => {
   /** `n` conversations whose work finished but that are not yet quiet, each with a long brief: copies of a real one. */
   async function finishedGroups(f: Awaited<ReturnType<typeof swarm>>, n: number) {
@@ -794,8 +823,8 @@ describe('an agent whose task was lost', () => {
     await loseByOffline(f)
     await backOnline(f)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: f.group, decision } as Command, host, f.lead)).result.routeDecisionId)
     await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker, routeDecisionId,
@@ -890,11 +919,11 @@ describe('a start that never runs', () => {
   /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
   const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: 'lead', decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     // The start's own machine dispatches and confirms it.
@@ -996,11 +1025,11 @@ describe('a task that stalls', () => {
     const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
       checks: [{ description: 'Read', independent: false }] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+        quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     return { group, startId }

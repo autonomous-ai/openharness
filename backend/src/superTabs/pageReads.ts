@@ -19,17 +19,18 @@ export async function pageReactions(tx: Transaction, tabId: string, messageIds: 
 }
 
 export type PageDelivery = Pick<SuperTabDelivery, 'id' | 'messageId' | 'agentId' | 'status' | 'receipt' | 'holdReason' | 'holdSince'
-  | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
+  | 'claimFailingSince' | 'claimFailures' | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
 
 /** The deliveries of one page of messages: who each message went to and how far it got. As Prisma read them: dates as
  *  Dates, and an optional field an older record lacks as null. */
 export async function pageDeliveries(tx: Transaction, tabId: string, messageIds: string[]): Promise<PageDelivery[]> {
   const rows = await tx.superTabDelivery.aggregateRaw({ pipeline: [{ $match: { tabId, messageId: { $in: messageIds } } },
-    { $project: { messageId: 1, agentId: 1, status: 1, receipt: 1, holdReason: 1, holdSince: 1, deliveredAt: 1, answeredAt: 1, createdAt: 1, updatedAt: 1 } }] }) as
+    { $project: { messageId: 1, agentId: 1, status: 1, receipt: 1, holdReason: 1, holdSince: 1, claimFailingSince: 1, claimFailures: 1, deliveredAt: 1, answeredAt: 1, createdAt: 1, updatedAt: 1 } }] }) as
     unknown as Array<Record<string, unknown>>
   const date = (value: unknown) => value == null ? null : new Date(ms(value))
   return rows.map(row => ({ id: row._id as string, messageId: row.messageId as string, agentId: row.agentId as string, status: row.status as string,
     receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
+    claimFailingSince: date(row.claimFailingSince), claimFailures: (row.claimFailures ?? null) as number | null,
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
 }
 
@@ -131,19 +132,61 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
   return new Set(copies.filter(row => reached.has(stableId(row.id, 'lead'))).map(row => row.id))
 }
 
-/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root. */
-export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean }
+/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root.
+ *  `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean
+  count?: number }
 
-/** Every message of the threads rooted at `roots` in one conversation, roots included, oldest first: what the page's thread
- *  summaries are counted from. Matched as the page reads are, so the tabId+conversationId+thread index bounds it. */
+/** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
+interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean }
+/** One row of a part, by its place in the thread. */
+interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
+
+/**
+ * The threads rooted at `roots` in one conversation, roots included, oldest first, as a few rows that stand for all of them:
+ * what the page's thread summaries are counted from (threads.ts). The database groups the rows of each part (ThreadPart) and
+ * returns its oldest and newest row, how many it has (`count` on the newest), and where each person it tags is first tagged.
+ * That is every place a summary reads: first appearances, the newest reply of each author, the count and the last reply. So
+ * a poll that brings one reply of a 500-reply thread gets a few rows back, not 500, while the summaries stay what every
+ * row gave (integration/superTabIndexes.test.ts). Matched as the page reads are, so the thread index bounds it; the database
+ * still examines each of the threads' rows.
+ */
 export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
-  // Sorted here: a $sort in the pipeline makes the planner walk the conversation's sequence index instead.
-  const rows = await tx.superTabMessage.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId, thread: { $in: roots } } },
-    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1, recipientIds: 1 } }] }) as unknown as Array<Record<string, unknown>>
-  const copies = await deliveredCopies(tx, tabId, rows.filter(row => row._id === row.thread)
-    .map(row => ({ id: row._id as string, source: row.source, recipientIds: (row.recipientIds ?? []) as string[] })))
-  return rows.map(row => ({ thread: row.thread as string, id: row._id as string, author: row.author as Author,
-    mentions: (row.mentions ?? []) as string[], sequence: row.sequence as number, createdAt: new Date(ms(row.createdAt)),
-    agentOnly: copies.has(row._id as string) || agentOnly(row.source, (row.recipientIds ?? []) as string[]), routing: routingRow(row.source) }))
-      .sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
+  const root = { $eq: ['$_id', '$thread'] }
+  const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
+    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' } }
+  // (sequence, id) lead each place, so the database's min and max order rows as the sort below does (ids are ASCII).
+  const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
+  // No $sort: it makes the planner walk the conversation's sequence index instead.
+  const [found] = await readBy(tx, 'SuperTabMessage', 'thread', [{ $match: { tabId, conversationId, thread: { $in: roots } } },
+    { $facet: {
+      parts: [{ $group: { _id: part, count: { $sum: 1 }, oldest: { $min: place }, newest: { $max: place },
+        // A root is its part's only row: what deliveredCopies reads of it.
+        root: { $first: { $cond: [root, { source: '$source', recipientIds: '$recipientIds' }, '$$REMOVE'] } } } }],
+      mentions: [{ $unwind: { path: '$mentions', includeArrayIndex: 'slot' } },
+        { $group: { _id: { ...part, person: '$mentions' }, first: { $min: { s: '$sequence', i: '$_id', slot: { $toInt: '$slot' }, at: '$createdAt', author: '$author' } } } }],
+    } }]) as unknown as Array<{
+      parts: Array<{ _id: ThreadPart; count: number; oldest: ThreadPlace; newest: ThreadPlace; root?: { source?: unknown; recipientIds?: string[] } | null }>
+      mentions: Array<{ _id: ThreadPart & { person: string }; first: ThreadPlace }>
+    }>
+  const parts = found?.parts ?? [], mentions = found?.mentions ?? []
+  const copies = await deliveredCopies(tx, tabId, parts.flatMap(p => p._id.root && p.root
+    ? [{ id: p._id.thread, source: p.root.source, recipientIds: p.root.recipientIds ?? [] }] : []))
+  // agentOnly reads only whether a row has recipients, not who they are.
+  const hidden = (key: ThreadPart) => (key.root && copies.has(key.thread))
+    || agentOnly({ kind: key.kind, recipientsOnly: key.only }, key.to ? ['recipient'] : [])
+  const rows = new Map<string, ThreadReply & { slots: Array<[number, string]> }>()
+  const row = (key: ThreadPart, at: ThreadPlace) => {
+    let kept = rows.get(at.i)
+    if (!kept) rows.set(at.i, kept = { thread: key.thread, id: at.i, author: at.author, mentions: [], sequence: at.s, createdAt: new Date(ms(at.at)),
+      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), count: 0, slots: [] })
+    return kept
+  }
+  for (const p of parts) {
+    row(p._id, p.oldest)
+    row(p._id, p.newest).count = p.count
+  }
+  for (const m of mentions) row(m._id, m.first).slots.push([m.first.slot!, m._id.person])
+  return [...rows.values()].map(({ slots, ...reply }) => ({ ...reply, mentions: slots.sort((a, b) => a[0] - b[0]).map(([, person]) => person) }))
+    .sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
 }

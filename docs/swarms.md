@@ -415,22 +415,50 @@ orders the rest by the owner's soft rules and the routing policy (strength,
 quota fit, effective cost).
 
 **Grid models.** A model served on the Swarm's grid counts as strong as the
-policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2; every other
 grid or local model takes the policy's local quality (1). An owner can change
 both, and add rows of their own, in the policy's local models (`models`: a name
 and a quality, first match first). A model whose host is offline is left out
 with that reason, so no Builder is sent to a machine that cannot start it.
 
-**Cheap first.** Low-risk work that is not a review ranks a grid model first:
-low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
-`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
-work. An owner opts out with the `noGridFirst` rule.
+**Builds at the top tier.** A build needs a model the table rates 3 (Ken and
+Dee, 2026-10-30: Builders run on Opus high or Astra xhigh), on the server and
+in the route alike, so Sonnet (2), Haiku (1) and any model the table does not
+name build nothing. Two exceptions: a model a person named, and a grid model
+for low-risk docs, tests or fixtures (below). The server refuses an agent's
+start, assignment or pick otherwise, and lets a person through with a warning.
+An owner who wants Sonnet Builders rates Sonnet 3 in their table. A Claude agent
+that reports no model is rated 1, since Claude Code's own default depends on
+the account and can be Sonnet; a person's own start without a model therefore
+posts a warning.
+
+**No Haiku by default.** Haiku's row is off too (review of #2314): an older CLI
+on a newer server picked it for easy work that the server refuses, on every
+route. With it off, every row the default table offers is rated 3.
+
+**Cheap first.** A grid model builds only low-risk work of kind `docs`,
+`tests` or `fixtures`, singular or plural (Ken, 2026-10-30), and ranks first
+there. Any other build leaves it out with that reason, unless a person asks for
+a local model or names one; the route decision records that, and the server
+refuses a grid start or assignment whose decision does not allow it. The floor
+still keeps a small model off medium work. An owner opts out of ranking it
+first with the `noGridFirst` rule.
+
+**No Sonnet by default.** The default routing table turns Claude Sonnet off
+(Ken, 2026-10-30: no Sonnet Builders). With its row off, the route also starts
+no new Sonnet Reviewer, and a role whose default is Sonnet starts on its
+engine's own model instead, telling the group why. A person who names Sonnet
+is told the table turns it off. An owner's saved table keeps its own Sonnet row
+as it is; an owner who wants none there sets a `forbidModel` rule. Codex GPT-6-Astra at
+`xhigh` is a built-in row (quality 3, cost 5: its API rate is 2.5 times
+Opus's), added on read like GPT-6.1 Sol's, so Builders can run on Opus high or
+Astra xhigh as the owners decided; an owner's own Astra row wins over it.
 
 **Stepping up.** When a grid attempt's first review says Ready no, or its grid
 host never starts the agent (the start fails or misses its window), the Swarm
 steps the task up: it closes the attempt, tells its Builder to stop, and wakes
-the Lead to route it again. The next attempt runs on no grid model and nothing
-below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+the Lead to route it again. The next attempt runs on no grid model and, as
+every build, at the top tier (quality 3). A
 task steps up at most twice; after that the Lead decides. The route and the
 server both keep to the new floor. The next attempt's brief carries the pull
 request, the last result and the review's findings, and the step (attempt
@@ -439,13 +467,14 @@ number and why) is kept on the attempt and its route decision.
 **Reviews.** A review never runs on a grid model or on a model the policy rates
 below 2. A model the policy does not name, a small Codex variant such as a mini
 or nano among them, is rated 1; an agent launched on its engine's own model is
-rated by that engine's `default` row. A review runs on another engine than the
-reviewed Builder's while a strong Reviewer of another engine can run in the
-Swarm (a Builder on a grid model counts as that model's family). A Swarm with
-one engine keeps its automatic reviews: the Builder's own engine reviews at its
-top tier (quality 3) only, and the route decision records why. The server
-refuses such a start, assignment or pick from an agent, whatever the soft rules
-say, and lets a person through with a warning.
+rated by that engine's `default` row. Any engine reviews any build, the
+Builder's own included (Ken, 2026-10-30: a Reviewer is a session of its own
+with fresh context, so its strength is what counts), and a review never waits
+for another engine's quota. The agent that built the work never reviews it.
+The route holds a Reviewer to the Builder's strength where one can run, and the
+owner's preferred engine for kind `review` ranks the rest. The server refuses
+such a start, assignment or pick from an agent, whatever the soft rules say,
+and lets a person through with a warning.
 
 Design:
 
@@ -611,6 +640,30 @@ The lead uses `project.report` to acknowledge the request and post a useful
 summary, or `text: null` when nothing merits another message. Human questions,
 serious blockers and completion are reported immediately. This does not start
 a second summarizing model or forward every terminal turn.
+
+## A message that is not getting in
+
+A message waits as a delivery until its recipient's computer takes it. Your newest message shows a line under it only
+while it sends, or when it needs attention.
+
+**Not delivered yet** is that line, in amber, with no actions. It shows while the recipient's computer is online and
+either:
+
+- has failed to take the message for a minute, or
+- has not picked it up for two minutes while the agent runs.
+
+Harness keeps trying, and the line goes once the message is in. An offline computer still reads as offline instead.
+
+Behind it, the backend writes each claim that ends busy on the delivery (`claimFailingSince`, `claimFailures`) and
+clears that record when a claim gets in. Every 5 minutes the delivery pass logs `[swarm-deliveries] claims failing`
+for a Swarm whose queued messages have failed to be claimed for 5 minutes and still fail. Prod watch alarms on that
+line. The pass cancels none of them: once the cause is fixed, they go in late but whole.
+
+The host's log names each delivery that keeps failing (delivery, agent, since when, how many tries). It logs at once,
+again when the error changes, and otherwise at most every 5 minutes, and it says once when the delivery gets in.
+
+This comes from 2026-10-30. A backend release made every claim of a person's message to their own Buddy end busy for
+two hours. Nothing was lost, but nobody could tell.
 
 ## Switching Swarms off on a computer
 

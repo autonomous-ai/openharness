@@ -80,6 +80,19 @@ function writeWorktrees(file: string, worktrees: SwarmWorktree[]) {
   writeFileSync(`${file}.next`, JSON.stringify({ version: 1, worktrees }), { mode: 0o600, flush: true })
   renameSync(`${file}.next`, file)
 }
+/** The starts this machine launched whose engines have not recorded their sessions yet (ContributedMachines `abandoned`),
+ *  kept across a restart: in memory only, a daemon restarted between the launch and the Swarm failing the start would
+ *  forget the agent it launched, and it would stay up with no Swarm agent, as ten did on Mac Auto (2026-10-29). */
+export const swarmUnconfirmedFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-unconfirmed-${machineId}.json`)
+type SavedLaunch = { startId: string; path: string; harnessId: string; creationId: string }
+function readUnconfirmed(file: string): SavedLaunch[] {
+  let saved: unknown
+  try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
+  const rows = object(saved).launches
+  return (Array.isArray(rows) ? rows.map(object) : []).filter(l => [l.startId, l.harnessId, l.creationId].every(identifier)
+    && typeof l.path === 'string' && l.path.startsWith('/api/')) as unknown as SavedLaunch[]
+}
+
 const within = (parent: string, path: string) => {
   const rel = relative(resolve(parent), resolve(path))
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
@@ -100,6 +113,9 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
     return dirname(await realpath(resolve(path, gitdir))) === join(await realpath(resolve(source, common)), 'worktrees')
   } catch { return false }
 }
+
+/** Whether `path` is not there at all: any other failure to read it (a permission, a file in its place) is not "gone". */
+const folderGone = (path: string) => realpath(path).then(() => false, (error: NodeJS.ErrnoException) => error?.code === 'ENOENT')
 
 export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
@@ -191,6 +207,8 @@ export class ContributedMachines {
   private readonly startsInFlight = new Map<string, Set<Promise<void>>>()
   /** Per removal whose cleanup or acknowledgement failed, how often and when it may run again. */
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
+  /** The last removal asked for each stopped agent's worktree, by tab and agent: the next one waits for it (removeStoppedWorktree). */
+  private readonly removals = new Map<string, Promise<void>>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
@@ -364,6 +382,7 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
@@ -588,8 +607,8 @@ export class ContributedMachines {
               else this.preparing.delete(String(start.id))
               // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
               if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
-                this.unconfirmed.set(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
-              } else this.unconfirmed.delete(String(start.id))
+                this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
+              } else this.forget(String(start.id))
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
@@ -615,6 +634,36 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+  private unconfirmedLoaded = false
+  /** The launches an earlier run of this daemon kept ([swarmUnconfirmedFile]), once, before the first pass looks at them. */
+  private loadUnconfirmed(): void {
+    if (this.unconfirmedLoaded) return
+    this.unconfirmedLoaded = true
+    for (const launch of readUnconfirmed(swarmUnconfirmedFile(this.core.dataDir, this.machineId))) {
+      if (!this.unconfirmed.has(launch.startId)) {
+        this.unconfirmed.set(launch.startId, { path: launch.path, harnessId: launch.harnessId, creationId: launch.creationId, tries: 0, checking: false })
+      }
+    }
+  }
+  private remember(startId: string, launch: Unconfirmed): void {
+    const known = this.unconfirmed.get(startId)
+    this.unconfirmed.set(startId, launch)
+    if (!known || known.harnessId !== launch.harnessId || known.creationId !== launch.creationId) this.saveUnconfirmed()
+  }
+  private forget(startId: string): void {
+    if (this.unconfirmed.delete(startId)) this.saveUnconfirmed()
+  }
+  /** Written whole on each change; a write that fails leaves the launches in memory, as before. */
+  private saveUnconfirmed(): void {
+    const file = swarmUnconfirmedFile(this.core.dataDir, this.machineId)
+    const launches: SavedLaunch[] = [...this.unconfirmed].map(([startId, l]) => ({ startId, path: l.path, harnessId: l.harnessId, creationId: l.creationId }))
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+      writeFileSync(`${file}.next`, JSON.stringify({ version: 1, launches }), { mode: 0o600 })
+      renameSync(`${file}.next`, file)
+    } catch (error) { this.log(`Could not keep the starts awaiting their sessions: ${error instanceof Error ? error.message : String(error)}`) }
+  }
+
   /**
    * A start this host launched, its engine never recording its session, that the backend no longer lists as pending: when
    * the backend says it failed (its machine did not start it within 3 minutes, say) and joined no agent, the agent this
@@ -627,20 +676,20 @@ export class ContributedMachines {
     launch.checking = true
     try {
       const status = object(await this.deps.backend(this.core, 'GET', launch.path))
-      if (identifier(status.harnessId) || !status.error) { this.unconfirmed.delete(startId); return }
+      if (identifier(status.harnessId) || !status.error) { this.forget(startId); return }
       const close = this.core.agents.closeMember
-      if (!close) { this.unconfirmed.delete(startId); return }
+      if (!close) { this.forget(startId); return }
       const closed = await close(launch.harnessId, launch.creationId)
       if ('closed' in closed && closed.closed) {
-        this.unconfirmed.delete(startId)
+        this.forget(startId)
         this.log(`Stopped the agent a failed start launched (start ${startId}, session ${launch.harnessId.slice(0, 8)}): ${String(status.error)}`)
         return
       }
       // Not this start's own agent, as its receipt says: nothing here to stop.
-      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.unconfirmed.delete(startId); return }
+      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.forget(startId); return }
       throw new Error(`${'error' in closed ? closed.error : 'unknown'}${'detail' in closed && closed.detail ? `: ${closed.detail}` : ''}`)
     } catch (error) {
-      if (++launch.tries >= ABANDONED_TRIES) this.unconfirmed.delete(startId)
+      if (++launch.tries >= ABANDONED_TRIES) this.forget(startId)
       this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
     } finally { launch.checking = false }
   }
@@ -698,14 +747,34 @@ export class ContributedMachines {
    *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
    *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
    *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
-  async removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
+  removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
+    // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can ask at the same moment.
+    // Each waits for the one before it and then checks for itself: after a removal it finds no record; after one that
+    // kept the folder (a session still open then), it reads the folder and the sessions again.
+    const key = JSON.stringify([tabId, harnessId])
+    const run = (this.removals.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.removeWorktreeOnce(tabId, harnessId))
+    this.removals.set(key, run)
+    const settled = () => { if (this.removals.get(key) === run) this.removals.delete(key) }
+    run.then(settled, settled)
+    return run
+  }
+  private async removeWorktreeOnce(tabId: string, harnessId: string): Promise<void> {
     const file = swarmWorktreesFile(this.core.dataDir, this.machineId)
-    const record = readWorktrees(file).find(w => w.tabId === tabId && w.harnessId === harnessId)
-    if (!record || !await swarmWorktree(record.path, record.source, record.startId)) return
+    const mine = (w: SwarmWorktree) => w.tabId === tabId && w.harnessId === harnessId
+    const record = readWorktrees(file).find(mine)
+    if (!record) return
+    // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
+    // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
+    if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    if (!await swarmWorktree(record.path, record.source, record.startId)) return
     if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
+    // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
+    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
+    if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
-    if (!await sweepOne(record.path, Date.now(), 0).catch(() => false)) return
-    writeWorktrees(file, readWorktrees(file).filter(w => !(w.tabId === tabId && w.harnessId === harnessId)))
+    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path.
+    if (!await sweepOne(record.path, Date.now(), 0).catch(() => { this.log('Kept a Swarm worktree: WORKTREE_CHECK_FAILED'); return false })) return
+    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
   /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */

@@ -50,11 +50,11 @@ async function fixture() {
 }
 async function routedStart(tab: string, lead: string, role?: 'reviewer') {
   const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-    candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-      quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+    candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
+      quality: 3, cost: 2, title: 'New agent', label: 'New agent' }],
     excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
   const routeDecisionId = String((await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId)
-  const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
+  const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
     name: 'Builder', cwd: '/fixture/repo', worktree: false, ...(role ? { role } : {}),
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   const startId = String((await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId)
@@ -2129,9 +2129,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('records, supersedes and lets a person change a route decision; a closed one refuses', async () => {
     const { tab, lead } = await fixture()
+    // A build is routed to a model rated 3 (rules.ts buildRefusal, #2314), read from the member's own configuration.
+    const builder = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Builder',
+      configuration: { ...config, engine: 'claude', model: 'opus' }, lead: false })).result.agentId as string
     const decision = { assessment: { difficulty: 'medium', risk: 'low', why: 'A small API change.' },
       candidates: [
-        { id: 'c0', kind: 'member', agentId: lead, machineId: 'test-host', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, title: 'Lead · Claude sonnet medium · test-host', label: 'Member Lead' },
+        { id: 'c0', kind: 'member', agentId: builder, machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'Builder · Claude opus high · test-host', label: 'Member Builder' },
         { id: 'c1', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent · Claude opus high · test-host', label: 'New agent' },
       ], excluded: [{ title: 'New agent · Codex · test-host', reason: 'The selected agent engine is not installed on this machine.' }],
       floor: 2, notes: false, pick: 'c0', via: 'order', fallback: 'unsure', p: null, belowFloor: false, why: 'Jev unsure; first in the policy order.' }
@@ -2165,7 +2168,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
     const operationId = randomUUID(), command: Command = { type: 'agent.start', request, routeDecisionId, overrideReason: 'The helper machine has the repository.' }
@@ -2179,10 +2182,10 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('corrects the log to the model that ran when the routed switch failed, and reads the times of one decision', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', name: 'Builder', cwd: '/fixture/repo', worktree: false,
+    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/fixture/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = (await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId as string
     // A queued start already holds its account's quota when the Lead routes again.
@@ -2195,7 +2198,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(before)
     const read = async () => (await app.inject({ url: `/api/super-tabs/${tab}/route-decisions/${routeDecisionId}`, headers: { authorization: `Bearer ${owner.sub}` } })).json().data
     expect(await read()).toMatchObject({ outcome: null, outcomeAt: null, createdAt: expect.any(String),
-      final: { kind: 'new', startId, model: 'sonnet', effort: 'auto', requested: { model: 'haiku', effort: 'auto' } } })
+      final: { kind: 'new', startId, model: 'sonnet', effort: 'auto', requested: { model: 'opus', effort: 'high' } } })
   })
 
   it('releases a queued start\'s route hold when that start fails', async () => {
@@ -2259,9 +2262,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const { tab, lead } = await fixture()
     const group = (await run(tab, { type: 'conversation.create', title: 'Build', brief: 'Build it.', checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+      name: 'Builder', configuration: { ...config, model: 'gpt-6.1-sol' }, lead: false })).result.agentId as string
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small.' },
-      candidates: [{ id: 'c0', kind: 'member', agentId: worker, machineId: 'test-host', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, title: 'Builder', label: 'Member Builder' }],
+      candidates: [{ id: 'c0', kind: 'member', agentId: worker, machineId: 'test-host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, title: 'Builder', label: 'Member Builder' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker, routeDecisionId } as Command, host, lead)).result.assignmentId as string
@@ -2276,10 +2279,10 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const { tab, lead } = await fixture()
     const group = (await run(tab, { type: 'conversation.create', title: 'Build', brief: 'Build it.', checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
     const add = async (name: string) => (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name, configuration: config, lead: false })).result.agentId as string
+      name, configuration: { ...config, model: 'gpt-6.1-sol' }, lead: false })).result.agentId as string
     const picked = await add('Picked'), chosen = await add('Chosen')
     const candidate = (id: string, agentId: string, title: string) => ({ id, kind: 'member', agentId, machineId: 'test-host', engine: 'codex',
-      model: 'fixture-model', effort: 'high', quality: 2, cost: 2, title, label: `Member ${title}` })
+      model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, title, label: `Member ${title}` })
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small.' },
       candidates: [candidate('c0', picked, 'Picked'), candidate('c1', chosen, 'Chosen')],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'jev', p: 0.9, belowFloor: false, why: 'Jev chose Picked.' }
@@ -2308,7 +2311,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('records more than 30 routes in an hour: there is no hourly cap', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     for (let i = 0; i < 30; i++) await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
     await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).resolves.toBeDefined()
@@ -3359,7 +3362,8 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
+      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])
@@ -3420,7 +3424,7 @@ describe('Lead mentions', () => {
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: 'Peer, see above.' }))
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 
@@ -4444,7 +4448,7 @@ describe('Swarm parts under concurrent writes', () => {
     const { routeDecisionId, startId } = await routedStart(tab, lead)
     await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } }, lead)
     const agentId = String((await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.started', startId,
-      harnessId: randomUUID(), configuration: config } }, lead)).result.agentId)
+      harnessId: randomUUID(), configuration: { ...config, model: 'gpt-6.1-sol' } } }, lead)).result.agentId)
     // Started and not pooled: the start is finished and out of every command's active state.
     expect((await db.swarmStart.findFirstOrThrow({ where: { tabId: tab, key: startId } })).finishedAt).not.toBeNull()
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Routed work', checks: [{ description: 'Done', independent: false }] }, host, lead)
@@ -4488,7 +4492,7 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
     await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
     expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
     expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
-    expect(await measured('archive', () => store.archiveFinished(tab, group, []))).toBe(false)
+    expect(await measured('archive', () => store.archiveFinished(tab, group, {}))).toBe(false)
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
     expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
       .toEqual([requestId])

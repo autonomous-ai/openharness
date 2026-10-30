@@ -34,6 +34,7 @@ void main() {
 
     expect(store.family, TerminalFontChoice.defaultForPlatform);
     expect(store.size, terminalFontSize);
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
   });
 
   test('remembers a family and size by name, not by ordinal', () async {
@@ -162,6 +163,7 @@ void main() {
     expect(storage.values['terminal_font_family'], 'font:JetBrains Mono');
     expect(store.family, isNull);
     expect(store.value.fontFamily, 'JetBrains Mono');
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
     // A glyph the face lacks still comes from a monospaced one: the platform's default first.
     expect(store.value.fontFamilyFallback, [
       terminalFontFamily,
@@ -177,6 +179,17 @@ void main() {
     await reopened.reset();
     expect(reopened.family, TerminalFontChoice.defaultForPlatform);
     expect(reopened.isDefault, isTrue);
+  });
+
+  test('a Nerd Font draws its own icons', () async {
+    final store = TerminalFontStore(storage: _FakeStore());
+    await store.setSelection(const InstalledFontFamily('MesloLGS NF'));
+
+    expect(store.value.fontFamily, 'MesloLGS NF');
+    expect(store.value.symbolFontFamily, isNull);
+
+    await store.setSelection(const InstalledFontFamily('JetBrains Mono'));
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
   });
 
   test(

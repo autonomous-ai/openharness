@@ -4,6 +4,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { validModelTokens } from '../lib/agentUsageWire.js'
+import { ASSIGNMENT_COMMANDS, staleAssignmentHint, wantsCurrent, withCurrentAssignment } from './assignmentIds.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
@@ -72,7 +73,7 @@ const HELP = {
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
-  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. Two failed starts in a row suspend an engine on a machine for up to 6 hours (the route says so); machine.engineResume offers it there again: only the machine\'s owner does, or the Lead passing on the owner\'s chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. Low-risk work that is not a review ranks models on the Swarm\'s grid first unless the owner set noGridFirst: low-difficulty work, and medium work of kind docs, copy, tests, fixtures, fix or refactor (a grid model rated 2, such as Kimi K3 or DeepSeek v4.1). A review never runs on a grid model, below quality 2 or on the reviewed Builder\'s engine. When a grid attempt\'s first review says Ready no, or its grid host never starts the agent, the Swarm closes it and steps the task up (no grid and quality 2, then quality 3, at most twice) and tells you: route it again, and the route and the server keep to the new floor.',
+  command: 'command OPERATION_ID JSON: send one of the commands below. The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<\'JSON\' … JSON). Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it. Two failed starts in a row suspend an engine on a machine for up to 6 hours (the route says so); machine.engineResume offers it there again: only the machine\'s owner does, or the Lead passing on the owner\'s chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine, preferIdle and noGridFirst only rank. A build needs a model the policy rates 3 (Opus high, Astra xhigh, Codex) unless a person names the model. A model on the Swarm\'s grid builds only low-risk work of kind docs, tests or fixtures, unless a person asks for a local model or names one, and ranks first there unless the owner set noGridFirst (at medium difficulty a grid model rated 2, such as Kimi K3 or DeepSeek v4.1). A review never runs on a grid model or below quality 2, and never by the agent that built the work; any engine reviews any build. When a grid attempt\'s first review says Ready no, or its grid host never starts the agent, the Swarm closes it and steps the task up (no grid, at the top tier as every build, at most twice) and tells you: route it again, and the route and the server keep to the new floor.',
   commands: [
     { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
@@ -85,7 +86,7 @@ const HELP = {
     { type: 'conversation.create', title: 'Review: Outcome', reviewOf: 'GROUP', task: { goal: 'An independent verdict on the Builder\'s revision', changes: 'None: read only', constraints: 'The reviewed group\'s constraints', owns: ['The reviewed group\'s owned code, read only'] }, checks: [{ description: 'Verdict with the reviewed revision', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
-    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'ATTEMPT', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
+    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
     { type: 'conversation.merged', conversationId: 'GROUP', pullRequestUrl: 'https://github.com/OWNER/REPOSITORY/pull/NUMBER', mergedAt: 'Optional ISO time of a merge recorded later' },
     { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
     { type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'The owner\'s words: No Haiku.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
@@ -97,15 +98,15 @@ const HELP = {
     { type: 'rule.remove', ruleId: 'RULE', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'machine.engineResume', machineId: 'MACHINE', engine: 'codex', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'needs_human', result: 'The decision you need from a person, asked as one short question' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'needs_human', result: 'The decision you need from a person, asked as one short question' },
     // The same, opened as a decision for one person in the conversation (decisions in help).
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'needs_human', result: 'The question, in one sentence',
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'needs_human', result: 'The question, in one sentence',
       ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'blocked', result: 'Why you are stuck and what would unblock you, in one or two sentences' },
-    { type: 'work.check', conversationId: 'GROUP', assignmentId: 'ATTEMPT', checkId: 'CHECK', passed: true, evidence: 'Exact test command, revision and observed result' },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'done', result: 'Exact revision, evidence and deliverable links' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'blocked', result: 'Why you are stuck and what would unblock you, in one or two sentences' },
+    { type: 'work.check', conversationId: 'GROUP', assignmentId: 'current', checkId: 'CHECK', passed: true, evidence: 'Exact test command, revision and observed result' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'done', result: 'Exact revision, evidence and deliverable links' },
   ],
 }
 
@@ -114,7 +115,7 @@ const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
 /** Only a project's Lead may tag people (spec 2026-10-24-lead-mentions), so only a Lead's help offers it. */
-const LEAD_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.`,
+const LEAD_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links.`,
   // Advisory (docs/plans/2026-10-27-swarm-scheduler.md): a plan for every open group at once, which the route still decides.
   plan: 'plan [JSON]: the best plan for all your open groups at once, from the scheduler on this machine (Python 3 and OR-Tools; without them it says how to install, and routing works as before). Per group: the machine, engine, model and effort, start order and expected finish, with the finish time and cost against routing one group at a time. JSON (optional): {"groups":{"GROUP":{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","kind":"optional word","after":["GROUP"]}}}; a group you do not assess is planned at medium and listed as an estimate. It keeps the owner\'s hard rules and a review\'s other model family, and records nothing: follow it in order by routing each group and starting the plan\'s pick with overrideReason "scheduler plan".',
   // Only a project's Lead asks a batch: up to 10 questions for one person, in one of its project's conversations.
@@ -596,11 +597,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          const command = await finishingWith(core, await mentionCommand(taskCommand(object(payload.command)), async () => (await swarm()).state), String(agent.harnessId))
+          const asked = object(payload.command)
+          // `current` (or no id) names the group's active assignment for the agent (superTabs/assignmentIds.ts).
+          const filled = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          const command = await finishingWith(core, await mentionCommand(taskCommand(filled), async () => (await swarm()).state), String(agent.harnessId))
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           let value: unknown
           try { value = await send(command) } catch (error) {
+            // A stale id gets the one to use, so the agent can send it again right.
+            if (error instanceof SuperTabHostError && error.code === 'STALE_ASSIGNMENT' && ASSIGNMENT_COMMANDS.has(String(command.type))) {
+              const hint = await swarm().then(read => staleAssignmentHint(command, read.state, agentId), () => '')
+              throw new SuperTabHostError(error.code, `${error.message}${hint ? ` ${hint}` : ''}`, error.status)
+            }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {
               const { tokens: _tokens, ...status } = command

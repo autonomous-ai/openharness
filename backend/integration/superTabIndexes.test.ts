@@ -12,7 +12,8 @@ import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
-import { outsider, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { outsider, owner, peer, richSwarm, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { threadSummaries } from '../src/superTabs/threads.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -100,7 +101,7 @@ describe('message page reads', () => {
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, messageId: 1 }'], docsExamined: 1001, returned: 1001 })
   })
 
-  it('reads a page\'s threads through the tabId+conversationId+thread index, examining only their messages', async () => {
+  it('reads a page\'s threads through the tabId+conversationId+thread index, examining only their messages and returning a few', async () => {
     // 300 top-level messages in one conversation, every tenth with three replies, beside another conversation's.
     const rows = []
     for (const conversationId of ['t0', 't1']) {
@@ -115,11 +116,56 @@ describe('message page reads', () => {
       createdAt: new Date(T0 + row.sequence * 1000) })) })
     const roots = Array.from({ length: 100 }, (_, i) => `t0-m${pad(100 + i)}`)
     const [threads, profile] = await profiled('SuperTabMessage', () => pageThreads(db, 'T', 't0', roots))
-    expect(threads).toHaveLength(130)
-    expect(threads.filter(row => row.id !== row.thread).map(row => row.id).slice(0, 3)).toEqual(['t0-m100-r1', 't0-m100-r2', 't0-m100-r3'])
+    // Each root, and of each thread's three replies by one author the first and the last, which stands for all three.
+    expect(threads).toHaveLength(120)
+    expect(threads.filter(row => row.id !== row.thread).slice(0, 2).map(row => [row.id, row.count])).toEqual([['t0-m100-r1', 0], ['t0-m100-r3', 3]])
     expect(threads[0]).toEqual({ thread: 't0-m100', id: 't0-m100', author: expect.objectContaining({ id: 'owner' }), mentions: [],
-      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, routing: false })
-    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 130 })
+      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, routing: false, count: 1 })
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 1 })
+  })
+
+  it('sums up a 500-reply thread from a few rows: what each reader may see, counted in the database', async () => {
+    // One long thread: 500 replies. Every tenth an agent-only note to another agent (no reader counts it), five route rows
+    // (a Buddy never reads them), a person who is not in the Swarm writing every third, the owner renamed after reply 100,
+    // and the last two replies written by one command (one sequence). Beside it, a thread whose only reply is hidden, and a
+    // short one. Each reader's summaries are the ones every reply read gave before (written out here by hand).
+    const s = richSwarm()
+    const group = s.state.conversations.find(c => c.id === s.web)!
+    const person = (id: string, displayName?: string) => ({ kind: 'person' as const, id, name: id, ...displayName ? { displayName } : {}, membershipGeneration: 'gen' })
+    const agent = (id: string) => ({ kind: 'agent' as const, id, name: id, membershipGeneration: 'gen' })
+    const rows: Array<{ id: string; thread: string; sequence: number; author: unknown; mentions?: string[]; source?: object; recipientIds?: string[] }> = [
+      { id: 'qa-root', thread: 'qa-root', sequence: 10_000, author: person(owner.userId, 'Owner now') },
+      { id: 'qb-root', thread: 'qb-root', sequence: 5_000, author: agent('lead') },
+      { id: 'qb-r1', thread: 'qb-root', sequence: 5_001, author: agent('ghost'), source: { kind: 'agent-only' }, recipientIds: ['a1'] },
+      { id: 'qc-root', thread: 'qc-root', sequence: 20_000, author: agent('lead') },
+      { id: 'qc-r1', thread: 'qc-root', sequence: 20_001, author: person(peer.userId) },
+    ]
+    for (let i = 0; i < 500; i++) {
+      const hidden = i % 10 === 9, route = i % 100 === 50
+      const author = hidden ? agent('ghost') : route ? agent('lead') : [person(owner.userId, i < 100 ? 'Owner before' : 'Owner now'), person('stranger'), agent('a1')][i % 3]
+      rows.push({ id: `qa-r${pad(i)}`, thread: 'qa-root', sequence: i === 498 ? 10_498 : 10_001 + i, author,
+        mentions: { 8: ['stranger'], 19: [peer.userId], 50: [outsider.userId], 307: [peer.userId, outsider.userId] }[i] ?? [],
+        ...hidden ? { source: { kind: 'agent-only' }, recipientIds: ['a1'] } : route ? { source: { kind: 'route' } } : {} })
+    }
+    await db.superTabMessage.createMany({ data: rows.map(row => ({ recipientIds: [], mentions: [], ...row, tabId: 'T', conversationId: 'qa', text: 'x',
+      author: row.author as object, createdAt: new Date(T0 + row.sequence * 1000) })) })
+    // Replies in the same thread id elsewhere, another conversation's and another Swarm's: never counted, named or read.
+    await db.superTabMessage.createMany({ data: [['T', 'qz'], ['U', 'qa']].map(([tabId, conversationId]) => ({ id: `${tabId}-${conversationId}-r`, tabId: tabId!,
+      conversationId: conversationId!, thread: 'qa-root', sequence: 30_000, text: 'x', author: person('elsewhere'), recipientIds: [], mentions: [outsider.userId],
+      createdAt: new Date(T0 + 30_000_000) })) })
+    const [threads, profile] = await profiled('SuperTabMessage', () => pageThreads(db, 'T', 'qa', ['qa-root', 'qb-root', 'qc-root']))
+    const last = { lastSequence: 10_498, lastAt: new Date(T0 + 10_498_000) }
+    expect(threadSummaries(s.state, group, threads)).toEqual([
+      { id: 'qa-root', replies: 450, ...last, authors: [person(owner.userId, 'Owner before'), agent('a1'), agent('lead')],
+        people: [owner.userId, outsider.userId, peer.userId] },
+      { id: 'qc-root', replies: 1, lastSequence: 20_001, lastAt: new Date(T0 + 20_001_000), authors: [person(peer.userId)], people: [peer.userId] },
+    ])
+    // A Buddy's page leaves the route rows out first (store.ts messages).
+    expect(threadSummaries(s.state, group, threads.filter(row => !row.routing))[0]).toEqual({ id: 'qa-root', replies: 445, ...last,
+      authors: [person(owner.userId, 'Owner before'), agent('a1')], people: [owner.userId, peer.userId, outsider.userId] })
+    // A few rows per author and kind of row, however long the thread: the database counts, not the server.
+    expect(threads.length).toBeLessThan(30)
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 505, returned: 1 })
   })
 
   it('reads a page of reactions through the tabId+messageId index, examining only the reactions it returns', async () => {
@@ -132,19 +178,20 @@ describe('message page reads', () => {
     const rows = await pageDeliveries(db, 'A', ['A-m150'])
     expect(rows.find(row => row.id === 'A-150-3')).toEqual({ id: 'A-150-3', messageId: 'A-m150', agentId: 'agent-3', status: 'delivered',
       receipt: 'typed', holdReason: 'busy', holdSince: new Date(T0 + 7000), deliveredAt: new Date(T0 + 8000), answeredAt: new Date(T0 + 9000),
-      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date) })
+      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-old')).toEqual({ id: 'A-150-old', messageId: 'A-m150', agentId: 'agent-old', status: 'answered',
-      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1) })
+      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-4')).toEqual({ id: 'A-150-4', messageId: 'A-m150', agentId: 'agent-4', status: 'answered',
       receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null,
-      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500) })
+      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500), claimFailingSince: null, claimFailures: null })
   })
 
   // The delivery read never had an order (no orderBy: it followed whichever index the planner took), so it is compared by id.
   // Reactions keep the tabId+messageId index order, which their counts' `by` lists show.
   it('returns the same rows as the Prisma reads it replaces', async () => {
     const select = { id: true, messageId: true, agentId: true, status: true, receipt: true,
-      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true }
+      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true,
+      claimFailingSince: true, claimFailures: true }
     const byId = (rows: Array<{ id: string }>) => [...rows].sort((a, b) => a.id.localeCompare(b.id))
     expect(byId(await pageDeliveries(db, 'A', PAGE))).toEqual(byId(await db.superTabDelivery.findMany({ where: { tabId: 'A', messageId: { in: PAGE } }, select })))
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },

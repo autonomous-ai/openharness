@@ -27,6 +27,100 @@ export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
   await ensureIndex(db, 'SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: MENTION_EXPIRY_MS / 1000 })
 }
 
+/** `@name` or `@name@domain`, as people tag in chat. Never right after a letter, digit, `@` or `/` (an address, a path, a
+ *  link), and a name never ends in a dot: `@dee.` closes a sentence. Desktop (message_text.dart) and the phone
+ *  (swarm_message_row.dart) use this same pattern; tagFixture.json is the table all three pass. */
+const TAG = /(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?/g
+const FENCE = /^ {0,3}(`{3,}|~{3,})/
+const blank = (part: string) => part.replace(/[^\n]/g, ' ')
+
+/** [text] with what is never a tag blanked out, as Markdown renders it: fenced and indented code, code spans, bare links and
+ *  link destinations. */
+function prose(text: string): string {
+  const lines = text.split('\n')
+  let fence: string | null = null
+  let indented = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (fence) {
+      const close = FENCE.exec(line)
+      if (close && close[1]![0] === fence[0] && close[1]!.length >= fence.length && !line.slice(close[0].length).trim()) fence = null
+      lines[i] = blank(line)
+      continue
+    }
+    const open = FENCE.exec(line)
+    if (open && !(open[1]![0] === '`' && line.slice(open[0].length).includes('`'))) {
+      fence = open[1]!
+      lines[i] = blank(line)
+      indented = false
+      continue
+    }
+    // Indented code starts after a blank line (or the first line) and runs while its lines stay indented.
+    const startsCode: boolean = /^( {4}|\t)/.test(line) && line.trim() !== '' && (indented || i === 0 || !lines[i - 1]!.trim())
+    indented = startsCode || (indented && !line.trim())
+    if (startsCode) lines[i] = blank(line)
+  }
+  return lines.join('\n')
+    .replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, blank)
+    .replace(/\]\([^)\]]*\)/g, blank)
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, blank)
+}
+
+/** The tags [text] holds, in order: each name as written after its `@`, lowercased, a full address with its domain. */
+export function tagTokens(text: string): string[] {
+  return [...prose(text).matchAll(TAG)].map(match => `${match[1]}${match[2] ?? ''}`.toLowerCase())
+}
+
+/** The people [text] names, in order, once each: `@username` in any case, or `@` and their full address. [names] is the
+ *  Swarm's usernames by person (usernames.ts swarmUsernames). */
+export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<string, string>): string[] {
+  const tokens = tagTokens(text)
+  if (!tokens.length) return []
+  const byName = new Map([...names].map(([id, name]) => [name.toLowerCase(), id]))
+  const ids = tokens.flatMap(token => {
+    const id = token.includes('@') ? state.people.find(p => p.email.toLowerCase() === token)?.id : byName.get(token)
+    return id && state.people.some(p => p.id === id) ? [id] : []
+  })
+  return [...new Set(ids)]
+}
+
+/** Whether [text] says `@` and exactly [name] outside code and links, in any case: a stored name that ends in a dot, chosen
+ *  before such names were refused, reads as a shorter tag in [namedIn] but is still said. */
+export function saysName(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![\\w@/])@${escaped}(?![\\w+-]|\\.[\\w+-])`, 'i').test(prose(text))
+}
+
+/** [tags] on the first line of [text], as a person types them in chat. Only text that opens with a block (a list, heading,
+ *  quote, table, code, divider or link definition) keeps them on a line of their own, so that block still renders. The same
+ *  rule as Desktop's SuperTabMessageText.withTags, which shows an older message's unsaid tags. */
+export function withTags(tags: string[], text: string): string {
+  if (!tags.length) return text
+  const body = text.replace(/^(?:[ \t]*\n)+/, '')
+  if (!body) return tags.join(' ')
+  return OPENS_BLOCK.test(body) ? `${tags.join(' ')}\n\n${body}` : `${tags.join(' ')} ${body}`
+}
+const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6}(?:[ \\t\\n]|$)|>'
+  + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
+  + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
+
+/** Whether [actor] may tag people in [group]: a person who can post there; among agents only the project's Lead, in its own
+ *  project's conversations; nobody in the Leads conversation. */
+function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  if (isLeads(group)) return false
+  if (actor.kind !== 'agent') return true
+  const led = ledProject(state, actor.agentId)
+  return !!led && groupProject(state, group).id === led.id
+}
+
+/** The people [named] by a post's text whom it tags: only when [actor] may tag here, only people who can read [group], never
+ *  the author. Anyone else stays plain text: a name in a sentence is never an error. */
+export function textTags(state: SuperTabState, actor: Actor, group: Conversation, named: string[]): string[] {
+  if (!mayTag(state, actor, group)) return []
+  return named.filter(id => (actor.kind !== 'person' || id !== actor.userId) && state.people.some(p => p.id === id
+    && canReadGroup(state, { kind: 'person', userId: p.id, email: p.email }, group)))
+}
+
 /** A person who can post here tags people; among agents only the project's Lead, in that project's conversations. Never in
  *  the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
 export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {

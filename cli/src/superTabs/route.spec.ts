@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, buildRefusals, cheapKind, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -65,12 +65,49 @@ describe('quota and rates', () => {
     expect(rateFor(policy, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'claude', 'claude-opus-4-7', 'high', true)).toEqual({ quality: 3, cost: 3 })
   })
+  // Lead's ruling, 10-30: Builders run on Opus high or Astra xhigh; the server's table now names Astra (backend
+  // superTabs/routingPolicy.ts ADDED_ROWS), and the route rates it by that row as the server does (rules.ts policyQuality).
+  it('rates Codex GPT-6-Astra by the server\'s Astra row, at xhigh or any other effort, and 1 from a server without it', () => {
+    const astra = { engine: 'codex' as const, model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 5, enabled: true }
+    const served = { ...policy, models: [...policy.models, astra] }
+    expect(rateFor(served, 'codex', 'gpt-6-astra', 'xhigh')).toEqual({ quality: 3, cost: 5 })
+    expect(rateFor(served, 'codex', 'gpt-6-astra', 'high')).toEqual({ quality: 3, cost: 5 })
+    expect(rateFor(policy, 'codex', 'gpt-6-astra', 'xhigh')).toEqual({ quality: 1, cost: 1 })
+  })
+  it('rates a Codex model by its own row in the server\'s policy, and an unnamed slug 1', () => {
+    const served = { ...policy, models: [...policy.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true }] }
+    expect(rateFor(served, 'codex', 'gpt-6.1-sol', 'xhigh')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(served, 'codex', 'gpt-7-unknown', 'high')).toEqual({ quality: 1, cost: 1 })
+  })
 })
 
 describe('choose', () => {
+  // A Reviewer's role default (Scholes's roadmap, piece 1): at least the reviewed Builder's strength, while one can run.
+  it('holds a review to the reviewed Builder\'s strength, and never leaves it with nobody when the strongest is busy', () => {
+    const strong = probe({ engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, machineId: 'm2', machineName: 'mac' })
+    const weaker = probe()
+    const low = a({ difficulty: 'low' })
+    const held = choose([strong, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in held) throw new Error('unexpected')
+    expect(held.shown.map(s => s.title)).toEqual(['New agent · Codex default default · mac'])
+    expect(held).toMatchObject({ floor: 3, belowFloor: false })
+    // Its machine is full: the weaker one still reviews, marked below the floor.
+    const busy = choose([{ ...strong, refusals: ['This machine runs as many agents as its owner allows.'] }, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in busy) throw new Error('unexpected')
+    expect(busy.shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · remote-1'])
+    expect(busy).toMatchObject({ floor: 3, belowFloor: true })
+    // Out of quota, the strong one is still offered first rather than a weaker one.
+    const short = choose([{ ...strong, quota: windows([99, 3 * H], [90, 5 * D]) }, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in short) throw new Error('unexpected')
+    expect(short.shown[0]!.title).toBe('New agent · Codex default default · mac')
+    // Without a reviewed Builder, the task's own floor.
+    const plain = choose([strong, weaker], policy, low, NOW)
+    if ('error' in plain) throw new Error('unexpected')
+    expect(plain.floor).toBe(1)
+  })
   it('returns NO_CANDIDATE with reasons when nothing can run', () => {
     expect(choose([probe({ refusals: ['Machine is offline.'] })], policy, a())).toEqual({ error: 'NO_CANDIDATE',
-      excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.' }] })
+      excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.', machine: 'remote-1' }] })
   })
   it('shows only floor-meeting candidates, ordered by effective cost, quality, room on the tightest window, member first', () => {
     const r = choose([
@@ -97,7 +134,7 @@ describe('choose', () => {
     const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
     expect(r.belowFloor).toBe(true)
     expect(r.shown.map(s => s.fit.status)).toEqual(['fits'])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.', machine: 'remote-1' }])
     // Under the reserve is short, and goes after a candidate that is only partly known.
     const reserve = ok(choose([probe({ quota: windows([10, null], [90, null]) }), probe({ machineName: 'mac', quota: windows([90, null], null) })], policy, a(), NOW))
     expect(reserve.shown.map(s => [s.machineName, s.fit.status])).toEqual([['mac', 'unknown']])
@@ -135,7 +172,7 @@ describe('strength, fit and effective cost', () => {
     const r = route([on(OPUS, 'a', windows([25, 4 * H], [80, 5 * D], 'A')), on(CODEX, 'a', windows([85, 3 * H], [80, 5 * D]))], { difficulty: 'high', size: 'large' })
     expect(picks(r)).toEqual(['default on a'])
     expect(r.shown[0].fit.account).toBe('a:codex')
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'The 5-hour window is expected to run out about a quarter of the way in; resets in 4h.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'The 5-hour window is expected to run out about a quarter of the way in; resets in 4h.', machine: 'a' }])
   })
   it('3. low, small: Haiku on the account whose weekly window has room, not on the one nearly spent for the week', () => {
     const A = windows([80, 4 * H], [12, 5 * D], 'A'), B = windows([60, 4 * H], [70, 5 * D], 'B')
@@ -205,7 +242,7 @@ describe('strength, fit and effective cost', () => {
     expect(metered).toEqual({ known: true, leftPercent: null, resetsAt: null, metered: true })
     const r = route([on(SONNET, 'key', metered), on(SONNET, 'sub', windows([90, 3 * H], [80, 5 * D], 'S')), on(SONNET, 'unread', unknown)], { difficulty: 'low' })
     expect(r.shown.map(s => [s.machineName, s.fit.status])).toEqual([['sub', 'fits'], ['key', 'fits']])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · unread', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · unread', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.', machine: 'unread' }])
     expect(r.shown[1].fit).toEqual({ status: 'fits', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'key:claude' })
     expect(r.shown[1].label).toContain('fits: metered, no usage window to run out')
     expect(r.shown[1].label).toContain('quota metered')
@@ -467,7 +504,7 @@ describe('the owner\'s rules', () => {
   it('leaves out a candidate that breaks a hard rule, with the owner\'s words as the reason', () => {
     const r = ok(choose([haiku, sonnet], policy, a(), NOW, [], [rule({ kind: 'forbidModel', model: 'HAIKU' }, 'No Haiku.')]))
     expect(r.shown.map(s => s.machineName)).toEqual(['mac'])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude haiku auto · cheap', reason: 'Breaks the owner\'s rule: No Haiku.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude haiku auto · cheap', reason: 'Breaks the owner\'s rule: No Haiku.', machine: 'cheap' }])
     // A full model id is caught too, a rule for another engine is not, and `default` is never matched.
     expect(breaks([rule({ kind: 'forbidModel', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'claude-haiku-4-5', effort: 'high' })).toContain('Rule.')
     expect(breaks([rule({ kind: 'forbidModel', engine: 'codex', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'haiku', effort: 'high' })).toBeNull()
@@ -481,7 +518,7 @@ describe('the owner\'s rules', () => {
     expect(titles(r)).toEqual(['New agent · Claude sonnet medium · other'])
     // When nobody is left, the Lead is told why each one was left out.
     expect(choose([sonnet], policy, a(), NOW, [], [rule({ kind: 'machines', machineIds: ['m9'] }, 'Only m9.')]))
-      .toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude sonnet medium · mac', reason: 'Breaks the owner\'s rule: Only m9.' }] })
+      .toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude sonnet medium · mac', reason: 'Breaks the owner\'s rule: Only m9.', machine: 'mac' }] })
   })
   it('holds a minimum effort, and lifts a new agent whose effort the engine chooses to that minimum', () => {
     const codex = probe({ machineName: 'box', engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 })
@@ -536,20 +573,20 @@ describe('local models on the Swarm\'s grid', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: 'yes' })).toContain('local')
   })
   it('fits a local model on no subscription, names it as local and records where it is served', () => {
-    const r = ok(choose([local()], policy, a({ difficulty: 'low' }), NOW))
+    const r = ok(choose([local()], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(r.shown[0]).toMatchObject({ title: 'New agent · Claude on Qwen 3 (local) · remote-1', fit: { status: 'fits', account: 'local:swarm-0123456789ab:qwen3' } })
     expect(r.shown[0]!.label).toContain('Claude on Qwen 3 (local)')
     expect((recordOf(r, decide(r), a(), policy) as { candidates: unknown[] }).candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: 'swarm-0123456789ab' })
     // Without a name or a label: the model stands for both, and nothing about the grid is recorded without a grid.
-    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low' }), NOW))
+    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(bare.shown[0]).toMatchObject({ title: 'New agent · Claude on qwen3 (local) · remote-1', fit: { account: 'local::qwen3' } })
     expect((recordOf(bare, decide(bare), a(), policy) as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('gridModel')
   })
   it('keeps a local model under the floor of a harder task, and keeps it beside a subscription row of the same name', () => {
-    const r = ok(choose([probe(), local()], policy, a(), NOW))
+    const r = ok(choose([probe(), local()], policy, a({ kind: 'docs' }), NOW))
     expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
     // Same machine, engine, model and effort as a subscription `default` row: both stay, being different models.
-    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low' }), NOW))
+    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(both.shown).toHaveLength(2)
   })
   it('considers only local models when a person asked for one, whatever the floor, and says when none is served', () => {
@@ -569,7 +606,7 @@ describe('local models on the Swarm\'s grid', () => {
     expect(r.belowFloor).toBe(false)
     // A subscription model by name, and the engine's name counts as one of its words.
     expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
-    expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
+    expect(ok(choose([older], policy, a({ difficulty: 'low', kind: 'docs' }), NOW)).shown[0]!.title).toContain('(shared)')
     expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
       excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Your models), or check its name.' }] })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
@@ -604,20 +641,20 @@ describe('local models on the Swarm\'s grid', () => {
   })
 
   describe('first for simple work (roadmap, Dec: about 30% of work on cheaper models)', () => {
-    const simple = a({ difficulty: 'low', risk: 'low', size: 'small' })
+    const simple = a({ difficulty: 'low', risk: 'low', size: 'small', kind: 'docs' })
     // Opus on an account whose 5-hour window resets in 20 minutes costs nothing in effect, so it ranked above a free model.
     const expiring = probe({ machineName: 'mac', model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([60, 20 * M], [60, 2 * D]) })
     const haiku = probe({ machineName: 'mac', model: 'haiku', effort: 'auto', quality: 1, cost: 1, quota: windows([90, 4 * H], [80, 5 * D]) })
     const idle = probe({ kind: 'member', agentId: 'a1', name: 'Idle', model: 'sonnet', quota: windows([90, 4 * H], [80, 5 * D]) })
     const grid = local({ machineName: 'mac' })
     const firstOf = (r: ReturnType<typeof choose>) => ok(r).shown[0]!.gridModel ?? ok(r).shown[0]!.model
-    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk work', () => {
+    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk docs', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
       expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
     })
-    it('ranks a strong grid model first for medium docs, copy, tests, fixtures, a specified fix or a mechanical refactor (Ken, 2026-10-29)', () => {
+    it('ranks a strong grid model first for medium docs, tests and fixtures (Ken, 2026-10-30)', () => {
       const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
-      for (const kind of ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']) {
+      for (const kind of ['docs', 'tests', 'fixtures']) {
         expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind }, NOW))).toBe('moonshotai/kimi-k3')
       }
       // A small model stays under the medium floor, and other kinds keep the policy order.
@@ -625,6 +662,35 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'ui' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'docs', risk: 'medium' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'high', kind: 'docs' }, NOW))).toBe('opus')
+    })
+    // Ken, 2026-10-30: cheaper shared models only for low-risk docs, tests and fixtures; they had also built copy, fixes,
+    // refactors and any low-difficulty work. Ken and Dee, the same day: a build needs a model rated 3.
+    it('builds only on the top tier, a grid model on low-risk docs, tests or fixtures, or what a person asked for', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      for (const kind of ['docs', 'doc', 'tests', 'test', 'fixtures', 'fixture']) expect(buildRefusals(kimi, { ...simple, kind })).toEqual([])
+      for (const assessment of [{ ...simple, kind: undefined }, ...['copy', 'fix', 'refactor', 'ui'].map(kind => ({ ...simple, kind })),
+        { ...simple, difficulty: 'medium' as const, kind: 'fix' }, { ...simple, risk: 'medium' as const }]) {
+        expect(buildRefusals(kimi, assessment)).toEqual([GRID_BUILDS])
+      }
+      expect(buildRefusals(kimi, { ...simple, kind: 'ui', local: true })).toEqual([])
+      expect(buildRefusals(kimi, { ...simple, kind: 'ui', model: 'kimi k3' })).toEqual([])
+      // Sonnet, Haiku and an unnamed model build nothing unless a person named them; the top tier builds anything.
+      expect(buildRefusals(idle, { ...simple, kind: 'fix' })).toEqual(['A build needs a model rated 3, and Claude sonnet is 2. Builders run at the top tier unless a person names the model.'])
+      expect(buildRefusals(haiku, simple)).toEqual(['A build needs a model rated 3, and Claude haiku is 1. Builders run at the top tier unless a person names the model.'])
+      expect(buildRefusals(idle, { ...simple, model: 'sonnet' })).toEqual([])
+      expect(buildRefusals(expiring, { ...simple, kind: 'ui', risk: 'high' })).toEqual([])
+      // A review is judged apart (reviewRefusals).
+      expect(buildRefusals(kimi, { ...simple, kind: 'review' })).toEqual([])
+      expect(['documentation', 'testing', ''].some(cheapKind)).toBe(false)
+    })
+    it('ranks a grid model first for singular kinds too', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'test' }, NOW))).toBe('moonshotai/kimi-k3')
+    })
+    it('says a model a person names is off in the routing table, rather than to share it', () => {
+      const off = { ...policy, models: policy.models.map(m => m.model === 'sonnet' ? { ...m, enabled: false } : m) }
+      expect(choose([], off, { ...simple, model: 'sonnet' }, NOW)).toEqual({ error: 'NO_CANDIDATE',
+        excluded: [{ title: 'Named model', reason: 'The routing table turns Claude sonnet off. Turn its row on to use it.' }] })
     })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
@@ -648,27 +714,22 @@ describe('local models on the Swarm\'s grid', () => {
     expect(gridQuality({ ...policy, localModels: { quality: 2, enabled: true } }, 'moonshotai/kimi-k3')).toBe(2)
     expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(1)
   })
-  it('never lets a grid model, a model below quality 2 or the reviewed Builder\'s own family review (Ken, 2026-10-29)', () => {
-    const codex = { engine: 'codex' }
-    expect(reviewRefusals(local({ quality: 2 }), codex, true)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
-    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex, true)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
-    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), codex, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Codex.'])
-    // A Builder on a grid model is its own family: Claude reviews it, even though Claude Code drove it.
-    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' }, true)).toEqual([])
-    expect(reviewRefusals(probe(), { engine: 'claude' }, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
-    expect(reviewRefusals(probe(), null, true)).toEqual([])
-    // Another engine counts only where the owner's rules let it run, at the effort a new agent starts at (review of ee4ee6c9a).
-    const codexElsewhere = probe({ machineId: 'm2', engine: 'codex', model: 'default', effort: 'default', quality: 3 })
-    const only = (machineIds: string[]) => [{ rule: { kind: 'machines', machineIds }, text: 'Only ours.' } as SwarmRule]
-    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [])).toBe(true)
-    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, only(['m1']))).toBe(false)
-    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [{ rule: { kind: 'minEffort', effort: 'high' }, text: 'High.' }])).toBe(true)
-    expect(otherFamilyReviews([probe(), probe({ engine: 'codex', model: 'gpt-5.5-mini', quality: 1 })], { engine: 'claude' }, [])).toBe(false)
-    expect(otherFamilyReviews([codexElsewhere], null, [])).toBe(false)
-    // With no Reviewer of another engine anywhere, the Builder's own engine reviews at its top tier only (Lead, 2026-10-29).
-    expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), { engine: 'claude' }, false)).toEqual([])
-    expect(reviewRefusals(probe(), { engine: 'claude' }, false))
-      .toEqual(['A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.'])
+  it('never lets a grid model, a model below quality 2 or the Builder itself review (Ken, 2026-10-29)', () => {
+    const codex = { engine: 'codex', agentId: 'builder' }
+    expect(reviewRefusals(local({ quality: 2 }), codex)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
+    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
+    expect(reviewRefusals(probe({ kind: 'member', agentId: 'builder', model: 'opus', quality: 3 }), codex)).toEqual(['A Reviewer never reviews work it built.'])
+    expect(reviewRefusals(probe({ kind: 'member', agentId: 'other', model: 'opus', quality: 3 }), codex)).toEqual([])
+    expect(reviewRefusals(probe(), null)).toEqual([])
+  })
+
+  // Ken, 2026-10-30: reviews of Claude builds waited all morning for Codex quota. Any strong engine reviews any build now.
+  it('lets the Builder\'s own engine review at once, at any strength of 2 or more, with Reviewers of another engine free', () => {
+    const claude = { engine: 'claude', agentId: 'builder', quality: 3 }
+    expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), claude)).toEqual([])
+    expect(reviewRefusals(probe({ model: 'sonnet', quality: 2 }), claude)).toEqual([])
+    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), { engine: 'codex' })).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' })).toEqual([])
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {

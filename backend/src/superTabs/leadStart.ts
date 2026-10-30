@@ -159,12 +159,37 @@ const placementOf = (state: SuperTabState, start: AgentStart): LeadPlacement | u
 }
 
 /** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
- *  meanwhile, which stays. The line its conversation shows. */
-export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): string {
+ *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine, so a Buddy reads
+ *  it without the name (store.ts withoutMachineNames; Diego, 10-30). */
+export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): { text: string; source: { kind: 'system'; machine?: string } } {
   if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
   const placement = placementOf(state, start)
   if (placement) placement.status = 'started'
-  return `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
+  const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
+  const started = `${LEAD_NAME} started on ${machine ?? 'its machine'}.`
+  const ran = state.agents.find(a => a.id === agentId)?.configuration
+  const other = ran && otherThanAsked(start.request, ran)
+  return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
+}
+
+/** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its
+ *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). */
+export const launchRefusedLine = (asked: { model: string; effort?: string }) =>
+  `${LEAD_NAME} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
+
+/** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as routing rates it (rules.ts policyQuality). */
+const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()
+/** What a started agent runs when it is known to differ from the model or effort its start asked for, said for its chat; null
+ *  when it runs them or cannot tell (no model reported, an effort read as auto). Its start never fails over this. */
+function otherThanAsked(asked: { model?: string; effort?: string }, ran: { model: string | null; effort: string | null }): string | null {
+  if (!asked.model) return null
+  const effortKnown = !!ran.effort && ran.effort !== 'auto' && ran.effort !== 'default'
+  const modelDiffers = !!ran.model && family(ran.model) !== family(asked.model)
+  const effortDiffers = effortKnown && !!asked.effort && ran.effort !== asked.effort
+  if (!modelDiffers && !effortDiffers) return null
+  const wanted = asked.effort ? `${asked.model} at ${asked.effort}` : asked.model
+  const runs = [ran.model ?? 'its engine\u2019s own model', ...(effortKnown ? [`at ${ran.effort}`] : [])].join(' ')
+  return `It asked for ${wanted} and runs ${runs} there.`
 }
 
 /** Its start failed with [reason]: the project says why and waits for its person to name a machine again. The line its

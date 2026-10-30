@@ -64,6 +64,7 @@ export function renewLease(assignment: Assignment, now: number): void {
 /** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
  *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
  *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
+// Desktop reads hand-offs with a copy of these two (desktop/lib/super_tabs/agent_mark.dart): change both together.
 const READY_FOR_REVIEW = /\bready for review\b/i
 const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
 
@@ -242,6 +243,10 @@ export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[]
 /** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */
 export const PURGE_NOTICE_MS = 15 * 60_000
 
+/** What its project's conversation hears of a removed confidential session [unpurged] still holds on [machine]. */
+export const unpurgedNotice = (machine: string) =>
+  `The saved session of a removed agent that held people's private chats, on ${machine}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`
+
 /** A removed confidential session whose host has not confirmed its data deleted (commands.ts removeAgent `heldFor`): its
  *  Team account keeps serving only its project, and its project's conversation hears once, or the Swarm's first one when
  *  its project went with it. Its host keeps trying (cli superTabs/host.ts endSession). */
@@ -252,10 +257,11 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
     closing.noticed = true
     const project = projectsOf(state).find(p => p.id === closing.heldFor) ?? projectsOf(state)[0]
     if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
+    // Its source names the machine, so a Buddy reading this conversation reads it without (store.ts withoutMachineNames).
+    const machine = state.machines?.find(m => m.machineId === closing.machineId)?.name
     return [{ id: stableId('unpurged', closing.agentId, closing.harnessId), conversationId: project.leadConversationId, replyTo: null, recipients: [],
       author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
-      text: `The saved session of a removed agent that held people's private chats, on ${machineName(state, closing.machineId)}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`,
-      source: { kind: 'system' } }]
+      text: unpurgedNotice(machine ?? machineName(state, closing.machineId)), source: machine ? { kind: 'system', machine } : { kind: 'system' } }]
   })
 }
 

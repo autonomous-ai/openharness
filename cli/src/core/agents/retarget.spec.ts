@@ -15,6 +15,9 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
+import { createLaunchAuthority } from './launchAuthority.js'
+import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -337,7 +340,78 @@ describe('retargeting an agent', () => {
     })
   })
 
+  // Security review 1 of #2255: a model switch relaunched an old Buddy with no saved role without asking the Swarm, so it
+  // came back without its guard.
+  describe('an old Swarm session with no saved role', () => {
+    const switchWith = (grant: SwarmSkillGrant | null | undefined) => {
+      const row = agent({ startedBy: 'agent' })
+      const adoptSwarmSkill = createSwarmSkillAdoption({ role: async () => grant, candidate: () => false,
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }),
+        save: (_id, skill) => { row.swarmSkill = skill; return true } })
+      return { row, ...setup(row, { adoptSwarmSkill }) }
+    }
+    it('switches its model with its Buddy role, saved on its row', async () => {
+      const run = switchWith({ role: 'buddy' })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+        expect.anything(), expect.any(Function), undefined)
+      expect(run.row.swarmSkill).toEqual({ role: 'buddy', key: 'a1' })
+      expect(restartAgent).toHaveBeenCalledOnce()
+    })
+    it('does not switch a session that changed while its role was read', async () => {
+      const row = agent({ startedBy: 'agent' })
+      const adoptSwarmSkill = createSwarmSkillAdoption({ candidate: () => false, save: vi.fn(),
+        role: async () => { row.cwd = '/replacement'; return { role: 'buddy' as const } },
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) })
+      const run = setup(row, { adoptSwarmSkill })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+    it('switches the person\'s own session as before, with no role and no Swarm read', async () => {
+      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const row = agent()
+      const run = setup(row, { adoptSwarmSkill: createSwarmSkillAdoption({ role, candidate: () => false, save: vi.fn(),
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) }) })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+      expect(role).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.not.objectContaining({ swarmSkill: expect.anything() }),
+        expect.anything(), expect.any(Function), undefined)
+    })
+    it('refuses the switch, saying why, and leaves the running engine alone while its role cannot be read', async () => {
+      const run = switchWith(undefined)
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
+        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' })
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(run.deps.acquireTerminalControl).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+  })
+
   describe('a move that goes ahead', () => {
+    // Codex 0.166 refuses to resume a conversation on another provider (thread/resume → ModelProviderMismatch);
+    // a move between a grid and its own login changes provider, so the conversation goes on in a fork of it.
+    it.each([
+      ['its own login onto a grid', agent({ engine: 'codex' }), grid, true],
+      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: grid }), null, true],
+      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: grid }), { ...grid, networkId: 'g2' }, false],
+    ] as const)('continues a Codex conversation moved from %s in a fork only when its provider changes', async (_how, row, to, forks) => {
+      const run = setup(row)
+      expect(await run.retarget({ agentId: 'a1', grid: to })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: 's1', ...(forks ? { continueInFork: true } : {}) })
+    })
+
+    it('resumes an engine whose conversations follow any provider (Claude Code) on every move', async () => {
+      const run = setup(agent())
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: 's1' })
+    })
+
+    it('starts fresh rather than forking a Codex agent with no conversation yet', async () => {
+      const run = setup(agent({ engine: 'codex', sessionId: '' }))
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: '' })
+    })
+
     it('keeps its route until a slow replacement is confirmed, even past the default hold timer', async () => {
       vi.useFakeTimers()
       const onDiscovered = vi.fn()

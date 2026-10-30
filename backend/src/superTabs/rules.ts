@@ -4,7 +4,7 @@
  * half the time on 2026-10-22 (Haiku, a stopping agent, low effort) because it did not know the owner's rules. */
 import { z } from 'zod'
 import type { Agent, SuperTabState, TaskRequirement } from './model.js'
-import type { RoutingPolicy } from './routingPolicy.js'
+import { gridQuality, type RoutingPolicy } from './routingPolicy.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const engine = z.enum(['claude', 'codex'])
@@ -43,7 +43,9 @@ export interface SwarmRule {
  *  start is checked when it is made. `gridModel`: a model served on the Swarm's grid that its engine drives. */
 export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null; devices?: string[]; gridModel?: string
   /** An agent its start launched on the engine's own model: rated by the policy's `default` row (targetQuality). */
-  launchedDefault?: true }
+  launchedDefault?: true
+  /** The agent itself, for a target that is one already here (agentTarget): a Reviewer never reviews its own build. */
+  agentId?: string }
 
 const ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 /** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
@@ -101,7 +103,7 @@ export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
   const reported = worker.configuration.effort
   const start = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)
   const launched = start?.request.effort
-  return { machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
+  return { agentId: worker.id, machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
     effort: reported && reported !== 'auto' ? reported : launched ?? reported, devices: start?.request.requirements?.devices ?? [],
     ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(!worker.gridModel && (worker.launchedDefault || (start && !start.request.gridModel && (start.request.model ?? 'default') === 'default'))
       ? { launchedDefault: true as const } : {}) }
@@ -124,62 +126,53 @@ export function policyQuality(policy: RoutingPolicy, engine: string, model: stri
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 /** A target's strength: an agent launched on the engine's own model falls back to the `default` row (Codex reports its slug). */
 export const targetQuality = (policy: RoutingPolicy, t: RunTarget) => policyQuality(policy, t.engine, t.model, t.effort, !!t.launchedDefault)
-/** A model family: a grid model's own, else its engine's. */
-const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
+/** How strong an agent counts: a grid model by the policy's grid rating, else as [targetQuality] (cli route.ts reviewedBuilder). */
+export const agentQuality = (state: SuperTabState, policy: RoutingPolicy, worker: Agent): number =>
+  worker.gridModel ? gridQuality(policy, worker.gridModel, state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridName ?? '')
+    : targetQuality(policy, agentTarget(state, worker))
+/** What a route decision says of the work it routed (routeRecord.ts assessment): enough to tell a build a grid model may take. */
+export interface RoutedWork { risk: string; kind?: string; local?: true; model?: string }
+/** The kinds of build a model on the Swarm's grid takes at low risk (Ken, 2026-10-30), singular or plural (review of #2314):
+ *  docs, tests and fixtures. The CLI's route reads the same (cli superTabs/route.ts cheapKind). */
+export const cheapKind = (kind: string | undefined) => ['doc', 'test', 'fixture'].includes((kind ?? '').replace(/s$/, ''))
+/** Whether a grid model may build [work]: low-risk docs, tests or fixtures, or a person asked for a local model or named one. */
+export const gridBuilds = (work: RoutedWork | undefined) => !!work && (!!work.local || !!work.model || (work.risk === 'low' && cheapKind(work.kind)))
+/** Why [target] may not build: Builders run at the top tier (Ken and Dee, 2026-10-30: Opus high or Astra xhigh), so a model
+ *  the policy rates below 3, Sonnet and Haiku among them, builds only when a person named it; a grid model only what
+ *  [gridBuilds] allows (review of #2314: an older CLI still sent other work to the grid). [work] is the linked route
+ *  decision's; with none, a grid model is refused and a named model is not known. The CLI's route judges the same (cli
+ *  superTabs/route.ts buildRefusals). */
+export function buildRefusal(policy: RoutingPolicy, target: RunTarget, work: RoutedWork | undefined): string | null {
+  if (target.gridModel) return gridBuilds(work) ? null : GRID_BUILDS
+  if (work?.model) return null
+  const quality = targetQuality(policy, target)
+  return quality >= 3 ? null : `A build needs a model rated 3, and ${ENGINE[target.engine] ?? target.engine} ${target.model ?? 'default'} is ${quality}. `
+    + 'Builders run at the top tier unless a person names the model.'
+}
+export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures, unless a person asks for a local model or names one.'
 
 /** Whether a new Reviewer may run [target] for [contributorId]'s machine: its owner's rules, the task's machine and team
- *  access, as the command judges them. Busy, offline or short of quota still counts as able, within its start window. */
+ *  access, as the command judges them (reviewCapacity.ts). */
 export type MayRun = (target: RunTarget, contributorId: string) => boolean
-/** Whether a strong Reviewer of another family than [builder]'s can run in this Swarm: on a machine an agent runs on or a
- *  contributed machine offers, with an engine other than the Builder's and an enabled policy row of quality 2 or more that
- *  [mayRun] allows there (review of ee4ee6c9a: an engine the owner rules out blocked the fallback). */
-function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy, mayRun: MayRun): boolean {
-  const places = [...state.agents.filter(a => !a.gridModel && !a.buddyOf).map(a => ({ machineId: a.machineId, contributorId: a.contributorId, engines: [a.configuration.engine] })),
-    ...(state.machines ?? []).filter(m => !m.buddyOnly).map(m => ({ machineId: m.machineId, contributorId: m.contributorId, engines: m.engines }))]
-  return places.some(place => place.engines.some(engine => familyOf({ engine }) !== familyOf(builder) && policy.models.some(row => row.enabled && row.engine === engine
-    && row.quality >= 2 && mayRun({ machineId: place.machineId, engine, model: row.model, effort: liftEffort(state.rules, engine, row.effort) }, place.contributorId))))
-}
 /** The effort a new agent on a row starts at: the row's, or the owner's minimum when the row leaves it to the engine (cli
  *  superTabs/route.ts liftEffort). */
-function liftEffort(rules: SwarmRule[] | undefined, engine: string, effort: string): string {
+export function liftEffort(rules: SwarmRule[] | undefined, engine: string, effort: string): string {
   if (rank(effort) >= 0) return effort
   const least = Math.max(-1, ...(rules ?? []).flatMap(({ rule }) => rule.kind === 'minEffort' && (!rule.engine || rule.engine === engine) ? [rank(rule.effort)] : []))
   return least < 0 ? effort : EFFORTS[least]!
 }
 
-/** How [target] may review the work of group [reviewed] (Ken, 2026-10-29: a small model never reviews again): never on a model
- *  served on the Swarm's grid or one the policy rates below 2, and on another model family than the reviewed Builder's while
- *  a strong Reviewer of another family can run here. With none, the Builder's own engine at its top tier, noted (Lead,
- *  2026-10-29: a Swarm of one engine keeps its automatic reviews). */
-function judgeReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun): { refusal: string } | { note: string } | null {
+/** Why [target] may not review the work of group [reviewed]; null when it may, or nothing is reviewed. Ken, 2026-10-29: a
+ *  small model never reviews again, so never a model served on the Swarm's grid or one the policy rates below 2. Any engine
+ *  may review any build (Ken, 2026-10-30: reviews of Claude builds waited all morning for Codex quota; a Reviewer is a
+ *  session of its own with fresh context, so its strength is what counts), and never the agent that built it (cli
+ *  superTabs/route.ts reviewRefusals). */
+export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
   if (!reviewed) return null
-  if (target.gridModel) return { refusal: 'A review never runs on a model served on the Swarm\'s grid.' }
+  if (target.gridModel) return 'A review never runs on a model served on the Swarm\'s grid.'
   const quality = targetQuality(policy, target)
-  const engine = ENGINE[target.engine] ?? target.engine
-  if (quality < 2) return { refusal: `A review needs a model of quality 2 or more, and ${engine} ${target.model} is ${quality}.` }
-  const assignment = state.conversations.find(c => c.id === reviewed)?.assignment
-  const worker = assignment && state.agents.find(a => a.id === assignment.agentId)
-  const builder = worker ? agentTarget(state, worker) : assignment ? { engine: assignment.configuration.engine } : null
-  // A grid target was refused above, so the same family is the target's engine.
-  if (!builder || familyOf(builder) !== familyOf(target)) return null
-  if (otherFamilyReviews(state, builder, policy, mayRun)) return { refusal: `A review runs on another engine than the reviewed Builder's, ${engine}.` }
-  return quality === 3 ? { note: `No Reviewer on another engine than the Builder's (${engine}) can run in this Swarm, so the review runs on it at the top tier.` }
-    : { refusal: `A review on the reviewed Builder's engine, ${engine}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.` }
-}
-/** Why [target] may not review the work of group [reviewed]; null when it may, or nothing is reviewed. */
-/** Without the command's own judgement, a machine may run a review where the owner's rules for the reviewed group's project
- *  allow it. */
-const ownerAllows = (state: SuperTabState, reviewed: string | undefined): MayRun => {
-  const projectId = state.conversations.find(c => c.id === reviewed)?.projectId
-  const rules = (state.rules ?? []).filter(r => !r.projectId || !projectId || r.projectId === projectId)
-  return target => !broken(rules, target)
-}
-export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun = ownerAllows(state, reviewed)): string | null {
-  const judged = judgeReview(state, reviewed, target, policy, mayRun)
-  return judged && 'refusal' in judged ? judged.refusal : null
-}
-/** Why [target] reviews on the reviewed Builder's own engine, when it may only because no other engine can; null otherwise. */
-export function sameEngineReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun = ownerAllows(state, reviewed)): string | null {
-  const judged = judgeReview(state, reviewed, target, policy, mayRun)
-  return judged && 'note' in judged ? judged.note : null
+  if (quality < 2) return `A review needs a model of quality 2 or more, and ${ENGINE[target.engine] ?? target.engine} ${target.model} is ${quality}.`
+  const builder = state.conversations.find(c => c.id === reviewed)?.assignment?.agentId
+  if (target.agentId && target.agentId === builder) return 'A Reviewer never reviews work it built.'
+  return null
 }

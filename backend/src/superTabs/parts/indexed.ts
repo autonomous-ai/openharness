@@ -59,6 +59,8 @@ export const NAMED_INDEX = {
     /** One message. */
     id: { _id: 1 },
   },
+  /** A Swarm's newest route decisions: the route-decision list. */
+  SuperTabRouteDecision: { recent: { tabId: 1, createdAt: 1 } },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

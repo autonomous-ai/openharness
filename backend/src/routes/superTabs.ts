@@ -10,7 +10,7 @@ import { operationSchema } from '../superTabs/commands.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
-import { routingPolicySchema } from '../superTabs/routingPolicy.js'
+import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
@@ -24,6 +24,7 @@ import { attribution } from '../github/attribution.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
+import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -104,7 +105,7 @@ const deliveryAction = z.discriminatedUnion('type', [
 ])
 const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
 const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered', 'settled']) }).strict()
-const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
+const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySaveSchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
 const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
@@ -237,7 +238,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         approvedFor: async repository => {
           const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
           return project.others.filter(other => ids.includes(other.id)).map(other => other.name)
-        } },
+        },
+        you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
     }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
@@ -256,24 +258,27 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof callbackQuery> }>('/api/github/callback', { preHandler: validateQuery(callbackQuery) }, async (req, reply) => {
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
-    if (!request) return page('This link has expired', 'Go back to Harness and choose Approve again.', 400)
+    if (!request) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
     // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
     // (local Team account run, 2026-10-28).
-    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was approved. Go back to Harness and choose Approve to try again.')
+    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was allowed. Go back to Harness and choose Continue in GitHub to try again.')
     if (!req.query.code || !signIn || !named) {
-      return page('Harness is installed', 'Go back to Harness and choose Approve, so this project can use it.')
+      return page('Harness is installed', 'Go back to Harness and choose Continue in GitHub, so this project can use it.')
     }
     const seen = await signIn.permission(req.query.code, named).catch(() => null)
-    if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Approve again.', 502)
+    if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Continue in GitHub again.', 502)
     if (!seen.push) {
-      return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
+      // Kept, so the app asks them to send it to someone who can rather than offering this sign-in again.
+      await approvals.refuse(request, seen.login).catch(() => undefined)
+      return page(`You can't push to ${named.fullName}`, 'So you can\'t allow it. Ask someone who can push to it to open the project in Harness and choose Set up GitHub for teammates.', 403)
     }
     await approvals.approve(request, seen.login)
     // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
     const where = request.scope === 'swarm' ? 'every project in this Swarm'
       : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
-    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
+    // Worded as the desktop's GitHub access dialog is (design 2026-10-30): allowed, not approved.
+    return page(`${named.fullName} is allowed`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
@@ -361,6 +366,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
+  // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await inboxWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many inbox reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
+    })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))

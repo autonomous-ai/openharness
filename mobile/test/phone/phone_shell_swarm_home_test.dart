@@ -9,14 +9,14 @@ import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_computers.dart';
-import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import 'devices_fixture.dart';
 
 /// With Swarm on, the app opens on Swarm Home, full screen, with Settings in
-/// its drawer and no way to Harness there: Settings ▸ Swarm off is the way
+/// the You tab and no way to Harness there: Settings ▸ Swarm off is the way
 /// back to it. With it off, the app opens on the terminal, as it always has.
 void main() {
   late DevicesApp app;
@@ -50,8 +50,9 @@ void main() {
     await frames(tester);
   }
 
-  Future<void> drawerTo(WidgetTester tester, String row) async {
-    await tester.tap(key('swarm-menu'));
+  /// Row [row] of the You tab, tapped.
+  Future<void> youTo(WidgetTester tester, String row) async {
+    await tester.tap(key('swarm-tab-you'));
     await frames(tester);
     await tester.tap(key(row));
     await frames(tester);
@@ -87,7 +88,7 @@ void main() {
     await open(tester);
 
     expect(find.byType(SwarmPage), findsOneWidget);
-    expect(key('swarm-menu'), findsOneWidget);
+    expect(key('swarm-title-button'), findsOneWidget);
     expect(key('tty-back'), findsNothing, reason: 'Home has nothing under it');
     expect(find.byType(AgentHome, skipOffstage: false), findsNothing);
   });
@@ -120,18 +121,17 @@ void main() {
     expect(find.byType(SwarmPage, skipOffstage: false), findsNothing);
   });
 
-  testWidgets('with Swarm on, the drawer has no Harness: its models, then '
+  testWidgets('with Swarm on, You has no Harness: its models, then '
       'Settings at its foot', (tester) async {
     await open(tester);
-    await tester.tap(key('swarm-menu'));
+    await tester.tap(key('swarm-tab-you'));
     await frames(tester);
 
-    final drawer = find.byType(SwarmDrawer);
-    expect(key('swarm-drawer-models'), findsOneWidget);
-    expect(key('swarm-drawer-settings'), findsOneWidget);
-    expect(key('swarm-drawer-harness'), findsNothing);
+    final you = find.byType(SwarmYouPage);
+    expect(key('swarm-you-models'), findsOneWidget);
+    expect(key('swarm-you-settings'), findsOneWidget);
     expect(
-      find.descendant(of: drawer, matching: find.text('Harness')),
+      find.descendant(of: you, matching: find.textContaining('Harness')),
       findsNothing,
       reason: 'Settings ▸ Swarm off is the way back to Harness',
     );
@@ -163,16 +163,18 @@ void main() {
     );
   });
 
-  testWidgets('Settings in the drawer opens over Swarm Home', (tester) async {
+  testWidgets('Settings in You opens over the tabs; back is You', (
+    tester,
+  ) async {
     await open(tester);
 
-    await drawerTo(tester, 'swarm-drawer-settings');
+    await youTo(tester, 'swarm-you-settings');
     expect(find.byType(SettingsPage), findsOneWidget);
 
     await tester.binding.handlePopRoute();
     await frames(tester);
     expect(find.byType(SettingsPage), findsNothing);
-    expect(find.byType(SwarmPage), findsOneWidget);
+    expect(find.byType(SwarmYouPage), findsOneWidget);
   });
 
   testWidgets('Swarm turned off puts the terminal at the root; turned on '
@@ -209,17 +211,21 @@ void main() {
 
     expect(find.text('a page over it'), findsNothing);
     expect(find.byType(SwarmPage), findsOneWidget);
-    expect(key('swarm-menu'), findsOneWidget, reason: 'the root, not pushed');
+    expect(
+      key('swarm-title-button'),
+      findsOneWidget,
+      reason: 'the root, not pushed',
+    );
     expect(find.byType(AgentHome), findsNothing);
     expect(find.byType(AgentHome, skipOffstage: false), findsOneWidget);
   });
 
-  testWidgets('Settings ▸ Swarm off, from the drawer, is the way to Harness: '
+  testWidgets('Settings ▸ Swarm off, from You, is the way to Harness: '
       'back from Settings is the terminal; Swarm on again from its Settings is '
       'Swarm Home', (tester) async {
     await open(tester);
 
-    await drawerTo(tester, 'swarm-drawer-settings');
+    await youTo(tester, 'swarm-you-settings');
     await tapSwarmSwitch(tester);
     expect(experimentalFeaturesStore.isOn(PhoneExperiment.swarm), isFalse);
     expect(find.byType(SettingsPage), findsOneWidget, reason: 'still open');
@@ -242,7 +248,11 @@ void main() {
     await tester.binding.handlePopRoute();
     await frames(tester);
     expect(find.byType(SwarmPage), findsOneWidget);
-    expect(key('swarm-menu'), findsOneWidget, reason: 'the root, not pushed');
+    expect(
+      key('swarm-title-button'),
+      findsOneWidget,
+      reason: 'the root, not pushed',
+    );
     expect(find.byType(AgentHome), findsNothing);
   });
 }

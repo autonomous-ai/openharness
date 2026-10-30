@@ -78,8 +78,11 @@ String superTabDefaultUsername(String email) {
       .first
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceAll(RegExp(r'\.{2,}'), '.')
       .replaceFirst(RegExp(r'^[._-]+'), '');
   if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  // Never a dot at the end, so `@name` in a message tags them.
+  prefix = prefix.replaceFirst(RegExp(r'\.+$'), '');
   if (prefix.isEmpty) return 'user';
   return prefix.length < 2 ? '${prefix}1' : prefix;
 }
@@ -302,9 +305,17 @@ class SuperTabRole {
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       kind = _text(row, 'kind'),
-      version = _text(row, 'version');
+      version = _text(row, 'version'),
+      defaults = row['defaults'] is Map
+          ? Map.unmodifiable(superTabMap(row['defaults']))
+          : null;
 
   final String id, name, kind, version;
+
+  /// The engine, model and effort its agents start on when a start names
+  /// none (backend projects.ts RoleDefaults). Kept as read, so an edit here
+  /// sends it back unchanged.
+  final Map<String, dynamic>? defaults;
 }
 
 class SuperTabProject {
@@ -847,11 +858,18 @@ class SuperTabDelivery {
       status = row['status'] as String? ?? '',
       holdReason = row['holdReason'] as String?,
       holdSince = _date(row['holdSince']),
+      claimFailingSince = _date(row['claimFailingSince']),
+      claimFailures = (row['claimFailures'] as num?)?.toInt(),
       deliveredAt = _date(row['deliveredAt']),
       answeredAt = _date(row['answeredAt']),
       updatedAt = _date(row['updatedAt']);
   final String? id, holdReason;
   final String agentId, status;
+
+  /// Since when the backend's claims of this delivery fail, and how many have
+  /// (prod 10-30, v1.3.71). Null from an older backend, and once a claim works.
+  final DateTime? claimFailingSince;
+  final int? claimFailures;
   final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
   static DateTime? _date(Object? value) =>
       value is String ? DateTime.tryParse(value) : null;

@@ -224,11 +224,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// [swarm]'s project Mobile, from Home, on its Tasks tab.
+  /// [swarm]'s project Mobile, from Home, with its Team sheet open, its tasks
+  /// on top (Swarm Home C).
   Future<void> openTasks(WidgetTester tester, {String swarm = tab}) async {
     await tester.tap(key('swarm-project-$swarm-$project'));
     await tester.pumpAndSettle();
-    await tester.tap(key('swarm-project-tab-tasks'));
+    await tester.tap(key('swarm-project-menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('swarm-project-menu-team'));
     await tester.pumpAndSettle();
   }
 
@@ -397,6 +400,8 @@ void main() {
       );
       expect(find.textContaining('Orion'), findsNothing);
 
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
       await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
       await openTasks(tester, swarm: other);

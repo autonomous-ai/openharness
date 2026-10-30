@@ -13,6 +13,7 @@ import { appendFileSync, existsSync, mkdirSync, readlinkSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { clearAuthSession } from './authSession.js'
+import { writeBuddyAccount } from './buddyAccount.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
 export const SIGN_OUT_BUTTON_FLAG = '--from-sign-out-button'
@@ -132,4 +133,6 @@ export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => r
     appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain() }) + '\n')
   } catch { /* the log is a record, not a gate */ }
   clearAuthSession()
+  // Every Buddy's wide grant holds for the account signed in here: none now, at once (final review of #2310).
+  try { writeBuddyAccount(null) } catch { /* the next start writes none again until it knows */ }
 }

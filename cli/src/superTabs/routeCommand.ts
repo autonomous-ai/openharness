@@ -4,10 +4,10 @@
  * and records the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { requiredToolReason, startRequirements } from './capacity.js'
+import { RELAYED_QUOTA, requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, otherFamilyReviews, repoMatch, repositoryKey, reviewRefusals, stepUpRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, buildRefusals, gridBuilds, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, reviewRefusals, stepUpRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -97,6 +97,19 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   ]
   const app = githubApp && projectOwner !== pool.contributorId
   return { all, engines, push: needsPush && !app && checkout?.push === false ? NO_PUSH : null }
+}
+/** A Harness Team account's engines that spend its Mac owner's subscription through the owner's relay, each with the Mac's
+ *  fresh reading of that subscription: the account itself holds no sign-in to read, so it reports its allowance unknown,
+ *  and the route left out every such candidate while another machine's quota fit. Codex in Tony's team account was never
+ *  offered for reviews on 2026-10-30 overnight, while all other Codex reviewers were out of quota. Only an engine the
+ *  account says is relayed (capacity.ts RELAYED_QUOTA), and only from its own Mac under the same contribution. */
+export function relayedReadings(pool: Json, pools: Json[], now = Date.now()): { relayedQuotas?: Record<string, Json> } {
+  const host = typeof pool.hostMachineId === 'string' ? pools.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : undefined
+  const reading = object(host?.observation), reasons = object(object(pool.observation).quotaReasons)
+  if (!host || !finite(reading.receivedAt) || now - reading.receivedAt >= 45_000) return {}
+  const relayed = Object.fromEntries(list(reading.quotas).filter(q => q.known === true && reasons[String(q.engine)] === RELAYED_QUOTA)
+    .map(q => [String(q.engine), { quota: q, from: String(host.name), account: `${String(host.machineId)}:${String(q.engine)}` }]))
+  return Object.keys(relayed).length ? { relayedQuotas: relayed } : {}
 }
 /** A running member keeps its engine and memory, but still needs a live terminal, account allowance and the task's tools. */
 function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
@@ -245,6 +258,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
+      ...relayedReadings(original, list(state.machines)),
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool,
       unready: unreadyPool(original, project, projectId, !review, object(value.tab).githubApp === true, projectOwner) })
@@ -291,7 +305,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     // The backend writes the mark with its loss's reason (backend superTabs/liveness.ts loseTask).
     return marked ? [`It lost its last task (${String(object(marked).reason)}). It takes work again once a person assigns it by hand or the Lead replaces it.`] : []
   }
-  const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
+  const probes = probed.flat()
+    .map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     refusals: [...p.refusals, ...limited(p.agentId), ...lostTask(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   probes.push(...localProbes(state, policy, probes, assessment, review))
@@ -305,14 +320,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const devices = object(object(start?.request).requirements).devices
     return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
   }
-  const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents) : null
-  // Another engine counts only on a machine the task may run on, and that its access lets take this project's work.
-  const teamRefused = (p: Probe) => { const why = machines.get(p.machineId)?.pool?.teammatesRefused; return typeof why === 'string' && p.refusals.includes(why) }
-  const otherFamily = otherFamilyReviews(probes.filter(p => !outside(p.machineId) && !teamRefused(p)), builder, rules)
+  const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents, list(state.starts), policy) : null
   const step = finite(object(group.stepUp).floor) ? { floor: object(group.stepUp).floor as number } : null
   for (const [i, p] of probes.entries()) {
     const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
-      ...(review ? reviewRefusals(p, builder, otherFamily) : []), ...stepUpRefusals(p, step)]
+      ...(review ? reviewRefusals(p, builder) : buildRefusals(p, assessment)), ...stepUpRefusals(p, step)]
     if (refusals.length) probes[i] = { ...p, refusals: [...p.refusals, ...refusals] }
   }
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
@@ -325,10 +337,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const failedOn = text(lostAttempt.machineId) ?? text(lostBy?.machineId), failedEngine = text(lostAttempt.engine) ?? text(object(lostBy?.configuration).engine)
   const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid, builder?.quality ?? 0)
   choice.excluded.push(...offlineModels(state, policy, assessment, review))
   // The task stays in the Lead's queue rather than going where it cannot be done.
-  if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
+  if ('error' in choice) return { ...choice, leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
@@ -347,6 +359,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
     alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
+    leftOut: leftOut(choice.excluded, choice.shown),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : []), ...(choice.avoided ? [choice.avoided] : [])],
@@ -360,14 +373,32 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
 }
 
+/** Each machine none of whose candidates is offered, with why, for the Lead's answer: the decision kept the exclusions, but the
+ *  answer showed none, so nobody saw why Tony's Mac was never offered for reviews (2026-10-30). In the order first left out;
+ *  at most [MAX_LEFT_OUT] machines and [MAX_REASONS] distinct reasons each. */
+export function leftOut(excluded: Excluded[], shown: Array<{ machineName: string }>): Array<{ machine: string; reasons: string[] }> {
+  const offered = new Set(shown.map(s => s.machineName)), out = new Map<string, Set<string>>()
+  for (const e of excluded) {
+    if (!e.machine || offered.has(e.machine)) continue
+    const reasons = out.get(e.machine) ?? out.set(e.machine, new Set()).get(e.machine)!
+    if (reasons.size < MAX_REASONS) reasons.add(e.reason.length > 300 ? `${e.reason.slice(0, 299)}…` : e.reason)
+  }
+  return [...out].slice(0, MAX_LEFT_OUT).map(([machine, reasons]) => ({ machine, reasons: [...reasons] }))
+}
+const MAX_LEFT_OUT = 20, MAX_REASONS = 4
+
 /** What the reviewed group's last attempt ran on: its agent's engine and grid model while it is here, else its assignment's
- *  engine. Null before any attempt. */
-function reviewedBuilder(reviewed: Json | undefined, agents: Json[]): Reviewed | null {
+ *  engine; and how strong that was, which a Reviewer is held to (route.ts choose). Null before any attempt. */
+function reviewedBuilder(reviewed: Json | undefined, agents: Json[], starts: Json[], policy: Policy): Reviewed | null {
   const assignment = object(reviewed?.assignment)
   if (!assignment.id) return null
-  const agent = agents.find(a => a.id === assignment.agentId)
+  // Rated as its route rates a member: by the effort and model it was launched with (review of #2274).
+  const found = agents.find(a => a.id === assignment.agentId), agent = found && withLaunchEffort(found, starts)
   const gridModel = text(agent?.gridModel)
-  return { engine: String(object(agent?.configuration ?? assignment.configuration).engine), ...(gridModel ? { gridModel } : {}) }
+  const ran = object(agent?.configuration ?? assignment.configuration), engine = String(ran.engine)
+  const quality = gridModel ? gridQuality(policy, gridModel, text(agent?.gridName) ?? '')
+    : rateFor(policy, engine, text(ran.model), text(ran.effort), agent?.engineDefault === true).quality
+  return { engine, ...(gridModel ? { gridModel } : {}), quality, ...(typeof assignment.agentId === 'string' ? { agentId: assignment.agentId } : {}) }
 }
 
 /** The next two rows, and the best row of every other machine, so the Lead can choose another machine with an overrideReason. */
@@ -456,7 +487,7 @@ export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Ass
  *  2026-10-29). Only where [localProbes] would offer them. */
 export function offlineModels(state: Json, policy: Policy, a: Assessment, review: boolean, now: number = Date.now()): Array<{ title: string; reason: string }> {
   const addOn = object(state.localModels)
-  if (addOn.enabled !== true || typeof addOn.grid !== 'string' || review || (policy.localModels?.enabled === false && !a.local)) return []
+  if (addOn.enabled !== true || typeof addOn.grid !== 'string' || review || !gridBuilds(a) || (policy.localModels?.enabled === false && !a.local)) return []
   const served = servedModels(state, addOn.grid, now), out: Array<{ title: string; reason: string }> = []
   for (const machine of list(state.machines)) {
     const observed = object(machine.observation)
@@ -495,8 +526,16 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const observed = object(pool.observation), resources = object(observed.resources)
     const fresh = finite(observed.receivedAt) && Date.now() - observed.receivedAt < 45_000
     const quotas = list(observed.quotas)
-    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })),
-      why: text(object(observed.quotaReasons)[engine]) }) : UNKNOWN_QUOTA }
+    const read = (q: Json, extra: { why?: string | null; account?: string } = {}) => quotaOf2({ known: q.known === true,
+      windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })), ...extra })
+    const quota = (engine: string): Probe['quota'] => {
+      const q = quotas.find(q => q.engine === engine)
+      if (!fresh || !q) return UNKNOWN_QUOTA
+      // A Harness Team account's engine on its Mac's subscription: that subscription's reading, on its account (relayedReadings).
+      const relayed = q.known !== true ? object(object(pool.relayedQuotas)[engine]) : {}
+      if (typeof relayed.from === 'string') return { ...read(object(relayed.quota), { account: String(relayed.account) }), from: relayed.from }
+      return read(q, { why: text(object(observed.quotaReasons)[engine]) })
+    }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
@@ -511,17 +550,17 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
       ...unready.all, ...(unready.push ? [unready.push] : []), ...(stuck ? [STALLED] : [])]
     return [...members.map(m => {
-      const allowance = quota(String(object(m.configuration).engine))
+      const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return memberProbe(m, fresh ? [...memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
+      return { ...memberProbe(m, fresh ? [...memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...teammates(m.contributorId), ...(unready.push ? [unready.push] : [])] : [OFFLINE],
-        allowance, null, fresh && running === null)
+        allowance, null, fresh && running === null) }
     }),
-      ...models.map(m => newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : []),
+      ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : []),
         ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
         { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
           freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-          hasFolder: finite(resources.projectDiskFreeBytes) }))]
+          hasFolder: finite(resources.projectDiskFreeBytes) }) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]

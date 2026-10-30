@@ -466,3 +466,40 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
   })
 })
+
+describe('Models, last 7 days: each model\'s tasks over a rolling week, for the sidebar (Dee, 2026-10-30)', () => {
+  const run = (assignmentId: string, at: number, engine: string, model: string | null, extra: Partial<Run> = {}): Run =>
+    ({ assignmentId, engine, model, effort: 'high', at, ...extra })
+  const work = (runs: Run[], extra: Partial<Conversation> = {}) => group({ status: 'working', ledger: { runs }, ...extra })
+
+  it('counts the attempts of the 7 days up to now, across the Monday, never older ones', () => {
+    // Now is Thursday noon: last Friday counts, last Thursday morning does not.
+    const view = board(swarm(), [work([run('a1', NOW - 6 * DAY_MS, 'claude', 'opus'), run('a2', NOW - 7 * DAY_MS - HOUR, 'claude', 'opus'),
+      run('a3', WEEK + HOUR, 'claude', 'opus', { firstReview: true }), run('a4', WEEK + 2 * HOUR, 'codex', 'gpt-6.1-sol', { firstReview: false })])])
+    expect(view.recentModels).toEqual([
+      { engine: 'claude', model: 'opus', attempts: 2, firstReview: { reviewed: 1, passed: 1 } },
+      { engine: 'codex', model: 'gpt-6.1-sol', attempts: 1, firstReview: { reviewed: 1, passed: 0 } },
+    ])
+  })
+
+  it('is the 7 days up to now whichever week the board shows', () => {
+    const view = board(swarm(), [work([run('a1', NOW - DAY_MS, 'claude', 'opus'), run('a2', LAST + HOUR, 'claude', 'sonnet')])], LAST)
+    expect(view.recentModels.map(m => [m.model, m.attempts])).toEqual([['opus', 1]])
+  })
+
+  it('sums one model\'s efforts as one, keeps an attempt with no reported model apart, and counts no review group', () => {
+    const view = board(swarm(), [
+      work([run('a1', WEEK, 'claude', 'opus'), run('a2', WEEK + HOUR, 'claude', 'opus', { effort: 'xhigh' }), run('a3', WEEK + 2 * HOUR, 'codex', null)]),
+      work([run('b1', WEEK + HOUR, 'codex', 'gpt-6.1-sol')], { reviewOf: 'g0' }),
+    ])
+    expect(view.recentModels.map(m => [m.engine, m.model, m.attempts])).toEqual([['claude', 'opus', 2], ['codex', null, 1]])
+  })
+
+  it('never counts a private conversation\'s or another project\'s attempts', () => {
+    const view = board(swarm(), [
+      work([run('a1', WEEK, 'claude', 'opus')], { audience: { people: [{ id: 'dee', generation: 'g' }] } }),
+      work([run('b1', WEEK, 'claude', 'opus')], { projectId: 'other' }),
+    ])
+    expect(view.recentModels).toEqual([])
+  })
+})

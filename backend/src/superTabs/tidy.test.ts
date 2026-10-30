@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, stopIdleWorkers } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers } from './tidy.js'
 
 const MINUTE = 60_000
 const START = Date.parse('2026-10-27T08:00:00.000Z')
@@ -197,5 +197,57 @@ describe('which finished groups archive', () => {
     const off = swarm()
     off.tidy = false
     expect(archivable(off, off.conversations[1]!, quiet)).toBe(false)
+  })
+})
+
+// Ken, 2026-10-30: 28 of 31 open review groups waited for a Reviewer on pull requests already merged or closed.
+describe('which reviews nobody reviews may close', () => {
+  const quiet = START + ARCHIVE_QUIET_MS
+  const PR = 'https://github.com/acme/app/pull/2288', SECOND = 'https://github.com/acme/app/pull/2290'
+  /** Work still waiting for its review, linking [built], and its review with no Reviewer, linking [own]. */
+  const reviewState = (patch: Partial<Conversation> = {}, built: string[] = [PR], own: string[] = []) => swarm({ groups: [
+    group({ assignment: done({ status: 'review' }), pullRequestUrls: built }),
+    group({ id: 'r1', title: 'Review: Task', reviewOf: 'g1', assignment: null, pullRequestUrls: own, ...patch })] })
+  const review = (state: SuperTabState) => state.conversations[2]!
+
+  it('is a review with no Reviewer, or one whose Reviewer\'s task ended, quiet for 30 minutes, whose work links a pull request', () => {
+    for (const assignment of [null, done({ status: 'lost' }), done({ status: 'stopped' })]) {
+      const state = reviewState({ assignment })
+      expect(reviewClosable(state, review(state), quiet)).toBe(true)
+      expect(reviewClosable(state, review(state), quiet - 1)).toBe(false)
+    }
+  })
+
+  it('is never one a Reviewer works on', () => {
+    for (const status of ['working', 'review', 'needs_human', 'blocked'] as const) {
+      const state = reviewState({ assignment: done({ status }) })
+      expect(reviewClosable(state, review(state), quiet)).toBe(false)
+    }
+  })
+
+  it('is never one with no pull request anywhere: nothing can say the work needs no review', () => {
+    const state = reviewState({}, [])
+    expect(reviewClosable(state, review(state), quiet)).toBe(false)
+  })
+
+  it('is never an archived one, a chat, a group that reviews nothing, or any once tidying is off', () => {
+    for (const patch of [{ archived: true }, { audience: { people: [] } as never }, { kind: 'buddy' as const }, { reviewOf: undefined }]) {
+      const state = reviewState(patch)
+      expect(reviewClosable(state, review(state), quiet)).toBe(false)
+    }
+    const off = reviewState()
+    off.tidy = false
+    expect(reviewClosable(off, review(off), quiet)).toBe(false)
+  })
+
+  it('reads the pull requests of the review and of the work it reviews, each once', () => {
+    const state = reviewState({}, [PR, SECOND], [PR])
+    expect(reviewPullRequests(state, review(state))).toEqual([PR, SECOND])
+  })
+
+  it('says, as the Lead and to nobody, how each pull request ended', () => {
+    const state = reviewState({}, [PR, SECOND])
+    expect(reviewCloseLine(state, review(state), { [PR]: 'merged', [SECOND]: 'closed' }, quiet)).toMatchObject({ conversationId: 'r1', recipients: [],
+      author: { kind: 'agent', id: 'L' }, source: { kind: 'auto-archive' }, text: 'Closed: #2288 merged, #2290 closed; no Swarm review is needed now.' })
   })
 })

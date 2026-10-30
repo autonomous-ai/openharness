@@ -71,12 +71,18 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   })
   // Every project approved unless a test says otherwise (github/approvals.ts); what was approved, kept here.
   const approved: Array<{ tabId: string; projectId: string; repository: string; scope: string; login: string }> = []
+  const refused = new Map<string, string>()
   const approvals: Approvals = {
     approved: async (_env, tabId, projectId, repository) => options.approveAll !== false
       || approved.some(a => a.tabId === tabId && a.repository === repository.toLowerCase() && (a.scope === 'swarm' || a.projectId === projectId)),
     approve: async (request, login) => { approved.push({ ...request, login }) },
     approvedProjects: async (_env, tabId, repository) => approved
       .filter(a => a.tabId === tabId && a.repository === repository.toLowerCase() && a.scope === 'project').map(a => a.projectId),
+    refuse: async (request, login) => { refused.set(`${request.tabId}/${request.projectId}/${request.repository}/${request.userId}`, login) },
+    reader: async (_env, tabId, projectId, repository, userId) => {
+      const login = refused.get(`${tabId}/${projectId}/${repository.toLowerCase()}/${userId}`)
+      return login ? { canPush: false, githubLogin: login } : null
+    },
   }
   await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
@@ -333,10 +339,13 @@ describe('a queued start\'s preparation token', () => {
     const refused = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(refused.statusCode).toBe(403)
     expect(refused.body).toContain('can&#39;t push to example/app')
+    // The app then knows GitHub said so, and asks them to send it on (design 2026-10-30).
+    const after = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
+    expect(after.json().data).toMatchObject({ state: 'not-approved', you: { canPush: false, githubLogin: 'olive' } })
     push = true
     const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(done.statusCode).toBe(200)
-    expect(done.body).toContain('example/app approved')
+    expect(done.body).toContain('example/app is allowed')
     // The page names the project it was approved for (local Team account run, 2026-10-28: 'This project can now use it').
     expect(done.body).toContain('Teammates&#39; agents in Pool can now push to it.')
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
@@ -362,7 +371,7 @@ describe('a queued start\'s preparation token', () => {
       url: `/api/github/callback?error=access_denied&error_description=The+user+has+denied+your+application+access.&state=${encodeURIComponent(state)}` })
     expect(cancelled.statusCode).toBe(200)
     expect(cancelled.body).toContain('Sign-in was cancelled')
-    expect(cancelled.body).toContain('Nothing was approved. Go back to Harness and choose Approve to try again.')
+    expect(cancelled.body).toContain('Nothing was allowed. Go back to Harness and choose Continue in GitHub to try again.')
     expect(cancelled.body).not.toContain('Harness is installed')
     expect(env.approved).toEqual([])
   })

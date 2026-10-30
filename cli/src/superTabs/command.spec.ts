@@ -15,9 +15,29 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
   for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
-    ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra'], [...prefix, 'route', 'g1'], [...prefix, 'route', '../x', '{}']]) {
+    ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
+})
+// Swarm groups #13 and #16 (2026-10-29/30): a Builder's done update got only the usage line back, once without its operation
+// id and once with its JSON split by a quote inside it, and it could not tell what to fix.
+it('says what is wrong with a command\'s id or JSON instead of the usage line', () => {
+  const json = '{"type":"work.status","conversationId":"g1","assignmentId":"current","status":"done","result":"ok"}'
+  expect(() => parseSuperTabArgs([...prefix, 'command', json], where)).toThrow('command needs OPERATION_ID before the JSON')
+  expect(() => parseSuperTabArgs([...prefix, 'command', 'op-1'], where)).toThrow('command needs its JSON after OPERATION_ID')
+  expect(() => parseSuperTabArgs([...prefix, 'command'], where)).toThrow('command needs OPERATION_ID and the JSON on the same command line')
+  // `'...--format='%h %s' returned...'` reaches the CLI as three arguments.
+  expect(() => parseSuperTabArgs([...prefix, 'command', 'op-1', '{"result":"git log --format=%h', '%s', 'returned"}'], where))
+    .toThrow("got 3 arguments after OPERATION_ID: a quote inside the JSON ended the shell's quoting")
+  expect(() => parseSuperTabArgs([...prefix, 'command', 'op-1', '{"type":'], where)).toThrow(/The command JSON is not valid .*send the JSON on stdin with -/)
+  expect(() => parseSuperTabArgs([...prefix, 'route', '../x', '{}'], where)).toThrow('route needs GROUP first')
+  expect(() => parseSuperTabArgs([...prefix, 'route', 'g1'], where)).toThrow("route needs its JSON after GROUP: route g1 JSON, or send the JSON on stdin with - in its place: route GROUP - <<'JSON'")
+  expect(() => parseSuperTabArgs([...prefix, 'messages'], where)).toThrow('harness super-tab')
+})
+it('reads a command\'s JSON from stdin for -', () => {
+  const stdin = vi.fn(() => '{"type":"work.status","result":"it\'s \'%h %s\'"}')
+  expect(parseSuperTabArgs([...prefix, 'command', 'op-1', '-'], where, stdin).payload).toMatchObject({ operationId: 'op-1', command: { type: 'work.status', result: "it's '%h %s'" } })
+  expect(stdin).toHaveBeenCalledOnce()
 })
 it('reacts to a message as people do, and --off takes the reaction back', () => {
   expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-1'], where).payload).toEqual({ action: 'command', tabId: 'tab', agentId: 'agent',
@@ -450,7 +470,7 @@ it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whateve
   const proposal = { conversationId: 'chat', ownerMessageId: 'asked', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' }
   expect(parseSuperTabArgs([...prefix, 'propose', 'op-1', JSON.stringify({ ...proposal, type: 'work.assign' })], where).payload)
     .toMatchObject({ action: 'command', operationId: 'op-1', command: { ...proposal, type: 'buddy.propose' } })
-  expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1'], where)).toThrow('harness super-tab')
+  expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1'], where)).toThrow('propose needs its JSON after OPERATION_ID')
 })
 // Security review of #2087: --agent naming a Builder let a Buddy on the same machine speak as it. The harness the command
 // runs in goes with every request, and the daemon holds the agent named to that harness's own (service.spec.ts).
