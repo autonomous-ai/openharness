@@ -6,6 +6,7 @@
  */
 import type { Prisma } from '@prisma/client'
 import type { Conversation } from '../model.js'
+import { ms } from '../parts/light.js'
 import { attemptTokens, type Billing, type RouteRun } from './attempts.js'
 import { attemptCost } from './cost.js'
 import { priceOf } from './prices.js'
@@ -41,6 +42,20 @@ export async function costRows(tx: Tx, tabId: string, since: number): Promise<{ 
       ...(record?.stepUp ? { stepUp: record.stepUp } : {}) }]
   })
   return { rows, truncated: found.length > MAX_ROWS }
+}
+
+/** The starts routed since `since` that failed before any work was assigned (routeDecisions.ts closeUnassignedStart), with
+ *  the engine, model and effort they were to run: by the same tabId+createdAt index as costRows, at most MAX_ROWS. Only
+ *  those fields leave the database. */
+export async function failedStarts(tx: Tx, tabId: string, since: number): Promise<Array<{ conversationId: string; engine: string; model: string; effort: string; at: number }>> {
+  const found = await tx.superTabRouteDecision.aggregateRaw({ pipeline: [
+    { $match: { tabId, createdAt: { $gte: { $date: new Date(since).toISOString() } }, outcome: 'failed' } },
+    { $sort: { createdAt: -1 } }, { $limit: MAX_ROWS },
+    { $project: { conversationId: 1, createdAt: 1, 'final.engine': 1, 'final.model': 1, 'final.effort': 1 } },
+  ] }) as unknown as Array<{ conversationId: string; createdAt: unknown; final?: { engine?: unknown; model?: unknown; effort?: unknown } }>
+  const text = (value: unknown) => typeof value === 'string' ? value : 'unknown'
+  return found.map(row => ({ conversationId: String(row.conversationId), engine: text(row.final?.engine), model: text(row.final?.model),
+    effort: text(row.final?.effort), at: ms(row.createdAt) }))
 }
 
 export interface CostSummaryRow {

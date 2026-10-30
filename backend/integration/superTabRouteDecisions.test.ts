@@ -199,6 +199,47 @@ describe('what the route-decision list gives each reader', () => {
     }
   })
 
+  it('finds the reader\'s older decisions in a group the newest 500 never name, when it reads between 1 and 99 of them', async () => {
+    const w = await world(5)
+    // Newest last: 70 in a quiet public group, then 480 the collaborator and the workers of Web cannot read, then 30 in Web.
+    await decide(w, [[w.finished[0]!, 70], [w.secretGroup, 480], [w.web, 30]])
+    const got = await sameAnswers(w)
+    for (const reader of ['a collaborator', 'a worker', 'the Lead']) expect(ids(got[reader]), reader).toHaveLength(100)
+    expect(new Set((got['a collaborator']!.value as Array<{ conversationId: string }>).map(d => d.conversationId))).toEqual(new Set([w.web, w.finished[0]]))
+  })
+
+  it('finds a quiet group stored with no project in a default-project agent\'s project, when the newest 500 name none of it', async () => {
+    const w = await world(5)
+    const quiet = w.finished[0]!
+    // A group from before projects: no project in its data or its listing, which belongs to the Swarm's first (groupProject).
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId, key: quiet }, u: { $set: { projectId: null }, $unset: { 'data.projectId': '' } } }] })
+    await decide(w, [[quiet, 20], [w.secretGroup, 600]])
+    const got = await sameAnswers(w)
+    expect(ids(got['a worker']), 'the worker of the default project reads it').toHaveLength(20)
+    expect(ids(got['the Lead'])).toHaveLength(20)
+    expect(ids(got['the Secret project\'s worker'])).toHaveLength(100)
+  })
+
+  it('checks access on the light groups of quiet conversations too: a closed Chat with PM, a Buddy chat and a private project\'s group, all dormant', async () => {
+    const w = await world(5)
+    // The conversations a reader must be kept out of are quiet, so they come through the light read, not the Swarm's active groups.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId, key: { $in: [w.peerChat, w.buddyChat, w.secretGroup] } },
+      u: { $set: { dormant: true, 'data.dormant': true } }, multi: true }] })
+    // Oldest first: the hidden ones on both sides of 600 secret decisions, so some are in the newest 500 and some only a fallback finds.
+    await decide(w, [[w.web, 3], [w.peerChat, 5], [w.buddyChat, 5], [w.secretGroup, 600], [w.peerChat, 5], [w.buddyChat, 5], [w.web, 3]],
+      [w.peerChat, w.buddyChat])
+    const got = await sameAnswers(w)
+    const seen = (name: string) => new Set((got[name]!.value as Array<{ conversationId: string }>).map(d => d.conversationId))
+    // The answers tell readers apart, or "same as before" proves little: the collaborator reads its Buddy chat and nobody the closed
+    // Chat with PM, which differ only in the kind and the audience the light group keeps.
+    expect(seen('a collaborator').has(w.buddyChat)).toBe(true)
+    for (const name of ['a collaborator', 'the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.peerChat), name).toBe(false)
+    for (const name of ['the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.buddyChat), name).toBe(false)
+    expect(seen('a member outside the private project').has(w.secretGroup)).toBe(false)
+    expect(seen('the owner').has(w.secretGroup)).toBe(true)
+    expect(JSON.stringify(got['a member outside the private project'])).not.toContain('hidden-text-of-')
+  })
+
   it('stops at one window of decisions when the Swarm holds no more than that, even if the reader reads fewer than a hundred of them', async () => {
     const w = await world(5)
     await decide(w, [[w.secretGroup, 60], [w.web, 40]], [w.secretGroup])
@@ -238,7 +279,9 @@ async function profiled<T>(read: () => Promise<T>): Promise<[T, Record<string, P
   await db.$runCommandRaw({ profile: 2 })
   const result = await read()
   await db.$runCommandRaw({ profile: 0 })
-  const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
+  const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } },
+    // Only the fields read: a pipeline in the profile can hold a `$type` expression, which Prisma reads back as a tagged value.
+    projection: { ns: 1, planSummary: 1, docsExamined: 1, nreturned: 1, responseLength: 1, 'command.hint': 1 }, batchSize: 10000 }) as
     unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; docsExamined?: number; nreturned?: number; responseLength?: number; command?: { hint?: unknown } }> } }
   await db.$runCommandRaw({ drop: 'system.profile' })
   const by: Record<string, Profiled> = {}
@@ -270,6 +313,18 @@ describe('what the route-decision list costs the database', () => {
     expect(groups.docsExamined).toBeLessThanOrEqual(live + 1 + 100)
     expect(groups.docsExamined).toBeLessThan(all / 2)
     // The answer is what it was.
+    expect(answer).toEqual(await listedBefore(w, owner, w.lead))
+  })
+
+  it('reads the groups the decisions name with only the fields access needs, not their briefs and tasks', async () => {
+    const w = await world(QUIET)
+    const brief = 'x'.repeat(4000)
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId }, u: { $set: { 'data.brief': brief } }, multi: true }] })
+    await decide(w, w.finished.slice(0, 300).map(group => [group, 1] as [string, number]))
+    const [answer, profile] = await profiled(() => store.routeDecisions(owner, w.tabId, w.lead))
+    expect(answer).toHaveLength(100)
+    // A hundred groups with a 4 KB brief each are 400 KB whole; the live groups come whole with the Swarm's base.
+    expect(profile.SwarmGroup!.bytes).toBeLessThan(200_000)
     expect(answer).toEqual(await listedBefore(w, owner, w.lead))
   })
 })
