@@ -13,7 +13,9 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 export interface BuddyReads { file: string; drops: string }
 /** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
  *  outside its folder that stay closed, and its person's approvals on this machine. */
-export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[];
+export interface BuddyWide { home: string; denied: readonly string[];
+  /** Outside the folder, all that may be read: the home and named system folders, the closed places within them aside. */
+  readable: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[];
   /** Where Claude Code keeps sessions' tool output: closed to the Buddy's reads, open to its sandbox, which writes its output there. */
   sessionTemp: readonly string[] }
 
@@ -31,10 +33,16 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
   'Library/Application Support/Microsoft Edge', 'Library/Application Support/com.operasoftware.Opera',
   'Library/Application Support/Claude']
 
+/** System folders a Buddy may read outside its folder: configuration, shared data and logs. */
+const SYSTEM_READABLE = process.platform === 'darwin'
+  ? ['/etc', '/usr/share', '/usr/local/etc', '/opt/homebrew/etc', '/Library/Logs', '/var/log']
+  : ['/etc', '/usr/share', '/var/log']
+
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
-export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[] }): BuddyWide {
-  return { home: input.home, repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
+  system?: readonly string[] }): BuddyWide {
+  return { home: input.home, readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
     approvalsDir: join(input.dataDir, 'buddy-approvals') }
 }
 
@@ -299,6 +307,12 @@ const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdb
 const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
 const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
 const DENIED = WIDE ? realRoots(WIDE.denied) : []
+// What may be read outside the folder at all: the person's home and the system folders named for it. Everything else is
+// closed, the process and device folders and every temporary folder among it (security reviews 1 and 2 of #2310: on Linux
+// /proc/<pid>/environ held the read-only DB URL while db-size ran; on macOS /private/var/folders held other processes'
+// files).
+const READABLE = WIDE ? realRoots(WIDE.readable) : []
+const NEVER = ['/proc', '/sys', '/dev']
 const HOME = WIDE ? realOf(WIDE.home) : null
 // Where people's homes are (/Users, /home): every one but the person's own stays closed. macOS's Shared folder is nobody's.
 const HOMES = HOME ? dirname(HOME) : null
@@ -315,6 +329,7 @@ function outsideAllowed(path, kind) {
   if (!WIDE || typeof path !== 'string') return false
   const real = realOf(path)
   if (!real || !HOME) return false
+  if (!READABLE.some((root) => under(real, root)) || NEVER.some((root) => under(real, root))) return false
   if (secretName(real) || secretName(resolve(ROOT, path)) || otherHome(real) || DENIED.some((root) => under(real, root))) return false
   if (kind === 'tree' && (DENIED.some((root) => under(root, real)) || (HOMES && under(HOMES, real)))) return false
   if (kind === 'any') return true

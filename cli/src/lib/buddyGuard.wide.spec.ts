@@ -104,6 +104,27 @@ describe('wide mode: reading outside the folder', () => {
     expect(bash(`cat '${path}'`)).toBe('deny')
   })
 
+  // Security reviews 1 and 2 of #2310: everything outside the home was open, and Read runs outside the sandbox. On Linux
+  // /proc/<pid>/environ held the read-only DB URL while db-size ran; on macOS /private/var/folders held other processes'
+  // temporary files. Outside the folder only the person's home and named system folders are read now.
+  it.each([
+    ['another process\'s environment', '/proc/1/environ'],
+    ['this process\'s environment', '/proc/self/environ'],
+    ['the kernel\'s settings', '/sys/kernel/hostname'],
+    ['a device', '/dev/stdin'],
+    ['the shared temporary folder', '/tmp/other-process.txt'],
+    ['macOS\'s per-user temporary folders', '/private/var/folders/xy/abc/T/other.txt'],
+    ['this test\'s own temporary folder, outside the home', join(tmpdir(), 'elsewhere.txt')],
+    ['a folder that is no system folder named', '/Volumes/Backup/notes.txt'],
+  ])('refuses %s', (_, path) => {
+    expect(decide('Read', { file_path: path })).toBe('deny')
+    expect(bash(`cat '${path}'`)).toBe('deny')
+  })
+
+  it.each(['/etc/hosts', '/usr/share/dict/words'].filter(existsSync))('reads the named system file %s', path => {
+    expect(decide('Read', { file_path: path })).toBe('allow')
+  })
+
   it.skipIf(!caseInsensitive)('refuses ~/.SSH on a case-insensitive volume', () => {
     expect(decide('Read', { file_path: join(home, '.SSH', 'id_ed25519') })).toBe('deny')
     expect(decide('Read', { file_path: join(home, 'Library', 'KEYCHAINS', 'login.keychain-db') })).toBe('deny')
@@ -483,6 +504,7 @@ describe('the launch\'s wide mode and sandbox', () => {
     expect(launched).toEqual({ home: launchHome, approvalsDir: join(dataDir, 'buddy-approvals'),
       repos: ['autonomous-ai/openharness', 'someone/openharness'], hosts: ['deploy.autonomous.ai', 'k8s.example.net'],
       sessionTemp: expect.arrayContaining(['/tmp/claude-501', '/private/tmp/claude-501']),
+      readable: expect.arrayContaining([launchHome, '/etc', '/usr/share', '/var/log']),
       denied: expect.arrayContaining([join(launchHome, '.ssh'), join(launchHome, '.claude'), dataDir, '/tmp/claude-501', '/private/tmp/claude-501']) })
   })
 
