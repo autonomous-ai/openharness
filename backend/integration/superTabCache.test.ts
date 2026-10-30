@@ -21,6 +21,7 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { outsider as outsiderActor, owner as ownerActor, peer as peerActor, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
+import { profiledReads } from './profiledReads.test-support.js'
 
 // The per-process Swarm cache (superTabs/cache.ts, Stability Roadmap 2.2) on a fresh loopback replica set; Redis is
 // MemoryStamps, one store of stamps every "pod" here shares. This suite never reads DATABASE_URL or an existing database.
@@ -145,23 +146,8 @@ async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = (
 }
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
-/** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). Only each row's collection
- *  is read back: a light read's projection holds `$type`, which Prisma would take for one of its own tagged values. */
-async function partReads<T>(run: () => Promise<T>): Promise<{ value: T; reads: number; byCollection: Record<string, number> }> {
-  await db.$runCommandRaw({ profile: 2 })
-  const since = new Date()
-  try {
-    const value = await run()
-    const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } },
-      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
-      { cursor: { firstBatch: Array<{ ns: string }> } }
-    const byCollection: Record<string, number> = {}
-    for (const { ns } of rows.cursor.firstBatch) byCollection[ns.slice(ns.lastIndexOf('.') + 1)] = (byCollection[ns.slice(ns.lastIndexOf('.') + 1)] ?? 0) + 1
-    return { value, reads: rows.cursor.firstBatch.length, byCollection }
-  } finally {
-    await db.$runCommandRaw({ profile: 0 })
-  }
-}
+/** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). */
+const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
 
 describe('reads through the cache', () => {
   it('reads a Swarm whose stamp did not move without asking Mongo for its parts', async () => {

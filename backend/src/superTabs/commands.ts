@@ -23,6 +23,7 @@ import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
+import { cloneData } from './cloneData.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
@@ -570,7 +571,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
   const command = withoutCredentials(commandSchema.parse(input), removed)
-  const state = structuredClone(original)
+  const state = cloneData(original)
   syncLeads(state)
   numberConversations(state)
   placeRules(state)
