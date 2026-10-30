@@ -1418,13 +1418,22 @@ describe('Reviewer role', () => {
   })
 
   it('lets the Builder join its own review group: joining is not reviewing (review of #2313)', () => {
-    const { f, leadActor, group, builder } = reviewed()
+    const { f, leadActor, group, builder, reviewer } = reviewed()
     f.run({ type: 'work.assign', conversationId: group, agentId: builder })
     const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
       leadActor).result.conversationId as string
     const added = f.run({ type: 'conversation.agent', conversationId: review, agentId: builder, present: true, lead: false }, leadActor)
     expect(added.result.warnings).toBeUndefined()
     expect(f.state.conversations.find(c => c.id === review)!.agentIds).toContain(builder)
+    // Sitting in the review group, it still never passes the review's verdict (re-review of #2313).
+    f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
+    const verdict = f.state.conversations.find(c => c.id === review)!
+    const check = { type: 'work.check', conversationId: review, assignmentId: verdict.assignment!.id, checkId: verdict.checks[0]!.id, passed: true, evidence: 'Looks fine.' } as Command
+    expect(() => f.run(check, { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' })).toThrow('does not give its review\'s verdict')
+    expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBeNull()
+    // Its Reviewer still does.
+    f.run(check, { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' })
+    expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBeTruthy()
   })
 
   it('never lets a small or unnamed model review: a review needs a model the policy names at quality 2 or more', () => {

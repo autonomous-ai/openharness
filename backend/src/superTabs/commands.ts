@@ -2355,6 +2355,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const check = group.checks.find(c => c.id === command.checkId) ?? fail('NOT_FOUND', 'This acceptance check is unavailable.', 404)
       if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the review.', 403)
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
+      // The Builder of the reviewed work may sit in its review group, but never gives that review's verdict (review of #2313).
+      if (group.reviewOf && actor.kind === 'agent' && actor.agentId === state.conversations.find(c => c.id === group.reviewOf)?.assignment?.agentId) {
+        fail('INDEPENDENT_REVIEW', 'The Builder of the reviewed work does not give its review\'s verdict.')
+      }
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
