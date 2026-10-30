@@ -260,7 +260,9 @@ describe('contributed machine executor', () => {
 
     it('fails at once when the backend refuses it or the server has no GitHub App', async () => {
       for (const refusal of [new SuperTabHostError('FORBIDDEN', 'This start is not this machine\'s.', 403),
-        new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'This server has no GitHub App.', 503)]) {
+        new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'This server has no GitHub App.', 503),
+        // Security review of #2390: GitHub refused the server's app, which the backend decided; it waited a minute.
+        new SuperTabHostError('GITHUB_APP_MISCONFIGURED', 'GitHub refused the Harness GitHub App\'s credentials.', 503)]) {
         const h = teamHost(() => { throw refusal })
         await h.pass()
         expect(h.failures()).toEqual([{ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start',
