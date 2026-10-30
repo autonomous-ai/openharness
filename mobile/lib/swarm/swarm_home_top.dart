@@ -24,20 +24,31 @@ import 'swarm_style.dart';
 /// Jump to… under it ([SwarmJumpField]), and While you were away
 /// ([SwarmAwayCard]).
 
-/// What Home's title says: the one Swarm it shows, "All Swarms" over
-/// several, "Swarm" before there is one.
-String swarmHomeTitle(List<SwarmListing> swarms, String? picked) =>
-    switch (swarms.where((swarm) => swarm.id == picked).firstOrNull) {
-      final swarm? => swarm.name,
-      null when swarms.length == 1 => swarms.single.name,
-      null when swarms.isEmpty => 'Swarm',
-      null => 'All Swarms',
+/// Whether Home offers Swarm [swarmId]: the account's, and its read not
+/// taken away, though the list may still have it until it is read again.
+bool swarmHomeOffers(SwarmInbox inbox, String swarmId) =>
+    inbox.swarms.any((swarm) => swarm.id == swarmId) &&
+    !(inbox.reader(swarmId)?.accessRevoked ?? false);
+
+/// The one Swarm of those Home [shown] that its title names: never one whose
+/// read is taken away.
+SwarmListing? swarmHomeNamed(SwarmInbox inbox, List<SwarmListing> shown) =>
+    switch (shown) {
+      [final swarm] when swarmHomeOffers(inbox, swarm.id) => swarm,
+      _ => null,
     };
+
+/// What Home's title says over the Swarms it [shown]: the one it shows,
+/// "All Swarms" over several, "Swarm" before there is one, or once the one
+/// Swarm's read is taken away.
+String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
+    swarmHomeNamed(inbox, shown)?.name ??
+    (shown.length > 1 ? 'All Swarms' : 'Swarm');
 
 /// The Swarms Home can show, from its title: All Swarms over several, each
 /// Swarm, the one shown ticked and what waits in each other one counted,
-/// and Join or create a Swarm. A Swarm the account loses while it is open
-/// leaves it, and a tap on it shows nothing.
+/// and Join or create a Swarm. A Swarm the account loses, or whose read is
+/// taken away, while it is open leaves it, and a tap on it shows nothing.
 Future<void> showSwarmSwitcher(BuildContext context, SwarmSession session) =>
     showModalBottomSheet<void>(
       context: context,
@@ -64,14 +75,18 @@ class _Switcher extends StatelessWidget {
     listenable: Listenable.merge([session.inbox, session.home]),
     builder: (context, _) {
       final inbox = session.inbox;
-      final swarms = inbox.swarms;
+      final swarms = [
+        for (final swarm in inbox.swarms)
+          if (swarmHomeOffers(inbox, swarm.id)) swarm,
+      ];
       final picked = swarms
           .where((swarm) => swarm.id == session.home.swarmId)
           .firstOrNull;
-      final shown = picked ?? (swarms.length == 1 ? swarms.single : null);
+      final shown =
+          picked ?? (inbox.swarms.length == 1 ? swarms.firstOrNull : null);
       void show(String? swarmId) {
-        // Taken away since the last frame: nothing to show.
-        if (swarmId == null || inbox.swarms.any((s) => s.id == swarmId)) {
+        // Taken away since the last frame, or its read: nothing to show.
+        if (swarmId == null || swarmHomeOffers(inbox, swarmId)) {
           session.home.show(swarmId);
         }
         Navigator.of(context).pop();
@@ -102,7 +117,7 @@ class _Switcher extends StatelessWidget {
             ),
             children: [
               const _Grabber(),
-              if (swarms.length > 1)
+              if (inbox.swarms.length > 1)
                 SwarmRow(
                   key: const ValueKey('swarm-switch-all'),
                   leading: const _Glyph(LucideIcons.layers300),
@@ -234,28 +249,28 @@ int swarmDoneSince(SuperTabSnapshot snapshot, DateTime since) => snapshot
     )
     .length;
 
-/// While you were away, as C1 draws it: how long ago the person left the
-/// app, then the work done since ([done], green) and what needs them now
-/// ([needs], yellow), each a dash while it is not known. A tap opens what
-/// needs them ([onTap]).
+/// While you were away, as C1 draws it: how long the person was away, from
+/// leaving the app ([since]) to coming back ([back]), then the work done
+/// since ([done], green) and what needs them now ([needs], yellow), each a
+/// dash while it is not known. A tap opens what needs them ([onTap]).
 class SwarmAwayCard extends StatelessWidget {
   const SwarmAwayCard({
     super.key,
     required this.since,
-    required this.now,
+    required this.back,
     required this.done,
     required this.needs,
     required this.onTap,
   });
 
-  final DateTime since, now;
+  final DateTime since, back;
   final int? done, needs;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final age = fzfAge(since.toLocal(), now.toLocal());
+    final age = fzfAge(since.toLocal(), back.toLocal());
     return Semantics(
       button: true,
       label:

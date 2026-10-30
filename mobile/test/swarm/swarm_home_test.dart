@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
@@ -221,6 +222,7 @@ void main() {
     bool settle = true,
     bool overPage = false,
     DateTime Function()? now,
+    MemoryKeyValueStore? store,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -235,7 +237,7 @@ void main() {
       notices: SilentSystemNotices(),
       features: features,
       computers: computers,
-      readMarks: MemoryKeyValueStore(),
+      readMarks: store ?? MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -599,6 +601,53 @@ void main() {
       await tester.tap(key('swarm-away'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmActivityPage), findsOneWidget);
+    });
+
+    testWidgets('back within five minutes and using the app on: still no '
+        'card, as only time in the background is time away', (tester) async {
+      var now = _halfHourIn();
+      await pump(tester, backend(), now: () => now);
+      await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
+      expect(key('swarm-away'), findsNothing);
+
+      now = now.add(const Duration(minutes: 2));
+      await tester.pump(const Duration(minutes: 2));
+      expect(
+        key('swarm-away'),
+        findsNothing,
+        reason: 'two minutes in the foreground are no time away',
+      );
+    });
+
+    testWidgets('opened four minutes after the app was last left, and used '
+        'on: no card', (tester) async {
+      var now = _halfHourIn();
+      final store = MemoryKeyValueStore()
+        ..values['swarm_home.$me'] = jsonEncode({
+          'pins': <Object>[],
+          'seen': now
+              .subtract(const Duration(minutes: 4))
+              .millisecondsSinceEpoch,
+        });
+      await pump(tester, backend(), now: () => now, store: store);
+      expect(key('swarm-away'), findsNothing);
+
+      now = now.add(const Duration(minutes: 2));
+      await tester.pump(const Duration(minutes: 2));
+      expect(key('swarm-away'), findsNothing);
+    });
+
+    testWidgets('its time is how long the person was away, not how long since '
+        'they left', (tester) async {
+      var now = _halfHourIn();
+      await pump(tester, backend(), now: () => now);
+      await away(tester, const Duration(minutes: 10), (d) => now = now.add(d));
+      expect(inside('swarm-away', find.text('10m')), findsOneWidget);
+
+      now = now.add(const Duration(minutes: 3));
+      await tester.pump(const Duration(minutes: 3));
+      expect(inside('swarm-away', find.text('10m')), findsOneWidget);
+      expect(find.text('13m'), findsNothing);
     });
 
     testWidgets('what needs you is a dash while it is read, and when it '
@@ -1309,6 +1358,90 @@ void main() {
       expect(host.session!.home.swarmId, isNull);
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
       expect(key('swarm-project-$second-$project'), findsNothing);
+    });
+
+    testWidgets('a Swarm whose read is taken away while the switcher is open '
+        'leaves it at once, though the list still has it, and a tap on its '
+        'row as it goes picks nothing', (tester) async {
+      final fake = two();
+      final host = await pump(tester, fake);
+      await openSwitcher(tester);
+      final stale = tester.widget<SwarmRow>(key('swarm-switch-$second')).onTap!;
+
+      Never refused(_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'You no longer have access to this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$second/changes'] = refused;
+      fake.routes['/api/super-tabs/$second/parts'] = refused;
+      await host.session!.inbox.reader(second)!.refresh();
+      expect(host.session!.inbox.reader(second)!.accessRevoked, isTrue);
+      await tester.pump();
+      expect(
+        host.session!.inbox.swarms.map((swarm) => swarm.id),
+        contains(second),
+      );
+      expect(key('swarm-switch-$second'), findsNothing);
+      expect(find.text('Work Swarm'), findsNothing);
+
+      stale();
+      await tester.pumpAndSettle();
+      expect(host.session!.home.swarmId, isNull);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'All Swarms');
+      expect(find.text('Work Swarm'), findsNothing);
+    });
+
+    testWidgets("the Swarm picked, its read taken away: Home's title lets go "
+        'of its name, and Home shows every Swarm again', (tester) async {
+      final fake = two();
+      final host = await pump(tester, fake);
+      host.session!.home.show(second);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Work Swarm');
+
+      Never refused(_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'You no longer have access to this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$second/changes'] = refused;
+      fake.routes['/api/super-tabs/$second/parts'] = refused;
+      await host.session!.inbox.reader(second)!.refresh();
+      expect(host.session!.inbox.reader(second)!.accessRevoked, isTrue);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(key('swarm-title')).data, 'All Swarms');
+      expect(find.text('Work Swarm'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(
+        inside(
+          'swarm-projects-error-$second',
+          find.text('You no longer have access to this Swarm.'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets("the one Swarm's read taken away: the title says Swarm, never "
+        'its name', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
+
+      Never refused(_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'You no longer have access to this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = refused;
+      await host.session!.inbox.reader(tab)!.refresh();
+      expect(host.session!.inbox.reader(tab)!.accessRevoked, isTrue);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
+      expect(find.text('Phone Swarm'), findsNothing);
     });
 
     testWidgets("Jump to names each project's Swarm; a Swarm whose read is "

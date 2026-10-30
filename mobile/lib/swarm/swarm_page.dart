@@ -98,8 +98,13 @@ class _SwarmPageState extends State<SwarmPage> {
   DateTime? _away;
   bool _awayRead = false;
 
+  /// When the person came back: the app shown again, or Home opened for the
+  /// account. Time away ends there, so using the app on never adds to it.
+  DateTime? _back;
+
   /// The app leaving and coming back: the first is when the person left
-  /// ([SwarmHomePrefs.seen]), the second reads it again.
+  /// ([SwarmHomePrefs.seen]), the second when they came back, and reads
+  /// when they left again.
   late final AppLifecycleListener _lifecycle;
 
   @override
@@ -107,7 +112,10 @@ class _SwarmPageState extends State<SwarmPage> {
     super.initState();
     _lifecycle = AppLifecycleListener(
       onHide: () => _session?.home.seen(widget.now()),
-      onShow: () => setState(() => _awayRead = false),
+      onShow: () => setState(() {
+        _awayRead = false;
+        _back = widget.now();
+      }),
     );
   }
 
@@ -118,8 +126,11 @@ class _SwarmPageState extends State<SwarmPage> {
     final hidden = OutOfSight.of(context);
     if (session == _session && hidden == _hidden) return;
     if (!_hidden) _session?.leave();
-    // Another account's Home: its own time away.
-    if (session != _session) _awayRead = false;
+    // Another account's Home: its own time away, from now.
+    if (session != _session) {
+      _awayRead = false;
+      _back = widget.now();
+    }
     _session = session;
     _hidden = hidden;
     _tick?.cancel();
@@ -235,13 +246,13 @@ class _SwarmPageState extends State<SwarmPage> {
       );
     }
     if (session == null) return const SwarmTabHeader('Swarm');
-    final swarms = session.inbox.swarms;
-    final title = swarmHomeTitle(swarms, session.home.swarmId);
-    // One Swarm shown has its tile; All Swarms has none.
-    final one = _shown(session).length == 1;
+    final shown = _shown(session);
+    final title = swarmHomeTitle(session.inbox, shown);
+    // The one Swarm named has its tile; All Swarms has none.
+    final named = swarmHomeNamed(session.inbox, shown);
     return SwarmTabHeader(
       title,
-      leading: one ? SwarmProjectTile(title) : null,
+      leading: named == null ? null : SwarmProjectTile(named.name),
       titleLabel: 'Swarm: $title. Switch Swarm',
       subtitle: updating ? 'Updating…' : null,
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
@@ -254,13 +265,16 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// The Swarms Home shows: the one the switcher picked while it is listed,
-  /// else all of them.
+  /// The Swarms Home shows: the one the switcher picked while it is listed
+  /// and its read not taken away, else all of them.
   List<SwarmListing> _shown(SwarmSession session) {
-    final swarms = session.inbox.swarms;
+    final inbox = session.inbox;
     final picked = session.home.swarmId;
-    final one = swarms.where((swarm) => swarm.id == picked).toList();
-    return one.isEmpty ? swarms : one;
+    if (picked == null || !swarmHomeOffers(inbox, picked)) return inbox.swarms;
+    return [
+      for (final swarm in inbox.swarms)
+        if (swarm.id == picked) swarm,
+    ];
   }
 
   List<Widget> _body(BuildContext context, SwarmSession session) {
@@ -325,7 +339,9 @@ class _SwarmPageState extends State<SwarmPage> {
       _awayRead = true;
     }
     final since = _away;
-    if (since == null || now.difference(since) < SwarmPage.awayAfter) {
+    // Decided at the return: time in the foreground is no time away.
+    final back = _back ?? now;
+    if (since == null || back.difference(since) < SwarmPage.awayAfter) {
       return null;
     }
     final inbox = session.inbox;
@@ -345,7 +361,7 @@ class _SwarmPageState extends State<SwarmPage> {
       child: SwarmAwayCard(
         key: const ValueKey('swarm-away'),
         since: since,
-        now: now,
+        back: back,
         done: done,
         // None found is not none waiting until all of it is read.
         needs: needs > 0 || _needsRead(inbox, shown) ? needs : null,
