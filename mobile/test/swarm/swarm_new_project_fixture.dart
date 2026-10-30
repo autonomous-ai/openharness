@@ -23,7 +23,8 @@ const lampRepo = 'https://github.com/autonomous-ai/lampos';
 
 /// A machine of the Swarm as the backend reads it, with its derived values
 /// over it: [contributor]'s, reporting [ago], offering [engines], its Harness
-/// able to start a Product Manager unless not [capable], [slots] agents free.
+/// able to start a Product Manager unless not [capable], [slots] agents free,
+/// added for every project ([scope] `swarm`) unless [scope] says otherwise.
 Map<String, dynamic> leadPool(
   String id, {
   String? name,
@@ -38,10 +39,12 @@ Map<String, dynamic> leadPool(
   String deviceType = 'Mac Studio',
   bool paused = false,
   Map<String, String>? suspended,
+  String? scope = 'swarm',
 }) => {
   'machineId': id,
   'name': name ?? '$id.local',
   'contributorId': contributor,
+  'scope': ?scope,
   'engines': engines,
   'maxAgents': 4,
   'cwd': '/Users/someone/swarm',

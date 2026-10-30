@@ -60,6 +60,11 @@ const swarmLeadChooseMachine =
 /// What PM runs on says when no machine can take the Product Manager now.
 const swarmLeadNoMachine = 'No machine can run the Product Manager now.';
 
+/// Why one of the person's machines added for the Lead only cannot take a
+/// project's Product Manager: the server's reason, said to its owner.
+const swarmLeadUnscoped =
+    'Add this machine to the Swarm again to support other projects.';
+
 /// A machine's reading counts while it is this fresh (backend
 /// `MACHINE_FRESH_MS`, as the start itself reads it).
 const _freshFor = Duration(seconds: 45);
@@ -373,6 +378,11 @@ List<SwarmLeadMachine> swarmLeadMachines(
           : own
           ? (pool['paused'] == true
                 ? 'Paused in this Swarm'
+                // Added for the Lead only: the server takes no other
+                // project's work there (backend machines.ts
+                // admitMachineStart, PROJECT_CONTRIBUTION).
+                : pool['scope'] != 'swarm'
+                ? swarmLeadUnscoped
                 : capable
                 ? null
                 : 'Update Harness on $name to run a Product Manager there.')
@@ -430,9 +440,12 @@ String? swarmLeadMachineRefusal(
   if (chosen == null) return 'Choose one of this Swarm’s machines.';
   if (chosen.startable) return null;
   final name = chosen.name;
-  return chosen.unavailable != null
-      ? '$name: ${chosen.unavailable}. Choose another machine.'
-      : !chosen.online
+  if (chosen.unavailable case final why?) {
+    // One full stop, whether its reason ends with one or not.
+    return '$name: ${why.endsWith('.') ? why : '$why.'} '
+        'Choose another machine.';
+  }
+  return !chosen.online
       ? '$name is offline. Choose another machine.'
       : chosen.leadEngines.isEmpty
       ? '$name: ${chosen.detail}. Choose another machine.'
@@ -533,16 +546,30 @@ class SwarmNewProjectGone implements Exception {
   const SwarmNewProjectGone();
 }
 
+/// The New project steps each Swarm's reader holds until they finish: kept
+/// with the session's reader of that Swarm, so they go with the Swarm, the
+/// person's access to it or their account, and never outlive the session.
+final _heldSteps = Expando<SwarmNewProjectSteps>('New project steps');
+
 /// One New project's steps in one Swarm, as Desktop's `startInSwarm` runs
 /// them: the project, its brief in its chat, its Product Manager's start on
 /// the machine picked, then its name. Each request is kept as first sent,
-/// under one operation id, for as long as the sheet is open: Create again
-/// repeats only what has not answered, and the Swarm answers a repeated
-/// operation with its receipt, so a lost answer never makes a second project.
-/// Only a definite refusal drops a request, so the next attempt (perhaps on
-/// another machine) is a new one.
+/// under one operation id, until the steps finish: Create again repeats only
+/// what has not answered, and the Swarm answers a repeated operation with its
+/// receipt, so a lost answer never makes a second project. Only a definite
+/// refusal drops a request, so the next attempt (perhaps on another machine)
+/// is a new one. The Swarm's reader holds them ([SwarmNewProjectSteps.of]):
+/// the sheet closed or torn down between steps, opening it again resumes
+/// them (Lead's ruling on #2324).
 class SwarmNewProjectSteps {
-  SwarmNewProjectSteps(this.reader);
+  SwarmNewProjectSteps._(this.reader);
+
+  /// The steps [reader]'s Swarm holds, or new ones it holds from now on.
+  factory SwarmNewProjectSteps.of(SwarmReader reader) =>
+      _heldSteps[reader] ??= SwarmNewProjectSteps._(reader);
+
+  /// The steps [reader]'s Swarm holds, if any.
+  static SwarmNewProjectSteps? heldBy(SwarmReader reader) => _heldSteps[reader];
 
   final SwarmReader reader;
 
@@ -550,12 +577,27 @@ class SwarmNewProjectSteps {
   String? _projectId, _conversationId;
   bool _briefPosted = false, _started = false, _named = false;
 
+  Future<void>? _running;
+
+  /// The run under way, if any: the next waits for it.
+  Future<void>? get running => _running;
+
+  /// What the sheet last chose and last said, to show again when it opens
+  /// on these steps.
+  String? chosenMachine, chosenRepository, failure;
+
   /// The project exists: its Swarm, brief and visibility are what it was
   /// made with.
   String? get projectId => _projectId;
 
   /// Its creation was asked for: Swarm, brief and visibility stay as sent.
   bool get sent => _create != null || _projectId != null;
+
+  /// The brief and visibility its creation was asked with, once [sent].
+  String? get sentBrief =>
+      superTabMap(_create?['command'] ?? const {})['brief'] as String?;
+  String? get sentVisibility =>
+      superTabMap(_create?['command'] ?? const {})['visibility'] as String?;
 
   /// A start was sent and has not answered: a retry repeats it as it is.
   bool get starting => _start != null && !_started;
@@ -575,16 +617,51 @@ class SwarmNewProjectSteps {
   String? get startRepository =>
       superTabMap(_start?['command'] ?? const {})['repositoryUrl'] as String?;
 
+  /// Done with: the Swarm holds them no more.
+  void forget() {
+    if (identical(_heldSteps[reader], this)) _heldSteps[reader] = null;
+  }
+
   /// Runs what is left: creates the project with [brief] and [visibility],
   /// posts [brief] in its chat, starts its Product Manager on [machineId]
   /// with the repository [repositoryUrl], then names it after that
   /// repository. Answers the project's id once all of it is done and read.
-  /// [live] is asked after every answer: once it says no, nothing more is
-  /// sent and [SwarmNewProjectGone] is thrown. [machinesOf] lists the
-  /// machines from a fresh read before a start is first sent, as Desktop
-  /// checks the machine again: one that can no longer take it is refused
-  /// with why, and nothing is sent.
+  /// Each answer is kept before [live] is asked: once it says no, nothing
+  /// more is sent and [SwarmNewProjectGone] is thrown, and the next run
+  /// starts after what was answered. [machinesOf] lists the machines from a
+  /// fresh read before a start is first sent, as Desktop checks the machine
+  /// again: one that can no longer take it is refused with why, and nothing
+  /// is sent. One run at a time: a second waits for the first.
   Future<String> run({
+    required String brief,
+    required String visibility,
+    required String machineId,
+    required String repositoryUrl,
+    required bool Function() live,
+    required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
+    machinesOf,
+  }) async {
+    for (var running = _running; running != null; running = _running) {
+      await running;
+    }
+    final done = Completer<void>();
+    _running = done.future;
+    try {
+      return await _run(
+        brief: brief,
+        visibility: visibility,
+        machineId: machineId,
+        repositoryUrl: repositoryUrl,
+        live: live,
+        machinesOf: machinesOf,
+      );
+    } finally {
+      _running = null;
+      done.complete();
+    }
+  }
+
+  Future<String> _run({
     required String brief,
     required String visibility,
     required String machineId,
@@ -597,6 +674,7 @@ class SwarmNewProjectSteps {
       if (!live()) throw const SwarmNewProjectGone();
     }
 
+    check();
     final text = String.fromCharCodes(
       brief.trim().runes.take(swarmNewProjectBriefRunes),
     ).trim();
@@ -611,7 +689,6 @@ class SwarmNewProjectSteps {
         },
       };
       final result = await _send(() => _create, (v) => _create = v);
-      check();
       final (projectId, conversationId) = switch (result) {
         {
           'projectId': final String project,
@@ -624,22 +701,25 @@ class SwarmNewProjectSteps {
       _conversationId = conversationId;
       // In Home's list at once, while its Product Manager starts.
       unawaited(reader.refresh());
+      check();
     }
     final projectId = _projectId!;
-    if (!_briefPosted && text.isNotEmpty) {
+    // The brief the project was made with, whatever the field says now.
+    final posted = sentBrief ?? text;
+    if (!_briefPosted && posted.isNotEmpty) {
       _brief ??= {
         'operationId': superTabOperationId(),
         'command': {
           'type': 'message.send',
           'conversationId': _conversationId,
-          'text': text,
+          'text': posted,
           'replyTo': null,
           'recipientIds': const <String>[],
         },
       };
       await _send(() => _brief, (v) => _brief = v);
-      check();
       _briefPosted = true;
+      check();
     }
     if (!_started) {
       if (_start == null) {
@@ -654,6 +734,15 @@ class SwarmNewProjectSteps {
             'SWARM_UNREADABLE',
             'Couldn’t check the machine for the Product Manager: the Swarm '
                 'didn’t answer. Try again.',
+          );
+        }
+        // Deleted meanwhile (from Desktop, say): these steps are done with,
+        // and the next Create makes a new project.
+        if (snapshot.projectById(projectId) == null) {
+          forget();
+          throw const SuperTabFailure(
+            'PROJECT_GONE',
+            'The project was deleted meanwhile. Create it again.',
           );
         }
         final machines = machinesOf(snapshot);
@@ -675,8 +764,8 @@ class SwarmNewProjectSteps {
         };
       }
       await _send(() => _start, (v) => _start = v);
-      check();
       _started = true;
+      check();
     }
     final name = swarmRepositoryName(startRepository ?? repositoryUrl);
     if (!_named) {
@@ -692,8 +781,8 @@ class SwarmNewProjectSteps {
         },
         (_) {},
       );
-      check();
       _named = true;
+      check();
     }
     // Read before the project opens, so its screen finds it by its name:
     // once more when the read joined was asked before the name was.
@@ -702,6 +791,7 @@ class SwarmNewProjectSteps {
       check();
       if (reader.snapshot?.projectById(projectId)?.name == name) break;
     }
+    forget();
     return projectId;
   }
 
@@ -806,20 +896,31 @@ typedef SwarmNewProject = ({String swarmId, String projectId});
 /// then Create. Answers the project once it is made and its Product Manager
 /// asked to start; null when closed. The Swarm taken away, the person's
 /// access to it, or their account, while it is open closes it, and nothing
-/// more is sent. [now] is what machine readings are measured from.
+/// more is sent. Steps left unfinished stay with the Swarm's reader
+/// ([SwarmNewProjectSteps]): the sheet opens on them again, and stays open
+/// while one of them waits for its answer. [now] is what machine readings
+/// are measured from.
 Future<SwarmNewProject?> showSwarmNewProjectSheet(
   BuildContext context, {
   required SwarmSession session,
   required List<String> swarmIds,
   DateTime Function() now = DateTime.now,
-}) => showModalBottomSheet<SwarmNewProject>(
-  context: context,
-  isScrollControlled: true,
-  backgroundColor: AppGlass.rowFill,
-  shape: AppControl.sheetShape,
-  builder: (_) =>
-      SwarmNewProjectSheet(session: session, swarmIds: swarmIds, now: now),
-);
+}) {
+  // The sheet reads no status bar of its own (the route takes it away).
+  final top = MediaQuery.paddingOf(context).top;
+  return showModalBottomSheet<SwarmNewProject>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppGlass.rowFill,
+    shape: AppControl.sheetShape,
+    builder: (_) => SwarmNewProjectSheet(
+      session: session,
+      swarmIds: swarmIds,
+      now: now,
+      topInset: top,
+    ),
+  );
+}
 
 /// What [showSwarmNewProjectSheet] shows.
 class SwarmNewProjectSheet extends StatefulWidget {
@@ -828,11 +929,15 @@ class SwarmNewProjectSheet extends StatefulWidget {
     required this.session,
     required this.swarmIds,
     this.now = DateTime.now,
+    this.topInset = 0,
   });
 
   final SwarmSession session;
   final List<String> swarmIds;
   final DateTime Function() now;
+
+  /// The phone's status bar: with the keyboard up the sheet reaches it.
+  final double topInset;
 
   @override
   State<SwarmNewProjectSheet> createState() => _SwarmNewProjectSheetState();
@@ -855,10 +960,10 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   _Pick? _picking;
   String? _linkError;
 
-  /// The steps sent in the Swarm picked: kept while the sheet is open.
-  SwarmNewProjectSteps? _steps;
+  /// A step's answer is awaited: the sheet stays open until it comes.
   bool _busy = false;
   String? _error;
+  final _errorKey = GlobalKey();
 
   /// The model list of the Swarm [_policySwarm], once read.
   Map<String, String> _modelList = const {};
@@ -870,17 +975,84 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
 
   SwarmInbox get _inbox => widget.session.inbox;
 
+  /// Each Swarm's reader as the sheet opened. One replaced since (its Swarm
+  /// left Home's list and came back) is another read of it: the sheet goes
+  /// rather than send through either.
+  late final Map<String, SwarmReader?> _readers;
+
   List<String> get _writable => [
     for (final id in widget.swarmIds)
-      if (swarmMayCreateProject(_inbox, id)) id,
+      if (_readers[id] case final reader?
+          when identical(_inbox.reader(id), reader) &&
+              swarmMayCreateProject(_inbox, id))
+        id,
   ];
+
+  /// The steps the Swarm picked holds, if any.
+  SwarmNewProjectSteps? get _steps => switch (_readers[_swarmId]) {
+    final reader? => SwarmNewProjectSteps.heldBy(reader),
+    null => null,
+  };
 
   @override
   void initState() {
     super.initState();
-    _swarmId = _writable.firstOrNull;
+    _readers = {for (final id in widget.swarmIds) id: _inbox.reader(id)};
+    final writable = _writable;
+    // A Swarm with a project's steps left unfinished: it opens on them.
+    _swarmId =
+        writable
+            .where(
+              (id) => SwarmNewProjectSteps.heldBy(_readers[id]!)?.sent ?? false,
+            )
+            .firstOrNull ??
+        writable.firstOrNull;
+    if (_steps case final steps?) _resume(steps);
     if (_swarmId case final id?) unawaited(_readModelList(id));
   }
+
+  /// Shows [steps] where they stopped: what they were sent with, what was
+  /// last chosen, and why they stopped. A run still under way keeps the
+  /// sheet busy until it answers.
+  void _resume(SwarmNewProjectSteps steps) {
+    if (steps.sentBrief case final brief?) _brief.text = brief;
+    if (steps.sentVisibility case final visibility?) _visibility = visibility;
+    if (steps.chosenRepository case final repository?) {
+      _repository = repository;
+      _repositoryPicked = true;
+    }
+    _machineId = steps.chosenMachine;
+    _error = steps.failure;
+    if (_error != null) _showError();
+    if (steps.running case final running?) {
+      _busy = true;
+      unawaited(
+        running.whenComplete(() {
+          if (!mounted || _closing) return;
+          setState(() {
+            _busy = false;
+            _error = steps.failure;
+          });
+          if (_error != null) _showError();
+        }),
+      );
+    }
+  }
+
+  /// Steps nothing was sent for, nor runs: let go, so the next Create
+  /// starts afresh.
+  void _dropUnsent() {
+    if (_steps case final steps? when !steps.sent && steps.running == null) {
+      steps.forget();
+    }
+  }
+
+  /// Scrolls why Create stopped into sight once it is drawn.
+  void _showError() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_errorKey.currentContext case final shown? when mounted) {
+      unawaited(Scrollable.ensureVisible(shown, alignment: 1));
+    }
+  });
 
   @override
   void didChangeDependencies() {
@@ -890,6 +1062,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
 
   @override
   void dispose() {
+    _dropUnsent();
     _brief.dispose();
     _link.dispose();
     super.dispose();
@@ -970,14 +1143,20 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
       _close();
       return const SizedBox.shrink();
     }
-    final readers = [for (final id in widget.swarmIds) ?_inbox.reader(id)];
     return ListenableBuilder(
-      listenable: Listenable.merge([widget.session, _inbox, ...readers]),
+      listenable: Listenable.merge([
+        widget.session,
+        _inbox,
+        // Not one replaced since: the inbox disposes it.
+        for (final MapEntry(:key, :value) in _readers.entries)
+          if (value != null && identical(_inbox.reader(key), value)) value,
+      ]),
       builder: (context, _) {
         final writable = _writable;
         final swarmId = _swarmId;
         // Signed out, another account, or the Swarm picked no longer the
-        // person's to write in: nothing of it stays, and the sheet goes.
+        // person's to write in, or read again: nothing of it stays, and the
+        // sheet goes.
         if (_closing ||
             SwarmScope.of(context) != widget.session ||
             swarmId == null ||
@@ -988,27 +1167,49 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
         final reader = _inbox.reader(swarmId)!;
         final snapshot = reader.snapshot!;
         final insets = MediaQuery.viewInsetsOf(context).bottom;
-        return Padding(
-          padding: EdgeInsets.only(bottom: insets),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * .85 - insets,
-            ),
-            child: SafeArea(
-              top: false,
-              child: KeyedSubtree(
-                key: const ValueKey('swarm-new-project-sheet'),
-                child: switch (_picking) {
-                  null => _form(context, writable, swarmId, reader, snapshot),
-                  final pick => _pick(
-                    context,
-                    pick,
-                    writable,
-                    swarmId,
-                    reader,
-                    snapshot,
+        final height = MediaQuery.sizeOf(context).height;
+        // With the keyboard up the sheet may reach the status bar, so what
+        // is typed in and Create both stay in sight on a small phone.
+        final maxHeight =
+            (insets > 0
+                ? height - widget.topInset - AppSpace.s
+                : height * .85) -
+            insets;
+        // While a step's answer is unknown the sheet stays: its close, the
+        // back gesture, the dimmed page behind it, and a drag down (which
+        // closes a sheet past PopScope) do nothing.
+        return PopScope(
+          canPop: !_busy,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart: _busy ? (_) {} : null,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: insets),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: math.max(0, maxHeight)),
+                child: SafeArea(
+                  top: false,
+                  child: KeyedSubtree(
+                    key: const ValueKey('swarm-new-project-sheet'),
+                    child: switch (_picking) {
+                      null => _form(
+                        context,
+                        writable,
+                        swarmId,
+                        reader,
+                        snapshot,
+                      ),
+                      final pick => _pick(
+                        context,
+                        pick,
+                        writable,
+                        swarmId,
+                        reader,
+                        snapshot,
+                      ),
+                    },
                   ),
-                },
+                ),
               ),
             ),
           ),
@@ -1017,9 +1218,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     );
   }
 
-  /// The sheet's grabber and [header] at its top and [footer] at its
-  /// bottom, always in sight; [children] between them scroll when the
-  /// phone is too short for them.
+  /// The sheet's grabber and [header] at its top and [footer] (its one
+  /// button) at its bottom, always in sight; [children] between them scroll
+  /// when the phone, or the room the keyboard leaves, is too short for them.
   Widget _frame({
     required Widget header,
     required List<Widget> children,
@@ -1125,11 +1326,18 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     return _frame(
       header: _header(
         'New project',
-        SwarmIconButton(
-          key: const ValueKey('swarm-new-project-close'),
-          icon: LucideIcons.x300,
-          label: 'Close',
-          onPressed: () => Navigator.of(context).pop(),
+        // Dimmed while a step's answer is awaited, and the sheet stays.
+        IgnorePointer(
+          ignoring: _busy,
+          child: Opacity(
+            opacity: _busy ? .55 : 1,
+            child: SwarmIconButton(
+              key: const ValueKey('swarm-new-project-close'),
+              icon: LucideIcons.x300,
+              label: 'Close',
+              onPressed: () => unawaited(Navigator.of(context).maybePop()),
+            ),
+          ),
         ),
       ),
       children: [
@@ -1204,11 +1412,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
             ),
           ],
         ),
-      ],
-      // Why it stopped, and Create, in sight however short the phone.
-      footer: [
+        // Why it stopped, under what it is about; scrolled into sight when
+        // it appears (_showError).
         if (_error case final error?)
           Padding(
+            key: _errorKey,
             padding: const EdgeInsets.fromLTRB(
               AppSpace.xs,
               AppSpace.m,
@@ -1236,6 +1444,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               lines: 3,
             ),
           ),
+      ],
+      // Create in sight however short the phone, the keyboard up too.
+      footer: [
         const SizedBox(height: AppSpace.l),
         SwarmButton(
           key: const ValueKey('swarm-new-project-create'),
@@ -1288,7 +1499,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     String machineId,
   ) async {
     if (_busy) return;
-    final steps = _steps ??= SwarmNewProjectSteps(reader);
+    // Held by the Swarm's reader: a sheet opened again resumes them.
+    final steps = SwarmNewProjectSteps.of(reader)
+      ..chosenMachine = machineId
+      ..chosenRepository = repository
+      ..failure = null;
     setState(() {
       _busy = true;
       _error = null;
@@ -1317,22 +1532,28 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   }
 
   /// Says why the last Create stopped; once the project exists, that it
-  /// stays, as Desktop leaves it in the list.
+  /// stays, as Desktop leaves it in the list. Kept with [steps], for a sheet
+  /// that opens on them again.
   void _fail(
     String swarmId,
     SwarmReader reader,
     SwarmNewProjectSteps steps,
     String why,
   ) {
+    final error = steps.projectId == null
+        ? 'Couldn’t create the project: $why'
+        // Its project deleted meanwhile, the steps were let go: the next
+        // Create starts afresh.
+        : !identical(SwarmNewProjectSteps.heldBy(reader), steps)
+        ? why
+        : steps.started
+        ? 'The project is made and its Product Manager is starting. '
+              'Naming it didn’t finish: $why'
+        : 'The project is made. Its Product Manager didn’t start: $why';
+    steps.failure = error;
     if (!_live(swarmId, reader)) return;
-    setState(
-      () => _error = steps.projectId == null
-          ? 'Couldn’t create the project: $why'
-          : steps.started
-          ? 'The project is made and its Product Manager is starting. '
-                'Naming it didn’t finish: $why'
-          : 'The project is made. Its Product Manager didn’t start: $why',
-    );
+    setState(() => _error = error);
+    _showError();
   }
 
   Widget _pick(
@@ -1382,8 +1603,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                       _picking = null;
                       if (id == _swarmId) return;
                       // Another Swarm: its own repositories and machines.
+                      _dropUnsent();
                       _swarmId = id;
-                      _steps = null;
                       _error = null;
                       _repository = null;
                       _repositoryPicked = false;
@@ -1520,8 +1741,6 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                 ),
               ),
             ),
-          ],
-          footer: [
             if (_linkError case final error?)
               Padding(
                 padding: const EdgeInsets.fromLTRB(
@@ -1537,6 +1756,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                   color: AppColors.danger,
                 ),
               ),
+          ],
+          footer: [
             const SizedBox(height: AppSpace.l),
             SwarmButton(
               key: const ValueKey('swarm-new-project-link-use'),

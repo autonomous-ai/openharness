@@ -49,6 +49,29 @@ void main() {
         old.detail,
         'Update Harness on mac-1 to run a Product Manager there.',
       );
+      expect(
+        swarmLeadMachineRefusal([old], 'mac-1'),
+        'mac-1: Update Harness on mac-1 to run a Product Manager there. '
+        'Choose another machine.',
+        reason: 'one full stop',
+      );
+    });
+
+    test('a machine of theirs added for the Lead only cannot take it, and '
+        'says why as the server would refuse it', () {
+      final [swarm, lead] = machines([
+        leadPool('mac-1', name: 'Studio', scope: null),
+        leadPool('mac-2', name: 'Mini'),
+      ]);
+      expect(swarm.id, 'mac-2', reason: 'the one that can comes first');
+      expect(swarm.startable, isTrue);
+      expect(lead.startable, isFalse);
+      expect(lead.detail, swarmLeadUnscoped);
+      expect(
+        swarmLeadMachineRefusal([lead], 'mac-1'),
+        'Studio: Add this machine to the Swarm again to support other '
+        'projects. Choose another machine.',
+      );
     });
 
     test('an engine not offered, not installed, signed out, out of quota or '
@@ -277,7 +300,7 @@ void main() {
 
     test('creates the project, posts its brief, starts its Product Manager '
         'on the machine picked, then names it after its repository', () async {
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       final made = await run(steps);
 
       expect(
@@ -318,8 +341,55 @@ void main() {
       expect(ids.toSet(), hasLength(4), reason: 'one operation per step');
     });
 
+    test('the Swarm\'s reader holds its steps until they finish, and runs '
+        'them one at a time', () async {
+      final steps = SwarmNewProjectSteps.of(reader);
+      expect(SwarmNewProjectSteps.of(reader), same(steps));
+      expect(SwarmNewProjectSteps.heldBy(reader), same(steps));
+      final held = Completer<Object?>();
+      swarm.answer = (command) =>
+          command['type'] == 'project.create' ? held.future : null;
+      final first = run(steps);
+      final second = run(steps);
+      await settle();
+      held.complete(null);
+      final made = await first;
+      expect(await second, made, reason: 'the second finds it done');
+      expect(swarm.commands('project.create'), hasLength(1));
+      expect(swarm.commands('lead.start'), hasLength(1));
+      expect(SwarmNewProjectSteps.heldBy(reader), isNull, reason: 'finished');
+      expect(SwarmNewProjectSteps.of(reader), isNot(same(steps)));
+    });
+
+    test('a project deleted before its start lets its steps go: nothing is '
+        'started, and the next Create makes a new one', () async {
+      swarm.answer = (command) {
+        if (command['type'] == 'message.send') {
+          // Deleted from Desktop meanwhile.
+          swarm.projects.removeWhere((p) => p['name'] == 'New project');
+        }
+        return null;
+      };
+      final steps = SwarmNewProjectSteps.of(reader);
+      await expectLater(
+        run(steps),
+        throwsA(
+          isA<SuperTabFailure>().having((f) => f.code, 'code', 'PROJECT_GONE'),
+        ),
+      );
+      expect(swarm.commands('lead.start'), isEmpty);
+      expect(SwarmNewProjectSteps.heldBy(reader), isNull);
+
+      swarm.answer = null;
+      await run(SwarmNewProjectSteps.of(reader));
+      final creates = swarm.commands('project.create');
+      expect(creates, hasLength(2));
+      expect(creates[0]['operationId'], isNot(creates[1]['operationId']));
+      expect(swarm.commands('lead.start'), hasLength(1));
+    });
+
     test('no brief posts nothing in its chat', () async {
-      await run(SwarmNewProjectSteps(reader), brief: '   ');
+      await run(SwarmNewProjectSteps.of(reader), brief: '   ');
       expect(swarm.commands('message.send'), isEmpty);
       expect(
         (swarm.commands('project.create').single['command'] as Map)['brief'],
@@ -331,7 +401,7 @@ void main() {
         'rune, never inside one, and fits what the server takes', () async {
       const smile = '😀';
       final atLimit = smile * swarmNewProjectBriefRunes;
-      await run(SwarmNewProjectSteps(reader), brief: atLimit);
+      await run(SwarmNewProjectSteps.of(reader), brief: atLimit);
       final brief =
           (swarm.commands('project.create').single['command'] as Map)['brief']
               as String;
@@ -343,7 +413,7 @@ void main() {
       );
 
       swarm.sent.clear();
-      await run(SwarmNewProjectSteps(reader), brief: '${atLimit}x$smile');
+      await run(SwarmNewProjectSteps.of(reader), brief: '${atLimit}x$smile');
       final cut =
           (swarm.commands('project.create').single['command'] as Map)['brief']
               as String;
@@ -361,7 +431,7 @@ void main() {
         }
         return null;
       };
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
       expect(steps.sent, isTrue, reason: 'its fields stay as sent');
       expect(steps.projectId, isNull);
@@ -398,7 +468,7 @@ void main() {
           }
           return null;
         };
-        final steps = SwarmNewProjectSteps(reader);
+        final steps = SwarmNewProjectSteps.of(reader);
         await expectLater(
           run(steps),
           throwsA(
@@ -445,7 +515,7 @@ void main() {
         }
         return null;
       };
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
       expect(steps.starting, isTrue);
       expect(steps.startMachine, 'mac-1');
@@ -459,7 +529,7 @@ void main() {
 
     test('a machine that can no longer take it on a fresh read is refused '
         'with why, and no start is sent', () async {
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       swarm.machines = [leadPool('mac-1', name: 'Studio', slots: 0)];
       await expectLater(
         run(steps),
@@ -477,7 +547,7 @@ void main() {
 
     test('a fresh read that fails sends no start and says so; once the Swarm '
         'answers again, Create again starts it', () async {
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       final changes = fake.routes['/api/super-tabs/$tab/changes']!;
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           throw const SuperTabFailure('NETWORK', 'Offline.');
@@ -506,7 +576,7 @@ void main() {
         final held = Completer<Object?>();
         swarm.answer = (command) =>
             command['type'] == 'project.create' ? held.future : null;
-        final steps = SwarmNewProjectSteps(reader);
+        final steps = SwarmNewProjectSteps.of(reader);
         final running = run(steps, live: () => live);
         await settle();
         live = false;
@@ -515,6 +585,14 @@ void main() {
         expect(
           [for (final b in swarm.sent) (b['command'] as Map)['type']],
           ['project.create'],
+        );
+        expect(steps.projectId, isNotNull, reason: 'its answer is kept');
+
+        // Opened again, it starts after what was answered.
+        await run(steps);
+        expect(
+          [for (final b in swarm.sent) (b['command'] as Map)['type']],
+          ['project.create', 'message.send', 'lead.start', 'project.rename'],
         );
       },
     );
@@ -529,7 +607,7 @@ void main() {
         }
         return null;
       };
-      final steps = SwarmNewProjectSteps(reader);
+      final steps = SwarmNewProjectSteps.of(reader);
       await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
       expect(steps.started, isTrue);
       expect(steps.startSent, isTrue);
@@ -591,6 +669,13 @@ void main() {
     Future<void> pickMachine(WidgetTester tester, String id) async {
       await tap(tester, 'swarm-new-project-machine');
       await tap(tester, 'swarm-new-project-pick-machine-$id');
+    }
+
+    /// A second of frames: Create's spinner never settles while it waits.
+    Future<void> pumpFor(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
     }
 
     testWidgets('+ New project is the last row of Projects for someone who '
@@ -704,6 +789,7 @@ void main() {
           leadPool('mac-1', name: 'Studio'),
           leadPool('mac-2', name: 'Old', capable: false),
           leadPool('mac-3', name: 'Full', slots: 0),
+          leadPool('mac-4', name: 'Lead only', scope: null),
         ],
       );
       final host = await pump(tester, [swarm]);
@@ -713,12 +799,14 @@ void main() {
       expect(key('swarm-new-project-pick-machine-mac-1'), findsOneWidget);
       expect(key('swarm-new-project-pick-machine-mac-2'), findsNothing);
       expect(key('swarm-new-project-pick-machine-mac-3'), findsNothing);
+      expect(key('swarm-new-project-pick-machine-mac-4'), findsNothing);
       await tap(tester, 'swarm-new-project-back');
 
       // None can now: each says why, and Create says so.
       swarm.machines = [
         leadPool('mac-2', name: 'Old', capable: false),
         leadPool('mac-3', name: 'Full', slots: 0),
+        leadPool('mac-4', name: 'Lead only', scope: null),
       ];
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
@@ -730,6 +818,14 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Claude Code · No agents free'), findsOneWidget);
+      // Added for the Lead only: the server would refuse it.
+      expect(
+        find.descendant(
+          of: key('swarm-new-project-pick-machine-mac-4'),
+          matching: find.text(swarmLeadUnscoped),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(key('swarm-new-project-pick-machine-mac-2'));
       await tester.pumpAndSettle();
       expect(
@@ -864,6 +960,277 @@ void main() {
       expect(renames, hasLength(2));
       expect(renames[0]['operationId'], renames[1]['operationId']);
       expectHomeCProject('openharness');
+    });
+
+    testWidgets('while a step\'s answer is awaited it stays open: its close, '
+        'back, the page behind it and a drag down do nothing', (tester) async {
+      final swarm = NewProjectSwarm();
+      final held = Completer<Object?>();
+      swarm.answer = (command) =>
+          command['type'] == 'project.create' ? held.future : null;
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tester.tap(key('swarm-new-project-create'));
+      await pumpFor(tester);
+      expect(find.text('Creating…'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-project-close'), warnIfMissed: false);
+      await pumpFor(tester);
+      expect(key('swarm-new-project-sheet'), findsOneWidget, reason: 'close');
+      await tester.binding.handlePopRoute();
+      await pumpFor(tester);
+      expect(key('swarm-new-project-sheet'), findsOneWidget, reason: 'back');
+      await tester.tapAt(const Offset(195, 40));
+      await pumpFor(tester);
+      expect(key('swarm-new-project-sheet'), findsOneWidget, reason: 'behind');
+      await tester.drag(
+        find.descendant(
+          of: key('swarm-new-project-sheet'),
+          matching: find.text('New project'),
+        ),
+        const Offset(0, 600),
+      );
+      await pumpFor(tester);
+      expect(key('swarm-new-project-sheet'), findsOneWidget, reason: 'drag');
+
+      held.complete(null);
+      await tester.pumpAndSettle();
+      expect(key('swarm-new-project-sheet'), findsNothing);
+      expect(swarm.commands('project.create'), hasLength(1));
+      expectHomeCProject('openharness');
+    });
+
+    testWidgets('closed after a create\'s answer was lost, it opens on its '
+        'steps where they stopped and finishes them under the same '
+        'operation', (tester) async {
+      final swarm = NewProjectSwarm();
+      var lose = true;
+      swarm.answer = (command) {
+        if (command['type'] == 'project.create' && lose) {
+          lose = false;
+          throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.');
+        }
+        return null;
+      };
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
+      await tap(tester, 'swarm-new-project-visibility');
+      await tap(tester, 'swarm-new-project-pick-visibility-private');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      expect(key('swarm-new-project-error'), findsOneWidget);
+      await tap(tester, 'swarm-new-project-close');
+      expect(key('swarm-new-project-sheet'), findsNothing);
+
+      await tap(tester, 'swarm-new-project');
+      expect(
+        find.text('Couldn’t create the project: The Swarm didn’t answer.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<TextField>(key('swarm-new-project-brief'))
+            .controller!
+            .text,
+        'Ship it',
+      );
+      for (final (field, value) in [
+        ('visibility', 'Private'),
+        ('machine', 'Studio'),
+        ('repository', 'openharness'),
+      ]) {
+        expect(
+          find.descendant(
+            of: key('swarm-new-project-$field'),
+            matching: find.text(value),
+          ),
+          findsOneWidget,
+          reason: field,
+        );
+      }
+      await tap(tester, 'swarm-new-project-create');
+
+      final creates = swarm.commands('project.create');
+      expect(creates, hasLength(2));
+      expect(creates[0]['operationId'], creates[1]['operationId']);
+      expect(creates[1]['command'], creates[0]['command']);
+      expect(
+        (swarm.commands('message.send').single['command'] as Map)['text'],
+        'Ship it',
+      );
+      expect(swarm.commands('lead.start'), hasLength(1));
+      expectHomeCProject('openharness');
+    });
+
+    testWidgets('closed after its create was refused, it opens afresh: '
+        'nothing was made to finish', (tester) async {
+      final swarm = NewProjectSwarm();
+      swarm.answer = (command) => command['type'] == 'project.create'
+          ? throw const SuperTabFailure(
+              'PROJECT_LIMIT',
+              'Too many projects.',
+              statusCode: 409,
+            )
+          : null;
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      expect(key('swarm-new-project-error'), findsOneWidget);
+      await tap(tester, 'swarm-new-project-close');
+
+      await tap(tester, 'swarm-new-project');
+      expect(key('swarm-new-project-error'), findsNothing);
+      expect(find.text('Create'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-new-project-machine'),
+          matching: find.text('Choose'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('torn down between steps, it opens on them still under way, '
+        'then finishes them with no second project or brief', (tester) async {
+      final swarm = NewProjectSwarm();
+      final held = Completer<Object?>();
+      swarm.answer = (command) =>
+          command['type'] == 'message.send' ? held.future : null;
+      await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
+      await pickMachine(tester, 'mac-1');
+      await tester.tap(key('swarm-new-project-create'));
+      await pumpFor(tester);
+      expect(swarm.commands('message.send'), hasLength(1));
+
+      // Gone without a word, as the system may take a sheet away.
+      final sheet = tester.element(key('swarm-new-project-sheet'));
+      Navigator.of(sheet).removeRoute(ModalRoute.of(sheet)!);
+      await pumpFor(tester);
+      expect(key('swarm-new-project-sheet'), findsNothing);
+
+      await tester.tap(key('swarm-new-project'));
+      await pumpFor(tester);
+      expect(find.text('Creating…'), findsOneWidget, reason: 'still waiting');
+      held.complete(null);
+      await tester.pumpAndSettle();
+      expect(find.text('Create'), findsOneWidget);
+      expect(key('swarm-new-project-error'), findsNothing);
+      await tap(tester, 'swarm-new-project-create');
+
+      expect(
+        [for (final b in swarm.sent) (b['command'] as Map)['type']],
+        ['project.create', 'message.send', 'lead.start', 'project.rename'],
+      );
+      expectHomeCProject('openharness');
+    });
+
+    testWidgets('on a 320 by 568 phone with the keyboard up and a four-line '
+        'error, the brief typed in and Create stay in sight', (tester) async {
+      final swarm = NewProjectSwarm();
+      swarm.answer = (command) => command['type'] == 'project.create'
+          ? throw SuperTabFailure(
+              'PROJECT_LIMIT',
+              'This Swarm has as many projects as it can hold. ' * 6,
+              statusCode: 409,
+            )
+          : null;
+      await pump(tester, [swarm]);
+      tester.view.physicalSize = const Size(960, 1704);
+      tester.view.padding = const FakeViewPadding(top: 60);
+      await tester.pumpAndSettle();
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      final error = key('swarm-new-project-error');
+      final scroll = find.descendant(
+        of: key('swarm-new-project-sheet'),
+        matching: find.byType(SingleChildScrollView),
+      );
+      // Scrolled into sight as it appears, over Create.
+      final first = tester.getRect(error);
+      expect(first.top, greaterThanOrEqualTo(tester.getRect(scroll).top));
+      expect(first.bottom, lessThanOrEqualTo(tester.getRect(scroll).bottom));
+      final text = find.descendant(of: error, matching: find.byType(RichText));
+      final painter = TextPainter(
+        text: tester.widget<RichText>(text).text,
+        textDirection: TextDirection.ltr,
+        maxLines: 4,
+      )..layout(maxWidth: tester.getSize(text).width);
+      expect(painter.computeLineMetrics(), hasLength(4));
+      painter.dispose();
+
+      // Refused outright: the brief is written again, the keyboard up, to
+      // its sixth line.
+      await tap(tester, 'swarm-new-project-brief');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 260 * 3);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        key('swarm-new-project-brief'),
+        List.filled(6, 'Ship the phone flow.').join('\n'),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final create = tester.getRect(key('swarm-new-project-create'));
+      expect(create.bottom, lessThanOrEqualTo(568 - 260));
+      final view = tester.getRect(scroll);
+      expect(view.top, greaterThanOrEqualTo(20), reason: 'under the bar');
+      expect(view.bottom, lessThanOrEqualTo(create.top));
+      // The line typed in, in sight.
+      final editable = tester
+          .state<EditableTextState>(
+            find.descendant(
+              of: key('swarm-new-project-brief'),
+              matching: find.byType(EditableText),
+            ),
+          )
+          .renderEditable;
+      final caret = MatrixUtils.transformRect(
+        editable.getTransformTo(null),
+        editable.getLocalRectForCaret(
+          TextPosition(offset: editable.text!.toPlainText().length),
+        ),
+      );
+      expect(caret.top, greaterThanOrEqualTo(view.top));
+      expect(caret.bottom, lessThanOrEqualTo(view.bottom));
+      // Why it stopped scrolls with the form, a scroll away.
+      expect(find.descendant(of: scroll, matching: error), findsOneWidget);
+      await tester.ensureVisible(error);
+      await tester.pumpAndSettle();
+      final shown = tester.getRect(error);
+      expect(shown.top, greaterThanOrEqualTo(view.top));
+      expect(shown.bottom, lessThanOrEqualTo(view.bottom));
+      expect(
+        tester.getRect(key('swarm-new-project-create')),
+        create,
+        reason: 'Create stays',
+      );
+    });
+
+    testWidgets('its Swarm read again under another reader while it is open '
+        'closes it, and nothing is sent through either', (tester) async {
+      final swarm = NewProjectSwarm();
+      final swarms = [swarm];
+      final host = await pump(tester, swarms);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      final inbox = host.session!.inbox;
+      final before = inbox.reader(tab);
+      // Off the list and back, between two frames.
+      swarms.clear();
+      await inbox.refresh();
+      swarms.add(swarm);
+      await inbox.refresh();
+      expect(inbox.reader(tab), isNot(same(before)));
+      expect(swarmMayCreateProject(inbox, tab), isTrue);
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(key('swarm-new-project'), findsOneWidget, reason: 'listed again');
+      expect(swarm.sent, isEmpty);
     });
 
     testWidgets('its Swarm\'s read taken away while it is open closes it at '

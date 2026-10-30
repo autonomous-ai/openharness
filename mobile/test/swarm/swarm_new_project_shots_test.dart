@@ -20,9 +20,11 @@ import 'swarm_fixture.dart';
 import 'swarm_new_project_fixture.dart';
 
 /// Review screenshots of + New project: Home's row, the sheet filled in, PM
-/// runs on, a Product Manager that did not start, and no machine able to
-/// run one. On a 390-point and a 320-point phone in both phone themes, from
-/// made-up data only, to the folder `SWARM_NEW_PROJECT_SHOTS` names.
+/// runs on, the brief written with the keyboard up, a long error (with the
+/// keyboard up too), a Product Manager that did not start, and no machine able to run
+/// one. On a 390-point and a 320-point phone in both phone themes, from
+/// made-up data only, to the folder `SWARM_NEW_PROJECT_SHOTS` names. The
+/// keyboard is a drawn box of an iPhone keyboard's height, labelled so.
 final shots = Platform.environment['SWARM_NEW_PROJECT_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -52,9 +54,9 @@ void main() {
 
   testWidgets('+ New project on a 390 and a 320 point phone, in both phone '
       'themes', (tester) async {
-    for (final (width, height, top, bottom) in [
-      (390.0, 844.0, 47.0, 34.0),
-      (320.0, 568.0, 20.0, 0.0),
+    for (final (width, height, top, bottom, keys) in [
+      (390.0, 844.0, 47.0, 34.0, 336.0),
+      (320.0, 568.0, 20.0, 0.0, 260.0),
     ]) {
       // The phone's screen, as the sheet measures its height by it.
       await tester.binding.setSurfaceSize(Size(width, height));
@@ -99,15 +101,53 @@ void main() {
           readMarks: MemoryKeyValueStore(),
         )..foreground = false;
         final boundary = GlobalKey();
+        final keyboard = ValueNotifier<double>(0);
         await tester.pumpWidget(
           RepaintBoundary(
             key: boundary,
-            child: MaterialApp(
-              debugShowCheckedModeBanner: false,
-              theme: buildAppTheme(brightness: brightness),
-              builder: (_, child) => SwarmScope(notifier: host, child: child!),
-              onGenerateRoute: (_) => CupertinoPageRoute<void>(
-                builder: (_) => SwarmPage(now: () => newProjectNow),
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: Stack(
+                children: [
+                  MaterialApp(
+                    debugShowCheckedModeBanner: false,
+                    theme: buildAppTheme(brightness: brightness),
+                    builder: (_, child) =>
+                        SwarmScope(notifier: host, child: child!),
+                    onGenerateRoute: (_) => CupertinoPageRoute<void>(
+                      builder: (_) => SwarmPage(now: () => newProjectNow),
+                    ),
+                  ),
+                  // Where the keyboard is, while it is up.
+                  ValueListenableBuilder(
+                    valueListenable: keyboard,
+                    builder: (_, height, _) => height == 0
+                        ? const SizedBox.shrink()
+                        : Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: height,
+                            child: ColoredBox(
+                              color: brightness == Brightness.dark
+                                  ? const Color(0xFF2C2C2E)
+                                  : const Color(0xFFD1D3D9),
+                              child: Center(
+                                child: Text(
+                                  'Keyboard',
+                                  style: TextStyle(
+                                    fontFamily: '.AppleSystemUIFont',
+                                    fontSize: 17,
+                                    color: brightness == Brightness.dark
+                                        ? const Color(0xFF8E8E93)
+                                        : const Color(0xFF6E6E73),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -150,6 +190,48 @@ void main() {
         await capture('machines');
         await tap('swarm-new-project-pick-machine-mac-studio');
         await capture('sheet');
+
+        // The keyboard up while the brief is written: it and Create stay in
+        // sight.
+        Future<void> raiseKeyboard() async {
+          await tester.showKeyboard(key('swarm-new-project-brief'));
+          tester.view.viewInsets = FakeViewPadding(bottom: keys * 3);
+          // Under the keyboard there is no home indicator to keep clear of.
+          tester.view.padding = FakeViewPadding(top: top * 3);
+          keyboard.value = keys;
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> lowerKeyboard() async {
+          FocusManager.instance.primaryFocus?.unfocus();
+          tester.view.resetViewInsets();
+          tester.view.padding = FakeViewPadding(
+            top: top * 3,
+            bottom: bottom * 3,
+          );
+          keyboard.value = 0;
+          await tester.pumpAndSettle();
+        }
+
+        await raiseKeyboard();
+        await capture('keyboard');
+        await lowerKeyboard();
+
+        // A create refused with a long reason, then the brief written again.
+        swarm.answer = (command) => command['type'] == 'project.create'
+            ? throw const SuperTabFailure(
+                'PROJECT_LIMIT',
+                'This Swarm has as many projects as its plan holds. Archive '
+                    'one you no longer need, or ask its owner to raise the '
+                    'limit, then try again.',
+                statusCode: 409,
+              )
+            : null;
+        await tap('swarm-new-project-create');
+        await capture('error');
+        await raiseKeyboard();
+        await capture('keyboard-error');
+        await lowerKeyboard();
 
         // Its Product Manager refused: the project stays, and says why.
         swarm.answer = (command) => command['type'] == 'lead.start'
@@ -196,6 +278,7 @@ void main() {
         await tester.pump(const Duration(seconds: 30));
         host.dispose();
         account.dispose();
+        keyboard.dispose();
       }
     }
     await tester.binding.setSurfaceSize(null);
