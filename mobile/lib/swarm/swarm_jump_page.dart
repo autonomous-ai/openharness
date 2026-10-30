@@ -16,25 +16,21 @@ import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 
-/// Opens Jump to over Home: [compose] for the compose button, where it
-/// starts a message in the project picked.
-void openSwarmJump(BuildContext context, {bool compose = false}) => unawaited(
-  Navigator.of(context).push(
-    phoneRoute((_) => SwarmJumpPage(compose: compose), listensForItself: true),
-  ),
+/// Opens Jump to over Home. A new message starts from Home's + instead
+/// (`swarm_new_message_sheet.dart`).
+void openSwarmJump(BuildContext context) => unawaited(
+  Navigator.of(context)
+      .push(phoneRoute((_) => const SwarmJumpPage(), listensForItself: true)),
 );
 
 /// Jump to…, from Swarm Home (Tony's prototype C1, 2026-10-30): every
 /// project of the account's Swarms that can be read, by name, narrowed as
 /// the person types; one picked opens on its chat, in place of this page.
-/// With [compose] it asks where a new message goes. A Swarm the account
-/// loses, or whose read is taken away, leaves the list as it goes, and a
-/// tap on one of its projects opens nothing. A Swarm that could not be read
-/// says so, never that there is no project.
+/// A Swarm the account loses, or whose read is taken away, leaves the list
+/// as it goes, and a tap on one of its projects opens nothing. A Swarm that
+/// could not be read says so, never that there is no project.
 class SwarmJumpPage extends StatefulWidget {
-  const SwarmJumpPage({super.key, this.compose = false});
-
-  final bool compose;
+  const SwarmJumpPage({super.key});
 
   @override
   State<SwarmJumpPage> createState() => _SwarmJumpPageState();
@@ -88,9 +84,7 @@ class _SwarmJumpPageState extends State<SwarmJumpPage> {
                       onChanged: (_) => setState(() {}),
                       style: AppType.body(color: AppPalette.textPrimary),
                       decoration: InputDecoration(
-                        hintText: widget.compose
-                            ? 'New message in…'
-                            : 'Jump to…',
+                        hintText: 'Jump to…',
                         hintStyle: AppType.body(color: AppPalette.textFaint),
                         filled: true,
                         fillColor: AppPalette.swarmSearchSurface,

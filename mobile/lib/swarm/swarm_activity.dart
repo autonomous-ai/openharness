@@ -653,7 +653,13 @@ class _SwarmMarks {
     }
     if (_forgotten) return;
     for (final MapEntry(:key, :value) in held.entries) {
-      values.putIfAbsent(key, () => value);
+      // A thread opened before the marks were back keeps the higher of the
+      // two: a mark read back late never lowers it. A reaction's signature
+      // set since is the newer.
+      final now = values[key];
+      if (now == null || (now is int && value is int && value > now)) {
+        values[key] = value;
+      }
     }
     this.found = found;
     loaded = true;
@@ -661,8 +667,13 @@ class _SwarmMarks {
     onLoaded();
   }
 
+  /// Keeps [value] under [key]: a thread's reply opened ([int]) only moves
+  /// on, so an older one put later never lowers it.
   void put(String key, Object value) {
     if (_forgotten || values[key] == value) return;
+    if (values[key] case final int had when value is int && value < had) {
+      return;
+    }
     values.remove(key);
     values[key] = value;
     while (values.length > SwarmActivity.keptMarks) {

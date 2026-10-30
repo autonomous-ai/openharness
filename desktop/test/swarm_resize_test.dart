@@ -1,3 +1,5 @@
+import 'package:harness/widgets/transient_menus.dart';
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -237,6 +239,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(find.byKey(const ValueKey('pane-resize-hint')), findsOneWidget);
+      expect(transientMenusVisible.value, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
       expect(
@@ -258,6 +261,7 @@ void main() {
       expect(app.focusedPaneId, left.id);
       expect(frames, isEmpty);
       expect(find.byKey(const ValueKey('pane-resize-hint')), findsNothing);
+      expect(transientMenusVisible.value, isFalse);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump(const Duration(milliseconds: 10));
       expect(frames.single.bytes, [27, 91, 65]);

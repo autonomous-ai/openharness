@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { isDesktopApp, removalLine, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
 
@@ -67,5 +68,23 @@ describe("harness.log's line for a removal", () => {
 
     expect(line).toBe('2026-10-27 06:45:20.022 [auth] sign-in removed · reason=logout · asked=terminal · '
       + 'pid=3 (node cli.js logout) · parent=2 (-zsh) · above=1 (tmux)')
+  })
+})
+
+// Final review of #2310: every sign-out (harness logout, reset, a Team account turned off) takes back every Buddy's grant at
+// once. The sign-in itself is a stand-in here, so nothing of this machine's is signed out.
+describe('signing out and the Buddies\' grants', () => {
+  it('removes the account every Buddy\'s grant holds for', async () => {
+    vi.resetModules()
+    vi.doMock('./authSession.js', async (original) => ({ ...(await original<object>()), clearAuthSession: vi.fn() }))
+    const { writeBuddyAccount, buddyAccountFile } = await import('./buddyAccount.js')
+    const { removeSignIn } = await import('./signOut.js')
+    const { clearAuthSession } = await import('./authSession.js')
+    writeBuddyAccount('peer')
+    expect(existsSync(buddyAccountFile())).toBe(true)
+    removeSignIn('logout', { asked: 'person' } as never, () => [])
+    expect(existsSync(buddyAccountFile())).toBe(false)
+    expect(clearAuthSession).toHaveBeenCalledOnce()
+    vi.doUnmock('./authSession.js')
   })
 })

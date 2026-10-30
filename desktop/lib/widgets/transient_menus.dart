@@ -9,13 +9,38 @@
 /// [dismissTransientMenus], the same way it already closes the search field.
 library;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
+
+final _visible = ValueNotifier<bool>(false);
+
+/// GTK views cannot composite below Flutter popups, including across panes.
+ValueListenable<bool> get transientMenusVisible => _visible;
+
+void _publishVisibility() {
+  // A portal can disappear during its owner's disposal in a build.
+  if (SchedulerBinding.instance.schedulerPhase ==
+      SchedulerPhase.persistentCallbacks) {
+    SchedulerBinding.instance.addPostFrameCallback((_) => _publishVisibility());
+  } else {
+    _visible.value = _open.isNotEmpty;
+  }
+}
+
 /// Close callbacks for every overlay menu currently on screen.
 final List<void Function()> _open = <void Function()>[];
 
 /// Register [close] while a menu is showing. The returned callback deregisters it.
 void Function() registerTransientMenu(void Function() close) {
   _open.add(close);
-  return () => _open.remove(close);
+  _publishVisibility();
+  var registered = true;
+  return () {
+    if (!registered) return;
+    registered = false;
+    _open.remove(close);
+    _publishVisibility();
+  };
 }
 
 /// Close every overlay menu. Safe to call when none are open.
