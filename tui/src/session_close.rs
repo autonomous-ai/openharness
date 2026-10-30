@@ -54,8 +54,10 @@ impl Identity {
     }
 }
 
+/// `kept`: a harness that keeps running on purpose (a Swarm Buddy; the daemon answers `keptRunning`). Nothing stops
+/// it, nothing asks about it, and its view closes as the others' do (Desktop's `kept_running`).
 #[derive(Clone)]
-struct Target { identity: Identity, name: String, activity: String, closed: bool }
+struct Target { identity: Identity, name: String, activity: String, closed: bool, kept: bool }
 
 #[derive(Clone)]
 struct View { pane: u64, machine: String, agent: String, epoch: Option<(String, String)>, owner: String }
@@ -152,7 +154,7 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, tab: Option<String>, retur
         // hide it silently, or keep it with no way out.
         if !a.close_supported || a.created_at_wire.is_empty() { unsupported = true; continue }
         if seen.insert((a.machine_id.clone(), a.id.clone())) {
-            targets.push(Target { identity: Identity::capture(app, a), name: a.name.clone(), activity: "unknown".into(), closed: false });
+            targets.push(Target { identity: Identity::capture(app, a), name: a.name.clone(), activity: "unknown".into(), closed: false, kept: false });
         }
     }
     if views.is_empty() { return }
@@ -172,6 +174,7 @@ fn activity_label(activity: &str) -> &'static str {
         "idle" => "Idle",
         "stopped" => "Stopped",
         "unconfirmed" => "Stop not confirmed",
+        "kept_running" => "Keeps running",
         _ => "Activity unknown",
     }
 }
@@ -207,7 +210,7 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     let rows = |items: &mut Vec<_>, listed: &[&Target]| {
         let space = room.saturating_sub(items.len() + 1);
         for t in listed.iter().take(space) {
-            let activity = activity_label(if t.closed { "stopped" } else { &t.activity });
+            let activity = activity_label(if t.closed { "stopped" } else if t.kept { "kept_running" } else { &t.activity });
             items.push(menu::note(&if several { format!("{} · {} · {activity}", t.name, app.fleet.machine_name(&t.identity.machine)) }
                 else { format!("{} · {activity}", t.name) }));
         }
@@ -215,7 +218,7 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     };
     if confirm {
         // Desktop's question: what needs attention, then what Stop will do.
-        let pending: Vec<&Target> = op.targets.iter().filter(|t| !t.closed).collect();
+        let pending: Vec<&Target> = op.targets.iter().filter(|t| !t.closed && !t.kept).collect();
         let attention: Vec<&Target> = pending.iter().copied().filter(|t| t.activity != "idle").collect();
         if !attention.is_empty() { items.push(menu::note(&summary(&attention))); }
         if !pending.is_empty() {
@@ -225,7 +228,7 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
         }
         rows(&mut items, &attention);
         if op.shells && items.len() < room { items.push(menu::note("The terminal and its running commands will end.")); }
-        let closed = op.targets.len() - pending.len();
+        let closed = op.targets.iter().filter(|t| t.closed).count();
         if closed > 0 && items.len() < room {
             items.push(menu::note(&format!("{closed} {} already closed.", if closed == 1 { "harness has" } else { "harnesses have" })));
         }
@@ -272,7 +275,7 @@ fn advance(app: &mut App, id: &str) {
     }
     if op.at >= op.targets.len() {
         if op.stage == Stage::Inspect {
-            let confirm = op.shells || op.targets.iter().any(|t| !t.closed && t.activity != "idle");
+            let confirm = op.shells || op.targets.iter().any(|t| !t.closed && !t.kept && t.activity != "idle");
             let op = app.session_close.operation.as_mut().unwrap();
             op.at = 0;
             if confirm {
@@ -290,7 +293,7 @@ fn advance(app: &mut App, id: &str) {
         return;
     }
     let (index, target, mode) = (op.at, op.targets[op.at].clone(), if op.stage == Stage::Inspect { "inspect" } else if op.force { "now" } else { "idle" });
-    if target.closed { app.session_close.operation.as_mut().unwrap().at += 1; advance(app, id); return }
+    if target.closed || target.kept { app.session_close.operation.as_mut().unwrap().at += 1; advance(app, id); return }
     let id = id.to_string();
     let payload = target.identity.payload(mode);
     #[cfg(test)]
@@ -330,6 +333,15 @@ fn received(app: &mut App, id: &str, index: usize, mode: &str, reply: Result<Val
         }
     };
     let activity = reply["activity"].as_str().unwrap_or("unknown").to_string();
+    // It keeps running on purpose (a Swarm Buddy), whether the inspect said so or the stop was refused: close only its view.
+    if reply["keptRunning"] == true {
+        let op = app.session_close.operation.as_mut().unwrap();
+        op.targets[index].kept = true;
+        op.targets[index].activity = activity;
+        op.at += 1;
+        advance(app, id);
+        return;
+    }
     if reply["error"] == "SESSION_NOT_IDLE" && mode == "idle" {
         if !showing(app, id) { fail(app, "Activity changed before stopping. Check the session before trying again.".into()); return }
         let op = app.session_close.operation.as_mut().unwrap();
@@ -434,7 +446,13 @@ fn finish(app: &mut App) {
     }
     let mut seen = HashSet::new();
     for view in views {
-        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { continue }
+        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) {
+            // A stopped harness's visit returns to its shell as it stops. A kept one (a Swarm Buddy) was not stopped,
+            // so return it here, as Close pane after a refused stop does (`dismiss`).
+            let kept = op.targets.iter().any(|t| t.kept && t.identity.machine == view.machine && t.identity.agent == view.agent);
+            if kept && view.matches(app) { crate::shell_context::leave(app, view.pane); }
+            continue;
+        }
         if seen.insert(view.pane) && view.matches(app) {
             app.close_pane(view.pane);
         }
@@ -912,6 +930,69 @@ mod tests {
         assert_eq!(app.fleet.agent("local", "a2").unwrap().status, "active");
         assert_eq!(modes(&app), ["inspect", "inspect", "idle", "idle"]);
         assert!(matches!(&app.modal, Some(Modal::Menu(menu)) if menu.items.iter().any(|i| i.label.contains("1 stopped"))));
+    }
+
+    // A Swarm Buddy keeps running on purpose: the daemon answers `keptRunning`, and only the view closes (Desktop's
+    // `_reviewSessionClose`). Nothing asks to stop it, and nothing is sent after the inspect.
+    #[tokio::test]
+    async fn closing_a_pane_on_a_buddy_closes_the_view_and_stops_nothing() {
+        for activity in ["idle", "working"] {
+            let mut app = app();
+            pane(&mut app, 1);
+            answer(&mut app, "inspect", json!({"activity":activity, "keptRunning":true}));
+            assert_eq!(modes(&app), ["inspect"], "{activity}: no stop is asked for");
+            assert!(app.modal.is_none(), "{activity}: no question and no failure");
+            assert!(app.session_close.operation.is_none());
+            assert!(!app.panes.contains_key(&1), "{activity}: the view closes"); assert!(app.panes.contains_key(&2));
+            assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active", "{activity}: the Buddy keeps running");
+            assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("not confirmed")));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tab_with_a_buddy_asks_and_stops_only_the_other_harnesses() {
+        let tab_with_buddy = || {
+            let mut app = app();
+            app.tabs[0].root.as_mut().unwrap().split(1, 3, crate::layout::Dir::Horizontal);
+            app.panes.insert(3, crate::pane::Pane::new(3, "local", "a2", 40, 20));
+            tab(&mut app, 0);
+            answer(&mut app, "inspect", json!({"activity":"working", "keptRunning":true}));
+            app
+        };
+        // The other one idle: it stops without a question, and every view of the tab closes.
+        let mut app = tab_with_buddy();
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        assert_eq!(modes(&app), ["inspect", "inspect", "idle"]);
+        assert_eq!(app.session_close.sent[2].1["agentId"], "a2");
+        answer(&mut app, "idle", json!({"closed":true}));
+        assert!(!app.panes.contains_key(&1) && !app.panes.contains_key(&3));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
+        assert_eq!(app.fleet.agent("local", "a2").unwrap().status, "stopped");
+        assert!(app.modal.is_none());
+        // The other one working: the question names only it, and Stop stops only it.
+        let mut app = tab_with_buddy();
+        answer(&mut app, "inspect", json!({"activity":"working"}));
+        assert_eq!(notes(&app), ["1 harness is still working.", "Stopping this harness will close the tab “tab-1”. History will be saved.",
+            "Task 2 · Working"]);
+        key(&mut app, KeyCode::Char('s'));
+        assert_eq!(modes(&app), ["inspect", "inspect", "now"]);
+        assert_eq!(app.session_close.sent[2].1["agentId"], "a2");
+        answer(&mut app, "now", json!({"closed":true}));
+        assert!(!app.panes.contains_key(&1) && !app.panes.contains_key(&3));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
+    }
+
+    #[tokio::test]
+    async fn a_stop_refused_because_it_is_a_buddy_closes_the_view() {
+        // A harness that became a Buddy after its inspect: the stop is refused, it keeps running, and its view closes.
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        answer(&mut app, "idle", json!({"error":"BUDDY_PROTECTED", "detail":"This is a Swarm Buddy.", "activity":"idle", "keptRunning":true}));
+        assert_eq!(modes(&app), ["inspect", "idle"]);
+        assert!(app.modal.is_none() && app.session_close.operation.is_none());
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
     }
 
     #[tokio::test]
