@@ -53,6 +53,7 @@ import 'terminal_row.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
+import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -84,6 +85,7 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
   });
@@ -101,6 +103,10 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
+  /// without it.
+  final VoidCallback? onNewSwarm;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
 
   /// How a message link reaches the account's other Swarms. Without it, and
@@ -297,6 +303,16 @@ class _SuperTabViewState extends State<SuperTabView>
       _newAfter.clear();
       _awayFromEnd.clear();
       _unread.reset();
+      // With the Swarm dropdown, a tab whose Swarm is taken away moves to
+      // Personal once the person has picked it here.
+      if ((widget.app, widget.onNewSwarm) case (final app?, _?)) {
+        final lost = c;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && widget.controller == lost) {
+            unawaited(fallBackToPersonal(app, lost));
+          }
+        });
+      }
     }
     final visible =
         c.snapshot?.conversations.map((g) => g.id).toSet() ?? <String>{};
@@ -1324,6 +1340,7 @@ class _SuperTabViewState extends State<SuperTabView>
     board: _board,
     onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
+    onNewSwarm: widget.onNewSwarm,
     devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
     // On a Mac what needs the person is in the menu bar's Harness menu and on

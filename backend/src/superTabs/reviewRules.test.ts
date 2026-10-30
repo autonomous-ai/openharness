@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_ROUTING_POLICY as policy } from './routingPolicy.js'
-import { agentTarget, broken, reviewRefusal, SAME_ENGINE, sameEngineReview, targetQuality } from './rules.js'
+import { agentTarget, broken, reviewRefusal, SAME_ENGINE, sameEngineReview, startTarget, targetQuality } from './rules.js'
+import { effectivePolicy } from './routingPolicy.js'
 import { cheapAttempt } from './stepUp.js'
 import { recordRun } from './leaderboard/record.js'
 const builder = { id: 'builder', machineId: 'allowed', harnessId: 'hb', configuration: { engine: 'claude', model: 'opus', effort: 'high' } }
@@ -88,5 +89,27 @@ describe('a review on its Builder\'s own engine when no Reviewer of another engi
     expect(reviewRefusal(state, 'work', target, policy, undefined, NOW)).not.toBeNull()
     codexAgent.limitedUntil = new Date(NOW + 2 * DAY).toISOString()
     expect(reviewRefusal(state, 'work', target, policy, undefined, NOW)).toBeNull()
+  })
+})
+
+// A Codex Reviewer started on a model named for it (Lead, 10-30: a gpt-6.1-sol Reviewer was refused as quality 1, and on a Mac
+// whose Codex default is a local model no review could run).
+describe('a Codex Reviewer on a named model', () => {
+  const codexOn = (model: string) => startTarget({ machineId: 'allowed', engine: 'codex', model, effort: 'high' })
+  it('accepts gpt-6.1-sol at quality 3', () => {
+    const state = stateOf({ id: 'other', machineId: 'allowed', harnessId: 'ho', configuration: { engine: 'claude', model: 'opus', effort: 'high' } })
+    expect(targetQuality(policy, codexOn('gpt-6.1-sol'))).toBe(3)
+    expect(reviewRefusal(state, 'work', codexOn('gpt-6.1-sol'), policy)).toBeNull()
+  })
+  it('still refuses a Codex model the policy does not name', () => {
+    const state = stateOf({ id: 'other', machineId: 'allowed', harnessId: 'ho', configuration: { engine: 'claude', model: 'opus', effort: 'high' } })
+    expect(targetQuality(policy, codexOn('gpt-7-unknown'))).toBe(1)
+    expect(reviewRefusal(state, 'work', codexOn('gpt-7-unknown'), policy)).toBe('A review needs a model of quality 2 or more, and Codex gpt-7-unknown is 1.')
+  })
+  it('rates gpt-6.1-sol in a policy saved before its row, and keeps an owner\'s own row for it', () => {
+    const saved = { ...policy, models: policy.models.filter(m => m.model !== 'gpt-6.1-sol') }
+    expect(targetQuality(effectivePolicy(saved, null).policy, codexOn('gpt-6.1-sol'))).toBe(3)
+    const owned = { ...policy, models: [...saved.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', quality: 2, cost: 2, enabled: false }] }
+    expect(targetQuality(effectivePolicy(owned, null).policy, codexOn('gpt-6.1-sol'))).toBe(2)
   })
 })

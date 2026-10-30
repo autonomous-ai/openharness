@@ -241,6 +241,8 @@ const server = http.createServer((req, res) => {
     return
   }
   if (req.url === '/api/status') return json(res, { machineId: LOCAL, signedIn: true, version: 'mock', webUrl: process.env.MOCK_WEB_URL || 'https://harness.example' })
+  // Whose account it is: the side bar's account button names the email's user (`dev.tester`).
+  if (req.url === '/api/auth/me') return json(res, { user: { email: 'dev.tester@example.test' } })
   if (req.url === '/api/machines') return json(res, { machines: [
     { machineId: LOCAL, name: process.env.MOCK_PROJECT_SEARCH === '1' ? 'M2' : DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: process.env.MOCK_PROJECT_SEARCH === '1' ? 'office' : DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },

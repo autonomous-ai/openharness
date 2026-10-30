@@ -103,12 +103,12 @@ function voicesOf(face: Face, leadId: string, agents: Json[], me: string | undef
   return new Set(idsOf(face.conversation.agentIds))
 }
 /** The reader's Buddy in a project as a dial draws it, from Desktop's pattern for its whole name. */
-function buddyOf(agents: Json[], chat: Json, me: string | undefined): SwarmBuddy | undefined {
+function buddyOf(agents: Json[], chat: Json, me: string | undefined, local: (a: Json) => string): SwarmBuddy | undefined {
   const [found] = buddiesIn(agents, chat, me)
   if (!found) return undefined
-  const name = agentName(found)
+  const name = agentName(found), here = local(found)
   return { chatId: chat.id as string, name: cut(name, NAME_BYTES), engine: String(object(found.configuration).engine ?? ''), ...buddyAvatar(name),
-    live: typeof found.downSince !== 'string' }
+    live: typeof found.downSince !== 'string', ...(here ? { local: here } : {}) }
 }
 
 /**
@@ -158,7 +158,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     const chat = chatOf(faceOf(conversations, projectId, lead, focus, me, buddies))
     const buddyChat = buddies ? buddyChatOf(conversations, projectId, me) : undefined
     const sideChat = buddies ? chatOf(sideFaceOf(conversations, projectId, lead, focus, me, side)) : undefined
-    const buddy = buddyChat && buddyOf(agents, buddyChat, me)
+    const buddy = buddyChat && buddyOf(agents, buddyChat, me, a => turnHere(a) && cardId(a.harnessId) ? String(a.harnessId) : '')
     leads.push({
       id: String(agent.id), projectId: String(project.id ?? 'lead'), project: cut(String(project.name ?? ''), NAME_BYTES), engine: String(object(agent.configuration).engine ?? ''),
       owner: owner && typeof owner.email === 'string' ? cut(owner.email, NAME_BYTES) : '',
