@@ -35,7 +35,10 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
  * usage window to run out. */
 export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
   /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
-  why?: string }
+  why?: string
+  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
+   *  the account spends (routeCommand.ts relayedReadings). */
+  from?: string }
 /** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
  * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -65,7 +68,9 @@ export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | 
 export interface Commitment { account: string; spend: Partial<Record<Window, number>>; size: Size; createdAt: number }
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
 /** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
-export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string
+/** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
+export interface Excluded { title: string; reason: string; machine?: string }
+export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: number; belowFloor: boolean; short?: string
   /** Every candidate left runs on an account the route was asked to avoid (`choose` `avoid`). */
   avoided?: string }
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
@@ -301,6 +306,7 @@ const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - 
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
+  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }
@@ -420,7 +426,7 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
 
 /** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
-  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Excluded[] } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   // A person asking for a local model considers local models alone, whatever their strength.
   if (a.local) probes = probes.filter(p => p.gridModel)
@@ -430,7 +436,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
     .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
-  const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
+  const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
   const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
@@ -451,10 +457,10 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   // An account whose model kept failing this task waits while any other account is offered.
   const fresh = strongest.filter(p => !avoid.includes(p.fit.account))
   const sized = fresh.length ? fresh : strongest
-  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED })))
+  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED, machine: p.machineName })))
   // Only the first group that has anyone is shown: those that fit, then those whose quota is not fully known, then the short.
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
-  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
+  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!), machine: p.machineName })))
   // When every candidate is short, the one expected to get furthest goes first.
   const soft = softOf(rules, a)
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))

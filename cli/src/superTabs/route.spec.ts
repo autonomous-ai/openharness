@@ -70,7 +70,7 @@ describe('quota and rates', () => {
 describe('choose', () => {
   it('returns NO_CANDIDATE with reasons when nothing can run', () => {
     expect(choose([probe({ refusals: ['Machine is offline.'] })], policy, a())).toEqual({ error: 'NO_CANDIDATE',
-      excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.' }] })
+      excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.', machine: 'remote-1' }] })
   })
   it('shows only floor-meeting candidates, ordered by effective cost, quality, room on the tightest window, member first', () => {
     const r = choose([
@@ -97,7 +97,7 @@ describe('choose', () => {
     const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
     expect(r.belowFloor).toBe(true)
     expect(r.shown.map(s => s.fit.status)).toEqual(['fits'])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.', machine: 'remote-1' }])
     // Under the reserve is short, and goes after a candidate that is only partly known.
     const reserve = ok(choose([probe({ quota: windows([10, null], [90, null]) }), probe({ machineName: 'mac', quota: windows([90, null], null) })], policy, a(), NOW))
     expect(reserve.shown.map(s => [s.machineName, s.fit.status])).toEqual([['mac', 'unknown']])
@@ -135,7 +135,7 @@ describe('strength, fit and effective cost', () => {
     const r = route([on(OPUS, 'a', windows([25, 4 * H], [80, 5 * D], 'A')), on(CODEX, 'a', windows([85, 3 * H], [80, 5 * D]))], { difficulty: 'high', size: 'large' })
     expect(picks(r)).toEqual(['default on a'])
     expect(r.shown[0].fit.account).toBe('a:codex')
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'The 5-hour window is expected to run out about a quarter of the way in; resets in 4h.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'The 5-hour window is expected to run out about a quarter of the way in; resets in 4h.', machine: 'a' }])
   })
   it('3. low, small: Haiku on the account whose weekly window has room, not on the one nearly spent for the week', () => {
     const A = windows([80, 4 * H], [12, 5 * D], 'A'), B = windows([60, 4 * H], [70, 5 * D], 'B')
@@ -205,7 +205,7 @@ describe('strength, fit and effective cost', () => {
     expect(metered).toEqual({ known: true, leftPercent: null, resetsAt: null, metered: true })
     const r = route([on(SONNET, 'key', metered), on(SONNET, 'sub', windows([90, 3 * H], [80, 5 * D], 'S')), on(SONNET, 'unread', unknown)], { difficulty: 'low' })
     expect(r.shown.map(s => [s.machineName, s.fit.status])).toEqual([['sub', 'fits'], ['key', 'fits']])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · unread', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · unread', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.', machine: 'unread' }])
     expect(r.shown[1].fit).toEqual({ status: 'fits', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'key:claude' })
     expect(r.shown[1].label).toContain('fits: metered, no usage window to run out')
     expect(r.shown[1].label).toContain('quota metered')
@@ -467,7 +467,7 @@ describe('the owner\'s rules', () => {
   it('leaves out a candidate that breaks a hard rule, with the owner\'s words as the reason', () => {
     const r = ok(choose([haiku, sonnet], policy, a(), NOW, [], [rule({ kind: 'forbidModel', model: 'HAIKU' }, 'No Haiku.')]))
     expect(r.shown.map(s => s.machineName)).toEqual(['mac'])
-    expect(r.excluded).toEqual([{ title: 'New agent · Claude haiku auto · cheap', reason: 'Breaks the owner\'s rule: No Haiku.' }])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude haiku auto · cheap', reason: 'Breaks the owner\'s rule: No Haiku.', machine: 'cheap' }])
     // A full model id is caught too, a rule for another engine is not, and `default` is never matched.
     expect(breaks([rule({ kind: 'forbidModel', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'claude-haiku-4-5', effort: 'high' })).toContain('Rule.')
     expect(breaks([rule({ kind: 'forbidModel', engine: 'codex', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'haiku', effort: 'high' })).toBeNull()
@@ -481,7 +481,7 @@ describe('the owner\'s rules', () => {
     expect(titles(r)).toEqual(['New agent · Claude sonnet medium · other'])
     // When nobody is left, the Lead is told why each one was left out.
     expect(choose([sonnet], policy, a(), NOW, [], [rule({ kind: 'machines', machineIds: ['m9'] }, 'Only m9.')]))
-      .toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude sonnet medium · mac', reason: 'Breaks the owner\'s rule: Only m9.' }] })
+      .toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude sonnet medium · mac', reason: 'Breaks the owner\'s rule: Only m9.', machine: 'mac' }] })
   })
   it('holds a minimum effort, and lifts a new agent whose effort the engine chooses to that minimum', () => {
     const codex = probe({ machineName: 'box', engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 })
