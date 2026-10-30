@@ -9,6 +9,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'profile_model.dart';
@@ -119,7 +120,127 @@ class SwarmTopBar extends StatelessWidget {
   }
 }
 
-/// A caption over a card, in sentence case, with maybe a count at its right.
+/// A tab's title at the top of its screen, in the terminal's face, with
+/// maybe one button at its end ([trailing], a [SwarmIconButton]) and a quiet
+/// line under it ([subtitle]). With [onTitle] the title is a button too,
+/// [leading] before it and a chevron after it, as Home's Swarm switcher is:
+/// [titleLabel] is how it is heard.
+class SwarmTabHeader extends StatelessWidget {
+  const SwarmTabHeader(
+    this.title, {
+    super.key,
+    this.trailing,
+    this.leading,
+    this.onTitle,
+    this.titleLabel,
+    this.subtitle,
+  });
+
+  final String title;
+  final Widget? trailing;
+  final Widget? leading;
+  final VoidCallback? onTitle;
+  final String? titleLabel;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final text = Text(
+      title,
+      key: const ValueKey('swarm-title'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Tty.of(context)
+          .style(size: 20, weight: FontWeight.w600)
+          .copyWith(height: 1.2),
+    );
+    final onTitle = this.onTitle;
+    final head = _title(text, onTitle);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 52),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          // A button's ink reaches past its words.
+          onTitle == null ? AppSpace.screenInset : AppSpace.s,
+          AppSpace.xs,
+          AppSpace.xs,
+          AppSpace.xs,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: switch (subtitle) {
+                null => head,
+                final subtitle => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    head,
+                    Padding(
+                      padding: EdgeInsets.only(
+                        left: onTitle == null ? 0 : AppSpace.xs,
+                      ),
+                      child: Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.caption(color: AppPalette.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+              },
+            ),
+            ?trailing,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _title(Widget text, VoidCallback? onTitle) => onTitle == null
+      ? text
+      : Align(
+          alignment: Alignment.centerLeft,
+          child: Semantics(
+            key: const ValueKey('swarm-title-button'),
+            button: true,
+            label: titleLabel ?? title,
+            excludeSemantics: true,
+            onTap: onTitle,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppControl.radius),
+              onTap: onTitle,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: minTouchTarget),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (leading case final leading?) ...[
+                        leading,
+                        const SizedBox(width: AppSpace.s),
+                      ],
+                      Flexible(child: text),
+                      const SizedBox(width: AppSpace.xs),
+                      Icon(
+                        LucideIcons.chevronDown300,
+                        size: 18,
+                        color: AppPalette.textFaint,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+}
+
+/// A caption over a card, in sentence case, with maybe a count, or a
+/// [note], at its right.
 class SwarmCaption extends StatelessWidget {
   const SwarmCaption(
     this.text, {
@@ -127,10 +248,15 @@ class SwarmCaption extends StatelessWidget {
     this.count,
     this.countColor,
     this.countKey = const ValueKey('swarm-needs-count'),
+    this.note,
     this.first = false,
   });
 
   final String text;
+
+  /// Quiet words at its right: what the card's column means, or a count in
+  /// words ("Points this week", "2 working · 1 waiting").
+  final String? note;
 
   /// How many there are: what waits on the person, in the warning colour
   /// unless [countColor] says otherwise; null shows none.
@@ -145,6 +271,9 @@ class SwarmCaption extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
+    final quiet = AppType.caption(
+      color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
+    );
     return Padding(
       padding: EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -156,18 +285,18 @@ class SwarmCaption extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Expanded(
-            child: Text(
-              text,
-              style: AppType.caption(
-                color: Color.lerp(
-                  AppPalette.textFaint,
-                  AppPalette.textSecondary,
-                  .5,
-                ),
+          Expanded(child: Text(text, style: quiet)),
+          if (note case final note? when note.isNotEmpty)
+            Flexible(
+              flex: 2,
+              child: Text(
+                note,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: quiet,
               ),
             ),
-          ),
           if (count case final count? when count > 0)
             Text(
               '$count',

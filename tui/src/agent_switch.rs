@@ -549,9 +549,18 @@ fn stop(app: &mut App, id: &str) {
     request(app, id, "agent_close", payload, 35, stopped);
 }
 
+/// Desktop's `buddyKeepsItsAgent`, word for word.
+const BUDDY_KEEPS_ITS_AGENT: &str = "A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.";
+
 fn stopped(app: &mut App, id: &str, reply: Reply) {
     if !valid(app, id) { return }
     let closed = reply.as_ref().ok().is_some_and(|r| r["closed"] == true);
+    // A Swarm Buddy keeps running, so it keeps its agent. The daemon's refusal speaks of Stop Harness: no help here.
+    if reply.as_ref().err().is_some_and(|e| e.code == "BUDDY_PROTECTED") || reply.as_ref().is_ok_and(|r| r["keptRunning"] == true) {
+        // A refusal, not a lost answer: nothing stopped, so the pane is not held for a replacement (Desktop's preservingViews).
+        if let Some(c) = app.agent_switch.changes.get_mut(id) { c.preserving = false; }
+        fail(app, id, BUDDY_KEEPS_ITS_AGENT); return;
+    }
     if !closed {
         let detail = reply.as_ref().err().map(|e| if e.detail.is_empty() { e.code.as_str() } else { &e.detail })
             .or_else(|| reply.as_ref().ok().and_then(|r| r["detail"].as_str())).unwrap_or("The machine did not confirm the stop");
@@ -871,6 +880,20 @@ mod tests {
         assert_eq!(app.panes[&1].agent_id, "a1");
         assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
         assert!(app.agent_switch.changes[&id].error.contains("No acknowledgement"));
+    }
+
+    #[tokio::test]
+    async fn a_buddy_keeps_its_agent_and_says_how_to_use_another() {
+        // The daemon refuses to stop a Swarm Buddy; its refusal speaks of Stop Harness, which is no help here.
+        let mut app = app();
+        let id = start(&mut app, "claude"); handoff(&mut app, &id);
+        stopped(&mut app, &id, Err(RpcError::new("BUDDY_PROTECTED", "This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.")));
+        assert!(sent(&app, "agent_create").is_empty());
+        assert_eq!(app.panes[&1].agent_id, "a1");
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
+        assert_eq!(app.agent_switch.changes[&id].error, "A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.");
+        // A refusal, not a lost answer: the pane is no longer held for a replacement, so a later stop closes it.
+        assert!(!preserves(&app, 1), "the pane is not held after the refusal");
     }
 
     #[tokio::test]

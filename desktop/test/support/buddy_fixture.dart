@@ -16,6 +16,9 @@ ConversationServer buddySwarm({bool enabled = true}) {
       'engines': <dynamic>[],
       'maxAgents': 4,
       'availableSlots': 4,
+      // Reporting now: the Buddy pickers offer a Swarm machine no account
+      // list confirms only while it reports (buddyMachines).
+      'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
     },
     {
       'machineId': 'studio',

@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
@@ -10,6 +14,68 @@ import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  testWidgets('rapid pending rows have independent identity and dimmed text', (
+    tester,
+  ) async {
+    final s = ConversationServer();
+    final post = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: s.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST') await post.future;
+        return s.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabView(
+            controller: c,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Test Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final composer = find.byKey(const ValueKey('super-message-composer'));
+    for (final text in ['First quick send', 'Second quick send']) {
+      await tester.enterText(composer, text);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+    }
+    expect(tester.takeException(), isNull);
+    expect(find.byType(SuperTabMessageRow), findsNWidgets(2));
+    final firstId = c.outgoing(c.selectedId).first.operationId!;
+    final stableRow = find.byKey(ValueKey('super-row-$firstId'));
+    expect(stableRow, findsOneWidget);
+    final before = tester.element(stableRow);
+    final beforeHeight = tester.getSize(stableRow).height;
+    final dimmed = find.ancestor(
+      of: find.text('First quick send'),
+      matching: find.byWidgetPredicate((w) => w is Opacity && w.opacity < 1),
+    );
+    expect(dimmed, findsOneWidget);
+    post.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabMessageRow), findsNWidgets(2));
+    expect(identical(before, tester.element(stableRow)), isTrue);
+    expect(
+      tester.getSize(stableRow).height,
+      beforeHeight,
+      reason: 'Replacing Sending with confirmation must not resize the row.',
+    );
+    expect(dimmed, findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
+  });
   testWidgets(
     'native observations keep their agent author and show source and truncation clearly',
     (tester) async {
@@ -451,7 +517,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('People'), findsOneWidget);
+      expect(find.text('Humans'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
       await tester.scrollUntilVisible(
         member,

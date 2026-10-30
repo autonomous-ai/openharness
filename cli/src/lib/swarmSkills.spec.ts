@@ -644,6 +644,9 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).not.toContain('run only harness super-tab commands')
     // Buddies replaced Chat with PM (Ken, 10-29): the PM's private lines to the owner land in the Buddy's chat, and are not its orders.
     expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
+    // Diego (10-29): it tells its owner how their proposals go, unasked, one note per milestone and nothing otherwise.
+    expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
+    expect(text).toContain('Nothing when nothing changed')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
 })
@@ -696,7 +699,11 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
       disableAllHooks: false,
       hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
     })
-    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    // It reads its own session's list of what its person sent it (Tony, 10-30), kept beside Harness's downloads.
+    const reads = (hash: string) => ({ file: join(process.env.ADAPTER_DATA_DIR!, 'buddy-reads', `${hash}.json`),
+      drops: join(process.env.ADAPTER_DATA_DIR!, 'paste-drops') })
+    const own = reads('3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175')
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace), own))
     for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json'), guard]) {
       expect(statSync(file).mode & 0o222, file).toBe(0)
     }
@@ -706,8 +713,13 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     // A relaunch prepares it again the same way, a guard someone changed put back.
     chmodSync(guard, 0o600); writeFileSync(guard, 'process.exit(0)\n')
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
-    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace)))
+    expect(readFileSync(guard, 'utf8')).toBe(buddyGuardSource(realpathSync(workspace), own))
     expect(statSync(guard).mode & 0o222).toBe(0)
+    // Another Buddy session reads its own list, never this one's.
+    const other = fixture()
+    prepareSwarmSkill(other, { role: 'buddy', key: 'other-session' })
+    expect(readFileSync(join(other, '.claude', 'buddy-guard.mjs'), 'utf8'))
+      .toBe(buddyGuardSource(realpathSync(other), reads('5f711b23ee4fecbbb8e053b872bbda822ad77cd627e586f7c3d8d663289c033b')))
   })
 
   it('carries Harness\'s own hooks from the person\'s Claude settings into the folder\'s, and nobody else\'s (Lead, 10-29)', () => {

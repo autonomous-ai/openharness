@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -788,6 +788,23 @@ describe('contributed machine executor', () => {
         // Once: it is no longer the host's to stop.
         f.advance(); await f.machine.tick(); await settle()
         expect(closeMember).toHaveBeenCalledTimes(1)
+      })
+
+      // A daemon restarted between the launch and the Swarm failing the start no longer forgets the agent it launched.
+      it('still stops it after the daemon restarted, from the launches it kept on disk', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        const dataDir = mkdtempSync(join(tmpdir(), 'swarm-unconfirmed-'))
+        onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+        ;(f.core as { dataDir: string }).dataDir = dataDir
+        await f.machine.tick()
+        expect(JSON.parse(readFileSync(swarmUnconfirmedFile(dataDir, 'host'), 'utf8')).launches)
+          .toEqual([{ startId: 'start', path: startPath, harnessId: 'launched', creationId: 'creation' }])
+        f.machine.stop()
+        const restarted = new ContributedMachines(f.core, 'host', f.deps as never)
+        fail(); f.advance(); await restarted.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+        expect(JSON.parse(readFileSync(swarmUnconfirmedFile(dataDir, 'host'), 'utf8')).launches).toEqual([])
+        restarted.stop()
       })
 
       it('never stops one that joined, one its receipt does not name, or one whose start is still pending', async () => {

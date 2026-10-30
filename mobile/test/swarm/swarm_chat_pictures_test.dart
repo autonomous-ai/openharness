@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
@@ -92,6 +93,25 @@ void main() {
     };
     return fake;
   }
+
+  testWidgets('a file chip reads name · size, as Slack shows it', (
+    tester,
+  ) async {
+    final pdf = SuperTabAttachment.fromJson(
+      file('f2', 'plan.pdf', 'application/pdf'),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SwarmFileChip(file: pdf, link: swarmAttachmentLink(pdf.url)),
+        ),
+      ),
+    );
+
+    for (final part in ['plan.pdf', '·', '2 KB']) {
+      expect(find.text(part), findsOneWidget);
+    }
+  });
 
   testWidgets('a picture shows in place; a PDF keeps its chip', (tester) async {
     // The app's store keeps this account's files, as the shell's keeper has

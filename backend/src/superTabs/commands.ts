@@ -1,4 +1,4 @@
-import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
@@ -10,8 +10,8 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
-import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
-import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
+import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, SAME_ENGINE, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -19,6 +19,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, 
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
+import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -28,13 +29,14 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
-import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
+import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -100,7 +102,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
-  z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
+  z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSaveSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
@@ -149,10 +151,15 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
   // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
   z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // A person names their own Buddy from its chat, or clears the name with null (buddies.ts renameBuddy).
+  z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
-  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
+  // `setup`: one of the person's own machines outside the Swarm, prepared by the app as Add machine prepares one (its folder and
+  // engines): it is recorded Buddy-only (machines.ts ContributedMachine.buddyOnly). Ignored for a machine already listed.
+  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
+    setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -178,7 +185,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
-    alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
+    alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
+    mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
@@ -228,6 +236,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'conversation.rename': ['title'],
+  'buddy.rename': ['name'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
@@ -281,13 +290,20 @@ export interface CommandContext {
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
-    hostMachineId?: string }
+    hostMachineId?: string
+    /** The machine's account row is signed in as a Harness Team account (lib/teamSession.ts), with or without a Mac. */
+    teamSession?: true }
   /** Loaded from this tab and conversation by the store. */
-  /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies). */
+  /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
+   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
   /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
-  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; agentOnly?: true }
+  reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null
+    agentOnly?: true }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
+  /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
+   *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
+  buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
   proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
@@ -602,9 +618,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[], mentions?: string[]) => {
+    attachments?: Attachment[], mentions?: string[], holdMentions?: true) => {
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
-      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
+      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}), ...(holdMentions ? { holdMentions } : {}) })
     result.messageId = operationId
   }
   /** The project Lead's own route, start, assignment or post on a task, with its time (liveness.ts reads it). It rides on the
@@ -662,7 +678,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
     if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
-    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true))
+    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true), context.now)
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
     return stepped ? { code: 'STEPPED_UP', why: stepped } : null
@@ -753,6 +769,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
+    // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
+    if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
     const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
@@ -765,7 +783,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A confidential session in a Team account keeps the account for its project until its host confirms the close, which
       // it does once the session's data there is deleted (security re-check 2 of #2089).
       const held = onTeamAccount(state, target) && isConfidential(state, target) ? { heldFor: agentProjectId(state, target), since: context.now } : {}
-      ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...held })
+      // Its machine part outlives the Buddy-only record while this closes: it stays as private as the record (read/changes.ts).
+      const hidden = state.machines?.some(m => m.machineId === target.machineId && m.buddyOnly) ? { buddyOnly: true as const } : {}
+      ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId,
+        ...held, ...hidden })
     }
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
@@ -774,6 +795,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.leadId === target.id) group.leadId = null
       if (group.assignment?.agentId === target.id && activeWork(group)) group.assignment.status = 'reconciling'
     }
+  }
+
+  /** Records [me]'s own machine [machineId], prepared by the app ([setup]), as Buddy-only (machines.ts buddyOnly): its host
+   *  then reads the Swarm, starts the Buddy and reports it, and nothing else of the Swarm runs there or reads it. */
+  const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
+    // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
+    if (state.machineCleanups?.some(c => c.machineId === machineId)) {
+      fail('MACHINE_CLEANING', 'This machine is still cleaning up after your last Buddy there. Try again in a minute.')
+    }
+    if ((state.machines?.length ?? 0) >= 32) fail('MACHINES_FULL', 'This Swarm cannot take another machine.')
+    const pool: ContributedMachine = { machineId, name: setup.name, cwd: setup.cwd, scope: 'swarm', engines: [...new Set(setup.engines)],
+      maxAgents: 1, contributorId: me.id, membershipGeneration: me.generation, generation: operationId, paused: false, buddyOnly: true }
+    ;(state.machines ??= []).push(pool)
+    return pool
   }
 
   /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
@@ -1083,9 +1118,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
       const mac = context.contribution?.hostMachineId
         ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
+      // A Mac's Team account never joins through a Buddy-only record: that Mac is not in the Swarm (security review 2 of #2234).
+      if (context.contribution?.hostMachineId && state.machines.some(m => m.machineId === context.contribution!.hostMachineId && m.buddyOnly)) {
+        fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
+      }
       if (command.ifMissing) {
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
-        if (cleaning || state.machines.some(m => m.machineId === command.machineId)) break
+        // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
+        if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
@@ -1513,6 +1553,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
       break
     }
+    case 'buddy.rename':
+      renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
+      break
     case 'person.tell': {
       const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
       if (!project) fail('TELL_FORBIDDEN', 'Only a project\'s Lead sends a person a private line, in its own project.', 403)
@@ -1539,25 +1582,29 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BUDDY_EXISTS', 'You already have a Buddy in this project. Remove it to add another.')
       }
       if (existing) removeAgent(existing)
-      // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
-      const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
-      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28).
-      if (pool.contributorId !== me.id || grant.machineOwnerId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') {
-        fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
-      }
+      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28). The grant is the store's reading of
+      // the machine's account row (store.ts contribution), never the request's.
+      const listed = machineContribution(state, command.machineId)
+      const notOwn = () => fail('BUDDY_OWN_MACHINE', BUDDY_OWN_MACHINE_REFUSAL, 403)
+      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
+      // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
+      // else of the Swarm reaches it.
+      const pool = listed ?? (command.setup ? addBuddyMachine(command.machineId, command.setup, me) : fail('BUDDY_MACHINE', 'Update Harness, then add your Buddy again.', 403))
+      if (pool.contributorId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') notOwn()
       // Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093): its machine
       // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
-      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop.
-      if (pool.observation?.resources.os === 'Windows') {
-        fail('BUDDY_WINDOWS', 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines from the Swarm\'s Machines list.', 403)
-      }
+      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop, and its launch is checked again (machines.ts).
+      if (pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+      // A slot for each of its person's Buddies there, one per project: it takes nothing else.
+      if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      openBuddyChat(state, project.id, me)
+      const chat = openBuddyChat(state, project.id, me)
+      const named = chosenBuddyName(state, chat, me, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
+        ...(command.model ? { model: command.model } : {}), name: named.name, cwd: projectFolder(pool, project), worktree: true,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
@@ -1565,6 +1612,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      // Its chosen name was taken since: its owner reads so in their chat, to nobody else (buddies.ts chosenBuddyName).
+      if (named.notice) message(chatId, named.notice, [], null, SYSTEM_ROW)
       result.startId = operationId
       result.conversationId = chatId
       break
@@ -1873,10 +1922,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.userId === state.ownerId) fail('OWNER_REQUIRED', 'The owner cannot leave their Super Tab.')
       const member = person(state, command.userId)
       // Their machines leave the way their owner removes one, so the Swarm's folders there are deleted too.
-      for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal) ?? []) {
+      // A Buddy-only one goes silently with their Buddies, below (dropIdleBuddyMachines): no chat ever saw it.
+      for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal && !m.buddyOnly) ?? []) {
         removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
       }
-      // Their Buddies go with them, on whosever machine they run.
+      // Their Buddies go with them, on whosever machine they run, and those still starting fail, as buddy.remove does: otherwise a
+      // Buddy-only record kept for them would never end (security review 2 of #2234).
+      for (const start of state.starts?.filter(s => s.request.buddyOf?.personId === member.id && !s.harnessId && !s.error) ?? []) {
+        start.error = 'Its person left the Swarm before it started.'
+      }
       for (const target of state.agents.filter(a => a.contributorId === member.id || a.buddyOf?.personId === member.id)) removeAgent(target)
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
@@ -1889,6 +1943,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
       const mentions = checkMentions(state, actor, group, command.mentions ?? [])
+      if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -1904,12 +1959,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const workerToLead = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
+      // Any other agent in the group reaches its Lead, beside anyone it names: an agent whose task here was lost, moved or
+      // cancelled has its status and results refused, so its posts are all the Lead hears from it. They reached no one until
+      // 10-29, when a moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no
+      // delivery, and the worker stayed down 4 h 50 min. Membership, not a record of past attempts, decides (Lead's ruling on
+      // #2243): the Lead already reads the group. The assigned worker keeps its own rule above; a note to itself stays its own.
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && assigned !== actor.agentId && group.leadId
+        && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent
         : isBuddyChat(group) ? group.agentIds[0] ?? null : group.leadId) : agentRecipient
       // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
       const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
-      const recipients = [...new Set([...command.recipientIds, ...everyLead,
+      const recipients = [...new Set([...command.recipientIds, ...everyLead, ...memberToLead,
         ...(command.recipientIds.length || everyLead.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         agent(state, id)
@@ -1920,7 +1982,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
+      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // A reply joins its message's thread, always at the root, so threads never nest. A reply to a notice only its
       // recipients read (the Lead answering a stalled alert) stays in the chat: people open a thread from its root.
       const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread : null
@@ -1976,7 +2038,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The step this attempt is comes from the group alone (stepUp.ts), and why a review stays on its Builder's engine from
       // the server's own judgement (rules.ts).
       const step = conversation(state, command.conversationId).stepUp
-      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true))
+      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true), context.now)
       const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
       const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
@@ -1984,7 +2046,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"${sameEngine ? ` · ${SAME_ENGINE}` : ''}`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
@@ -2096,7 +2158,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
-      message(group.id, `${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
+      // A review on its Builder's own engine says so first, so its Reviewer knows why (rules.ts sameEngineReview).
+      const sameEngine = sameEngineReview(state, group.reviewOf, agentTarget(state, worker), policy, mayRun(group.id, true), context.now)
+      message(group.id, `${sameEngine ? `${sameEngine}\n\n` : ''}${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
+      const news = assignedNotice(state, group, sender, operationId)
+      if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' }) })
       break
@@ -2157,8 +2223,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now),
+          sameEngine: a => sameEngineReview(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now) })
         if (opened) effects.messages.push(...opened.messages)
+        // No new Reviewer on another engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
+        const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, policy, mayRun(group.id, false), context.now) : null
+        // A row of its own beside the command's, as the ship notice is: written as the Engineer who handed over.
+        if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
+          text: short.text, replyTo: null, recipients: [], source: short.source, ...(short.mentions.length ? { mentions: short.mentions } : {}) })
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
@@ -2259,6 +2331,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
+  dropIdleBuddyMachines(state, context.now)
   syncLeads(state)
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
@@ -2274,6 +2347,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   for (const draft of effects.messages) {
     const group = state.conversations.find(c => c.id === draft.conversationId)
     if (group) bindPullRequestCards(group, draft)
+  }
+  // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
+  for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
+  // Each row is stored under its id: two alike roll the whole command back on a duplicate key, in the store alone (review of
+  // #2275: the review-capacity notice took the Ready for review row's id, so no Builder could hand over during a shortage).
+  const ids = new Set<string>()
+  for (const draft of effects.messages) {
+    if (ids.has(draft.id)) throw new Error(`Command ${command.type} wrote two messages with the id ${draft.id}.`)
+    ids.add(draft.id)
   }
   return effects
 }

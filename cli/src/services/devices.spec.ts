@@ -748,6 +748,11 @@ describe('what the windows say, reaching the dial', () => {
         [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1' }], [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null }]])
       seen.host.superTabSelected!('st1', 'proj1')
       expect(vi.mocked(core.clients.sendLocal)).toHaveBeenCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1' } })
+      // A round dial's side rides along, so the window opens the Buddy chat or the Lead chat the dial shows.
+      seen.host.superTabSelected!('st1', 'proj1', 'buddy')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy' } })
+      seen.host.superTabSelected!('st1', 'proj1', 'pm')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'pm' } })
     })
   })
 

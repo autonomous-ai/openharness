@@ -6,3 +6,7 @@
 
 /** Why a Codex Buddy is refused for now (commands.ts buddy.create); Desktop shows the same words beside a disabled Codex. */
 export const CODEX_BUDDY_REFUSAL = 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.'
+
+/** Why a Buddy is refused a machine: the same words whether the machine is someone else's, shared with the person, a Harness
+ *  Team account, or no machine at all, so they never say which (security review 2 of #2234). */
+export const BUDDY_OWN_MACHINE_REFUSAL = 'A Buddy runs only on your own machine. Pick one of yours.'

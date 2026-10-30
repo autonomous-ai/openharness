@@ -128,6 +128,17 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCardRecap).toHaveBeenCalledOnce()
   })
   // Round dial PM and Buddy screens (spec 2026-10-29): the swarmBuddy dial's fields, checked as the chat and notice are.
+  it('keeps the Buddy\'s session id on its way to the devices service; an unsound one is dropped and the Buddy kept', () => {
+    const { cards, swarmCards } = setup()
+    const buddy = (over: Record<string, unknown> = {}) => ({ chatId: 'b1', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true, ...over })
+    cards.cards([card('t1', [lead('l1', { buddies: true, buddy: buddy({ local: 'h-buddy' }) })])])
+    expect(swarmCards.mock.calls.at(-1)![0][0].leads[0].buddy).toEqual(buddy({ local: 'h-buddy' }))
+    for (const bad of ['bad id', 'x'.repeat(48), 5, '']) {
+      cards.cards([card('t1', [lead('l1', { buddies: true, buddy: buddy({ local: bad }) })])])
+      expect(swarmCards.mock.calls.at(-1)![0][0].leads[0].buddy).toEqual(buddy())
+    }
+  })
+
   it('keeps a sound side chat, buddies flag, buddy block and buddy notice, drops a malformed one', () => {
     const { cards, swarmCards, swarmCardRecap } = setup()
     const buddy = (over: Record<string, unknown> = {}) => ({ chatId: 'b1', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true, ...over })

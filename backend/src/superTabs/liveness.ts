@@ -6,7 +6,7 @@ import { agentDisplayName } from './agentNames.js'
 import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
-import { MACHINE_FRESH_MS } from './machines.js'
+import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { ledProject, projectsOf } from './projects.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -64,6 +64,7 @@ export function renewLease(assignment: Assignment, now: number): void {
 /** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
  *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
  *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
+// Desktop reads hand-offs with a copy of these two (desktop/lib/super_tabs/agent_mark.dart): change both together.
 const READY_FOR_REVIEW = /\bready for review\b/i
 const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
 
@@ -233,7 +234,10 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
+  dropIdleBuddyMachines(state, now)
+  return drafts
 }
 
 /** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */

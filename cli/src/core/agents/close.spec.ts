@@ -51,6 +51,13 @@ describe('closing agents no window shows', () => {
     expect(close.changed).toBe(deps.announceSession)
   })
 
+  // Diego's Buddy, 10-30: the close service refuses a Buddy only if the guard the core is handed reaches it.
+  it('hands the close service the Lead and Buddy guards it was given', () => {
+    const leadProtected = (id: string) => id === 'lead', buddyProtected = (id: string) => id === 'buddy'
+    const { close } = setup({ leadProtected, buddyProtected })
+    expect([close.leadProtected?.('lead'), close.buddyProtected?.('buddy'), close.buddyProtected?.('lead')]).toEqual([true, true, false])
+  })
+
   it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {
     const at = (screen: string) => setup({ captureTerminal: vi.fn(async () => screen) }).close.atStartupQuestion!(row({ sessionId: '' }))
     expect(await at(TAKEOVER.CLAUDE_MCP_SERVER_PROMPT)).toBe(true)

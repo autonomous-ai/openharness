@@ -28,6 +28,7 @@ import 'connectors_page.dart';
 import 'devices_page.dart';
 import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
+import 'out_of_sight.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
 import 'phone_sheet.dart';
@@ -96,10 +97,12 @@ class SettingsPage extends StatelessWidget {
   /// back chevron a large header does not draw.
   final bool large;
 
+  // While out of sight (the You tab under another), it follows the app no more, and catches up
+  // once shown.
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => ListenWhileInSight(
     listenable: notifier,
-    builder: (context, _) {
+    builder: (context) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
       return Scaffold(

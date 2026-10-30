@@ -5,6 +5,24 @@ import 'package:harness_mobile/swarm/swarm_start.dart';
 
 /// The person's computers as a test scripts them.
 class FakeComputers extends ChangeNotifier implements SwarmComputers {
+  /// The person's own computers a Buddy may run on.
+  @override
+  List<SwarmOwnComputer> own = const [];
+
+  /// Each question asked of a computer, and how the computer answers it.
+  final asked = <(String, Map<String, dynamic>)>[];
+  Map<String, dynamic> Function(String machineId, Map<String, dynamic> payload)?
+  answer;
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    asked.add((machineId, payload));
+    return answer?.call(machineId, payload) ?? const {};
+  }
+
   FakeComputers(this.computers);
 
   @override

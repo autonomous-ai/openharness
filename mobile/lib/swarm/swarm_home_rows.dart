@@ -9,18 +9,17 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'swarm_need_rows.dart';
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
-import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_unread.dart';
 import 'team_glance.dart';
 
-/// The rows of Swarm Home, direction B, as Tony's prototype B1 draws them
-/// (2026-10-29): what needs the person, each a line; a project with its
-/// team in coloured dots and when it last moved; the projects quiet for a
-/// day folded in one row.
+/// The rows of Swarm Home: a project with its team in coloured dots and
+/// when it last moved, as Tony's prototype B1 drew them (2026-10-29), its
+/// tile now a dot and its name a channel's, as C1 draws them (2026-10-30);
+/// the projects quiet for a day folded in one row.
 
 /// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
 /// waiting", each dot in its state's colour ([swarmStateColor]), who is down
@@ -84,115 +83,13 @@ String swarmNeedAsk(SwarmNeed need) => switch (need) {
   SwarmWorkNeed(:final work) => work.question ?? work.conversation.label,
 };
 
-/// Who asks a need, and where: its project, who asks, and how long ago.
-String swarmNeedWhere(SwarmNeed need, DateTime now) {
-  final (project, who, at) = switch (need) {
-    SwarmDecisionNeed(:final decision) => (
-      decision.projectName,
-      decision.askerName,
-      decision.createdAt,
-    ),
-    SwarmMentionNeed(:final mention) => (
-      mention.projectName,
-      mention.leadName,
-      mention.createdAt,
-    ),
-    SwarmWorkNeed(:final work) => (
-      work.project.name,
-      work.agentName,
-      work.conversation.changedAt,
-    ),
-  };
-  return [
-    project,
-    who,
-    if (at != null) fzfAge(at.toLocal(), now.toLocal()),
-  ].where((part) => part.isNotEmpty).join(' · ');
-}
-
-/// One thing that needs the person, on Home: a yellow dot, what is asked in
-/// bold, where and who under it, and a chevron; a tap opens it. A decision
-/// whose answer is held for Undo says what is being sent.
-class SwarmHomeNeedRow extends StatelessWidget {
-  const SwarmHomeNeedRow({
-    super.key,
-    required this.session,
-    required this.need,
-    required this.now,
-    required this.onTap,
-  });
-
-  final SwarmSession session;
-  final SwarmNeed need;
-  final DateTime now;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final held = switch (need) {
-      final SwarmDecisionNeed decision => switch (session.held(decision)) {
-        final choice? =>
-          'Sending “${swarmOption(decision.decision.options, choice)}”',
-        null => null,
-      },
-      _ => null,
-    };
-    return SwarmRow(
-      leading: const _Dot(size: 8),
-      title: swarmNeedAsk(need),
-      news: (bold: true, tags: 0),
-      detail: SwarmRow.line(held ?? swarmNeedWhere(need, now)),
-      onTap: onTap,
-    );
-  }
-}
-
-/// The last row of Home's Needs you: "See all 4" and a chevron.
-class SwarmSeeAllRow extends StatelessWidget {
-  const SwarmSeeAllRow({super.key, required this.count, required this.onTap});
-
-  final int count;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return _Tap(
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 48),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpace.l,
-            vertical: AppSpace.s,
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'See all $count',
-                  style: AppType.label(color: AppPalette.textSecondary),
-                ),
-              ),
-              Icon(
-                LucideIcons.chevronRight300,
-                size: 18,
-                color: AppPalette.textFaint,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// One project on Home, as B1 draws it: its tile, its name — bold and bright
-/// with something new in it, quiet otherwise — its team in coloured dots
-/// ([SwarmTeamDots]), and at its right how long ago it last moved, over the
-/// tags waiting in it ("@2", filled) or, unread, a dot. A tap opens it; a
-/// long press offers its pin ([onLongPress]).
+/// One project on Home, as C1 draws it: a dot in the colour of how its team
+/// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
+/// and bright with something new in it, quiet otherwise — and, as B1 draws
+/// them, its team in coloured dots ([SwarmTeamDots]), and at its right how
+/// long ago it last moved, over the tags waiting in it ("@2", filled) or,
+/// unread, a dot. A tap opens it; a long press offers its pin
+/// ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
@@ -234,8 +131,19 @@ class SwarmHomeProjectRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              SwarmProjectTile(project.project.name),
-              const SizedBox(width: 12),
+              ExcludeSemantics(
+                child: SizedBox(
+                  key: const ValueKey('swarm-project-dot'),
+                  width: 16,
+                  child: Center(
+                    child: _Dot(
+                      size: 8,
+                      color: swarmProjectColor(glance, news),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpace.s),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -246,7 +154,7 @@ class SwarmHomeProjectRow extends StatelessWidget {
                           ? 'Unread messages'
                           : null,
                       child: Text(
-                        project.project.name,
+                        '#${project.project.name}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppType.label(
@@ -297,9 +205,9 @@ class SwarmHomeProjectRow extends StatelessWidget {
   }
 }
 
-/// The projects quiet for a day, folded in one row at the foot of Projects:
-/// "Other projects (9)", "Quiet for 24h" and a chevron that turns as they
-/// open ([open]).
+/// The projects quiet for a day, folded in one row at the foot of Projects,
+/// as C1 draws it: a chevron that turns as they open ([open]), then "Other
+/// projects · 9".
 class SwarmOtherProjectsRow extends StatelessWidget {
   const SwarmOtherProjectsRow({
     super.key,
@@ -328,24 +236,24 @@ class SwarmOtherProjectsRow extends StatelessWidget {
             ),
             child: Row(
               children: [
+                SizedBox(
+                  width: 16,
+                  child: Icon(
+                    open
+                        ? LucideIcons.chevronDown300
+                        : LucideIcons.chevronRight300,
+                    size: 18,
+                    color: AppPalette.textFaint,
+                  ),
+                ),
+                const SizedBox(width: AppSpace.s),
                 Expanded(
                   child: Text(
-                    'Other projects ($count)',
+                    'Other projects · $count',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppType.label(color: AppPalette.textSecondary),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'Quiet for ${swarmQuietAfter.inHours}h',
-                  style: AppType.caption(color: AppPalette.textFaint),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  open ? LucideIcons.chevronUp300 : LucideIcons.chevronDown300,
-                  size: 18,
-                  color: AppPalette.textFaint,
                 ),
               ],
             ),
@@ -355,6 +263,18 @@ class SwarmOtherProjectsRow extends StatelessWidget {
     );
   }
 }
+
+/// How a project's team is, as its dot on Home: red with someone down,
+/// yellow with someone waiting or a tag waiting on the person, green with
+/// someone working, faint otherwise.
+Color swarmProjectColor(SwarmTeamGlance glance, SwarmRowNews news) =>
+    glance.down > 0
+    ? swarmStateColor(SwarmAgentState.down)
+    : glance.waiting > 0 || news.tags > 0
+    ? swarmStateColor(SwarmAgentState.waiting)
+    : glance.working > 0
+    ? swarmStateColor(SwarmAgentState.working)
+    : AppPalette.textFaint;
 
 /// A row's ink on a tap, with a click a thumb can feel.
 class _Tap extends StatelessWidget {

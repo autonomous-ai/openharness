@@ -3362,6 +3362,97 @@ describe('Lead mentions', () => {
     expect(indexes.cursor.firstBatch).toContainEqual(expect.objectContaining({ key: { createdAt: 1 }, expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }))
   })
 
+  describe('a tag held for a task with no worker', () => {
+    const MINUTE = 60_000
+    /** The Lead's notice that a failed start left a task with no worker, tagging the requester only if that lasts. */
+    async function held() {
+      const { tab, lead } = await fixture()
+      await invite(tab)
+      const group = (await run(tab, { type: 'conversation.create', title: 'Welcome copy', brief: 'Write the welcome copy',
+        checks: [{ description: 'Copy reads well', independent: false }] })).result.conversationId as string
+      await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+      const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Builder could not start on the Studio.', replyTo: null,
+        recipientIds: [], mentions: [peer.sub], mentionsIfNoWorker: true } as Command, host, lead)).result.messageId as string
+      return { tab, lead, group, messageId }
+    }
+    /** A store whose clock is [minutes] on. */
+    const after = (minutes: number) => new SuperTabStore(db, () => Date.now() + minutes * MINUTE)
+    const waitingAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'waiting')).mentions
+    const countAt = async (tab: string, minutes: number) => (await waiting(tab, peer, after(minutes))).mentionsWaiting
+    const assignAt = async (tab: string, group: string, lead: string, minutes: number) => String((await after(minutes).execute(owner, tab,
+      { operationId: randomUUID(), command: { type: 'work.assign', conversationId: group, agentId: lead } })).result.assignmentId)
+
+    it('does not tag the requester at once, and tags them once the group has had no worker for 20 minutes', async () => {
+      const { tab, group, messageId } = await held()
+      expect(await waitingAt(tab, 0)).toEqual([])
+      expect(await countAt(tab, 0)).toBe(0)
+      expect(await countAt(tab, 19)).toBe(0)
+      expect(await waitingAt(tab, 21)).toEqual([expect.objectContaining({ conversationId: group, messageId, resolvedBy: null })])
+      expect(await countAt(tab, 21)).toBe(1)
+      expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+    })
+
+    it('never tags them when the Lead acted on the group after the notice', async () => {
+      const { tab, lead, group } = await held()
+      await run(tab, { type: 'message.send', conversationId: group, text: 'Starting it on another machine.', replyTo: null, recipientIds: [] }, host, lead)
+      expect(await waitingAt(tab, 21)).toEqual([])
+      expect(await countAt(tab, 21)).toBe(0)
+    })
+
+    it('never tags them when a worker was assigned within the 20 minutes', async () => {
+      const { tab, lead, group } = await held()
+      await assignAt(tab, group, lead, 5)
+      expect(await waitingAt(tab, 21)).toEqual([])
+      expect(await (await after(21).mentions(peer, tab, 'earlier')).mentions).toEqual([])
+    })
+
+    it('clears a shown tag the moment a worker is assigned, and does not bring it back when that work ends', async () => {
+      const { tab, lead, group, messageId } = await held()
+      expect(await countAt(tab, 21)).toBe(1)
+      const assignmentId = await assignAt(tab, group, lead, 22)
+      expect(await waitingAt(tab, 22)).toEqual([])
+      expect(await countAt(tab, 22)).toBe(0)
+      expect((await after(22).mentions(peer, tab, 'earlier')).mentions).toEqual([expect.objectContaining({ messageId, resolvedBy: 'worker' })])
+      await after(23).execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } })
+      expect(await waitingAt(tab, 24)).toEqual([])
+    })
+
+    const earlierAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'earlier')).mentions
+    const as = (minutes: number, user: AuthUser, tab: string, command: Command, agent?: string) =>
+      after(minutes).execute(user, tab, { operationId: randomUUID(), command }, agent)
+    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it.', replyTo: null, recipientIds: [] })
+
+    it('keeps a tag the Lead acted on out of Waiting and Earlier, also when a worker is assigned or the requester replies later', async () => {
+      const { tab, lead, group } = await held()
+      await as(5, host, tab, post(group), lead)
+      await assignAt(tab, group, lead, 22)
+      expect(await waitingAt(tab, 22)).toEqual([])
+      expect(await earlierAt(tab, 22)).toEqual([])
+      const again = await held()
+      await as(5, host, again.tab, post(again.group), again.lead)
+      await as(25, peer, again.tab, post(again.group))
+      expect(await waitingAt(again.tab, 25)).toEqual([])
+      expect(await earlierAt(again.tab, 25)).toEqual([])
+    })
+
+    it('moves a listed tag to Earlier when the requester replies after minute 20, and never lists one answered before', async () => {
+      const late = await held()
+      await as(25, peer, late.tab, post(late.group))
+      expect(await waitingAt(late.tab, 25)).toEqual([])
+      expect(await earlierAt(late.tab, 25)).toEqual([expect.objectContaining({ messageId: late.messageId, resolvedBy: 'reply' })])
+      const early = await held()
+      await as(10, peer, early.tab, post(early.group))
+      expect(await waitingAt(early.tab, 25)).toEqual([])
+      expect(await earlierAt(early.tab, 25)).toEqual([])
+    })
+
+    it('keeps a tag out of the lists when its group has no worker but was archived', async () => {
+      const { tab, group } = await held()
+      await run(tab, { type: 'conversation.archive', conversationId: group, archived: true } as Command)
+      expect(await waitingAt(tab, 21)).toEqual([])
+    })
+  })
+
   it('keeps the stored tab and older messages as the previous backend reads and writes them', async () => {
     const { tab, group } = await tagged()
     const stored = await storedState(tab)

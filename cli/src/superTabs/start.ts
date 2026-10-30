@@ -159,21 +159,24 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
   const machineName = (id: unknown) => text(machines.find(m => m.machineId === id)?.name) ?? 'its machine'
   const blocked = async (on: Json, required = false): Promise<Json> => {
     const requester = identifier(group?.requesterId) ? [group.requesterId] : []
+    // This Lead is told by the result below and usually starts the task again within minutes. The requester is tagged only if
+    // the task still has no worker after a while and the Lead has done nothing for it (backend mentions.ts): tagged at once,
+    // Dee got two notices he could not act on for a task that had a worker soon after (2026-10-29).
     // People read why in the failure row the backend wrote; this one says only what it means, never the raw error. A task's
     // requirement names no machine at all: the one it failed on is a required one, which a reader may not see (backend
     // model.ts TaskRequirement; review of #1847). A memory shortage is named, with only the numbers members see in the Machines
     // view: "until that machine is fixed" sent people looking for a fault on Ken's MacBook Pro (2026-10-28).
     const short = memoryShortIn(on.error)
     requireSuccess(await scoped({ action: 'command', operationId: derived('start-blocked', String(on.id)), command: { type: 'message.send',
-      conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester } : {}),
+      conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester, mentionsIfNoWorker: true } : {}),
       text: required
         ? `${String(request.name)} could not start. This task needs a particular machine or device, so it was not moved to another machine. `
-          + 'It has no worker until a machine that has what it needs can start it.'
+          + 'It has no worker. Make a machine that has what it needs available, then ask the Lead to start it again.'
         : short
           ? `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}: not enough free memory (${short.free} free, ${short.needed} needed), `
-            + 'and no other machine allowed for this task could take it. This task has no worker until memory frees up on that machine or another one is added.'
+            + 'and no other machine allowed for this task could take it. This task has no worker. Free up memory on that machine or add another one, then ask the Lead to start it again.'
           : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
-            + 'This task has no worker until that machine is fixed or another one is added.' } }))
+            + 'This task has no worker. Fix that machine or add another one, then ask the Lead to start it again.' } }))
     return { error: 'START_BLOCKED', startId: on.id, detail: `${String(on.error)} ${required
       ? 'This task requires its machine or device, so it was not moved; the group was told.'
       : 'No other machine allowed for this task could start it; the group was told.'}` }

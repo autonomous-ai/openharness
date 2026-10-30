@@ -27,6 +27,7 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
   final AppNotifier notifier;
 
   List<SwarmComputer>? _computers;
+  List<SwarmOwnComputer> _own = const [];
   bool _rechecking = false;
 
   /// How many computers' sockets are up.
@@ -48,21 +49,49 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
               ),
           ])
         : null;
+    final own = List<SwarmOwnComputer>.unmodifiable([
+      if (notifier.machinesAnswered)
+        for (final machine in notifier.machineStates.values)
+          if (!machine.machine.shared &&
+              machine.machine.sessionKind != 'team' &&
+              !machine.needsLink)
+            (
+              id: machine.machine.machineId,
+              name: machine.machine.displayName,
+              away: phoneMachineAway(machine),
+            ),
+    ]);
     final rechecking = notifier.machinesRefreshing;
     final up = notifier.machineStates.values
         .where((m) => m.connectionStatus == ConnectionStatus.connected)
         .length;
     final cameUp = up > _up;
     _up = up;
+    // A computer shared, become a Team account or waiting for a link changes
+    // the person's own without changing a name or whether one is away.
     if (!cameUp &&
         listEquals(computers, _computers) &&
+        listEquals(own, _own) &&
         rechecking == _rechecking) {
       return;
     }
     _computers = computers;
+    _own = own;
     _rechecking = rechecking;
     notifyListeners();
   }
+
+  /// The account's own computers, as the Buddy picker lists them: never one
+  /// shared with this person, nor a Harness Team account, nor one waiting for
+  /// a link. Told of like [computers].
+  @override
+  List<SwarmOwnComputer> get own => _own;
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) => notifier.swarmAskComputer(machineId, payload);
 
   /// The machines tab's Try again: the account's list read again.
   @override

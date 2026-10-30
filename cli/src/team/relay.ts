@@ -392,7 +392,8 @@ export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps:
     const file = join(dir, 'models_cache.json'), next = `${file}.harness-${process.pid}`
     writeFileSync(next, JSON.stringify({ fetched_at: new Date(deps.now()).toISOString(), client_version: version, models }), { mode: 0o600 })
     renameSync(next, file)
-    dropUnofferedModel(join(dir, 'config.toml'), new Set(models.flatMap(m => typeof (m as { slug?: unknown })?.slug === 'string' ? [(m as { slug: string }).slug] : [])))
+    const rows = models.flatMap(m => m && typeof m === 'object' && typeof (m as { slug?: unknown }).slug === 'string' ? [m as { slug: string; visibility?: unknown }] : [])
+    settleCodexModel(join(dir, 'config.toml'), new Set(rows.map(m => m.slug)), rows.find(m => m.visibility === 'list')?.slug ?? null)
     return models
   } catch { /* The relay or ChatGPT did not answer: Codex keeps the list it had. */ }
   return null
@@ -434,28 +435,36 @@ export const codexModelNotOffered = (model: string, offered: OfferedCodexModels)
   + (offered.listed.length ? `it offers ${offered.listed.join(', ')}.` : 'it lists no model to choose.')
 
 /**
- * A default model saved in the team account's Codex config that the owner's account does not offer is taken out, so Codex
- * starts on the owner's default. Codex saves the model a /model switch picks there, and a switch made while the account
- * knew only Codex's built-in models saved gpt-5.5, which ChatGPT refuses for the owner. Codex 0.164 then opens on a
- * "Meet GPT-6 Sol" choice before its session starts, which nobody in a team account answers: every Codex start on Mac
- * Auto's waited 3 minutes and failed (2026-10-29). Only a top-level `model` line is touched, and only against a list that
- * was read; a model the owner is offered stays.
+ * The team account's Codex is set to open on a model its owner is offered. Codex saves the model a /model switch picks in
+ * its config, and a switch made while the account knew only Codex's built-in models saved gpt-5.5, which ChatGPT refuses
+ * for the owner: Codex 0.164 then opened on a "Meet GPT-6 Sol" choice nobody answers, and every start on Mac Auto's waited
+ * 3 minutes and failed. With no model saved, Codex opened on its own default, gpt-6.1-sol, which Mac Auto's owner is not
+ * offered either, so the agent's first message was refused before the start's model was switched in (2026-10-29). A
+ * saved model the owner is offered stays; otherwise the top-level `model` becomes [fallback], the first model the owner's
+ * list offers to choose, or is taken out when there is none. Only that line is written, and only against a list that was
+ * read. Returns whether the file changed.
  */
-export function dropUnofferedModel(config: string, offered: ReadonlySet<string>): boolean {
+export function settleCodexModel(config: string, offered: ReadonlySet<string>, fallback: string | null): boolean {
   if (!offered.size) return false
-  let text: string
-  try { text = readFileSync(config, 'utf8') } catch { return false }
-  const lines = text.split('\n')
+  let text = ''
+  try { text = readFileSync(config, 'utf8') } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false
+  }
+  const lines = text ? text.split('\n') : []
   const firstTable = lines.findIndex(line => /^\s*\[/.test(line))
   const top = firstTable < 0 ? lines.length : firstTable
   const index = lines.slice(0, top).findIndex(line => /^\s*model\s*=/.test(line))
-  if (index < 0) return false
-  const saved = /^\s*model\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/.exec(lines[index]!)
+  const saved = index < 0 ? null : /^\s*model\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/.exec(lines[index]!)
   if (saved && offered.has(saved[1] ?? saved[2] ?? '')) return false
-  lines.splice(index, 1)
+  const line = fallback && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(fallback) ? `model = "${fallback}"` : null
+  if (index >= 0) { if (line) lines[index] = line; else lines.splice(index, 1) }
+  else if (line) lines.unshift(line)
+  else return false
   const next = `${config}.harness-${process.pid}`
-  writeFileSync(next, lines.join('\n'), { mode: 0o600 })
-  renameSync(next, config)
+  try {
+    writeFileSync(next, lines.join('\n') + (text ? '' : '\n'), { mode: 0o600 })
+    renameSync(next, config)
+  } catch { return false }
   return true
 }
 

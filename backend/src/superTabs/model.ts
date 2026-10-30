@@ -248,6 +248,9 @@ export interface Conversation {
   reactionSeq?: number
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
   proposals?: string[]
+  /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
+   *  one added again takes it. Absent: the default, "<person>'s Buddy". */
+  buddyName?: string
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -332,7 +335,9 @@ export interface SuperTabState {
   /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
    *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
    *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true }>
+  /** `buddyOnly`: a Buddy's session on a Buddy-only machine, kept from every reader as its machine is (read/changes.ts). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
+    buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
@@ -374,11 +379,15 @@ export interface MessageDraft {
   text: string
   replyTo: string | null
   recipients: string[]
+  /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
+  buddyRecipients?: string[]
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
+  /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
+  holdMentions?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */
@@ -406,6 +415,8 @@ export const NOTICE_READERS = {
   rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people', 'auto-review': 'people',
   'auto-archive': 'people', native: 'people',
+  // No new Reviewer can start, or soon none will, tagging who can fix it (reviewCapacity.ts).
+  'review-capacity': 'people',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
@@ -422,6 +433,12 @@ export const agentOnly = (source: unknown, recipients: readonly string[]): boole
 }
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */
+/** Whether [target]'s machine is kept from [actor]: one Buddy-only (machines.ts buddyOnly), which only the Buddy's person and
+ *  the Buddy itself read where it runs (security review 1 of #2234). */
+export const machineHiddenFrom = (state: SuperTabState, actor: Actor, target: Agent): boolean =>
+  !!target.buddyOf && !!state.machines?.some(m => m.buddyOnly && m.machineId === target.machineId)
+  && !(actor.kind === 'person' ? actor.userId === target.buddyOf?.personId : actor.agentId === target.id)
+
 export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {
   const { replacement: _replacement, ...rest } = target
   return { ...rest, machineId: '', harnessId: '',
@@ -607,6 +624,11 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
+  // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
+  if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // Nor its id, which a Buddy's row carries (machineHiddenFrom).
+  visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
   visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)

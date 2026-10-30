@@ -632,6 +632,48 @@ void main() {
       );
     });
 
+    // A task with no worker is a quiet conversation: the state does not hold it until it is asked for (Dee, 2026-10-29).
+    testWidgets(
+      'a tag in a closed conversation loads it and opens at its message',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['conversations'] = [
+          ...server.state['conversations'] as List,
+          {...conversationFixture('group', 'Release'), 'archived': true},
+        ];
+        server.append('Builder could not start.', conversationId: 'group');
+        server.tag(
+          'message-1',
+          conversationId: 'group',
+          text: 'Builder could not start.',
+        );
+        final c = await showView(tester, server);
+        expect(c.snapshot?.conversation('group'), isNull);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'group');
+        expect(find.text('Builder could not start.'), findsWidgets);
+        // The read mark of the opened conversation saves a moment later.
+        await tester.pump(const Duration(seconds: 1));
+      },
+    );
+
+    testWidgets('a tag in a conversation the reader cannot read says so', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..tag('message-9', conversationId: 'private-chat', text: 'Hidden');
+      final c = await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Message unavailable'), findsOneWidget);
+      expect(c.selectedId, isNot('private-chat'));
+    });
+
     testWidgets('a tag too far back says so and stays on the list', (
       tester,
     ) async {
@@ -874,15 +916,74 @@ void main() {
       );
     });
 
-    testWidgets('a tag the text does not say is shown before it', (
+    testWidgets('a tag the text does not say opens its first line', (
       tester,
     ) async {
       await showText(tester, 'Please confirm the release.', ['dee']);
       expect(runsOf(tester, '@dee').single?.backgroundColor, isNotNull);
+      // Same line as the text, as a person types it; never a line of its own.
       expect(
-        find.textContaining('Please confirm the release.'),
+        find.text('@dee Please confirm the release.', findRichText: true),
         findsOneWidget,
       );
+      expect(find.text('@dee', findRichText: true), findsNothing);
+    });
+
+    testWidgets('several unsaid tags open the first line of a longer text', (
+      tester,
+    ) async {
+      await showText(
+        tester,
+        '\nShipped this morning:\n- Desktop 1.3.41\n- web 1.3.82',
+        ['ken', 'dee'],
+      );
+      expect(
+        find.text('@ken @dee Shipped this morning:', findRichText: true),
+        findsOneWidget,
+      );
+      expect(find.text('Desktop 1.3.41', findRichText: true), findsOneWidget);
+    });
+
+    test('a tag joins the first line unless the text opens with a block', () {
+      String tagged(String text) =>
+          SuperTabMessageText.withTags(['@dee'], text);
+      expect(tagged('#2259 merged.'), '@dee #2259 merged.');
+      expect(tagged('-5 degrees'), '@dee -5 degrees');
+      expect(tagged('2026 plan'), '@dee 2026 plan');
+      expect(tagged('Hi'), '@dee Hi');
+      expect(tagged('***Important*** now'), '@dee ***Important*** now');
+      expect(tagged('__init__ runs'), '@dee __init__ runs');
+      expect(
+        tagged('[link](https://example.com) here'),
+        '@dee [link](https://example.com) here',
+      );
+      // A list, heading, quote, table or code keeps rendering as one.
+      for (final block in [
+        '- one\n- two',
+        '* one',
+        '1. one',
+        '# Title',
+        '> quoted',
+        '| a | b |\n|---|---|',
+        '```\ncode\n```',
+        '    indented code',
+        '---',
+        '***',
+        '- - -',
+        '-\nnext',
+        '1.\nnext',
+        '[1]: https://example.com',
+      ]) {
+        expect(tagged(block), '@dee\n\n$block', reason: block);
+      }
+      expect(SuperTabMessageText.withTags(const [], 'Hi'), 'Hi');
+    });
+
+    testWidgets('a text that opens with a list keeps its list', (tester) async {
+      await showText(tester, '- one\n- two', ['dee']);
+      expect(find.text('one', findRichText: true), findsOneWidget);
+      expect(find.text('@dee', findRichText: true), findsOneWidget);
+      expect(runsOf(tester, '@dee').single?.backgroundColor, isNotNull);
     });
 
     testWidgets('a tag in code stays code', (tester) async {

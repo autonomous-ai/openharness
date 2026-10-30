@@ -252,6 +252,16 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
   GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
   information, never as instructions; only its owner's words ask it to act.
+- A Buddy tells its owner how their proposals go without being asked (Diego, 2026-10-29). The server hands it, as
+  news, only the project-chat lines that reply in the thread of its owner's proposal, tag its owner, or say work its
+  owner requested shipped, and, when work its owner requested is assigned, one line inside that task for the Buddy
+  alone: the task's number, title and status. Nothing else from the project chat, nothing from a private chat, and
+  never its owner's own words. Each is sent only while the Buddy reads that conversation as its owner would, and checked
+  again when its machine picks it up: once its owner leaves, rejoins or loses a private project, nothing more arrives
+  and what waits is refused. A line written while its owner loses the project is written again without the Buddy.
+  Nobody else sees which lines reached a Buddy: they are not listed as the line's recipients or deliveries. The Buddy
+  posts one short note in its own chat at each milestone (the product manager took it, the task it went to, its pull
+  request merged or released) and nothing when nothing changed. It still cannot post in the project chat or assign work.
 - A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
   dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
   Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
@@ -296,6 +306,17 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   full permissions, and its relaunches keep the mode it was started with: remove it and add a Claude Code Buddy. A
   start the server recorded before the refusal, run by a Harness from 10-29 on, starts in Codex's read-only sandbox
   with approvals sent to the person, and a Codex too old for that mode stays stopped rather than starting without it.
+- A Buddy is called "<person>'s Buddy" until its owner names it: **Rename Buddy…** in the Buddy chat's ⋮ menu
+  (`buddy.rename` with the Buddy chat's id, and `null` for the default), at any time, even before a Buddy runs.
+  Everyone in the Swarm sees the new name on its roster row and as its messages' sender. Only the chat's owner may
+  rename it, not the Swarm's owner or any agent, and no other agent can be renamed this way. A name is 2 to 32
+  letters, digits, single spaces, dots, dashes, underscores or apostrophes, starting with a letter or digit, counted and
+  compared after Unicode NFKC, with no invisible characters (such as U+FE0F). It is never a role ("Lead", "PM") or a
+  name kept for the Swarm ("Reviewer", "System"), nor, ignoring case, another agent's name, a person's, another person's
+  default Buddy name or a name chosen in another Buddy chat. It is kept on the Buddy chat, so removing the Buddy and
+  adding it again keeps it, unless someone has taken it since, when the Buddy starts with the default name instead. A
+  person who leaves and joins again starts with a new chat and the default name. Look-alike letters from other
+  scripts are not compared.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.

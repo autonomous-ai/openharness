@@ -6,6 +6,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -305,6 +306,140 @@ void main() {
     expect(c.openedThread?.root, 'message-1');
   });
 
+  group('the replies row shows each replier as their own messages do', () {
+    const river = {
+      'kind': 'agent',
+      'id': 'river',
+      'name': 'Lead',
+      'displayName': 'River',
+    };
+    const gone = {'kind': 'person', 'id': 'gone', 'name': 'gone@example.com'};
+    Map<String, dynamic> riverRow({String displayName = 'River'}) => {
+      'id': 'river',
+      'projectId': 'lead',
+      'name': 'Lead',
+      'displayName': displayName,
+      'machineId': 'm',
+      'harnessId': 'h-river',
+      'contributorId': 'owner',
+      'configuration': {'engine': 'claude', 'model': 'opus'},
+      'avatar': {'kind': 'preset', 'key': 'owl'},
+    };
+
+    /// A root by the owner answered by [peer], who has a picture and a
+    /// status, the agent River, and someone no longer in the Swarm.
+    ConversationServer answered({
+      Map<String, Object> peerAvatar = const {
+        'kind': 'upload',
+        'url': 'https://storage.googleapis.com/avatars/peer?X-Goog-Expires=3600&X-Goog-Signature=fixture',
+      },
+    }) {
+      final server = ConversationServer()..threads = true;
+      (server.state['people'] as List).add({
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'username': 'pia',
+        'role': 'collaborator',
+        'avatar': peerAvatar,
+        'status': {'text': 'Coffee break', 'emoji': '☕'},
+      });
+      (server.state['agents'] as List).add(riverRow());
+      server.append('Who wants this?');
+      for (final author in [gone, river, peer]) {
+        server.append('Me.');
+        server.messages.last
+          ..['thread'] = 'message-1'
+          ..['replyTo'] = 'message-1'
+          ..['author'] = author;
+      }
+      return server;
+    }
+
+    List<SuperTabAvatar> faces(WidgetTester tester) => tester
+        .widgetList<SuperTabAvatar>(
+          find.descendant(
+            of: line('message-1'),
+            matching: find.byType(SuperTabAvatar),
+          ),
+        )
+        .toList();
+
+    testWidgets('a person their uploaded picture and status, an agent its '
+        'avatar, and someone who left the face their name gives', (
+      tester,
+    ) async {
+      await show(tester, answered());
+      final [person, agent, left] = faces(tester);
+      expect(person.identity, 'person:peer');
+      expect(person.name, 'pia');
+      expect(person.picture, isA<SuperTabUploadedAvatar>());
+      expect(person.status?.text, 'Coffee break');
+      expect(agent.identity, 'agent:river');
+      expect(agent.name, 'River');
+      expect(agent.picture, isA<SuperTabPresetAvatar>());
+      expect(agent.pattern, isTrue);
+      // The row names the engine already where an agent writes; its reply
+      // line does not badge it either.
+      expect(agent.engine, isNull);
+      expect(left.identity, 'person:gone');
+      expect(left.name, 'gone');
+      expect(left.picture, isNull);
+      expect(left.status, isNull);
+      // Its size is unchanged.
+      expect(
+        tester.getSize(find.byWidget(person)).width,
+        grid.AppDesktop.iconSize,
+      );
+    });
+
+    testWidgets('a person with a preset shows it', (tester) async {
+      await show(
+        tester,
+        answered(peerAvatar: const {'kind': 'preset', 'key': 'fox'}),
+      );
+      expect(
+        find.descendant(of: line('message-1'), matching: find.text('🦊')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: line('message-1'), matching: find.text('🦉')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a person who leaves and an agent removed while the chat is '
+        'open fall back on the next read, and a renamed agent follows', (
+      tester,
+    ) async {
+      final server = answered(
+        peerAvatar: const {'kind': 'preset', 'key': 'fox'},
+      );
+      final c = await show(tester, server);
+      expect(faces(tester).first.picture, isNotNull);
+      (server.state['people'] as List).removeWhere(
+        (p) => (p as Map)['id'] == 'peer',
+      );
+      server.state['agents'] = [riverRow(displayName: 'Rio')];
+      await c.refresh();
+      await tester.pumpAndSettle();
+      var [person, agent, _] = faces(tester);
+      expect(person.picture, isNull);
+      expect(person.status, isNull);
+      expect(person.name, 'peer');
+      expect(agent.name, 'Rio');
+      expect(agent.picture, isA<SuperTabPresetAvatar>());
+      server.state['agents'] = <dynamic>[];
+      await c.refresh();
+      await tester.pumpAndSettle();
+      [_, agent, _] = faces(tester);
+      expect(agent.picture, isNull);
+      expect(agent.pattern, isTrue);
+      expect(agent.name, 'River');
+      expect(find.text('🦊'), findsNothing);
+      expect(find.text('🦉'), findsNothing);
+    });
+  });
+
   testWidgets('the reply line is a button assistive technology can press', (
     tester,
   ) async {
@@ -477,6 +612,49 @@ void main() {
     );
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
   });
+
+  test('a thread read on another device, with no mark kept here, shows as '
+      'read', () async {
+    final server = threaded();
+    // The reader read the whole chat elsewhere, up to its last message.
+    server.markReadElsewhere('lead', server.revision);
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    await c.loadMessages('lead');
+    final thread = c.thread('lead', 'message-1')!;
+    // The last reply is the peer's, so only the read mark keeps it quiet.
+    expect(thread.authors.first['id'], 'peer');
+    expect(thread.lastSequence, 3);
+    expect(c.readMark('lead'), server.revision);
+    expect(c.threadUnread(thread), isFalse);
+  });
+
+  test(
+    'a reply past the mark read on another device is still unread',
+    () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', 2);
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadMessages('lead');
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+    },
+  );
+
+  test(
+    'another person\'s read mark never reads the reader\'s thread',
+    () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', server.revision, reader: 'peer');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadMessages('lead');
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+    },
+  );
 
   testWidgets('the read mark passes thread replies after the last row shown', (
     tester,

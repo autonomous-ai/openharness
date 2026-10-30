@@ -55,17 +55,26 @@ String buddyPersonName(SuperTabController c, String personId) {
 }
 
 /// The machine [machineId]'s name as the dialog and the chat show it.
-String buddyMachineName(SuperTabController c, String machineId) {
-  final row = c.snapshot?.pool(machineId);
-  final name = row?['name'];
+String buddyMachineName(
+  SuperTabController c,
+  String machineId, {
+  AppNotifier? app,
+}) {
+  // The name its person gave it, else the Swarm's (docs/naming-system.md). A
+  // machine of the reader's own outside the Swarm is in no Swarm list
+  // (backend buddyOnly), so their account names it.
+  final given = app?.stateOf(machineId)?.machine.displayName;
+  final name = given != null && given.isNotEmpty
+      ? given
+      : c.snapshot?.pool(machineId)?['name'];
   return name is String && name.isNotEmpty
       ? superTabMachineName(name)
       : 'another machine';
 }
 
 /// Add a Buddy: project, one of the reader's own machines, and engine. With
-/// [app], this computer is offered first, even before it is in the Swarm: Add
-/// Buddy then adds it.
+/// [app], every machine of their account is offered, this computer first; one
+/// outside the Swarm stays out of it (buddyMachines).
 Future<void> showAddBuddy(
   BuildContext context,
   SuperTabController c, {
@@ -136,7 +145,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
       _busy = true;
       _error = null;
     });
-    final (:id, error: addError) = await _adder.resolve(
+    final (:id, :setup, error: addError) = await _adder.resolve(
       machine,
       alive: () => mounted,
     );
@@ -152,7 +161,10 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
       projectId: project,
       machineId: id,
       engine: _engine,
+      setup: setup,
     );
+    // Its host reads the Swarm now rather than on its next pass.
+    if (added && setup != null) unawaited(widget.app?.wakeSuperTabHost(id));
     if (!mounted) return;
     if (added) {
       Navigator.pop(context);
@@ -224,12 +236,12 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   label('Machine'),
                   Expanded(
                     child: machines.isEmpty
-                        ? BuddyNoMachine(controller: c, app: widget.app)
+                        ? BuddyNoMachine(machines: machines)
                         : BuddyMachineField(
                             key: const ValueKey('super-buddy-machine'),
                             machines: machines,
-                            value: _picked!.id,
-                            action: 'Add Buddy',
+                            value: _picked?.id,
+                            busy: _busy,
                             onChanged: (value) {
                               if (!_busy) setState(() => _machine = value);
                             },
@@ -237,15 +249,11 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
-              if (_picked?.joins == true) ...[
+              if (machines.isNotEmpty && _picked == null) ...[
                 const SizedBox(height: 4),
                 Padding(
                   padding: const EdgeInsets.only(left: _labelWidth),
-                  child: Text(
-                    buddyJoinsNote('Add Buddy'),
-                    key: const ValueKey('super-buddy-joins'),
-                    style: DesktopChrome.control(color: DesktopChrome.muted),
-                  ),
+                  child: BuddyNoMachine(machines: machines),
                 ),
               ],
               const SizedBox(height: 12),
@@ -353,6 +361,134 @@ Future<void> confirmRemoveBuddy(
   if (remove == true) await c.removeBuddy(projectId);
 }
 
+/// What the reader's Buddy is called until they name it, as the backend
+/// names it: "ken's Buddy".
+String buddyDefaultName(SuperTabController c) {
+  final email = c.snapshot?.people
+      .where((p) => p.id == c.accountId)
+      .firstOrNull
+      ?.email;
+  return "${(email ?? '').split('@').first}'s Buddy";
+}
+
+/// Rename the reader's Buddy in [projectId] (mockup confirmed by Diego,
+/// 10-29): the name everyone in the Swarm sees; empty goes back to
+/// [buddyDefaultName]. The backend checks the name and says why it refuses.
+Future<void> showRenameBuddy(
+  BuildContext context,
+  SuperTabController c,
+  String projectId,
+) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: projectId,
+    child: _RenameBuddyDialog(controller: c, projectId: projectId),
+  ),
+);
+
+class _RenameBuddyDialog extends StatefulWidget {
+  const _RenameBuddyDialog({required this.controller, required this.projectId});
+  final SuperTabController controller;
+  final String projectId;
+
+  @override
+  State<_RenameBuddyDialog> createState() => _RenameBuddyDialogState();
+}
+
+class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
+  SuperTabController get c => widget.controller;
+
+  /// The backend's limit: a longer name is refused there anyway.
+  static const _maxLength = 32;
+  late final _name = TextEditingController(
+    text: c.buddyChat(widget.projectId)?.buddyName ?? '',
+  );
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final renamed = await c.renameBuddy(widget.projectId, _name.text);
+    if (!mounted) return;
+    if (renamed) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = c.operationError ?? 'Could not rename the Buddy. Try again.';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final fallback = buddyDefaultName(c);
+    return AlertDialog(
+      title: const Text('Rename your Buddy'),
+      content: SizedBox(
+        width: 440,
+        // Scrolls in a short window or at large text, as Add a Buddy does.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Everyone in this Swarm sees this name.',
+                style: DesktopChrome.text(),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('super-buddy-name'),
+                controller: _name,
+                autofocus: true,
+                enabled: !_busy,
+                maxLength: _maxLength,
+                decoration: InputDecoration(
+                  hintText: fallback,
+                  counterText: '',
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Leave it empty to go back to "$fallback".',
+                style: DesktopChrome.control(color: DesktopChrome.muted),
+              ),
+              if (_error case final error?) ...[
+                const SizedBox(height: 12),
+                Text(error, style: DesktopChrome.control()),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: Text(_busy ? 'Saving…' : 'Save'),
+        ),
+      ],
+    );
+  }
+}
+
 /// Under a Buddy chat's header: what it runs on and who else can see its
 /// terminal, and, while it is down, a way to start it again. Before its
 /// agent is there, how its start is going (backend: the start carries the
@@ -404,7 +540,7 @@ class SuperTabBuddyBar extends StatelessWidget {
               error is String
                   ? "Couldn't start: $error"
                   : 'Starting ${buddyEngineName(engine)} on '
-                        '${buddyMachineName(c, machineId)}…',
+                        '${buddyMachineName(c, machineId, app: app)}…',
               style: DesktopChrome.control(),
             ),
           ),
@@ -433,7 +569,7 @@ class SuperTabBuddyBar extends StatelessWidget {
     final agent = c.buddy(chat.projectId);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
-    final machine = buddyMachineName(c, agent.machineId);
+    final machine = buddyMachineName(c, agent.machineId, app: app);
     final project = c.snapshot!.projects
         .where((p) => p.id == chat.projectId)
         .firstOrNull;
@@ -508,23 +644,38 @@ class _BuddyStartState extends State<_BuddyStart> {
   String _engine = 'claude';
   bool _adding = false;
 
-  /// Starts the Buddy on [machine], first adding it to the Swarm when it is
-  /// this Mac and not in it yet. A failed add says why and starts nothing.
+  /// Starts the Buddy on [machine], first preparing it when it is one of the
+  /// reader's machines outside the Swarm. A failed setup says why and starts
+  /// nothing.
   Future<void> _start(BuddyMachine machine) async {
     if (_adding) return;
     setState(() {
       _adding = true;
       _error = null;
     });
-    final (:id, :error) = await _adder.resolve(machine, alive: () => mounted);
+    final (:id, :setup, :error) = await _adder.resolve(
+      machine,
+      alive: () => mounted,
+    );
     if (!mounted) return;
     setState(() {
       _adding = false;
       _error = error;
     });
     if (id == null) return;
+    final app = widget.app;
     unawaited(
-      c.addBuddy(projectId: widget.projectId, machineId: id, engine: _engine),
+      c
+          .addBuddy(
+            projectId: widget.projectId,
+            machineId: id,
+            engine: _engine,
+            setup: setup,
+          )
+          .then((added) {
+            // Its host reads the Swarm now rather than on its next pass.
+            if (added && setup != null) unawaited(app?.wakeSuperTabHost(id));
+          }),
     );
   }
 
@@ -546,16 +697,16 @@ class _BuddyStartState extends State<_BuddyStart> {
             style: DesktopChrome.control(medium: true),
           ),
           const SizedBox(height: 8),
-          if (machine == null)
-            BuddyNoMachine(controller: c, app: widget.app)
+          if (machines.isEmpty)
+            BuddyNoMachine(machines: machines)
           else
             Row(
               children: [
                 BuddyMachineField(
                   key: const ValueKey('super-buddy-start-machine'),
                   machines: machines,
-                  value: machine.id,
-                  action: 'Start',
+                  value: machine?.id,
+                  busy: busy,
                   fitNames: true,
                   onChanged: (value) {
                     if (!busy) setState(() => _machine = value);
@@ -584,18 +735,16 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: busy ? null : () => unawaited(_start(machine)),
+                  onPressed: busy || machine == null
+                      ? null
+                      : () => unawaited(_start(machine)),
                   child: const Text('Start'),
                 ),
               ],
             ),
-          if (machine?.joins == true) ...[
+          if (machines.isNotEmpty && machine == null) ...[
             const SizedBox(height: 4),
-            Text(
-              buddyJoinsNote('Start'),
-              key: const ValueKey('super-buddy-start-joins'),
-              style: DesktopChrome.control(color: DesktopChrome.muted),
-            ),
+            BuddyNoMachine(machines: machines),
           ],
           if (_error case final error?) ...[
             const SizedBox(height: 4),

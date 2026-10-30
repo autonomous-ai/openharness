@@ -77,6 +77,14 @@ class Machine {
   final String? hostname;
   final String? status;
 
+  /// Another account's machine shared with this one (the list's `shared` or
+  /// `share`): never where this person's Buddy runs.
+  final bool shared;
+
+  /// How its computer signed in on its last connect: `team` for a Harness
+  /// Team account, which is never a person's own machine for a Buddy.
+  final String? sessionKind;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -86,6 +94,8 @@ class Machine {
     this.name,
     this.hostname,
     this.status,
+    this.shared = false,
+    this.sessionKind,
   });
 
   String get displayName => (name != null && name!.isNotEmpty)
@@ -104,6 +114,8 @@ class Machine {
     name: j['name'] as String?,
     hostname: j['hostname'] as String?,
     status: j['status'] as String?,
+    shared: j['shared'] == true || j['share'] is Map,
+    sessionKind: j['sessionKind'] as String?,
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -115,6 +127,8 @@ class Machine {
     name: name ?? this.name,
     hostname: hostname,
     status: status,
+    shared: shared,
+    sessionKind: sessionKind,
   );
 }
 

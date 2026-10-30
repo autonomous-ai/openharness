@@ -245,7 +245,8 @@ describe('Super Tab collaboration policy', () => {
     const worker = f.add('worker')
     const posted = f.run({ type: 'message.send', conversationId: 'lead', text: 'Which behavior?', replyTo: null, recipientIds: [] },
       { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
-    expect(posted.recipients).toEqual([])
+    // Any agent in a group reaches its Lead (review of #2243).
+    expect(posted.recipients).toEqual([lead])
     const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
       { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
     expect(reply.messages[0]!.recipients).toEqual([worker])
@@ -276,21 +277,46 @@ describe('Super Tab collaboration policy', () => {
     expect(inline.alsoInChat).toBeUndefined()
   })
 
-  it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
+  it('delivers an assigned worker\'s own post to its Lead, or to the agents it names instead', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
     const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
     const post = (actor: Actor, recipientIds: string[] = []) => f.run({ type: 'message.send', conversationId: group, text: 'PR is green.',
       replyTo: null, recipientIds }, actor).messages[0]!.recipients
-    expect(post(as(worker))).toEqual([])
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     expect(post(as(worker))).toEqual([lead])
     expect(post(as(worker), [other])).toEqual([other])
-    expect(post(as(other))).toEqual([])
     expect(post(as(lead))).toEqual([worker])
     f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
     expect(post(as(worker))).toEqual([lead])
+  })
+
+  // 10-29: a moved agent's alarm and answers reached no one, and the backend worker stayed down 4 h 50 min.
+  it('delivers any other agent\'s post in the group to its Lead, beside the agents it names, whether or not it held the task', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (actor: Actor, recipientIds: string[] = [], agentOnly?: boolean) => f.run({ type: 'message.send', conversationId: group,
+      text: 'Severe: the worker is down.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}) }, actor).messages[0]!.recipients
+    const assignment = () => f.state.conversations.find(c => c.id === group)!.assignment!
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    expect(post(as(other))).toEqual([lead])
+    expect(post(as(other), [worker])).toEqual([worker, lead])
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: assignment().id, reason: 'Duplicate of another task' })
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker), [other])).toEqual([other, lead])
+    expect(post(as(worker), [lead])).toEqual([lead])
+    // A note to itself stays its own.
+    expect(post(as(worker), [worker], true)).toEqual([worker])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: other })
+    f.run({ type: 'work.status', conversationId: group, assignmentId: assignment().id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    expect(post(as(other))).toEqual([lead])
+    expect(() => post(as(other), ['not-an-agent'])).toThrow()
   })
 
   describe('a Lead\'s message to the assigned worker (#1549)', () => {
@@ -337,12 +363,12 @@ describe('Super Tab collaboration policy', () => {
       expect(post(lead, [], report.id).recipients).toEqual([worker])
     })
 
-    it('lets explicit recipients win and leaves other members, replies to others and person routing alone', () => {
+    it('lets explicit recipients win and leaves replies to others and person routing alone', () => {
       const { f, lead, group, worker, other, as, post, history } = setup()
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       expect(post(lead, [other]).recipients).toEqual([other])
       const aside = post(other)
-      expect(aside.recipients).toEqual([])
+      expect(aside.recipients).toEqual([lead])
       expect(post(lead, [], aside.id).recipients).toEqual([])
       const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
       history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })
@@ -611,6 +637,12 @@ describe('tab.routingPolicy', () => {
     const f = fixture()
     expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } })).toThrow()
     expect(() => f.run({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } } as never)).toThrow()
+  })
+  it('refuses a second row for a built-in model', () => {
+    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
+    expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [sol, { ...sol, enabled: false }] } }))
+      .toThrow('Only one row for codex gpt-6.1-sol.')
+    expect(commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [sol] } })).toBeTruthy()
   })
 })
 
@@ -1324,27 +1356,50 @@ describe('Reviewer role', () => {
   })
 
   it('lets a Claude-only Swarm review a Claude Builder\'s work on Opus, never below the top tier, and records why on the decision', () => {
-    const { f, leadActor, group, builder } = reviewed()
+    const { f, leadActor, group, builder, reviewer } = reviewed()
     // Every agent runs Claude and no machine offers Codex: no Reviewer of another engine can run here.
     for (const a of f.state.agents) a.configuration = { ...a.configuration, engine: 'claude' }
     f.run({ type: 'work.assign', conversationId: group, agentId: builder })
     const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
       leadActor).result.conversationId as string
     const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, leadActor)
-    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: 'No Reviewer on another engine than the Builder\'s (Claude) can run in this Swarm, so the review runs on it at the top tier.' } })
+    const same = 'same-engine review: no Reviewer of another engine has quota, so the review runs on Claude, the Builder\'s engine, at its top tier.'
+    const routed = route({})
+    expect(routed.routeDecisions[0]).toMatchObject({ record: { sameEngine: same } })
+    // Its route line says so (Lead, 2026-10-30).
+    expect(routed.messages.find(m => m.conversationId === review)!.text).toMatch(/ · same-engine review: no Reviewer of another engine has quota$/)
     expect(() => route({ model: 'sonnet', effort: 'medium', quality: 2 }))
-      .toThrow('A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm. Route again.')
+      .toThrow('A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm. Route again.')
     expect(() => route({ model: 'default', effort: 'default' })).toThrow('Claude default is 1.')
     expect(() => route({ model: 'default', effort: 'default', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' })).toThrow('never runs on a model served on the Swarm\'s grid')
     // A machine that offers Codex makes the other engine available, and the same engine is refused again.
-    f.state.machines = [{ machineId: 'codex-box', contributorId: 'owner', engines: ['codex'] } as never]
+    // Each run hands back a new state, so the machine is set afresh before each.
+    const codexBox = (reading: Record<string, unknown> = {}) => {
+      f.state.machines = [{ machineId: 'codex-box', contributorId: 'owner', engines: ['codex'], observation: { receivedAt: 1000, quotas: [], ...reading } } as never]
+    }
+    const weekly = (resetsIn: number) => ({ quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: new Date(1000 + resetsIn).toISOString() }] }] })
+    codexBox()
     expect(() => route({})).toThrow('A review runs on another engine than the reviewed Builder\'s, Claude. Route again.')
+    // Unless it could not start within the start window: out of quota for days (2026-10-30), or offline.
+    codexBox(weekly(3 * 86_400_000))
+    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: same } })
+    codexBox(weekly(10 * 60_000))
+    expect(() => route({})).toThrow('A review runs on another engine than the reviewed Builder\'s, Claude. Route again.')
+    codexBox({ receivedAt: -3_600_000 })
+    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: same } })
+    codexBox()
     // Unless that machine may not run the review: the owner's rules, or the task's own machine (review of ee4ee6c9a).
     f.run({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['host', 'machine'] }, text: 'Only our machines.' } as Command)
     expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: expect.stringContaining('top tier') } })
     f.run({ type: 'rule.remove', ruleId: f.state.rules!.at(-1)!.id } as Command)
     f.state.conversations.find(c => c.id === review)!.task = { goal: 'g', changes: 'c', constraints: 'k', owns: [], requires: { machines: ['machine'] } }
     expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: expect.stringContaining('top tier') } })
+    // The Reviewer's brief says it first, assigned by hand too.
+    delete f.state.conversations.find(c => c.id === review)!.task
+    codexBox(weekly(3 * 86_400_000))
+    const assigned = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
+    expect(assigned.result.warnings).toBeUndefined()
+    expect(assigned.messages.find(m => m.recipients.includes(reviewer))!.text).toMatch(new RegExp(`^${same.replace(/[.()]/g, '\\$&')}\n\nReview it\.`))
   })
 
   it('never lets a small or unnamed model review: a review needs a model the policy names at quality 2 or more', () => {
@@ -1370,8 +1425,11 @@ describe('Reviewer role', () => {
     // An agent from before the flag was kept is judged by its start: one that named the model is rated by that model's row.
     delete f.state.agents.find(a => a.id === reviewer)!.launchedDefault
     expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
+    f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-9-preview'
+    expect(member({ engine: 'codex', model: 'gpt-9-preview' })).toThrow('Codex gpt-9-preview is 1.')
+    // A named strong Codex model has its own row (Lead, 10-30): a start that named it reviews.
     f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-6.1-sol'
-    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).toThrow('Codex gpt-6.1-sol is 1.')
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
   })
 
   it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, once its start has finished', () => {
@@ -1402,9 +1460,9 @@ describe('Reviewer role', () => {
     expect(pick).toThrow('Codex gpt-5.5-mini is 1.')
     // A replaced terminal (Change agent) is not the session its start launched: it is rated by the model it reports.
     f.run({ type: 'agent.rebind', agentId: reviewer, machineId: 'host', projectId: 'lead', previousHarnessId: 'native-reviewer', harnessId: 'native-reviewer-2',
-      configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+      configuration: { ...config, model: 'gpt-9-preview' } }, reviewerActor)
     expect(f.state.agents.find(a => a.id === reviewer)).not.toHaveProperty('launchedDefault')
-    expect(pick).toThrow('Codex gpt-6.1-sol is 1.')
+    expect(pick).toThrow('Codex gpt-9-preview is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {
@@ -1568,6 +1626,18 @@ describe('Reviewer role', () => {
       return { ...setup, fresh, built, builderActor, markReady, reviews }
     }
 
+    // Overnight 2026-10-30 reviews waited hours with every other-engine Reviewer out of quota, and nobody was told.
+    it('tells the project chat once when no new Reviewer on another engine than the Builder\'s can start, tagging who can fix it', () => {
+      const { f, markReady } = ready()
+      teamMachine(f, 'owner')
+      f.state.machines![0]!.observation!.quotas = [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }]
+      const said = markReady(`Ready: yes.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')
+      expect(said).toMatchObject([{ conversationId: f.state.projects![0]!.leadConversationId, recipients: [], mentions: ['owner'] }])
+      expect(said[0]!.text).toBe('Reviews of Codex builds cannot start a new Reviewer: Claude Code is unavailable on every machine this project may use (Studio: out of quota). '
+        + 'More Claude Code quota, Claude Code signed in on another machine, or another machine in the Swarm would unblock them. @owner can fix it.')
+      expect(markReady(`Ready: yes, again.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')).toEqual([])
+    })
+
     it('opens "Review: <group>" with the handoff, the checks and the link, assigns a free Reviewer and adds it to the reviewed group', () => {
       const { f, lead, group, reviewer, fresh, markReady, reviews } = ready()
       f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
@@ -1721,8 +1791,11 @@ describe('Reviewer role', () => {
       for (const a of f.state.agents) a.configuration = { ...a.configuration, engine: 'claude' }
       f.state.agents.find(a => a.id === reviewer)!.configuration.model = 'claude-sonnet-4-5'
       f.state.agents.find(a => a.id === fresh)!.configuration.model = 'claude-opus-4-7'
-      markReady(`Ready. ${pr}`)
+      const effects = markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+      // Its brief says first why it reviews on the Builder's engine (Lead, 2026-10-30).
+      const brief = effects.messages.find(m => m.conversationId === reviews()[0]!.id && m.recipients.includes(fresh))!.text
+      expect(brief).toMatch(/^same-engine review: no Reviewer of another engine has quota, so the review runs on Claude, the Builder's engine, at its top tier\.\n\nGive an independent verdict/)
     })
 
     it('gives the review to a strong Reviewer on another engine, and to an Engineer on the grid even a Reviewer on its relay engine', () => {
@@ -3108,6 +3181,15 @@ describe('Lead mentions', () => {
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
 
+  it('holds a tag for a notice that says a task has no worker, and only a tag can be held', () => {
+    const { f, lead } = swarm(), group = f.group()
+    const held = (mentions: string[]): Command => ({ ...send(group, mentions), mentionsIfNoWorker: true } as Command)
+    expect(f.run(held(['peer']), as(lead)).messages[0]).toMatchObject({ mentions: ['peer'], holdMentions: true })
+    expect(f.run(send(group, ['peer']), as(lead)).messages[0]).not.toHaveProperty('holdMentions')
+    expect(() => f.run(held([]), as(lead))).toThrow('Hold a tag only for a message that tags someone.')
+    expect(commandSchema.safeParse({ ...send(group, ['peer']), mentionsIfNoWorker: false }).success).toBe(false)
+  })
+
   it('tags at most five people', () => {
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e'])).success).toBe(true)
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e', 'f'])).success).toBe(false)
@@ -3203,7 +3285,9 @@ describe('credentials in Swarm chat', () => {
     expect(route).toMatchObject({ decision: { assessment: { why: `needs ${CREDENTIAL_MARKER}` }, excluded: [{ reason: `asked for ${CREDENTIAL_MARKER}` }] } })
     const owns = withoutCredentials({ type: 'work.define', conversationId: 'g', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as unknown as Command, removed)
     expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
-    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github'])
+    const rename = withoutCredentials({ type: 'buddy.rename', conversationId: 'chat', name: github } as Command, removed)
+    expect(rename).toMatchObject({ name: CREDENTIAL_MARKER })
+    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github', 'github'])
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)

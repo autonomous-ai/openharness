@@ -103,14 +103,20 @@ describe('linked pull requests read directly from GitHub', () => {
   })
 
   it('one flight per URL across callers, preserving their order', async () => {
-    let release!: (value: { stdout: string }) => void
-    const run = vi.fn<Run>(() => new Promise(resolve => { release = resolve }))
-    const read = createPullRequestsStatusReader(run)
+    // Every flight waits at this gate until both callers are in, so a second flight would be counted, not hidden.
+    let open!: () => void
+    const gate = new Promise<void>(resolve => { open = resolve })
+    const run = vi.fn<Run>(async () => { await gate; return { stdout: JSON.stringify(view()) } })
+    // A fixed clock: the two answers are stamped alike, so they compare on what was read.
+    const read = createPullRequestsStatusReader(run, () => 0, async () => 'ada')
     const a = read([url()]), b = read([url()])
-    // Each read first asks which account gh reads as, so the flight starts a moment later; it is still one.
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
-    release({ stdout: JSON.stringify(view()) })
-    expect(await a).toEqual(await b)
+    // Each read first asks which account gh reads as; a timer runs only after every pending step of both has.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(run).toHaveBeenCalledTimes(1)
+    open()
+    const [first, second] = await Promise.all([a, b])
+    expect(first).toEqual(second)
+    expect(first.rows).toMatchObject([{ url: url(), status: 'found' }])
     expect(run).toHaveBeenCalledTimes(1)
   })
   it('caches final states permanently, open/no-access briefly, and failures for five seconds', async () => {

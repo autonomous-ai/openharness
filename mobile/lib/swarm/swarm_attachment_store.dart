@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:http/http.dart' as http;
 
 import 'package:harness_mobile/logging/app_log.dart';
 
@@ -179,7 +180,7 @@ class SwarmAttachmentStore {
           File('${folder.path}/index.json'),
         ),
         fileSystem: _files?.call(folder) ?? IOFileSystem(key),
-        fileService: _fileService ?? HttpFileService(),
+        fileService: _fileService ?? SwarmFileFetch(),
       ),
     );
   }
@@ -201,8 +202,9 @@ class SwarmAttachmentStore {
   }
 }
 
-/// The app's one store of Swarm's files.
-final swarmAttachments = SwarmAttachmentStore();
+/// The app's one store of Swarm's files; review screenshots put in one
+/// that serves made-up pictures.
+SwarmAttachmentStore swarmAttachments = SwarmAttachmentStore();
 
 /// Keeps [store] to the account whose Swarm [host] reads: the files go on
 /// sign-out, Swarm turned off and another account ([SwarmAttachmentStore.keepOnly]),
@@ -293,5 +295,25 @@ class SwarmAttachmentKeeper {
     _again?.cancel();
     host.removeListener(_hostChanged);
     _session?.inbox.removeListener(_listChanged);
+  }
+}
+
+/// The cache's fetch of a chat file: `HttpFileService`'s, with a redirect
+/// refused, so a picture comes only from the host its message names and
+/// nothing from another host is kept or drawn.
+class SwarmFileFetch extends FileService {
+  SwarmFileFetch({http.Client? client}) : _client = client ?? http.Client();
+
+  final http.Client _client;
+
+  @override
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final request = http.Request('GET', Uri.parse(url))
+      ..followRedirects = false;
+    if (headers != null) request.headers.addAll(headers);
+    return HttpGetResponse(await _client.send(request));
   }
 }

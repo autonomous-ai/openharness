@@ -27,7 +27,7 @@ export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'lastMainSequence', 'pullRequestUrls', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'liveness', 'leadAction', 'stepUp',
+  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'lastMainSequence', 'pullRequestUrls', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'liveness', 'leadAction', 'stepUp',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt'],
 } as const
 const LIGHT_GROUP = {
@@ -107,20 +107,28 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
  * values read once every finished worker's decision is stored); plus those named by id and those the named agents are in,
  * dormant ones too, and the active ones of the named projects. Starts: unfinished, or every live start with `includeRecentStarts`.
+ * With `recentStartGroups`, only unfinished starts are read whole, but the conversations of every live start are loaded as with
+ * `includeRecentStarts`: a change poll sends only the starts that changed (read/service.ts), and the conversations it holds
+ * decide what each reader may see (an agent stored with no project takes its project from them: projects.ts agentProjectId).
  */
 export async function loadLight(tx: Transaction, tabId: string,
-  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working'
+  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; recentStartGroups?: boolean; groups?: 'active' | 'working'
     /** False leaves machines out: the read cache keeps them at their own stamp (cache.ts). */
     machines?: boolean } = {}): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const live = { tabId, deleted: false }
   const starts = (await delegate(tx, 'start').findMany({ where: opts.includeRecentStarts ? live : { ...live, finishedAt: null } })).map(row => toPart<AgentStart>('start', row))
+  // Each live start's conversation id alone (a busy Swarm's week of finished starts was ~1 MB whole each poll, prod 10-29).
+  const startGroups = opts.recentStartGroups && !opts.includeRecentStarts
+    ? ((await tx.$runCommandRaw({ distinct: 'SwarmStart', key: 'conversationId', query: live })) as unknown as { values: Array<string | null> }).values
+      .filter((id): id is string => typeof id === 'string')
+    : starts.map(s => s.data!.request.conversationId)
   const { projects, leadsConversationId, invitations } = head.data as unknown as HeadData
   // Besides the Lead conversations and running work, the conversations a start or an invitation names: a reader sees
   // those only alongside their conversation (model.ts visibleState).
   const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '',
-    ...starts.map(s => s.data!.request.conversationId), ...invitations.map(i => i.conversationId)]
+    ...startGroups, ...invitations.map(i => i.conversationId)]
   // One read per index, never one $or over several: Mongo plans an $or again whenever its plan cache misses (parts/indexed.ts).
   const keys = [...opts.groups === 'working' ? working : [], ...opts.groupIds ?? []]
   // The Swarm's first project also holds conversations stored with no project (model.ts groupProject).
