@@ -206,6 +206,43 @@ void main() {
       expect(find.byType(SwarmProjectPage), findsOneWidget);
     });
 
+    testWidgets('a link whose first copy of the Swarm is older than its '
+        'project reads once more, and opens the project', (tester) async {
+      final fake = swarm();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+        ...(await load(body) as Map<String, dynamic>),
+        'head': part('head', 1, headData(projects: const [])),
+      };
+      var newer = false;
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => newer
+          ? {...changes(cursor: 'c3'), 'head': part('head', 2, headData())}
+          : changes(cursor: 'c2');
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+      expect(find.text('Mobile', skipOffstage: false), findsNothing);
+
+      newer = true;
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+      expectProjectAt(tester, 'm7');
+    });
+
+    testWidgets('a work chat its copy of the Swarm already places opens at '
+        'once, with no read more', (tester) async {
+      final fake = swarm();
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+      int reads() => fake.paths.where((p) => p.endsWith('/changes')).length;
+      final before = reads();
+
+      await arrive(tester, 'harness://swarm/$tab/g9/m1');
+      expectOpened(tester, (tab, 'g9', 'm1'));
+      expect(reads(), before);
+    });
+
     testWidgets("a work chat's link opens that chat, not a project", (
       tester,
     ) async {

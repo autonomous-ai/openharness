@@ -125,7 +125,10 @@ Route<void> swarmChatRoute({
 /// Which it is, only the Swarm's read knows: in that Swarm alone, so an id
 /// from another Swarm names nothing. Until it is read the chat page shows,
 /// and the read settles it once: a project's chat then turns into its page;
-/// anything else, or access lost, stays the chat page.
+/// anything else, or access lost, stays the chat page. A copy of the Swarm
+/// that does not place the chat under a project it holds may be older than
+/// that project, so one more read, asked as it opens, decides (as
+/// [SwarmProjectPage] reads on open).
 class SwarmOpenedChat extends StatefulWidget {
   const SwarmOpenedChat({
     super.key,
@@ -151,6 +154,10 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
 
   /// The read has said what the chat is; nothing more is listened to.
   bool _settled = false;
+
+  /// A read of the Swarm asked since it opened ([_readOnce]): under way,
+  /// and finished.
+  bool _reading = false, _read = false;
 
   @override
   void didChangeDependencies() {
@@ -183,18 +190,43 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       _reader = reader?..addListener(_look);
     }
     if (reader == null) return;
+    if (reader.accessRevoked) return _settle(null);
     final snapshot = reader.snapshot;
-    if (!reader.accessRevoked && snapshot == null) return;
+    if (snapshot == null) return;
+    final project = snapshot.projects
+        .where((p) => p.leadConversationId == widget.conversationId)
+        .firstOrNull;
+    if (project != null) return _settle(project.id);
+    // Not a project's chat in this copy: sure once the copy places the chat
+    // under a project it holds, or after a read since it opened.
+    final chat = snapshot.conversation(widget.conversationId);
+    if (_read ||
+        (chat != null &&
+            snapshot.projects.any((p) => p.id == chat.projectId))) {
+      return _settle(null);
+    }
+    _readOnce(reader);
+  }
+
+  void _settle(String? projectId) {
     _settled = true;
     _stopListening();
-    final project = reader.accessRevoked
-        ? null
-        : snapshot!.projects
-              .where((p) => p.leadConversationId == widget.conversationId)
-              .firstOrNull;
-    if (project == null) return;
+    if (projectId == null) return;
     // Called from didChangeDependencies too, where a build follows anyway.
-    setState(() => _projectId = project.id);
+    setState(() => _projectId = projectId);
+  }
+
+  /// One read of [reader], joining one under way; what it brings decides.
+  void _readOnce(SwarmReader reader) {
+    if (_reading) return;
+    _reading = true;
+    unawaited(
+      reader.refresh().whenComplete(() {
+        if (!mounted || _settled) return;
+        _read = true;
+        _look();
+      }),
+    );
   }
 
   @override

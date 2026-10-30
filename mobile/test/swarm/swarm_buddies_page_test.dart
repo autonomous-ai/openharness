@@ -161,6 +161,24 @@ void main() {
     expectOwnPage();
   });
 
+  testWidgets('two quick taps on a row with its chat open one chat', (
+    tester,
+  ) async {
+    await pump(tester, buddiesBackend());
+
+    // The second a frame later, at the row's start where it is then: still
+    // in sight while the chat slides in over it.
+    await tester.tap(key(mobile));
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.tapAt(tester.getTopLeft(key(mobile)) + const Offset(24, 24));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(SwarmConversationPage, skipOffstage: false),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('two quick taps on a row with no chat yet ask once and open '
       'one chat', (tester) async {
     final fake = buddiesBackend();
