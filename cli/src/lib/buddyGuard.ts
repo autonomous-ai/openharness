@@ -131,6 +131,9 @@ const MAY = 'A Buddy only reads, so this was refused and nobody will be asked. R
   'A file your person sent you in your chat opens with Read, by the path you were given; an Artifact link they sent, with the ' +
   'Artifact tool\'s read and that link.'
 
+// Why the call was refused, as the Buddy is told it.
+let reason = MAY
+
 // The command's words, or null when the shell could read it any other way.
 function words(command) {
   const out = []
@@ -314,13 +317,59 @@ function artifactAllowed(tool) {
   return link !== null && listed('links').some((entry) => entry.url === link)
 }
 
-// harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, and an --attach only from its folder.
+// Secrets by their shape (docs/specs/2026-10-30-buddy-read-access.md, section 4), each named by its kind: what a Buddy
+// reads must never reach a chat, its owner's own included, as Harness stores chats and shows them on other devices.
+const SECRETS = [
+  ['a GitHub token', /\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{40,}/],
+  ['an Anthropic key', /\bsk-ant-[A-Za-z0-9_-]{20,}/],
+  ['an API key', /\bsk-[A-Za-z0-9_-]{20,}|\bnpm_[A-Za-z0-9]{36}/],
+  ['an AWS key', /\b(AKIA|ASIA)[0-9A-Z]{16}\b/],
+  ['a Slack token', /\bxox[abposr]-[A-Za-z0-9-]{10,}/],
+  ['a GitLab token', /\bglpat-[A-Za-z0-9_-]{20,}/],
+  ['a Google API key', /\bAIza[0-9A-Za-z_-]{35}/],
+  ['a JWT', /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/],
+  ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['a URL with a password', /\b[a-z][a-z0-9+.-]*:\/\/[^\s\/:@]+:[^\s\/@]+@/i],
+  ['a password or token', /(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?[^\s"',;]{20,}/i],
+]
+const secretIn = (text) => SECRETS.find(([, shape]) => shape.test(text))?.[0] ?? null
+const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
+  'send again: never pass on secrets, tokens, keys or connection strings.'
+// A file to attach, in the folder: its first 10 MB, the most a chat file holds, read as text.
+function fileText(path) {
+  let fd
+  try {
+    fd = openSync(resolve(ROOT, path), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const buffer = Buffer.alloc(10 * 1024 * 1024), read = readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer.subarray(0, read).toString('utf8')
+  } catch { return null } finally { if (fd !== undefined) closeSync(fd) }
+}
+// In wide mode a proposal carries a summary, never what a command printed: no code block and at most 10 lines.
+function pastedOutput(json) {
+  let proposal
+  try { proposal = JSON.parse(json) } catch { return false }
+  const text = [proposal?.goal, proposal?.scope].filter((part) => typeof part === 'string').join('\n')
+  return text.includes('\x60\x60\x60') || text.split('\n').length > 10
+}
+const SUMMARIZE = 'A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
+  'was sent, and nobody will be asked. Summarize the numbers and findings in a few lines and send again.'
+
+// harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, an --attach only from its folder, and nothing it sends
+// carrying a secret.
 function superTabAllowed(rest) {
   let i = 0
   while (rest[i] === '--tab') i += 2
   if (i > rest.length || !SUPER_TAB.has(rest[i])) return false
-  return !rest.slice(i + 1).some((word, at, after) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
-    || ['--agent', '--port', '--machine'].includes(word))
+  const after = rest.slice(i + 1)
+  if (after.some((word, at) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
+    || ['--agent', '--port', '--machine'].includes(word))) return false
+  if (rest[i] !== 'post' && rest[i] !== 'propose') return true
+  const attached = after.flatMap((word, at) => after[at - 1] === '--attach' ? [fileText(word)] : [])
+  if (attached.includes(null)) return false
+  const kind = secretIn([...after, ...attached].join('\n'))
+  if (kind) { reason = SECRET(kind); return false }
+  if (WIDE && rest[i] === 'propose' && after[1] !== undefined && pastedOutput(after[1])) { reason = SUMMARIZE; return false }
+  return true
 }
 
 function bashAllowed(command) {
@@ -468,8 +517,6 @@ function approved(w) {
 const ASK = (command) => 'Not run before, so it was refused, and nobody will be asked here. Ask your person in your chat first: show ' +
   'them this exact command, why you want it and what it reads. They approve it by sending a line of their own: run: ' + command +
   ' . Do not run it again until they have.'
-let reason = MAY
-
 function decide(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.tool_name !== 'string') return false
   const tool = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : null

@@ -389,3 +389,65 @@ describe('recording the person\'s approvals', () => {
     expect(() => judgeBuddyApprovals({ node: process.execPath, guard: broken, text: 'run: argocd app list' })).toThrow()
   })
 })
+
+// What a Buddy reads must never reach the project chat (docs/specs/2026-10-30-buddy-read-access.md, section 4): its posts and
+// its owner's proposals are refused when they carry a secret's shape, in every mode, and in wide mode a proposal carries no
+// pasted output. Made-up values in each real format.
+describe('no secret leaves in a post or a proposal', () => {
+  const secrets: Array<[string, string]> = [
+    ['a GitHub token', `ghp_${'A1b2C3d4E5'.repeat(4)}`],
+    ['a GitHub token', `github_pat_${'11ABCDEFG0'.repeat(5)}`],
+    ['an Anthropic key', `sk-ant-api03-${'aB3dE6gH9j'.repeat(3)}`],
+    ['an API key', `sk-proj-${'aB3dE6gH9j'.repeat(3)}`],
+    ['an AWS key', 'AKIAIOSFODNN7EXAMPLE'],
+    ['a Slack token', `xoxb-1234567890-${'a1B2c3D4e5'.repeat(2)}`],
+    ['a GitLab token', `glpat-${'aB3dE6gH9j'.repeat(2)}`],
+    ['a Google API key', `AIza${'Sy0123456789abcdefghijklmnopqrstuvw'}`],
+    ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'],
+    ['a private key', '-----BEGIN OPENSSH PRIVATE KEY-----'],
+    ['a URL with a password', 'mongodb+srv://reader:Sup3rS3cret@cluster0.example.net/harness'],
+    ['a URL with a password', 'https://user:hunter2hunter2@example.com/x'],
+    ['a password or token', 'DB_PASSWORD=Zx9-qWe8_rTy7uIo6pAs5'],
+  ]
+
+  it.each(secrets)('refuses a post in its chat holding %s (%s), saying what kind, never the value', (kind, value) => {
+    for (const guard of [script, narrow]) {
+      const refused = answer('Bash', { command: `harness super-tab post chat 'Found it: ${value}' op-1`, description: 'x' }, guard)
+      expect(refused.permissionDecision).toBe('deny')
+      expect(refused.permissionDecisionReason).toContain(kind)
+      expect(refused.permissionDecisionReason).not.toContain(value)
+    }
+  })
+
+  it.each(secrets)('refuses a proposal holding %s', (_, value) => {
+    const proposal = JSON.stringify({ conversationId: 'chat', ownerMessageId: 'm', goal: `Fix the login: ${value}`, scope: 'x', priority: 'normal' })
+    expect(bash(`harness super-tab propose op-1 '${proposal}'`)).toBe('deny')
+  })
+
+  it('refuses an attachment holding a secret, and sends a clean one', () => {
+    writeFileSync(join(root, 'leak.md'), `Notes\nDB: mongodb://reader:Sup3rS3cret@db.example.net/x\n`)
+    writeFileSync(join(root, 'plan.md'), 'The plan: measure CPU, then decide.\n')
+    expect(bash('harness super-tab post chat \'See the notes\' op-1 --attach leak.md')).toBe('deny')
+    expect(bash('harness super-tab post chat \'See the plan\' op-1 --attach plan.md')).toBe('allow')
+  })
+
+  it.each([
+    'CPU is 22 s per minute per pod, 4 pods, steady since the 9:00 release.',
+    'The token expires at 10:00; ask Ken to renew it.',
+    'Run gh run view 123 --log-failed for the details.',
+    'https://github.com/autonomous-ai/openharness/pull/2300',
+  ])('sends an ordinary post: %s', text => {
+    expect(bash(`harness super-tab post chat '${text}' op-1`)).toBe('allow')
+  })
+
+  it.each([
+    ['a code block', 'Logs:\n```\nerror at line 1\n```'],
+    ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')],
+  ])('refuses in wide mode a proposal pasting output (%s), and lets a summary through', (_, scope) => {
+    const proposal = (text: string) => JSON.stringify({ conversationId: 'chat', ownerMessageId: 'm', goal: 'Cut API CPU', scope: text, priority: 'normal' })
+    const refused = answer('Bash', { command: `harness super-tab propose op-1 '${proposal(scope)}'`, description: 'x' })
+    expect(refused.permissionDecision).toBe('deny')
+    expect(refused.permissionDecisionReason).toContain('summar')
+    expect(bash(`harness super-tab propose op-1 '${proposal('CPU 22 s per minute per pod on 4 pods; change feed is 63% of slow reads.')}'`)).toBe('allow')
+  })
+})
