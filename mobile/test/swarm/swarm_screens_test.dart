@@ -13,6 +13,7 @@ import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -467,7 +468,11 @@ void main() {
   });
 
   group('a project', () {
-    const page = SwarmProjectPage(swarmId: tab, projectId: project);
+    const page = SwarmProjectPage(
+      swarmId: tab,
+      projectId: project,
+      tabs: SwarmProjectTab.homeB,
+    );
 
     /// The scrollable of the project's sheet, not the chat's under it.
     Finder sheetList() => find
@@ -661,15 +666,22 @@ void main() {
 
   group('a project while it reads', () {
     const gone = 'This project is no longer in the Swarm.';
-    const page = SwarmProjectPage(swarmId: tab, projectId: project);
+    const page = SwarmProjectPage(
+      swarmId: tab,
+      projectId: project,
+      tabs: SwarmProjectTab.homeB,
+    );
 
     /// [projectId]'s page pushed over Home, as Home opens it.
     Future<void> openFromHome(WidgetTester tester, String projectId) async {
       unawaited(
         Navigator.of(tester.element(find.byType(SwarmPage))).push(
           MaterialPageRoute<void>(
-            builder: (_) =>
-                SwarmProjectPage(swarmId: tab, projectId: projectId),
+            builder: (_) => SwarmProjectPage(
+              swarmId: tab,
+              projectId: projectId,
+              tabs: SwarmProjectTab.homeB,
+            ),
           ),
         ),
       );
