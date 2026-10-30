@@ -52,11 +52,18 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
   for (const id of named.groupIds ?? []) {
     if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id })))
   }
+  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts: namedStarts(active.starts, named) }
+}
+
+/** The starts loadActive gives for `named`: every unfinished one, and the finished ones named by id or by the agent they
+ *  started (or all of them with `includeRecentStarts`). A finished start's agent is a sha256 (stableId), so it is worked
+ *  out only when the read names an agent: hashing every finished start was ~40% of a messages read's CPU (local profile of
+ *  prod's busiest Swarm, 873 starts, 2026-10-30). */
+export function namedStarts(starts: Part<AgentStart>[], named: ReadNamed): Part<AgentStart>[] {
+  if (named.includeRecentStarts) return starts
   const startIds = new Set(named.startIds ?? []), startAgents = new Set(named.startAgentIds ?? [])
   const agentOf = (start: AgentStart) => start.harnessId ? stableId(start.request.machineId, start.harnessId) : null
-  const starts = named.includeRecentStarts ? active.starts : active.starts.filter(s => !startFinished(s.data!) || startIds.has(s.key)
-    || startAgents.has(agentOf(s.data!) ?? ''))
-  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts }
+  return starts.filter(s => !startFinished(s.data!) || startIds.has(s.key) || (startAgents.size > 0 && startAgents.has(agentOf(s.data!) ?? '')))
 }
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
