@@ -1269,6 +1269,12 @@ model SuperTabDelivery {
   // Optional on older records: backend first, then Desktop's inline receipt.
   holdReason            String?
   holdSince             DateTime?
+  // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
+  // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
+  claimFailingSince     DateTime?
+  claimFailedAt         DateTime?
+  claimFailures         Int?
+  claimFailure          String?
   deliveredAt           DateTime?
   answeredAt            DateTime?
   createdAt             DateTime @default(now())
@@ -1998,5 +2004,25 @@ model GitHubRepositoryApproval {
   createdAt     DateTime @default(now())
 
   @@unique([autonomousEnv, tabId, repository, projectId])
+  @@index([tabId])
+  /// Whether the reader allowed a repository before, in any Swarm (github/approvals.ts `reader`).
+  @@index([autonomousEnv, approvedBy, repository])
+}
+
+/// A person GitHub said cannot push to a project's repository when they tried to allow it (github/approvals.ts): the app
+/// then asks them to send it to someone who can, instead of offering the same sign-in again. One per person, project and
+/// repository; removed when the repository is allowed for the project.
+model GitHubApprovalRefusal {
+  id            String   @id @map("_id")
+  autonomousEnv String
+  tabId         String
+  projectId     String
+  /// owner/name, lower case, as the project names it.
+  repository    String
+  userId        String
+  githubLogin   String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, tabId, repository, projectId, userId])
   @@index([tabId])
 }

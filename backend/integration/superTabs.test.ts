@@ -4355,7 +4355,7 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
     await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
     expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
     expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
-    expect(await measured('archive', () => store.archiveFinished(tab, group, []))).toBe(false)
+    expect(await measured('archive', () => store.archiveFinished(tab, group, {}))).toBe(false)
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
     expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
       .toEqual([requestId])

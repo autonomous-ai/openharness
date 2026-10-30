@@ -31,7 +31,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
+import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadLightGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
@@ -200,6 +200,8 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
     }
   }, sleep, error => error === staleIndex)
 }
+/** The longest a failed claim's record may hold up the busy answer. */
+const RECORD_FAILED_CLAIM_MS = 2_000
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
 const pendingCommits = new WeakMap<Transaction, Array<() => void>>()
@@ -1328,6 +1330,9 @@ export class SuperTabStore {
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
       const unreadable = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.agent' && !command.present
+        // A task cancelled with no assignment archives (commands.ts work.cancel).
+        || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
+          && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
       if (unreadable) {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
@@ -2646,6 +2651,42 @@ export class SuperTabStore {
   async delivery(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
       | { type: 'hold'; claimId: string; reason: HoldReason }) {
+    const reached = { authorized: false }
+    try {
+      return await this.deliver(user, tabId, agentId, deliveryId, action, reached)
+    } catch (error) {
+      // Prod 10-30, v1.3.71: 2 hours of SWARM_BUSY claims left no trace on the delivery. Retries end that way (retry.ts), so it is
+      // the only code to record; the client still gets the original error. Only once an attempt got past the authorization
+      // checks: a busy answer from before them says nothing about whether this caller may touch the delivery. The write is capped
+      // so a struggling database cannot delay the 503 further.
+      if (action.type === 'claim' && reached.authorized && error instanceof SuperTabError && error.code === 'SWARM_BUSY') {
+        let timer: NodeJS.Timeout | undefined
+        const cap = new Promise<void>(resolve => { timer = setTimeout(resolve, RECORD_FAILED_CLAIM_MS); timer.unref() })
+        try { await Promise.race([this.recordFailedClaim(tabId, agentId, deliveryId, error.code), cap]) } finally { clearTimeout(timer) }
+      }
+      throw error
+    }
+  }
+
+  /** A failed claim, written on its delivery by two single-document writes outside the failed transaction: they touch no Swarm
+   *  part, so they cannot meet the conflict that failed it. Only a delivery still queued; the first failure's time never moves
+   *  later. Best effort: a failed write is logged and never replaces the busy answer. */
+  private async recordFailedClaim(tabId: string, agentId: string, deliveryId: string, code: string): Promise<void> {
+    try {
+      const at = new Date(this.now()), mine = { id: deliveryId, tabId, agentId, status: 'queued' }
+      // A row an older backend wrote lacks the field, which Prisma on Mongo matches as isSet false, not null. The count starts at 0
+      // here: Prisma's increment of a missing count leaves it null.
+      await this.db.superTabDelivery.updateMany({ where: { ...mine, OR: [{ claimFailingSince: null }, { claimFailingSince: { isSet: false } }] },
+        data: { claimFailingSince: at, claimFailures: 0 } })
+      await this.db.superTabDelivery.updateMany({ where: mine, data: { claimFailedAt: at, claimFailure: code, claimFailures: { increment: 1 } } })
+    } catch (error) {
+      logger.warn('[swarm-deliveries] could not record a failed claim', { tabId, deliveryId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  private async deliver(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
+    action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
+      | { type: 'hold'; claimId: string; reason: HoldReason }, reached: { authorized: boolean }) {
     return transaction(this.db, async tx => {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
       await this.row(tx, user, tabId)
@@ -2671,6 +2712,7 @@ export class SuperTabStore {
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type !== 'claim' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
       if (action.type === 'hold') return this.hold(tx, delivery, action.reason)
+      reached.authorized = true
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'
       if (delivery.status === 'delivered' && action.type === 'ack' && (action.uncertain || delivery.receipt !== action.receipt)) {
         fail('RECEIPT_CONFLICT', 'A delivered instruction keeps its original host receipt.')
@@ -2682,7 +2724,11 @@ export class SuperTabStore {
         const part = parts.members.find(p => p.key === touch.key)
         if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
       }
+      // A claim that gets in ends the failing record. Unset, never null: a missing field is a real absence, which the first failure's
+      // isSet: false branch matches and which leaves no keys in the document.
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
+        ...(action.type === 'claim' ? { claimFailingSince: { unset: true }, claimFailedAt: { unset: true }, claimFailures: { unset: true },
+          claimFailure: { unset: true } } : {}),
         ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
       const row = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
@@ -2792,24 +2838,34 @@ export class SuperTabStore {
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
    *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
-   *  waiting deliveries end, as a person's archive ends them. True when it archived. */
-  async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
+   *  waiting deliveries end, as a person's archive ends them. With `reviewOf`, the group the pass read as the one it
+   *  reviews, a review nobody is reviewing closes the same way once those of the work it reviews are too (tidy.ts
+   *  reviewClosable). True when it archived. */
+  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = structuredClone(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
-      if (!group || !archivable(state, group, now) || (group.pullRequestUrls ?? []).some(url => !checked.includes(url))) return false
+      if (!group) return false
+      const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      const finished = archivable(state, group, now) && read(group.pullRequestUrls ?? [])
+      // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
+      const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
+      if (!finished && !review) return false
       if (await waitingIn(tx, tabId, groupId)) return false
       group.archived = true
-      const line = archiveLine(state, group, now), rows = line ? [line] : []
+      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
       await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } },
         data: { status: 'cancelled', holdReason: null, holdSince: null } })
-      await this.save(tx, loaded, state, clock.next())
+      // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
+      // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
+      // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
+      await this.save(tx, loaded, state, clock.next(), review ? [{ kind: 'group', key: group.reviewOf! }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
     })
