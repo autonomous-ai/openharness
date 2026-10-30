@@ -62,6 +62,9 @@ class SuperTabUnreadLines {
   /// [id]'s line came into view: reading on needs no way back to it.
   void saw(String id) => _seen.add(id);
 
+  /// Whether [id]'s line has been in view this visit.
+  bool seen(String id) => _seen.contains(id);
+
   /// Whether [id] offers the jump back to its line: placed, out of view, and
   /// not yet seen this visit (a link opened the chat elsewhere).
   bool offersJump(String id) => away && _at[id] != null && !_seen.contains(id);

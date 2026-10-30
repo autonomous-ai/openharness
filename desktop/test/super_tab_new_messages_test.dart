@@ -417,6 +417,86 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
   });
 
+  /// The offline chat's 60 messages from the Lead, read up to [mark].
+  ConversationServer offlineChat(int mark) {
+    final server = _server(2);
+    for (var i = 1; i <= 60; i++) {
+      _fromLead(server, 'Offline $i', conversationId: 'offline');
+    }
+    server.markReadElsewhere('offline', mark);
+    return server;
+  }
+
+  testWidgets('in a long chat, the line on screen as it opens offers no way '
+      'back to it', (tester) async {
+    final server = _server(150)..markReadElsewhere('lead', 20);
+    await show(tester, server);
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+    // Seen, so reading on does not bring it back either.
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isFalse);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('a long chat opening at its line never shows the pill on the '
+      'way there', (tester) async {
+    final server = _server(150)..markReadElsewhere('lead', 20);
+    final c = server.controller();
+    await c.refresh();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: c,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Team Mac',
+          ),
+        ),
+      ),
+    );
+    for (var frame = 0; frame < 60; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.byKey(_jump), findsNothing, reason: 'frame $frame');
+    }
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+  });
+
+  testWidgets('opened at a linked message with the line near the top, the '
+      'pill is still the way back to it', (tester) async {
+    final c = await show(tester, offlineChat(8));
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-50',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-50')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    // The jump to the link passed the line; the reader never saw it.
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
   testWidgets('opened at a linked message below the line, a pill above the '
       'list takes the reader back to it, then goes', (tester) async {
     final server = _server(2);
@@ -505,16 +585,6 @@ void main() {
     expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
     expect(find.byKey(_jump), findsNothing);
   });
-
-  /// The offline chat's 60 messages from the Lead, read up to [mark].
-  ConversationServer offlineChat(int mark) {
-    final server = _server(2);
-    for (var i = 1; i <= 60; i++) {
-      _fromLead(server, 'Offline $i', conversationId: 'offline');
-    }
-    server.markReadElsewhere('offline', mark);
-    return server;
-  }
 
   Finder offlineList() =>
       find.byKey(const PageStorageKey('super-messages-tab-offline'));

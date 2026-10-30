@@ -137,6 +137,10 @@ class _SuperTabViewState extends State<SuperTabView>
   // The conversation a link or tag opened at its own message this visit: its
   // New messages line stays where it is, reached by the jump pill.
   String? _openedAtMessage;
+  // The jump to a message or line still landing: its passing scroll neither
+  // counts the line as seen nor shows the pill. Each jump takes a new number.
+  int? _landing;
+  int _landings = 0;
   final _targetKey = GlobalKey();
   // A quote followed to its original: the search still reading older pages,
   // the reply to come back to (its row's top in the list), and the message
@@ -515,7 +519,7 @@ class _SuperTabViewState extends State<SuperTabView>
       0,
       arrived: (row) {
         // A link or tag opened since takes the reader to its message instead.
-        if (request != _scrollRequest) return _checkUnreadLine();
+        if (request != _scrollRequest) return;
         // The line itself, not its row: with the catch-up card under it the
         // row can be taller than the view, and its top would go above it.
         final line = _unread.key.currentContext;
@@ -523,9 +527,7 @@ class _SuperTabViewState extends State<SuperTabView>
           Scrollable.ensureVisible(
             line != null && line.mounted ? line : row,
             alignment: .15,
-          ).then((_) {
-            _checkUnreadLine();
-          }),
+          ),
         );
       },
     );
@@ -544,17 +546,21 @@ class _SuperTabViewState extends State<SuperTabView>
   void _checkUnreadLine() {
     final scroll = _scroll[c.selectedId];
     var away = false, below = false;
+    // A jump still landing passes lines it does not stop at: measured once
+    // it has landed.
     if (_unread.lineAt(c.selectedId) case final lineAt?
-        when scroll != null && scroll.hasClients) {
+        when scroll != null && scroll.hasClients && _landing == null) {
       final line = _unread.key.currentContext;
       final top = line == null ? null : _topInList(line);
       final view = scroll.position.viewportDimension;
       away = top == null || top < 0 || top > view;
       if (!away) _unread.saw(c.selectedId);
-      // A line not laid out is told by its place in the list.
+      // A line not laid out is told by its place in the list; once seen, no
+      // pill needs its direction.
       below = top != null
           ? top > view
-          : _below(c.selectedId, lineAt, scroll.position);
+          : !_unread.seen(c.selectedId) &&
+                _below(c.selectedId, lineAt, scroll.position);
     }
     final id = c.selectedId;
     final awayFromEnd =
@@ -1633,30 +1639,45 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The list is lazy: jump near the target until its row is built, then
-  /// bring it into view, or hand its row to [arrived] to place it.
+  /// bring it into view, or hand its row to [arrived] to place it. Until it
+  /// has landed or given up, the New messages line is not measured.
   void _revealTarget(
     String id,
     int attempt, {
     void Function(BuildContext row)? arrived,
+    int? landing,
   }) {
+    landing ??= _landing = ++_landings;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || c.selectedId != id || _target == null) return;
+      if (!mounted) return;
+      if (c.selectedId != id || _target == null) return _landed(landing!);
       if (_targetKey.currentContext case final target?) {
         if (arrived != null) {
           arrived(target);
         } else {
           unawaited(Scrollable.ensureVisible(target, alignment: .3));
         }
-        return;
+        return _landed(landing!);
       }
       final scroll = _scroll[id];
       final entries = superTabTranscriptEntries(_shownMessages(id));
       final index = entries.indexWhere((e) => e.message.id == _target);
       if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
-        return;
+        return _landed(landing!);
       }
       scroll.jumpTo(_estimate(scroll.position, index, entries.length));
-      _revealTarget(id, attempt + 1, arrived: arrived);
+      _revealTarget(id, attempt + 1, arrived: arrived, landing: landing);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// Jump [landing] is over: the line is measured where the list lays out
+  /// next, unless a newer jump has started.
+  void _landed(int landing) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _landing != landing) return;
+      _landing = null;
+      _checkUnreadLine();
     });
     WidgetsBinding.instance.scheduleFrame();
   }
