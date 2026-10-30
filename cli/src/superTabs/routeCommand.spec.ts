@@ -8,11 +8,15 @@ import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
 
+// Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
+// specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
 const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', models: [
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
-  { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
+  { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 3, cost: 2, enabled: true },
   { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: false },
 ] }
+/** The table with Sonnet at its real rating, 2, for the specs of strength and floors. */
+const floorPolicy = { ...policy, models: policy.models.map(m => m.model === 'sonnet' ? { ...m, quality: 2 } : m) }
 const agents = [
   { id: 'a1', name: 'Multiply', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } },
   { id: 'lead', name: 'Lead', machineId: 'm1', harnessId: 'hl', configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
@@ -47,9 +51,9 @@ async function withBlocked(os: string, body: () => Promise<void>) {
   blocked.push(os)
   try { await body() } finally { blocked.splice(blocked.indexOf(os), 1) }
 }
-function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; recordThrows?: boolean } = {}) {
+function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; recordThrows?: boolean; policy?: typeof policy } = {}) {
   return vi.fn(async (payload: Record<string, any>): Promise<Record<string, unknown>> => {
-    if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
+    if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy: answers.policy ?? policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
     if (payload.action === 'routeHistory') return answers.historyHangs ? new Promise(() => {}) : answers.history ?? { ok: true, value: { decisions: [], attempts: [] } }
     if (payload.action === 'command') {
       if (answers.recordThrows) throw new Error('socket closed')
@@ -256,7 +260,7 @@ describe('routeTask', () => {
       assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude', model: 'opus', effort: 'high' } } } as never)
     Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
     // Codex is on in the policy and signed in with quota, so a Codex Reviewer could start too.
-    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const both = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
     const context = { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [{ machineId: 'm1', name: 'remote-1' }] } }
     const s = scoped({ context })
     const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
@@ -273,13 +277,13 @@ describe('routeTask', () => {
       assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'codex' } } } as never)
     Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
     // The idle Sonnet Reviewer is cheaper, but the Builder ran Codex's top tier.
-    const s = scoped({ tab: t })
+    const s = scoped({ tab: t, policy: floorPolicy })
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
     expect(recorded(s).command.decision).toMatchObject({ floor: 3, belowFloor: false })
     // A Builder on a grid model of quality 2: the Sonnet Reviewer will do.
     t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'codex', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
     Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
-    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(await routeTask(input, scoped({ tab: t, policy: floorPolicy }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
   })
   it('rates a Builder launched on its engine\'s own model by that engine\'s default row, whatever slug it reports (review of #2274)', async () => {
     const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
@@ -289,7 +293,7 @@ describe('routeTask', () => {
     t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
       assignment: { id: 'b', agentId: 'b2', status: 'review' } } as never)
     Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
-    const s = scoped({ tab: t })
+    const s = scoped({ tab: t, policy: floorPolicy })
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
     expect(recorded(s).command.decision).toMatchObject({ floor: 3, belowFloor: false })
   })
@@ -302,7 +306,7 @@ describe('routeTask', () => {
       observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],
         quotas: engines.map(engine => ({ engine, known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 },
           { name: 'weekly', usedPercent: engine === 'codex' ? weekly.usedPercent : 10, resetsAt: Date.now() + (engine === 'codex' ? weekly.resetsIn : 5 * DAY) }] })) } })
-    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const both = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
     const routeWith = async (codexBox: Record<string, unknown>, rules: unknown[] = []) => {
       const t = tab(); t.state.agents = [agents[1]] as never
       t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
@@ -333,12 +337,23 @@ describe('routeTask', () => {
       expect((await routeWith(pool('m2', ['codex']), prefer('codex'))).result).toMatchObject({ ok: true, pick: { engine: 'codex', machineId: 'm2' } })
     })
   })
+  // Ken and Dee, 2026-10-30: Builders run on Opus high or Astra xhigh. Review of #2314: an idle Sonnet member still got builds.
+  it('passes over an idle Sonnet member for a build, says why, and tells the server when a person named the model', async () => {
+    const s = scoped({ policy: floorPolicy })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', model: 'opus' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+      reason: 'A build needs a model rated 3, and Claude sonnet is 2. Builders run at the top tier unless a person names the model.' }]))
+    const named = scoped({ policy: floorPolicy })
+    expect(await routeTask({ ...input, assessment: { ...input.assessment, model: 'sonnet' } }, named, where as never, opener(), () => 'op'))
+      .toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(recorded(named).command.decision.assessment).toMatchObject({ model: 'sonnet' })
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.
     expect(member).toMatchObject({ pick: { kind: 'member', agentId: 'a1' } })
     expect(member.next).toContain('"type":"work.assign","conversationId":"g1","agentId":"a1","routeDecisionId":"d1"')
-    const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped(), where as never, opener(), () => 'op')
+    const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ policy: floorPolicy }), where as never, opener(), () => 'op')
     expect(fresh).toMatchObject({ pick: { kind: 'new', engine: 'claude', model: 'opus', effort: 'high' } })
     expect(fresh.next).toContain('"engine":"claude","model":"opus","effort":"high","routeDecisionId":"d1"')
     // Without a branch the agent starts from the default one, and the hint says how to choose another.
@@ -351,7 +366,7 @@ describe('routeTask', () => {
       machineId: 'm2', engine: 'claude', model: 'opus', effort: 'high', routeDecisionId: 'd1' })
     // The task's own repository, when the assessment named one, and no decision when none was recorded.
     const placed = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high', needs: { cwd: '/repo/api' } } },
-      scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener(), () => 'op')
+      scoped({ record: { error: 'BACKEND_UNAVAILABLE' }, policy: floorPolicy }), where as never, opener(), () => 'op')
     expect(JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(placed.next as string)![1]!)).toMatchObject({ cwd: '/repo/api' })
     expect(placed.next).not.toContain('routeDecisionId')
   })
@@ -376,7 +391,7 @@ describe('routeTask', () => {
         : request(type, payload, ms))
       return d
     })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped(), where as never, make, () => 'op')
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ policy: floorPolicy }), where as never, make, () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { kind: 'new' } })
   })
   it('warns when the account\'s machines could not be read, and still offers the Lead\'s own machine', async () => {
@@ -500,8 +515,10 @@ describe('routeTask', () => {
   })
   it('names a member that has no name, model or effort of its own, and leaves the decision blank when it is unrecorded', async () => {
     const plain = tab(); plain.state.agents = [{ id: 'a1', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude' } }, agents[1]] as never
-    const options = { tab: plain, record: { error: 'BACKEND_UNAVAILABLE' } }
-    const easy = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, scoped(options), where as never, opener())
+    // A member launched on Claude's own model builds where the table rates that model 3; with no row it is rated 1 and does not.
+    const options = { tab: plain, record: { error: 'BACKEND_UNAVAILABLE' }, policy: floorPolicy }
+    const rated = { ...options, policy: { ...floorPolicy, models: [...floorPolicy.models, { engine: 'claude', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true }] } }
+    const easy = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, scoped(rated), where as never, opener())
     expect(easy).toMatchObject({ unrecorded: true, pick: { kind: 'member', title: 'Member · Claude default default · remote-1' } })
     expect(easy.next).not.toContain('routeDecisionId')
     const hard = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped(options), where as never, opener())
@@ -575,13 +592,17 @@ describe('routeTask', () => {
     // Codex hand was launched on the engine's own model, which it reports by its slug; Mini hand was launched on a model the
     // policy does not name (review of #2137).
     Object.assign(working.state, { starts: [{ harnessId: 'h4', request: { model: 'default' } }, { harnessId: 'h5', request: { model: 'gpt-5.5-mini' } }] })
-    const s = scoped({ tab: working })
+    const s = scoped({ tab: working, policy: floorPolicy })
     const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4', 'h5'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
     // Low work, so a model rated 1 is shown too.
     await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, open)
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
-    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2], 'Mini hand': [1, 1] })
+    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Codex hand': [3, 2] })
+    // Below the top tier they build nothing, and say how they are rated (a build needs 3: route.ts buildRefusals).
+    const below = Object.fromEntries((recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>)
+      .filter(e => /hand/.test(e.title)).map(e => [e.title.split(' · ')[0], / is (\d)\. /.exec(e.reason)?.[1]]))
+    expect(below).toEqual({ 'Sonnet hand': '2', 'Mini hand': '1' })
   })
   it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
     const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
@@ -941,14 +962,14 @@ describe('routing contributed capacity', () => {
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
       tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
   async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>,
-    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean } = {}) {
+    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean; kind?: string } = {}) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
     if (more.review) Object.assign(groups[1]!, { reviewOf: 'g0' })
     const crew = members ? agents.map(a => more.review && a.id === 'a1' ? { ...a, role: 'reviewer' } : a) : [agents[1]]
     const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { ...more.tab, state: { id: 'tab', agents: crew, conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}), ...more.state } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
-    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs, ...(more.kind ? { kind: more.kind } : {}) } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
     return { answer, s }
   }
@@ -1093,7 +1114,7 @@ describe('routing contributed capacity', () => {
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]
-      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } } })
+      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } }, kind: 'tests' })
       expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
       expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
     })
@@ -1256,7 +1277,7 @@ describe('routing contributed capacity', () => {
     const subscription = healthy(), reading = { usedPercent: 20, resetsAt: Date.now() + 5 * 86_400_000 }
     Object.assign(subscription, { engines: ['claude', 'codex'] })
     subscription.observation.quotas = ['claude', 'codex'].map(engine => ({ engine, known: true, windows: [{ ...reading, name: '5-hour' }, { ...reading, name: 'weekly' }] }))
-    const enabled = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const enabled = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
     const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines: [subscription, keyed('m2'), keyed('m3')] } },
       policy: { policy: enabled, warnings: [] }, machines: [] } } })
     const answer = await routeTask(input, s, where, opener())
@@ -1521,7 +1542,7 @@ describe('local models on the Swarm\'s grid', () => {
         { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
       { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, opener(), () => 'op')
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
     const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
     expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so a Builder on it would never start.' },
@@ -1543,7 +1564,7 @@ describe('local models on the Swarm\'s grid', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }] } }] })
     Object.assign(t.state.conversations[1]!, { stepUp: { attempt: 3, floor: 3, reason: 'Its first review said Ready no.', at: 1, carry: '' } })
-    const s = scoped({ tab: t })
+    const s = scoped({ tab: t, policy: floorPolicy })
     const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { model: 'opus' } })
     const why = 'This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality 3.'
