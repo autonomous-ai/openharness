@@ -322,7 +322,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const devices = object(object(start?.request).requirements).devices
     return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
   }
-  const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents) : null
+  const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents, list(state.starts), policy) : null
   // Another engine counts only on a machine the task may run on, and that its access lets take this project's work.
   const teamRefused = (p: Probe) => { const why = machines.get(p.machineId)?.pool?.teammatesRefused; return typeof why === 'string' && p.refusals.includes(why) }
   const otherFamily = otherFamilyReviews(probes.filter(p => !outside(p.machineId) && !teamRefused(p)), builder, rules, Date.now())
@@ -342,7 +342,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const failedOn = text(lostAttempt.machineId) ?? text(lostBy?.machineId), failedEngine = text(lostAttempt.engine) ?? text(object(lostBy?.configuration).engine)
   const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid, builder?.quality ?? 0)
   choice.excluded.push(...offlineModels(state, policy, assessment, review))
   // The task stays in the Lead's queue rather than going where it cannot be done.
   if ('error' in choice) return { ...choice, leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
@@ -395,13 +395,17 @@ export function leftOut(excluded: Excluded[], shown: Array<{ machineName: string
 const MAX_LEFT_OUT = 20, MAX_REASONS = 4
 
 /** What the reviewed group's last attempt ran on: its agent's engine and grid model while it is here, else its assignment's
- *  engine. Null before any attempt. */
-function reviewedBuilder(reviewed: Json | undefined, agents: Json[]): Reviewed | null {
+ *  engine; and how strong that was, which a Reviewer is held to (route.ts choose). Null before any attempt. */
+function reviewedBuilder(reviewed: Json | undefined, agents: Json[], starts: Json[], policy: Policy): Reviewed | null {
   const assignment = object(reviewed?.assignment)
   if (!assignment.id) return null
-  const agent = agents.find(a => a.id === assignment.agentId)
+  // Rated as its route rates a member: by the effort and model it was launched with (review of #2274).
+  const found = agents.find(a => a.id === assignment.agentId), agent = found && withLaunchEffort(found, starts)
   const gridModel = text(agent?.gridModel)
-  return { engine: String(object(agent?.configuration ?? assignment.configuration).engine), ...(gridModel ? { gridModel } : {}) }
+  const ran = object(agent?.configuration ?? assignment.configuration), engine = String(ran.engine)
+  const quality = gridModel ? gridQuality(policy, gridModel, text(agent?.gridName) ?? '')
+    : rateFor(policy, engine, text(ran.model), text(ran.effort), agent?.engineDefault === true).quality
+  return { engine, ...(gridModel ? { gridModel } : {}), quality }
 }
 
 /** The next two rows, and the best row of every other machine, so the Lead can choose another machine with an overrideReason. */

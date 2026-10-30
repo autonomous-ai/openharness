@@ -12,7 +12,26 @@ export const SKILL_SET_NAMES: Record<SkillSet, string> = { default: 'Default', o
 export type RoleKind = 'lead' | 'builder' | 'reviewer'
 /** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (store.ts roleText), so a
  *  roster or tab read never carries up to 20 x 64 KB of skill text; `version` names the text. */
-export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string }
+export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string; defaults?: RoleDefaults }
+/** What an agent of a role starts on when its start names no model: an engine, and on it a model and effort. */
+export interface RoleDefaults { engine: 'claude' | 'codex'; model?: string; effort?: string }
+/** The built-in sets' defaults (Scholes's roadmap, piece 1, 10-30): the Product Manager runs Claude Opus 5.5 at xhigh. Engineers
+ *  and temporary agents are left to routing; a Reviewer's is a route floor, the reviewed Builder's strength (cli route.ts). */
+export const BUILT_IN_ROLE_DEFAULTS: Partial<Record<RoleKind, RoleDefaults>> = { lead: { engine: 'claude', model: 'opus', effort: 'xhigh' } }
+
+/** The defaults an agent of [kind] (by [roleId] in a custom set) starts with: its custom role's own, else the built-in ones. */
+export function roleDefaults(project: SwarmProject, kind: RoleKind, roleId?: string): RoleDefaults | undefined {
+  const custom = skillSetOf(project) === 'custom' ? project.roles?.find(r => r.id === roleId && r.kind === kind) ?? project.roles?.find(r => r.kind === kind) : undefined
+  return custom?.defaults ?? BUILT_IN_ROLE_DEFAULTS[kind]
+}
+
+/** [request] with its role's [defaults] filled in when it names no model, on the defaults' engine alone; a named effort is kept. A
+ *  grid model chooses its own. */
+export function withRoleDefaults<T extends { engine: string; model?: string; effort?: string; gridModel?: string }>(request: T, defaults: RoleDefaults | undefined): T {
+  if (!defaults || request.model || request.gridModel || defaults.engine !== request.engine || !defaults.model) return request
+  const effort = request.effort ?? defaults.effort
+  return { ...request, model: defaults.model, ...(effort ? { effort } : {}) }
+}
 export const MAX_ROLES = 20
 export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
