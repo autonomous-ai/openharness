@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { BUDDY_PROTECTED_DETAIL, CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -62,6 +62,33 @@ it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (
   expect(deps.activity).not.toHaveBeenCalled()
   expect(deps.stop).not.toHaveBeenCalled()
   expect(await svc.request(request('inspect'))).toEqual({ activity: expect.any(String) })
+  svc.dispose()
+})
+
+// Diego's Buddy, 10-30: closing the tab that showed it stopped it, and two proposals waited 30 minutes. A close of a Buddy
+// is refused at once, before anything is read, saved or stopped, and says it kept running: a window closes only its view.
+it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Buddy (%s), which keeps running', async mode => {
+  const svc = new CloseAgentService({ ...deps, buddyProtected: id => id === row.agentId })
+  expect(await svc.request(request(mode))).toEqual({ error: 'BUDDY_PROTECTED', detail: BUDDY_PROTECTED_DETAIL, keptRunning: true })
+  expect(BUDDY_PROTECTED_DETAIL).toBe('This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.')
+  expect(registry.byAgent(row.agentId)?.closePlan).toBeUndefined()
+  expect(deps.activity).not.toHaveBeenCalled()
+  expect(deps.stop).not.toHaveBeenCalled()
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  // A review before a close still reads it, and says it will keep running, so no window asks to stop it.
+  expect(await svc.request(request('inspect'))).toEqual({ activity: 'idle', keptRunning: true })
+  // Cancelling a plan saved before it was a Buddy still clears it.
+  expect(await svc.request(request('cancel'))).toEqual({ cancelled: true })
+  svc.dispose()
+})
+
+it('closes a Buddy again once its person removed it (the guard no longer names it)', async () => {
+  let buddy = true
+  const svc = new CloseAgentService({ ...deps, buddyProtected: () => buddy })
+  expect(await svc.request(request('now'))).toMatchObject({ error: 'BUDDY_PROTECTED' })
+  buddy = false
+  expect(await svc.request(request('now'))).toEqual({ closed: true })
+  expect(deps.stop).toHaveBeenCalledTimes(1)
   svc.dispose()
 })
 

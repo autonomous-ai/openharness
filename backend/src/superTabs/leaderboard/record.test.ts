@@ -622,6 +622,65 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
   })
 
+  it('names the model an agent reports after its task began, when it had reported none: never "Codex" alone (Dee, 2026-10-30)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent }), done = f.create(owner, { checks: independent })
+    const worker = f.add('codex-worker', id), earlier = f.add('codex-earlier', done)
+    for (const agentId of [worker, earlier]) f.state.agents.find(a => a.id === agentId)!.configuration = { ...config, engine: 'codex', model: null }
+    const { assignmentId } = f.assign(id, worker)
+    const finished = f.assign(done, earlier)
+    f.passChecks(done, finished.assignmentId)
+    f.status(done, finished.assignmentId, earlier, 'done', 'Shipped')
+    const report = (agentId: string, model: string) => {
+      const agent = f.state.agents.find(a => a.id === agentId)!
+      f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: { ...agent.configuration, model } }, f.asAgent(agentId))
+    }
+    report(worker, 'gpt-6.1-sol')
+    report(earlier, 'gpt-6.1-sol')
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000 }])
+    // A finished task's attempt is history: what its agent reports afterwards is another task's.
+    expect(f.group(done).ledger!.runs![0]!.model).toBeNull()
+    // A model on record is never rewritten by a later report.
+    report(worker, 'gpt-6.1-luna')
+    expect(f.group(id).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
+  })
+
+  /** [count] Codex workers on their own groups, launched on Codex's own model, which they have not reported yet. */
+  const codexTasks = (f: ReturnType<typeof fixture>, count: number) => Array.from({ length: count }, (_, i) => {
+    const id = f.create(owner, { checks: independent }), worker = f.add(`codex-${i}`, id)
+    f.state.agents.find(a => a.id === worker)!.configuration = { ...config, engine: 'codex', model: null }
+    return { id, ...f.assign(id, worker) }
+  })
+  const reportModel = (f: ReturnType<typeof fixture>, agentId: string, configuration: Partial<AgentConfiguration>) => {
+    const agent = f.state.agents.find(a => a.id === agentId)!
+    f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: { ...agent.configuration, ...configuration } },
+      f.asAgent(agentId))
+  }
+
+  it('names the reported model on the attempt a request shipped on, when its merge was recorded while it still ran', () => {
+    const f = fixture()
+    const [task] = codexTasks(f, 1)
+    f.run({ type: 'conversation.merged', conversationId: task!.id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
+    expect(f.group(task!.id).ledger!.shippedBy).toMatchObject({ assignmentId: task!.assignmentId, model: null })
+    reportModel(f, task!.worker, { model: 'gpt-6.1-sol' })
+    expect(f.group(task!.id).ledger!.shippedBy).toMatchObject({ assignmentId: task!.assignmentId, engine: 'codex', model: 'gpt-6.1-sol' })
+  })
+
+  it('names no model on a grid attempt, another engine\'s attempt, or another agent\'s task', () => {
+    const f = fixture()
+    const [grid, other, mine] = codexTasks(f, 3)
+    const run = (id: string) => f.group(id).ledger!.runs![0]!
+    run(grid!.id).grid = true
+    reportModel(f, grid!.worker, { model: 'gpt-6.1-sol' })
+    // A report from another engine is not what the attempt ran on.
+    reportModel(f, other!.worker, { engine: 'claude', model: 'opus' })
+    reportModel(f, mine!.worker, { model: 'gpt-6.1-sol' })
+    expect(run(grid!.id).model).toBeNull()
+    expect(run(other!.id).model).toBeNull()
+    expect(run(mine!.id).model).toBe('gpt-6.1-sol')
+    expect([run(grid!.id), run(other!.id)].map(r => r.engine)).toEqual(['codex', 'codex'])
+  })
+
   it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })

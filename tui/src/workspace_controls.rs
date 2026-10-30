@@ -147,7 +147,9 @@ pub fn status(app: &App) -> String {
 /// The sidebar uses the same actions on its existing header/footer rows.
 pub fn side_actions(buf: &mut Buffer, app: &App, rect: Rect, style: Style, account: bool) {
     if !enabled(app) { return }
-    let items: Vec<(&str, Action)> = if account { vec![(crate::account::label(app), Action::Account)] }
+    // The account's username, shortened to the room there is.
+    let user = crate::format::short_name(&crate::account::button(app), rect.width as usize);
+    let items: Vec<(&str, Action)> = if account { vec![(user.as_str(), Action::Account)] }
         else { vec![("+", Action::New), (MENU_GLYPH, Action::Menu)] };
     let total: u16 = items.iter().map(|(label, _)| label.width() as u16).sum::<u16>() + items.len().saturating_sub(1) as u16 * 2;
     if total > rect.width { return }

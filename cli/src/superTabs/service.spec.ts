@@ -1284,6 +1284,13 @@ describe('the assignment a command names', () => {
       error: 'STALE_ASSIGNMENT', detail: `This is no longer the active assignment. This group's active assignment is ${live}: send it again with "assignmentId": "${live}" (or "current").` })
   })
 
+  it('sends a check with no group to the one task the agent holds', async () => {
+    const t = setup(); withTask(t, t.agentId)
+    const check = { type: 'work.check', assignmentId: 'current', checkId: 'c1', passed: true, evidence: 'Posted' }
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'e', command: check }, owner)).toMatchObject({ ok: true })
+    expect(posted(t)).toEqual([{ ...check, conversationId: 'g1', assignmentId: live }])
+  })
+
   it('never fills in another agent\'s task for a status', async () => {
     const t = setup(); withTask(t, 'someone-else')
     await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'd', command: status('current') }, owner)

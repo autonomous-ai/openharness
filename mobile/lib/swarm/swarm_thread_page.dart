@@ -72,6 +72,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   final _focus = FocusNode(debugLabel: 'Swarm thread reply');
   final _scroll = ScrollController();
 
+  /// The latest reply is more than a screen below, where Jump to latest is
+  /// offered.
+  final _farBack = ValueNotifier<bool>(false);
+
   /// The message whose actions are open (Copy), by a tap on it.
   String? _acting;
 
@@ -110,6 +114,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     _thread.composer.removeListener(_drafted);
     _thread.dispose();
     _attachNote.dispose();
+    _farBack.dispose();
     _text.dispose();
     _focus.dispose();
     _scroll.dispose();
@@ -150,6 +155,32 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     }
   }
 
+  /// Whether the foot is more than a screen below ([_farBack]), on every
+  /// scroll and whenever the thread's length changes.
+  bool _measured(Notification n) {
+    final ScrollMetrics? m = switch (n) {
+      ScrollMetricsNotification() => n.metrics,
+      ScrollUpdateNotification() => n.metrics,
+      _ => null,
+    };
+    if (m != null) {
+      _farBack.value = m.maxScrollExtent - m.pixels > m.viewportDimension;
+    }
+    return false;
+  }
+
+  /// Back down to the latest reply.
+  void _toFoot() {
+    if (!_scroll.hasClients) return;
+    unawaited(
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      ),
+    );
+  }
+
   /// Sends the reply, at the foot of the thread where it shows. Once the
   /// backend took it the keyboard goes down, unless the next is being typed.
   Future<void> _send() async {
@@ -179,9 +210,33 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           children: [
             _header(context, tty),
             Expanded(
-              child: ListenableBuilder(
-                listenable: _thread,
-                builder: (context, _) => _body(tty),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: NotificationListener<Notification>(
+                      onNotification: _measured,
+                      child: ListenableBuilder(
+                        listenable: _thread,
+                        builder: (context, _) => _body(tty),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 8,
+                    child: ListenableBuilder(
+                      listenable: Listenable.merge([_thread, _farBack]),
+                      builder: (context, _) =>
+                          _farBack.value &&
+                              _thread.state == SwarmChatState.loaded
+                          ? Center(
+                              child: SwarmNewPill(count: 0, onTap: _toFoot),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ],
               ),
             ),
             ListenableBuilder(
