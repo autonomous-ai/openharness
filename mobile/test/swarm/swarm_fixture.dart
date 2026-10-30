@@ -370,6 +370,14 @@ class MemorySwarmHomeKey implements SwarmHomeKey {
   }
 }
 
+/// Waits until every save [cache] has under way is done: an inbox keeps its
+/// Home in the background (a temp file, then a rename), so a test that ends
+/// right after a read would have its folder deleted mid-save. The cache does
+/// one thing at a time, so a read of [account]'s Home answers after them.
+/// Real time only: under a widget test's fake clock it would never answer.
+Future<void> homeSaved(SwarmHomeCache cache, {String account = me}) =>
+    cache.read(account);
+
 /// A kept Home in a folder of its own, gone after the test.
 SwarmHomeCache memoryHomeCache() {
   final dir = Directory.systemTemp.createTempSync('swarm-home');
