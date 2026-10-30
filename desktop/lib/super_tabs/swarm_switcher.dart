@@ -397,43 +397,49 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                 alignmentOffset: const Offset(0, grid.AppControl.menuGap),
                 style: grid.AppMenu.style(minWidth: width, maxWidth: width),
                 onOpen: personal.clearError,
+                // As wide as the row it opens from.
                 menuChildren: [
-                  AppMenuItem(
-                    key: const ValueKey('swarm-switch-personal'),
-                    label: kPersonalSwarmName,
-                    icon: AppIcons.user,
-                    selected: isPersonal,
-                    expandLabel: true,
-                    trailing: personal.busy
-                        ? const SizedBox.square(
-                            dimension: 12,
-                            child: CircularProgressIndicator(strokeWidth: 1.5),
-                          )
-                        : badge(personalWaiting),
-                    onPressed: _pickPersonal,
-                  ),
-                  for (final choice in choices)
+                  for (final item in <Widget>[
                     AppMenuItem(
-                      key: ValueKey('swarm-switch-${choice.id}'),
-                      label: choice.name,
-                      icon: AppIcons.users,
-                      selected: choice.id == current,
+                      key: const ValueKey('swarm-switch-personal'),
+                      label: kPersonalSwarmName,
+                      icon: AppIcons.user,
+                      selected: isPersonal,
                       expandLabel: true,
-                      trailing: choice.id == current
-                          ? null
-                          : badge(choice.waiting),
-                      onPressed: () => _pick(choice.id),
+                      trailing: personal.busy
+                          ? const SizedBox.square(
+                              dimension: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                              ),
+                            )
+                          : badge(personalWaiting),
+                      onPressed: _pickPersonal,
                     ),
-                  AppMenuItem(
-                    key: const ValueKey('swarm-switch-new'),
-                    label: 'New Swarm',
-                    icon: AppIcons.plus,
-                    expandLabel: true,
-                    onPressed: () {
-                      _menu.close();
-                      widget.onNewSwarm();
-                    },
-                  ),
+                    for (final choice in choices)
+                      AppMenuItem(
+                        key: ValueKey('swarm-switch-${choice.id}'),
+                        label: choice.name,
+                        icon: AppIcons.users,
+                        selected: choice.id == current,
+                        expandLabel: true,
+                        trailing: choice.id == current
+                            ? null
+                            : badge(choice.waiting),
+                        onPressed: () => _pick(choice.id),
+                      ),
+                    AppMenuItem(
+                      key: const ValueKey('swarm-switch-new'),
+                      label: 'New Swarm',
+                      icon: AppIcons.plus,
+                      expandLabel: true,
+                      onPressed: () {
+                        _menu.close();
+                        widget.onNewSwarm();
+                      },
+                    ),
+                  ])
+                    SizedBox(width: width, child: item),
                 ],
                 builder: (context, menu, _) => Semantics(
                   label: 'Swarm: $label',

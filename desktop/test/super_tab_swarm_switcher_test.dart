@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -8,8 +10,10 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
+import 'package:harness/super_tabs/view.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 
@@ -286,8 +290,75 @@ Future<void> _openMenu(WidgetTester tester) async {
   await tester.pump();
 }
 
+/// Set to a folder to write the PR's pictures of the dropdown there.
+final _shots = Platform.environment['SWARM_SWITCHER_SHOTS'];
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() => loadCaptureFonts(_shots));
+
+  for (final brightness in Brightness.values) {
+    testWidgets('pictures of the Swarm dropdown, closed and open, in '
+        '${brightness.name}', (tester) async {
+      if (_shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2400, 1300);
+      addTearDown(tester.view.reset);
+      late AppNotifier app;
+      late SuperTabController shown;
+      await tester.runAsync(() async {
+        final backend = _Backend()
+          ..add('openharness', 'openharness')
+          ..add('robots', 'Autonomous Robots')
+          ..add('crit', 'Design crit');
+        backend.servers['robots']!.state['mentionsWaiting'] = 3;
+        app = _computer(backend, MemoryStore());
+        await app.superTabs.setTabVisible('crit', false);
+        await app.superTabs.refreshTabs();
+        app.selectSwarm(
+          app.swarms.firstWhere((s) => s.superTabId == 'openharness').id,
+        );
+        await (await app.superTabs.open('robots')).refresh();
+        shown = await app.superTabs.open('openharness');
+        await shown.refresh();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: shown,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewProject: () {},
+              onNewSwarm: () {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await captureWindow(
+        tester,
+        _shots,
+        'swarm-dropdown-closed-${brightness.name}',
+      );
+      await _openMenu(tester);
+      await captureWindow(
+        tester,
+        _shots,
+        'swarm-dropdown-open-${brightness.name}',
+      );
+      await _releaseAll(tester, app);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
 
   testWidgets('the bar starts with the shown Swarm; its menu lists Personal, '
       'every Swarm with what waits, the shown one ticked, then New Swarm', (
@@ -575,6 +646,50 @@ void main() {
     expect(_shown(other, tab2), 'alpha');
     expect(PersonalSwarm.of(other).error, isNull);
   });
+
+  for (final dropdown in [true, false]) {
+    testWidgets('the Swarm view moves a tab whose Swarm is taken away to '
+        'Personal${dropdown ? '' : ', but not without the dropdown'}', (
+      tester,
+    ) async {
+      late AppNotifier app;
+      late String tab, personal;
+      late SuperTabController alpha;
+      await tester.runAsync(() async {
+        (app, _) = await _twoTabs();
+        tab = app.activeSwarmId;
+        await PersonalSwarm.of(app).show(tab);
+        await _settle();
+        personal = PersonalSwarm.of(app).id!;
+        app.showSuperTabIn(tab, 'alpha', 'Alpha');
+        await _settle();
+        alpha = await app.superTabs.open('alpha');
+        await alpha.refresh();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: alpha,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewSwarm: dropdown ? () {} : null,
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      alpha.revokeAccess('You no longer have access to this Swarm.');
+      await tester.pump();
+      await tester.pump();
+      expect(_shown(app, tab), dropdown ? personal : 'alpha');
+      await _releaseAll(tester, app);
+    });
+  }
 
   testWidgets('a failed creation says so under the bar, and picking Personal '
       'again creates it', (tester) async {
