@@ -4,10 +4,16 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf, forgetBuddyReads } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
+vi.mock('../lib/buddyGuard.js', async original => {
+  const actual = await original<typeof import('../lib/buddyGuard.js')>()
+  return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads) }
+})
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -3385,6 +3391,52 @@ describe('closing the sessions the backend ends', () => {
     for (const file of [buddyReadsOf('other-buddy').file, shot]) rmSync(file)
   })
 
+  // Follow-up to #2389's security re-check 2: a lists folder that could not be read threw the read's own error into this log,
+  // its path under the person's home with it. It is logged by a fixed code, once, nothing is deleted, and the end waits.
+  it('logs a lists folder it cannot read by a fixed code, with no path, deletes nothing, and acknowledges the end once it can', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(shot, 'png')
+    const reads = buddyReadsOf('unread-folder-buddy'), lists = dirname(reads.file)
+    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
+    const before = readdirSync(lists).sort()
+    await t.poll()
+    chmodSync(lists, 0o000)
+    try {
+      t.rows.splice(0, 1, ended())
+      await t.poll()
+      await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(t.commands).toEqual([])
+      const line = 'Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LISTS_UNREAD'
+      expect(t.log.mock.calls.filter(([said]) => said === line)).toHaveLength(1)
+      const said = t.log.mock.calls.flat().join('\n')
+      for (const path of [lists, env.ADAPTER_DATA_DIR, tmpdir()]) expect(said).not.toContain(path)
+    } finally { chmodSync(lists, 0o700) }
+    expect(readdirSync(lists).sort()).toEqual(before)
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(existsSync(reads.file)).toBe(false)
+    rmSync(shot)
+  })
+
+  // Follow-up to #2389's security re-check 2: the host logs an end's failure by its codes alone. One that is not the cleanup's
+  // own, whose message may name a path, is logged by kind, never by its message.
+  it('logs a failure that is not the lists cleanup\'s own by kind, never by its message', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    vi.mocked(forgetBuddyReads).mockImplementationOnce(() => { throw new Error('EACCES: permission denied, scandir \'/Users/person/.harness/buddy-reads\'') })
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    expect(t.log).toHaveBeenCalledWith('Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LISTS_FAILED')
+    expect(t.log.mock.calls.flat().join('\n')).not.toContain('/Users/person')
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+    expect(t.commands).toEqual([])
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+  })
+
   // Re-check 2 of #2248: a list the host could not delete was only logged; the end was acknowledged, the backend dropped the
   // row, and nothing tried again, so the list kept allowing its file for the rest of the day.
   it('acknowledges a Buddy session\'s end only once its list is deleted, and its guard allows nothing meanwhile', async () => {
@@ -3409,7 +3461,9 @@ describe('closing the sessions the backend ends', () => {
       expect(t.commands).toEqual([])
       expect(existsSync(reads.file)).toBe(true)
       expect(guardReads(guard, folder, shot)).toBe('deny')
-      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
+      // By its kind alone (follow-up to #2389's security re-check 2): the error it caught named the list's path.
+      expect(t.log).toHaveBeenCalledWith('Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LIST_KEPT')
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain(dirname(reads.file))
     } finally { chmodSync(dirname(reads.file), 0o700) }
     await t.poll()
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))
