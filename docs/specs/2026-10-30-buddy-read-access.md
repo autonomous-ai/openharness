@@ -49,6 +49,16 @@ not trust that alone. The host checks it locally, at each message the Buddy's pe
 
 Only then does the host grant wide mode in the session's list, which only the host writes. It takes the grant back when
 a later message fails the check. The guard reads beyond the folder and runs wider commands only while it is granted.
+
+A grant holds for one launch, one account and an hour (delta reviews of #2310):
+- **Launch:** each launch draws a random id. It goes into the guard and into a read-only file in the Buddy's folder, from
+  which the host copies it into the grant. A grant from before a relaunch is void, and each launch takes back the grant
+  before it.
+- **Account:** the host records the account signed in on this machine at its start, and none until it knows. A sign-in
+  or sign-out restarts the daemon, so a grant made under another account is void.
+- **Time:** an hour at most from the person's message.
+
+`run:` approvals are dated by when the person sent the message, so a delivery tried again adds no time.
 Until the person's first message, and whenever the check fails, the Buddy reads its folder alone, as before.
 
 Ruling: the check runs at each message, not at launch. Why: the launch does not know the Buddy's person, least of all on
@@ -61,6 +71,10 @@ closed: `/proc`, `/sys`, `/dev` and every temporary folder included. On Linux, `
 DB URL while db-size ran; on macOS, `/private/var/folders` held other processes' files (security reviews of #2310).
 Within those folders, these stay closed:
 
+- Every engine's data (`BUDDY_ENGINE_HOMES`, typed by the engine list so a new engine names its own): Claude Code,
+  Codex, Cursor, OpenCode, Pi, OMP, Hermes, Command Code, Devin, Muse, Amp, Kilo, Grok, Antigravity (`~/.gemini`),
+  Copilot.
+- Terminal's per-session histories (`~/.zsh_sessions`), fish's history, and hub's GitHub token (`~/.config/hub`).
 - Secret stores in the home folder: `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, `~/.kube`,
   `~/.docker`, `~/.config/gh`, `~/.config/argocd`, `~/.argocd`, git credentials, `~/.password-store`, `~/.config/op`,
   `~/Library/Keychains`.
@@ -98,7 +112,7 @@ files with Glob, then reads them.
 | `gh api` | GET only (`-X`/`--method GET` at most); a path under `repos/OWNER/NAME` of the project's own repositories (from its git remotes), with no `secret`, `key`, `token` or `hook` part; `--jq`, `--paginate`, `--cache`, `--include` | other methods, `-f`/`-F`/`--field`/`--raw-field`/`--input` (they make gh POST), `-H`, `--hostname`, `graphql`, `user` |
 | `argocd app` | `list`, `get`, `get-resource` (never a Secret or a ConfigMap), `resources`, `history`, `logs` (`--kind`, `--name`, `--group`, `--since-seconds`, `--tail`, `--filter`, …) | `sync`, `set`, `patch`, `patch-resource`, `delete`, `delete-resource`, `rollback`, `terminate-op`, `actions`, `manifests`, `get --refresh`, `logs -f`, `--server`, `--auth-token`, `--config` |
 | `argocd` | `version` | `login`, `logout`, `account`, `cluster`, `repo`, `proj` |
-| `kubectl` | `get`, `describe`, `top`, `logs`, `version`, `api-resources`, `config current-context`; a ConfigMap by name only (`get` with no `-o`, or `-o name`/`wide`) | any Secret, a ConfigMap described or printed whole, `--raw`, `exec`, `cp`, `port-forward`, `apply`, `delete`, `edit`, `patch`, `scale`, `rollout`, `label`, `annotate`, `-w`, `-f`, `--server`, `--token`, `--kubeconfig`, `--as` |
+| `kubectl` | `get`, `describe`, `top`, `logs`, `version`, `api-resources`, `config current-context`; a ConfigMap by name only (`get` with every `-o` being `name` or `wide`, as kubectl takes the last; any word with `configmap` in it, or `cm` followed by `.`, `/` or nothing) | any Secret, a ConfigMap described or printed whole, `--raw`, `exec`, `cp`, `port-forward`, `apply`, `delete`, `edit`, `patch`, `scale`, `rollout`, `label`, `annotate`, `-w`, `-f`, `--server`, `--token`, `--kubeconfig`, `--as` |
 | Recipe | `harness buddy-read db-size` | anything added to it |
 | Anything else | (none) | `curl`, `wget`, `nc`, `ssh`, `sh`, `python`, `node`, `env`, `printenv`, `security`, `mongosh`, `osascript`, `open` |
 
@@ -189,7 +203,7 @@ Rulings:
 - **Not sent (a best effort).** The guard refuses a `post`, a `propose`, an `--attach` file or an Artifact read's prompt
   that holds a secret's shape. It names the kind of secret, never the value, in every mode. It checks each word, a
   proposal's fields as the CLI decodes them (an escape such as `\u0067` hides nothing), each field without its spaces,
-  and the message's fields and files run together (a token split in two). The run-together checks use only the
+  zero-width or other format characters, and the message's fields and files run together (a token split in two). The run-together checks use only the
   distinctive shapes, so ordinary prose is not refused. It is still a best effort; what holds is that secrets are never
   read (the line above). The shapes:
   - GitHub, Anthropic, other `sk-` and npm, AWS, Slack, GitLab and Google keys
@@ -214,6 +228,11 @@ Buddy text; it copies only the Lead, Engineer and Reviewer texts.
 
 ## Design (docs/feature-design-rules.md)
 
+0. **Lists' owner marks (from #2261, folded in).** Beside each list, an empty file names its session. Every writer
+   (`allowBuddyReads`, `recordBuddyApprovals`, `grantBuddyWide`) goes through one helper that writes the mark first,
+   create-only and never through a link, and takes away other sessions' marks. A session's end removes its own lists
+   unread, by its mark. A list it cannot read, beside another session's mark, is that session's. Beside no mark at all,
+   it fails the end, as before marks.
 1. **Growth.**
    - Approvals: 200 per person, each 30 days; `forget runs` clears them; a file untouched for 30 days is deleted. A new
      membership has a new key, so the old file can no longer be read and goes within 30 days.
