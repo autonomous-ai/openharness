@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PERMISSION_MODES } from '../../lib/engineLaunch.js'
+import { buddyGuardSource, buddyWideOf } from '../../lib/buddyGuard.js'
 
 /**
  * A Codex Buddy launched with full permissions could push and open pull requests with its person's own GitHub login
@@ -132,5 +133,44 @@ describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real
     const write = await sandboxed(...command)
     expect(write.status).not.toBe(0)
     expect(write.output).toMatch(/error connecting to api\.github\.com/)
+  })
+  // The Claude guard and this sandbox must not disagree (docs/specs/2026-10-30-buddy-read-access.md, section 5): every
+  // write the guard refuses in wide mode, Codex's Buddy sandbox refuses too, and nothing it would have done is done.
+  describe('agrees with the Claude guard in wide mode on every write', () => {
+    const guardOf = () => {
+      const guard = join(root, 'buddy-guard.mjs')
+      writeFileSync(guard, buddyGuardSource(repo, { file: join(root, 'reads.json'), drops: join(root, 'drops') },
+        buddyWideOf({ home: join(root, 'home'), dataDir: join(root, 'data'), tmpDirs: [], repos: ['autonomous-ai/openharness'] })))
+      return guard
+    }
+    const claudeGuard = (command: readonly string[]) => {
+      const text = command.map((word) => /^[A-Za-z0-9_\-.\/:=,@%+]+$/.test(word) ? word : `'${word}'`).join(' ')
+      const run = spawnSync(process.execPath, [guardOf()], { encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'PreToolUse',
+        tool_name: 'Bash', tool_input: { command: text, description: 'x' }, cwd: repo }) })
+      return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+    }
+    const commits = () => git('rev-list', '--count', 'HEAD')
+
+    it.each([
+      ['git push', ['git', 'push', 'origin', 'HEAD:main'], () => expect(execFileSync('git', ['--git-dir', remote, 'for-each-ref'], { env, encoding: 'utf8' })).toBe('')],
+      ['git commit', ['git', 'commit', '--allow-empty', '-qm', 'planted'], () => expect(commits()).toBe('1')],
+      ['git config', ['git', 'config', 'user.name', 'planted'], () => expect(git('config', '--list')).not.toContain('planted')],
+      ['a git alias that runs a program', ['git', '-c', 'alias.x=!touch planted', 'x'], () => expect(() => readFileSync(join(repo, 'planted'))).toThrow()],
+      ['curl -X POST', ['curl', '-sS', '-X', 'POST', '-d', 'x', 'URL'], () => expect(received.filter((request) => request.endsWith(path))).toEqual([`POST ${path}`])],
+    ])('%s', async (_, command, unchanged) => {
+      const words = command.map((word) => word === 'URL' ? url : word)
+      expect(claudeGuard(words)).toBe('deny')
+      const ran = await sandboxed(...words)
+      expect(ran.status).not.toBe(0)
+      unchanged()
+    })
+
+    it.skipIf(!hasGh)('gh api -X POST', async () => {
+      const words = ['gh', 'api', '-X', 'POST', 'repos/autonomous-ai/openharness/issues', '-f', 'title=x']
+      expect(claudeGuard(words)).toBe('deny')
+      const ran = await sandboxed(...words)
+      expect(ran.status).not.toBe(0)
+      expect(ran.output).toMatch(/error connecting to api\.github\.com/)
+    })
   })
 })

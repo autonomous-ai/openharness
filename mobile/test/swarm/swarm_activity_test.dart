@@ -555,4 +555,187 @@ void main() {
       );
     });
   });
+
+  /// The Desktop's #2250 on the phone: a thread is read as far as the person
+  /// read its chat on any device (the server's mark) or on this phone, and a
+  /// thread opened here as far as it was opened. None of these only moves
+  /// back.
+  group('Threads read on another device', () {
+    const page = activityPage;
+
+    /// root-1's reply at [last], told by a change read; the server's mark is
+    /// [readMark] when set.
+    Future<void> newReply(
+      FakeSwarm fake,
+      SwarmSession session,
+      void Function(Map<String, dynamic>) setPage, {
+      required int last,
+      int? readMark,
+      String cursor = 'c3',
+    }) async {
+      setPage({
+        ...page(),
+        'threads': [thread('root-1', last: last)],
+      });
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: cursor,
+        derived: {
+          'decisionsWaiting': 1,
+          'mentionsWaiting': 1,
+          if (readMark != null) 'readMarks': {leadChat: readMark},
+        },
+        lastChangedAt: last,
+        groups: [
+          part(
+            leadChat,
+            last,
+            groupData(
+              leadChat,
+              title: 'Mobile',
+              agentIds: ['agent-lead'],
+              leadId: 'agent-lead',
+              lastMessageSequence: last,
+            ),
+          ),
+        ],
+      );
+      await session.inbox.refresh();
+      await settle();
+    }
+
+    SwarmActivityItem rootOne(SwarmActivity activity) => activity
+        .items(SwarmActivityFilter.threads)
+        .firstWhere((item) => item.key == 'thread:$tab:root-1');
+
+    test('a thread read on another device, with no mark on this phone, is '
+        'not news', () async {
+      // The person read the chat elsewhere through root-1's last reply (12).
+      final store = MemoryKeyValueStore();
+      final session = await start(
+        backend(page: page, readMark: 12),
+        store: store,
+      );
+      final activity = session.activity..watch();
+      await settle();
+
+      final reader = session.inbox.reader(tab)!;
+      expect(
+        store.values['swarm_read_marks.$me.$tab'] ?? '',
+        isNot(contains(leadChat)),
+        reason: 'this phone holds no mark of the chat',
+      );
+      expect(reader.readMarks!.readThrough(leadChat), 12);
+      expect(activity.handled(rootOne(activity)), 'Read');
+      expect(activity.count(SwarmActivityFilter.threads), 0);
+    });
+
+    test("a reply past the server's mark is news", () async {
+      final session = await start(backend(page: page, readMark: 11));
+      final activity = session.activity..watch();
+      await settle();
+
+      expect(activity.handled(rootOne(activity)), isNull);
+      expect(activity.count(SwarmActivityFilter.threads), 1);
+    });
+
+    test("another person's marks on this phone never read the person's "
+        'thread', () async {
+      // Someone else signed in on this phone read the chat and opened root-1.
+      const other = 'person-other';
+      final store = MemoryKeyValueStore()
+        ..values['swarm_read_marks.$other.$tab'] = '{"marks":{"$leadChat":99}}'
+        ..values['swarm_activity.$other.$tab'] = '{"marks":{"t:root-1":99}}';
+      final session = await start(backend(page: page), store: store);
+      final activity = session.activity..watch();
+      await settle();
+
+      expect(session.inbox.reader(tab)!.readMarks!.readThrough(leadChat), 10);
+      expect(activity.handled(rootOne(activity)), isNull);
+      expect(activity.count(SwarmActivityFilter.threads), 1);
+    });
+
+    test(
+      'a lower server mark read later never makes a read thread news',
+      () async {
+        var next = page();
+        final fake = backend(page: () => next, readMark: 12);
+        final session = await start(fake);
+        final activity = session.activity..watch();
+        await settle();
+        expect(activity.handled(rootOne(activity)), 'Read');
+
+        // A change read carries an older mark of the chat than the one held.
+        await newReply(fake, session, (p) => next = p, last: 12, readMark: 5);
+
+        expect(session.inbox.reader(tab)!.readMarks!.readThrough(leadChat), 12);
+        expect(activity.handled(rootOne(activity)), 'Read');
+        expect(activity.count(SwarmActivityFilter.threads), 0);
+      },
+    );
+
+    test('a thread opened here, then an older copy of it opened, stays read '
+        'through the newer reply', () async {
+      final store = MemoryKeyValueStore()
+        ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
+      var next = page();
+      final fake = backend(page: () => next);
+      final session = await start(fake, store: store);
+      final activity = session.activity..watch();
+      await settle();
+      // The row as it stood with the reply at 12, still held by a screen.
+      final older = rootOne(activity);
+
+      await newReply(fake, session, (p) => next = p, last: 14);
+      activity.replied(rootOne(activity));
+      activity.replied(older);
+      await settle();
+
+      expect(activity.handled(rootOne(activity)), 'Read');
+      expect(
+        store.values['swarm_activity.$me.$tab'],
+        contains('"t:root-1":14'),
+      );
+    });
+
+    test('a mark read back from the phone after a tap keeps the higher of '
+        'the two', () async {
+      // Opened through 14 in an earlier session; the read back waits.
+      final store = _SlowStore('swarm_activity.$me.$tab')
+        ..values['swarm_activity.$me.$tab'] = '{"marks":{"t:root-1":14}}';
+      var next = page();
+      final fake = backend(page: () => next);
+      final session = await start(fake, store: store);
+      final activity = session.activity..watch();
+      await settle();
+
+      // Reply opened from a row still showing the reply at 12.
+      activity.replied(rootOne(activity));
+      store.release();
+      await settle();
+      await newReply(fake, session, (p) => next = p, last: 14);
+
+      expect(activity.handled(rootOne(activity)), 'Read');
+      expect(activity.count(SwarmActivityFilter.threads), 0);
+      expect(
+        store.values['swarm_activity.$me.$tab'],
+        contains('"t:root-1":14'),
+      );
+    });
+  });
+}
+
+/// A phone store whose read of [slow] waits for [release].
+class _SlowStore extends MemoryKeyValueStore {
+  _SlowStore(this.slow);
+
+  final String slow;
+  final _gate = Completer<void>();
+
+  void release() => _gate.complete();
+
+  @override
+  Future<String?> read(String key) async {
+    if (key == slow) await _gate.future;
+    return super.read(key);
+  }
 }

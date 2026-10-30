@@ -146,6 +146,17 @@ describe('the nightly routing reflection', () => {
     expect(routingReflection({ ...seededWeek(), rules: [{ kind: 'noGridFirst' }] })!.proposals.map(p => p.title)).toEqual([UI, PARSER])
   })
 
+  it('says an approval whose 30 days just ended is still not followed, instead of proposing it cold (Lead, 10-30)', () => {
+    const report = routingReflection({ ...seededWeek(), lapsed: [{ title: UI, on: '2026-09-29', by: 'owner' }, { title: DOCS, on: '2026-09-30', by: 'pm' }] })!
+    const [ui, parser, docs] = report.proposals
+    expect(ui!.why).toBe('Approved on 2026-09-29; the last 7 days still route the old way. Its first review passed 0 of 6 (0%); even the top of its 95% range is 39%. '
+      + 'Only 6 first reviews.')
+    expect(docs!.why).toMatch(/^PM decided on 2026-09-30; the last 7 days still route the old way\. 3 of 3 docs tasks/)
+    expect(parser!.why).toMatch(/^Its first review passed/)
+    expect(proposalQuestion(ui!).question).toContain('Approved on 2026-09-29; the last 7 days still route the old way.')
+    expect(report.text).toContain(`1. ${UI}: about $12.00 a week at API prices of attempts that failed their first review. Approved on 2026-09-29;`)
+  })
+
   it('dates in the project\'s time zone, the default one for none or an unknown one', () => {
     const late = Date.UTC(2026, 9, 30, 18, 0)
     expect(localDate(late)).toBe('2026-10-31')

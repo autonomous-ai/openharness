@@ -348,7 +348,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+            clang cmake ninja-build pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev liblzma-dev libstdc++-12-dev
 
       # Flutter has no Linux ARM64 SDK archive. Its action installs the same
       # pinned SDK from Git, verifies the revision, and reuses main's native cache.
