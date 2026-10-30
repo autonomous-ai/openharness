@@ -806,6 +806,10 @@ export class DeviceLink {
       return
     }
     if (frame.type === 'e2e_denied') {
+      // Only for a machine this daemon has a session or hello with, or is linked to (read through the bounded
+      // cache): the relay names the machine, and acting on any id it made up recorded a quiet time and a log
+      // line for each, never removed (security review 1 on #2357).
+      if (!from || (!this.sessions.has(from) && !this.cryptoWaiters.has(from) && !this.linked(from))) return
       // The far end knows this daemon's key and rejected it — the pin is stale, not merely missing.
       this.opts.log(`device: e2e denied ${from} — the remote password may have changed or this machine's link was revoked, re-run \`harness link connect ${from}\``)
       this.failCrypto(from, new Error('E2EE_DENIED'))

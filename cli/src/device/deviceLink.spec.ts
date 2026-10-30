@@ -712,6 +712,22 @@ describe('the lane\'s own bounds', () => {
     expect(cache.size).toBe(0)
   })
 
+  it('acts on a refused key only for a machine it is linked to or has a session with: made-up ids grow nothing', async () => {
+    // Security review 1 on #2357: every e2e_denied recorded a quiet time for whatever id it named, never removed.
+    const { server, link, lines, seal } = await lane()
+    await link.online()
+    const startedAt = (link as unknown as { startedAt: Map<string, unknown> }).startedAt
+    for (let n = 0; n < 1_000; n++) server.send({ type: 'e2e_denied', machineId: `made-up-${n}`, payload: {} })
+    // A frame the lane does act on, sent after them, marks when they have all been read.
+    await link.establish(LINKED)
+    server.send({ type: 'e2e_denied', machineId: LINKED, payload: {} })
+    await until('the linked machine\'s denial', () => lines.some((line) => line.includes(`e2e denied ${LINKED}`)))
+    expect(startedAt.size).toBe(1)
+    expect(startedAt.has(LINKED)).toBe(true)
+    expect(lines.filter((line) => line.includes('e2e denied made-up-'))).toHaveLength(0)
+    expect(seal.drop).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a frame held just after a renewal until the delayed renewal reads it, however slow its welcome', async () => {
     // Held at the start of the per-machine limit (30 s), renewed when it ends, welcomed just inside the hello's
     // 15 s: read 45 s after it was held. A hold time of 30 s threw it away before the renewal could read it.
