@@ -8,7 +8,7 @@ import { MACHINE_MCP_FILE } from '../lib/machineMcp.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  activeSsid, CHECK_NOW, CMDLINE, deviceCodeOf, execBounded, GH, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
+  activeSsid, CHECK_NOW, CMDLINE, deviceCodeOf, execBounded, GH, GITHUB_SIGN_IN_MS, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
   startOsDevice, UPDATE_BUSY_MS, updateOf, wifiNetworks, type OsDeviceDeps,
 } from './osDevice.js'
 
@@ -482,6 +482,28 @@ describe('the Harness OS computer, managed from the phone', () => {
       vi.useRealTimers()
     })
 
+    it('forgets a sign-in it was signed out of: its late end neither shows an error nor ends the next one', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const [first, second, third] = [signIn(), signIn(), signIn({ code: 'EF56-GH78', url: 'https://github.com/login/device' })]
+      const githubSignIn = vi.fn().mockReturnValueOnce(first.run).mockReturnValueOnce(second.run).mockReturnValueOnce(third.run)
+      const { ask } = github({ githubSignIn })
+      const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+      // Signed out while it waited: the gh it stopped ends with an error, which is not the phone's to show.
+      await ask({ action: 'github', state: 'sign_in' })
+      expect(await ask({ action: 'github', state: 'sign_out' })).toEqual({ login: null })
+      first.end(new Error('signal: killed'))
+      await settled()
+      expect(await ask({ action: 'github' })).toEqual({ login: null })
+      // Stopped gh ending after the next sign-in started: neither its error nor its end is the new one's.
+      await ask({ action: 'github', state: 'sign_in' })
+      await ask({ action: 'github', state: 'sign_out' })
+      const waiting = { login: null, signingIn: { code: 'EF56-GH78', url: 'https://github.com/login/device' } }
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual(waiting)
+      second.end(new Error('signal: killed'))
+      await settled()
+      expect(await ask({ action: 'github' })).toEqual(waiting)
+    })
+
     it('signs out of the account it uses, and stops a sign-in waiting', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const { ask, exec, login, signInAs } = github()
@@ -549,6 +571,44 @@ describe('the Harness OS computer, managed from the phone', () => {
       await vi.waitFor(async () => expect(await ask({ action: 'github' }))
         .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed: error: failed retrieving file' }))
       expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('says the GitHub CLI could not be put back when the setup gives no reason', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, githubSignIn, done } = withoutGh(async () => '{"installed": false}')
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed.' }))
+      expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('signs in once the GitHub CLI is back even when its sign-in cannot be read', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, githubSignIn, done } = withoutGh(async () => '{"installed": true}')
+      const base = exec.getMockImplementation()!
+      exec.mockImplementation(async (file, args, options) => {
+        if (file === GH && args[1] === 'status') throw new Error('gh: config unreadable')
+        return base(file, args, options)
+      })
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(() => expect(githubSignIn).toHaveBeenCalledTimes(1))
+    })
+
+    it('says why, once the GitHub CLI is back, its sign-in showed no code', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.spyOn(console, 'log').mockImplementation(() => {})
+        const stop = vi.fn()
+        const { ask, githubSignIn, done } = withoutGh(async () => '{"installed": true}')
+        githubSignIn.mockReturnValue({ code: new Promise(() => {}), done: new Promise(() => {}), stop } as never)
+        await ask({ action: 'github', state: 'sign_in' })
+        await done
+        await vi.advanceTimersByTimeAsync(15_000)
+        expect(stop).toHaveBeenCalled()
+        expect(await ask({ action: 'github' })).toEqual({ login: null, signInError: 'gh auth login did not show a code' })
+      } finally { vi.useRealTimers() }
     })
 
     it('asks for an update on an OS from before install-gh, whose sudo refuses it', async () => {
@@ -657,5 +717,39 @@ describe('the defaults that run commands', () => {
     const stopped = ghProcess()
     githubDeviceSignIn().stop()
     expect(stopped.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('ends a device sign-in gh could not start, or that printed nothing, with why', async () => {
+    const missing = ghProcess()
+    const run = githubDeviceSignIn()
+    missing.emit('error', new Error('spawn gh ENOENT'))
+    await expect(run.code).rejects.toThrow('spawn gh ENOENT')
+    await expect(run.done).rejects.toThrow('spawn gh ENOENT')
+    const silent = ghProcess()
+    const quiet = githubDeviceSignIn()
+    silent.emit('close', 1)
+    await expect(quiet.done).rejects.toThrow('gh auth login exited 1')
+  })
+
+  it('kills a device sign-in nobody finished in time', () => {
+    vi.useFakeTimers()
+    try {
+      const proc = ghProcess()
+      githubDeviceSignIn()
+      vi.advanceTimersByTime(GITHUB_SIGN_IN_MS - 1)
+      expect(proc.kill).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('keeps no more of what gh prints than MAX_OUTPUT', async () => {
+    const proc = ghProcess()
+    const run = githubDeviceSignIn()
+    proc.stdout.emit('data', Buffer.from('x'.repeat(MAX_OUTPUT)))
+    // Past the bound, even a code is not read: a gh that floods its output never grows this process.
+    proc.stdout.emit('data', Buffer.from('\n! First copy your one-time code: B4B9-2B70\n'))
+    proc.emit('close', 1)
+    await expect(run.code).rejects.toThrow('x'.repeat(200))
   })
 })
