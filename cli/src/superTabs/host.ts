@@ -34,8 +34,8 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, hasBuddyApprovals, judgeBuddyApprovals,
-  recordBuddyApprovals, type JudgedApprovals } from '../lib/buddyGuard.js'
+import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, hasBuddyApprovals,
+  judgeBuddyApprovals, recordBuddyApprovals, writeBuddyAccount, type JudgedApprovals } from '../lib/buddyGuard.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -369,6 +369,11 @@ export class SuperTabHost {
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
+    // Which account is signed in here, for every Buddy's guard: none until it is read again, so a grant made before a sign-out
+    // or another account's sign-in (each restarts the daemon) holds nothing (delta reviews of #2310).
+    try { writeBuddyAccount(null) } catch (error) { this.log(`Buddy account mark: ${error instanceof Error ? error.message : String(error)}`) }
+    void this.core.account.identity().then(identity => writeBuddyAccount(identity?.accountId ?? null))
+      .catch(error => this.log(`Buddy account mark: ${error instanceof Error ? error.message : String(error)}`))
     this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts(); this.recordNative(); this.pollMachines() }, 1_000)
     this.timer.unref?.()
     void this.tick()
@@ -1181,7 +1186,9 @@ export class SuperTabHost {
     // Wide mode only for its own person, on their own machine, signed in here as them: the Swarm's word that the machine is
     // theirs is checked against this machine's own sign-in (security reviews 1 and 2 of #2310).
     const signedIn = own?.onTheirMachine ? (await this.core.account.identity().catch(() => null))?.accountId : undefined
-    const wide = !!own?.onTheirMachine && !!signedIn && signedIn === String(object(message.author).id)
+    // For this launch of the Buddy (its folder's launch id, lib/swarmSkills.ts): a relaunch makes a grant from before none.
+    const launch = own?.onTheirMachine && buddySession?.cwd ? buddyLaunchOf(buddySession.cwd) : null
+    const wide = !!own?.onTheirMachine && !!signedIn && !!launch && signedIn === String(object(message.author).id)
     const sent = key && own ? { key, session: entry.harnessId, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     const elsewhere = own && !own.onTheirMachine ? links : []
     // Judged by the Buddy's own guard, before the lease as the downloads are: only on its person's own machine. A guard that
@@ -1211,9 +1218,12 @@ export class SuperTabHost {
     if (sent) {
       try {
         allowBuddyReads(buddyReadsOf(sent.key), sent)
-        grantBuddyWide(buddyReadsOf(sent.key), { session: sent.session, wide })
+        if (signedIn) writeBuddyAccount(signedIn)
+        grantBuddyWide(buddyReadsOf(sent.key), wide ? { session: sent.session, wide: true, account: signedIn!, launch: launch! } : { session: sent.session, wide: false })
+        // Dated by when its person sent it, never by this delivery: a delivery tried again adds no time (delta reviews of #2310).
+        const sentAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
         if (approving) recordBuddyApprovals({ reads: buddyReadsOf(sent.key), session: sent.session, approvals: approving.approvals, judged: approving.judged,
-          messageId: String(message.id) })
+          messageId: String(message.id) }, Number.isFinite(sentAt) ? Math.min(sentAt, Date.now()) : Date.now())
       } catch (error) { this.authorized.delete(id); throw error }
     }
     // The durable intent must exist before the core can write. A thrown disk write must not deliver.

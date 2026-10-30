@@ -17,7 +17,11 @@ export interface BuddyWide { home: string; denied: readonly string[];
   /** Outside the folder, all that may be read: the home and named system folders, the closed places within them aside. */
   readable: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[];
   /** Where Claude Code keeps sessions' tool output: closed to the Buddy's reads, open to its sandbox, which writes its output there. */
-  sessionTemp: readonly string[] }
+  sessionTemp: readonly string[]
+  /** This launch, at random: a grant from before a relaunch is none (delta reviews of #2310). */
+  launch: string
+  /** Where the host keeps the account signed in on this machine (`writeBuddyAccount`): a grant holds only for it. */
+  accountFile: string }
 
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
@@ -41,8 +45,8 @@ const SYSTEM_READABLE = process.platform === 'darwin'
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
-  system?: readonly string[] }): BuddyWide {
-  return { home: input.home, readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+  system?: readonly string[]; launch?: string }): BuddyWide {
+  return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
     approvalsDir: join(input.dataDir, 'buddy-approvals') }
 }
 
@@ -330,9 +334,17 @@ const DENIED = WIDE ? realRoots(WIDE.denied) : []
 const READABLE = WIDE ? realRoots(WIDE.readable) : []
 // Whether the host granted wide mode to this session: it checked, at its person's last message, that they are the account
 // signed in on this machine (superTabs/host.ts, security reviews 1 and 2 of #2310). Without it, the folder alone.
+// A grant is for this launch, the account signed in here now, and an hour at most (delta reviews of #2310): one from before
+// a relaunch, under another account, after a sign-out, or older is none.
+const GRANT_MS = 60 * 60 * 1000
 function granted() {
   if (!WIDE) return false
-  try { return JSON.parse(readFileSync(READS, 'utf8')).wide === true } catch { return false }
+  try {
+    const list = JSON.parse(readFileSync(READS, 'utf8')), grant = list.wide
+    if (!grant || typeof grant !== 'object' || grant.session !== list.session || grant.launch !== WIDE.launch) return false
+    const account = JSON.parse(readFileSync(WIDE.accountFile, 'utf8')).accountId, age = Date.now() - grant.at
+    return typeof account === 'string' && account.length > 0 && grant.account === account && Number.isFinite(grant.at) && age > -60_000 && age < GRANT_MS
+  } catch { return false }
 }
 const NOT_GRANTED = 'Reading beyond your folder opens once your owner writes to you in your chat, on their own computer signed in as ' +
   'them. It was refused, and nobody will be asked. Tell your owner in one line.'
@@ -781,7 +793,9 @@ interface ListedLink { url: string; at: number }
 /** `session`: the native session the host delivered these to, whose lists go when the Swarm ends it (`forgetBuddyReads`).
  *  `approvals`: its person's approvals on this machine (`recordBuddyApprovals`), set by the host once it checked a message
  *  was theirs; the guard reads no approvals without it. */
-interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[]; approvals?: string; wide?: boolean }
+/** A grant of wide mode: to this session, at this launch, for this account, at this time (delta reviews of #2310). */
+interface Grant { session: string; account: string; launch: string; at: number }
+interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[]; approvals?: string; wide?: Grant | false }
 
 /** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. */
 function heldList(file: string, session: string): List {
@@ -791,7 +805,8 @@ function heldList(file: string, session: string): List {
     if (held.session !== session) return none
     const entries = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : []
     const { approvals, wide } = held as { approvals?: unknown; wide?: unknown }
-    return { version: 1, session, ...(typeof approvals === 'string' ? { approvals } : {}), ...(typeof wide === 'boolean' ? { wide } : {}),
+    const grant = wide === false ? false : wide && typeof wide === 'object' ? wide as Grant : undefined
+    return { version: 1, session, ...(typeof approvals === 'string' ? { approvals } : {}), ...(grant !== undefined ? { wide: grant } : {}),
       files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size', 'sha256']
         .every(field => typeof entry[field] === 'string') && Number.isFinite(entry.at)),
       links: entries(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string' && Number.isFinite(entry.at)) }
@@ -922,8 +937,34 @@ function classify(node: string, guard: string, commands: readonly string[]): { w
  * signed in on this machine (superTabs/host.ts). The guard reads beyond the folder only while it is granted. Throws when
  * it cannot write, so the host tries the delivery again.
  */
-export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide: boolean }): void {
-  writeList(reads.file, input.session, { ...heldList(reads.file, input.session), wide: input.wide })
+export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide: false } | { session: string; wide: true; account: string; launch: string },
+  now = Date.now()): void {
+  const wide: Grant | false = input.wide ? { session: input.session, account: input.account, launch: input.launch, at: now } : false
+  writeList(reads.file, input.session, { ...heldList(reads.file, input.session), wide })
+}
+
+/** Takes back the grant in [reads]'s list, whoever's session it names: at each launch (delta reviews of #2310). */
+export function revokeBuddyWide(reads: BuddyReads): void {
+  let session: unknown
+  try { session = (JSON.parse(readFileSync(reads.file, 'utf8')) as { session?: unknown }).session } catch { return }
+  if (typeof session === 'string') writeList(reads.file, session, { ...heldList(reads.file, session), wide: false })
+}
+
+/** The file that names the account signed in on this machine, beside the lists; not a list, so no sweep removes it. */
+export const buddyAccountFile = (dataDir: string = env.ADAPTER_DATA_DIR): string => join(dataDir, 'buddy-reads', 'signed-in.account')
+
+/** Records the account signed in on this machine, or that none is ([accountId] null), for every Buddy's guard. */
+export function writeBuddyAccount(accountId: string | null, dataDir: string = env.ADAPTER_DATA_DIR): void {
+  const file = buddyAccountFile(dataDir)
+  if (!accountId) { rmSync(file, { force: true }); return }
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeWhole(file, { accountId })
+}
+
+/** Where a Buddy's launch keeps its launch id in its folder, and what it says there now. */
+export const buddyLaunchFile = (folder: string): string => join(folder, '.claude', 'buddy-launch')
+export function buddyLaunchOf(folder: string): string | null {
+  try { return readFileSync(buddyLaunchFile(folder), 'utf8').trim() || null } catch { return null }
 }
 
 /** Whether [text] has a line approving commands or forgetting them: the host judges it only then. */

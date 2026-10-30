@@ -762,7 +762,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     ['allowBuddyReads', (session) => allowBuddyReads(mine, { session, files: [sent], links: [] })],
     ['recordBuddyApprovals', (session) => recordBuddyApprovals({ reads: mine, session, approvals: join(parent, 'approvals', 'person.json'),
       judged: { wide: true, approve: [], refused: [], forgot: true }, messageId: 'm' })],
-    ['grantBuddyWide', (session) => grantBuddyWide(mine, { session, wide: true })],
+    ['grantBuddyWide', (session) => grantBuddyWide(mine, { session, wide: false })],
   ]
   it.each(writers)('marks the list %s writes, so its session\'s end finds it unread, holds back on it alone, and removes it', (_, write) => {
     write('harness-1')
@@ -801,11 +801,11 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     writeFileSync(elsewhere, 'untouched')
     symlinkSync(elsewhere, mark(mine.file, 'harness-1'))
     try {
-      expect(() => grantBuddyWide(mine, { session: 'harness-1', wide: true })).toThrow()
+      expect(() => grantBuddyWide(mine, { session: 'harness-1', wide: false })).toThrow()
       expect(readFileSync(elsewhere, 'utf8')).toBe('untouched')
       expect(existsSync(mine.file)).toBe(false)
     } finally { rmSync(mark(mine.file, 'harness-1')); rmSync(elsewhere) }
-    grantBuddyWide(mine, { session: 'harness-1', wide: true })
+    grantBuddyWide(mine, { session: 'harness-1', wide: false })
     grantBuddyWide(mine, { session: 'harness-1', wide: false })
     expect(lstatSync(mark(mine.file, 'harness-1')).isFile()).toBe(true)
     expect(held()).toMatchObject({ session: 'harness-1', wide: false })
@@ -813,7 +813,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
 
   it('takes the marks of other sessions away from a list a session writes', () => {
     allowBuddyReads(mine, { session: 'harness-0', files: [sent], links: [] })
-    grantBuddyWide(mine, { session: 'harness-1', wide: true })
+    grantBuddyWide(mine, { session: 'harness-1', wide: false })
     expect(existsSync(mark(mine.file, 'harness-0'))).toBe(false)
     expect(existsSync(mark(mine.file, 'harness-1'))).toBe(true)
     // The earlier session's end no longer finds the list as its own.

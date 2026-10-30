@@ -1,12 +1,12 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyGuardCommand, buddyGuardSource, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, type BuddyWide } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource, buddyLaunchFile, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, revokeBuddyWide, type BuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
 import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, type SwarmRole, type SwarmSkill, type SwarmSkillGrant, type SwarmSkillMode } from './savedSkill.js'
 
@@ -744,6 +744,12 @@ function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): voi
   mkdirSync(join(root, '.claude'), { recursive: true })
   // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
   for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
+  // Each launch starts with no grant (delta reviews of #2310): the host grants this launch, by its id, at its person's next
+  // message.
+  revokeBuddyWide(buddyReadsOf(key))
+  const launchFile = buddyLaunchFile(root)
+  if (existsSync(launchFile)) chmodSync(launchFile, 0o600)
+  if (wide) writeFileSync(launchFile, `${wide.launch}\n`, { mode: 0o600 }); else rmSync(launchFile, { force: true })
   writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide), { mode: 0o600 })
   writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide) : null), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {

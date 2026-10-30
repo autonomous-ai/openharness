@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyReadsOf, buddyWideOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1080,7 +1080,10 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     const t = setup({ conversationId: 'chat', text: `Have a look: ${LINK}?v=2`, author: person, attachments: [picture], ...message }, claim)
     t.row.agent.id = AGENT
     t.from(String(message.conversationId ?? 'chat'))
-    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key } } as never)
+    // Its folder, as its launch left it: this launch's id (lib/swarmSkills.ts).
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-launch-'))); roots.push(folder)
+    mkdirSync(join(folder, '.claude')); writeFileSync(buddyLaunchFile(folder), 'launch-1\n')
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', cwd: folder, swarmSkill: { role: 'buddy', key } } as never)
     // Its person's own Mac, signed in as them.
     vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'peer', email: 'peer@example.com' })
     const state = { agents: read.agents ?? [buddyAgent], conversations: read.conversations ?? [buddyChat] }
@@ -1109,7 +1112,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     const { host, shot, delivered } = buddyOn()
     await host.tick()
     const stat = lstatSync(shot, { bigint: true })
-    const list = { version: 1, session: 'harness', wide: true,
+    const list = { version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) },
       files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3', sha256: sha256('png'), at: expect.any(Number) }],
       links: [{ url: LINK, at: expect.any(Number) }] }
     expect(delivered).toHaveLength(1)
@@ -1213,7 +1216,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     await host.tick()
     expect(delivered).toHaveLength(1)
     expect(reads).toHaveLength(1)
-    expect(listed()).toEqual({ version: 1, session: 'harness', wide: true, files: [], links: [] })
+    expect(listed()).toEqual({ version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) }, files: [], links: [] })
   })
 
   it.each([
@@ -1222,7 +1225,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   ])('keeps it to its folder with %s, and takes back a grant given before', async (_, identity) => {
     const first = buddyOn({ text: 'Hello', attachments: [] })
     await first.host.tick()
-    expect(listed()).toMatchObject({ wide: true })
+    expect(listed()).toMatchObject({ wide: { account: 'peer', launch: 'launch-1' } })
     const second = buddyOn({ text: 'Hello again', attachments: [], id: 'message-2' })
     vi.mocked(second.t.core.account.identity).mockResolvedValue(identity)
     await second.host.tick()
@@ -1271,8 +1274,9 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     function folderWith(wide: boolean, guard?: string) {
       const folder = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-folder-'))); roots.push(folder)
       mkdirSync(join(folder, '.claude'))
+      if (wide) writeFileSync(buddyLaunchFile(folder), 'launch-1\n')
       writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), guard ?? buddyGuardSource(folder, buddyReadsOf(key),
-        wide ? buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: ['autonomous-ai/openharness'] }) : null))
+        wide ? buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: ['autonomous-ai/openharness'], launch: 'launch-1' }) : null))
       return folder
     }
     function approving(message: Record<string, unknown>, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {},
@@ -1336,13 +1340,32 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       expect(delivered[0]!.text).toContain('Your owner sent run: lines, but wider reads are off for you on this computer, so nothing was approved.')
     })
 
+    // Delta reviews of #2310: a delivery tried again must not add time to an approval.
+    it('dates each approval by when its person sent the message, not when it was delivered', async () => {
+      const sent = Date.now() - 10 * 24 * 60 * 60 * 1000
+      const { host, delivered } = approving({ text: 'run: argocd app list', createdAt: new Date(sent).toISOString() })
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      expect((JSON.parse(readFileSync(approvals, 'utf8')).entries as { at: number }[])[0]!.at).toBe(sent)
+    })
+
+    it('grants this launch only: a folder whose launch left no id gets no grant, and its run: lines approve nothing', async () => {
+      const folder = folderWith(true)
+      rmSync(buddyLaunchFile(folder))
+      const { host, delivered } = approving({ text: 'run: argocd app list' }, {}, {}, folder)
+      await host.tick()
+      expect(recorded()).toEqual([])
+      expect(listed()).toMatchObject({ wide: false })
+      expect(delivered[0]!.text).toContain('wider reads are off for you on this computer')
+    })
+
     it('delivers nothing while its guard cannot judge the lines, and records and delivers once it can', async () => {
       const folder = folderWith(true, 'process.exit(3)\n')
       const { t, host, delivered } = approving({ text: 'run: argocd app list' }, {}, {}, folder)
       await host.tick()
       expect([delivered, recorded()]).toEqual([[], []])
       writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), buddyGuardSource(folder, buddyReadsOf(key),
-        buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: [] })))
+        buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: [], launch: 'launch-1' })))
       t.wait(1_000)
       await host.tick()
       expect(delivered).toHaveLength(1)
@@ -3109,5 +3132,27 @@ describe('Swarm changes the server pushes', () => {
     const quiet = feedReads(t)
     await seconds(t, host, 3)
     expect(feedReads(t)).toBe(quiet + 3)
+  })
+})
+
+// Delta reviews of #2310: a grant holds only for the account signed in here now. Each sign-in or sign-out restarts the
+// daemon, so the host's start says which account it is, and none until it knows.
+describe('the account a Buddy\'s grant holds for', () => {
+  const account = () => existsSync(buddyAccountFile()) ? JSON.parse(readFileSync(buddyAccountFile(), 'utf8')).accountId : null
+  it('is the one signed in here, written at the host\'s start, and none while nobody is', async () => {
+    const t = setup()
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'peer', email: 'peer@example.com' })
+    const host = t.open()
+    host.start()
+    await vi.waitFor(() => expect(account()).toBe('peer'))
+    host.stop()
+    const signedOut = setup()
+    vi.mocked(signedOut.core.account.identity).mockResolvedValue(null)
+    const next = signedOut.open()
+    next.start()
+    expect(account()).toBeNull()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(account()).toBeNull()
+    next.stop()
   })
 })

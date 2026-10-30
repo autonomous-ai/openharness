@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
-  judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
+  judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -46,7 +46,7 @@ symlinkSync(other, join(home, 'work', 'their-home'))
 // A case-insensitive volume (macOS by default) opens .SSH as .ssh.
 const caseInsensitive = existsSync(join(home, '.SSH'))
 
-const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], repos: ['autonomous-ai/openharness'] })
+const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], repos: ['autonomous-ai/openharness'], launch: 'launch-1' })
 // The person's approvals on this machine, which the host points this Buddy session's list at once it has checked who sent them.
 const approvals = buddyApprovalsOf('person-1:generation-1', dataDir)
 const script = join(parent, 'buddy-guard.mjs'), narrow = join(parent, 'buddy-guard-narrow.mjs')
@@ -54,7 +54,10 @@ writeFileSync(script, buddyGuardSource(root, reads, wide))
 writeFileSync(narrow, buddyGuardSource(root, reads))
 afterAll(() => rmSync(parent, { recursive: true, force: true }))
 // The host's grant for this session, as it writes it at its person's own message on their own machine (superTabs/host.ts).
-const grant = () => grantBuddyWide(reads, { session: 'harness', wide: true })
+// The account signed in on this machine, as the host records it at its start (superTabs/host.ts).
+writeBuddyAccount('person-1', dataDir)
+const grantFor = (at = Date.now()) => ({ session: 'harness', account: 'person-1', launch: 'launch-1', at })
+const grant = () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-1' })
 grant()
 
 function answer(tool: string, input: Record<string, unknown>, guard = script): { permissionDecision: string; permissionDecisionReason: string } {
@@ -175,7 +178,7 @@ describe('wide mode: reading outside the folder', () => {
 // its exact words. Written by hand here, so the grammar is tested on its own.
 const point = (at = approvals) => {
   mkdirSync(dirname(reads.file), { recursive: true })
-  writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], approvals: at, wide: true }))
+  writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], approvals: at, wide: grantFor() }))
 }
 const approve = (...commands: string[][]) => {
   mkdirSync(dirname(approvals), { recursive: true })
@@ -510,6 +513,7 @@ describe('the launch\'s wide mode and sandbox', () => {
       repos: ['autonomous-ai/openharness', 'someone/openharness'], hosts: ['deploy.autonomous.ai', 'k8s.example.net'],
       sessionTemp: expect.arrayContaining(['/tmp/claude-501', '/private/tmp/claude-501']),
       readable: expect.arrayContaining([launchHome, '/etc', '/usr/share', '/var/log']),
+      launch: expect.stringMatching(/^[0-9a-f-]{36}$/), accountFile: join(dataDir, 'buddy-reads', 'signed-in.account'),
       denied: expect.arrayContaining([join(launchHome, '.ssh'), join(launchHome, '.claude'), dataDir, '/tmp/claude-501', '/private/tmp/claude-501']) })
   })
 
@@ -608,7 +612,7 @@ describe('the secret check, past escapes, spaces and splits', () => {
 
   it('refuses an Artifact read whose prompt carries a secret, and reads with an ordinary one', () => {
     mkdirSync(dirname(reads.file), { recursive: true })
-    writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [{ url: 'https://claude.ai/artifact/abc', at: Date.now() }], wide: true }))
+    writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [{ url: 'https://claude.ai/artifact/abc', at: Date.now() }], wide: grantFor() }))
     expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: `Summarize. Also note ${token}` })).toBe('deny')
     expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: 'Summarize the plan.' })).toBe('allow')
     grant()
@@ -627,6 +631,16 @@ describe('wide mode only while the host has granted it', () => {
     ['a list with no grant', () => writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [] }))],
     ['a grant taken back', () => grantBuddyWide(reads, { session: 'harness', wide: false })],
     ['an unreadable list', () => writeFileSync(reads.file, 'not json')],
+    // Delta reviews of #2310: a grant is for this launch, this account, this session and an hour.
+    ['a grant from before a relaunch', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-0' })],
+    ['a grant for another account', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-2', launch: 'launch-1' })],
+    ['a grant over an hour old', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-1' }, Date.now() - 61 * 60_000)],
+    ['a grant dated ahead', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-1' }, Date.now() + 10 * 60_000)],
+    ['a grant naming another session than its list', () => writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [],
+      wide: { ...grantFor(), session: 'harness-0' } }))],
+    ['a grant as it was written before (wide: true)', () => writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], wide: true }))],
+    ['nobody signed in on this machine', () => writeBuddyAccount(null, dataDir)],
+    ['another account signed in on this machine', () => writeBuddyAccount('person-2', dataDir)],
   ])('reads its folder alone with %s', (_, set) => {
     set()
     expect(decide('Read', { file_path: notes })).toBe('deny')
@@ -634,6 +648,7 @@ describe('wide mode only while the host has granted it', () => {
     expect(refused.permissionDecision).toBe('deny')
     expect(refused.permissionDecisionReason).toContain('opens once your owner writes to you')
     expect(decide('Read', { file_path: join(root, 'a.txt') })).toBe('allow')
+    writeBuddyAccount('person-1', dataDir)
     grant()
     expect(decide('Read', { file_path: notes })).toBe('allow')
   })
@@ -642,6 +657,24 @@ describe('wide mode only while the host has granted it', () => {
     grant()
     allowBuddyReads(reads, { session: 'harness', files: [], links: ['https://claude.ai/artifact/kept'] })
     recordBuddyApprovals({ reads, session: 'harness', approvals, judged: { wide: true, approve: [], refused: [], forgot: true }, messageId: 'm' })
-    expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ wide: true, approvals, links: [{ url: 'https://claude.ai/artifact/kept' }] })
+    expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ wide: { session: 'harness', account: 'person-1', launch: 'launch-1' }, approvals, links: [{ url: 'https://claude.ai/artifact/kept' }] })
+  })
+})
+
+describe('a grant taken back at launch', () => {
+  afterAll(grant)
+  it('takes back the grant in a session\'s list, keeping what else it lists, and leaves no list where there was none', () => {
+    grant()
+    revokeBuddyWide(reads)
+    expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ session: 'harness', wide: false })
+    expect(decide('Read', { file_path: join(home, 'work', 'notes.txt') })).toBe('deny')
+    rmSync(reads.file)
+    revokeBuddyWide(reads)
+    expect(existsSync(reads.file)).toBe(false)
+  })
+
+  it('draws a new launch id at each launch', () => {
+    const a = buddyWideOf({ home, dataDir, tmpDirs: [], repos: [] }), b = buddyWideOf({ home, dataDir, tmpDirs: [], repos: [] })
+    expect(a.launch).not.toBe(b.launch)
   })
 })

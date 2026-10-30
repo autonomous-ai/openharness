@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PERMISSION_MODES } from './engineLaunch.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
-import { buddyApprovalsOf, buddyLaunchWide, buddyReadsOf, grantBuddyWide, judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
+import { buddyAccountFile, buddyApprovalsOf, buddyLaunchOf, buddyLaunchWide, buddyReadsOf, grantBuddyWide, judgeBuddyApprovals, recordBuddyApprovals,
+  writeBuddyAccount } from './buddyGuard.js'
 import { fakeModel, type Call } from '../testing/fakeClaudeModel.js'
 
 /**
@@ -84,7 +85,7 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
     writeFileSync(join(root, 'pr.txt'), `${PLANTED}\n`)
     writeFileSync(join(root, 'config', '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, customApiKeyResponses: { approved: [API_KEY.slice(-20)], rejected: [] } }))
   })
-  afterAll(() => { rmSync(root, { recursive: true, force: true }); rmSync(buddyApprovalsOf('peer:g'), { force: true }); rmSync(buddyReadsOf(key).file, { force: true }) })
+  afterAll(() => { rmSync(root, { recursive: true, force: true }); rmSync(buddyAccountFile(), { force: true }); rmSync(buddyApprovalsOf('peer:g'), { force: true }); rmSync(buddyReadsOf(key).file, { force: true }) })
 
   describe('an instruction planted in a pull request', () => {
     const calls = {
@@ -111,7 +112,8 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
       calls.readNotes.input.file_path = join(home, 'notes.txt')
       // Its person wrote to it on their own Mac, signed in as them, and approved one read there, as the host records both
       // (superTabs/host.ts).
-      grantBuddyWide(buddyReadsOf(key), { session: 'harness', wide: true })
+      writeBuddyAccount('peer')
+      grantBuddyWide(buddyReadsOf(key), { session: 'harness', wide: true, account: 'peer', launch: buddyLaunchOf(folder)! })
       const judged = judgeBuddyApprovals({ node: process.execPath, guard: join(folder, '.claude', 'buddy-guard.mjs'), text: 'run: argocd app list' })
       expect(judged.approve.map((entry) => entry.command)).toEqual(['argocd app list'])
       recordBuddyApprovals({ reads: buddyReadsOf(key), session: 'harness', approvals: buddyApprovalsOf('peer:g'), judged, messageId: 'm' })

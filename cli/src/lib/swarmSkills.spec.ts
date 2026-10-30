@@ -8,7 +8,7 @@ import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwar
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { buddyGuardCommand, buddyGuardSource, buddyReadsOf, buddySandboxSettings, buddyWideOf } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource, buddyLaunchOf, buddyReadsOf, buddySandboxSettings, buddyWideOf, grantBuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
 import { hookArgv } from '../engines/kit/notifyHooks.js'
@@ -782,6 +782,18 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     expect(settings.sandbox).toEqual(buddySandboxSettings(root, wide))
     expect(settings.permissions).toEqual({ defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] })
     expect(readFileSync(join(root, '.claude', 'buddy-guard.mjs'), 'utf8')).toBe(buddyGuardSource(root, buddyReadsOf('session'), wide))
+    // This launch's id, for the host to grant this launch alone, read-only like the rest of the folder (delta reviews of #2310).
+    expect(buddyLaunchOf(root)).toBe(wide.launch)
+    expect(statSync(join(root, '.claude', 'buddy-launch')).mode & 0o222).toBe(0)
+  })
+
+  it('takes back at each launch the grant a session had before it', () => {
+    const workspace = fixture()
+    const reads = buddyReadsOf('relaunched')
+    grantBuddyWide(reads, { session: 'harness', wide: true, account: 'peer', launch: 'before' })
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'relaunched' }, folderOnly)
+    expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ session: 'harness', wide: false })
+    expect(buddyLaunchOf(realpathSync(workspace))).toBeNull()
   })
 
   it('writes no sandbox for a Buddy that reads its folder alone', () => {
