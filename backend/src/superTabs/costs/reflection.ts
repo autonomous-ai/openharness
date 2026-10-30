@@ -55,8 +55,9 @@ export interface ReflectionInput {
   truncated: boolean
   /** Titles of proposals the owner answered in the last REASK_DAYS days: not proposed again until then. */
   decided?: readonly string[]
-  /** Proposals the owner approved, with the local date: listed every night and never proposed again. */
-  approved?: ReadonlyArray<{ title: string; on: string }>
+  /** Proposals approved in the last APPROVED_DAYS days, with the local date and who decided: the owner, or the PM when the
+   *  owner left it to the PM. Listed every night, and not proposed again while listed. */
+  approved?: readonly Approved[]
   /** The project's routing rules: a change one already makes is not proposed. */
   rules?: ReadonlyArray<SwarmRule['rule']>
 }
@@ -77,6 +78,21 @@ export interface Reflection {
 }
 /** Days an answered proposal is not proposed again. */
 export const REASK_DAYS = 14
+/** Days an approved proposal is listed and reminded each night; after that it may be proposed again (Lead's ruling). */
+export const APPROVED_DAYS = 30
+export interface Approved { title: string; on: string; by: 'owner' | 'pm' }
+/** The zone of a project that set no digest: the owner's time zone is stored nowhere; the digest's is the one a project sets. */
+export const DEFAULT_TIME_ZONE = 'Asia/Ho_Chi_Minh'
+/** The local date of [at] in [timeZone], or in the default zone for none or one this runtime does not know. */
+export function localDate(at: number, timeZone: string = DEFAULT_TIME_ZONE): string {
+  const format = (zone: string) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at)
+  try { return format(timeZone) } catch { return format(DEFAULT_TIME_ZONE) }
+}
+const decidedBy = (a: Approved) => `${a.by === 'pm' ? 'PM decided' : 'approved'} ${a.on}`
+/** The Lead's nightly reminder of what was approved: it routes this way until routing does it by itself. */
+export const approvedReminder = (approved: readonly Approved[]): string =>
+  ['Approved routing changes: route this way until routing does it by itself. This reminder repeats each night for 30 days after each approval.',
+    ...approved.map(a => `- ${a.title} (${decidedBy(a)})`)].join('\n')
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const usd = (n: number) => `$${n.toFixed(2)}`
@@ -222,8 +238,8 @@ export function routingReflection(input: ReflectionInput): Reflection | null {
     ...table.slice(0, MAX_LINES).map(line),
     ...table.length > MAX_LINES ? [`- and ${table.length - MAX_LINES} more`] : [],
     waste(input, grid, week.totals.stepUps),
-    ...approved.length ? ['Approved by the project owner: the Lead routes this way, and this list repeats every night until routing does it by itself:',
-      ...approved.map(a => `- ${a.title} (approved ${a.on})`)] : [],
+    ...approved.length ? ['Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
+      ...approved.map(a => `- ${a.title} (${decidedBy(a)})`)] : [],
     ...proposed.length ? ['Proposed changes (advice: no rule or setting changes by itself):',
       ...proposed.map((p, i) => { const n = note(p); return `${i + 1}. ${p.title}: ${p.saving}. ${p.why}${n ? ` ${n}` : ''}` })]
       : ['No change proposed.'],
@@ -239,11 +255,12 @@ export const reflectionMessageId = (tabId: string, projectId: string, on: string
 export const APPROVE = 0
 /** A proposal asked of the project owner as a decision. The question starts with the proposal's title, so a proposal waiting
  *  for an answer, answered lately or approved is told by it (proposalTitle). It says plainly what Yes does: nothing changes
- *  by itself; the Lead routes this way and every night's report lists it until routing applies it (review of #2276). */
+ *  by itself; the Lead is reminded each night and routes this way (reviews of #2276). */
 export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}? Expected saving: ${p.saving}. ${p.why}`,
-  options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+  options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
+    'Not yet: ask again when there is more evidence'],
   recommended: p.strong ? APPROVE : 2,
-  unblocks: `If you say yes, the Lead routes ${p.change.taskKind} work this way, and every nightly report lists it as approved until routing `
-    + 'applies it by itself. No rule or setting changes.' })
+  unblocks: `If you say yes, the Lead is reminded each night for ${APPROVED_DAYS} days and routes ${p.change.taskKind} work this way. `
+    + 'No rule or setting changes.' })
 /** The proposal a decision asked, by the title its question starts with. */
 export const proposalTitle = (question: string): string => question.slice(0, Math.max(0, question.indexOf('?')))

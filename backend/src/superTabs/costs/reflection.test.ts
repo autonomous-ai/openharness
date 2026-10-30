@@ -3,7 +3,7 @@ import type { Conversation } from '../model.js'
 import type { ModelKindEvidence } from '../evidence/store.js'
 import type { RouteRun } from './attempts.js'
 import type { CostRow } from './read.js'
-import { proposalQuestion, proposalTitle, routingReflection, wilson, type FailedStart, type ReflectionInput } from './reflection.js'
+import { approvedReminder, localDate, proposalQuestion, proposalTitle, routingReflection, wilson, type FailedStart, type ReflectionInput } from './reflection.js'
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR
 const NOW = 10 * DAY
@@ -99,9 +99,9 @@ describe('the nightly routing reflection', () => {
   it('asks plainly what a Yes does, and recommends Yes only on strong evidence, else Not yet', () => {
     const [ui] = routingReflection(seededWeek())!.proposals
     expect(proposalQuestion(ui!)).toEqual({ question: `${UI}? Expected saving: ${ui!.saving}. ${ui!.why}`,
-      options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
-      recommended: 2, unblocks: 'If you say yes, the Lead routes ui work this way, and every nightly report lists it as approved until routing '
-        + 'applies it by itself. No rule or setting changes.' })
+      options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
+        'Not yet: ask again when there is more evidence'],
+      recommended: 2, unblocks: 'If you say yes, the Lead is reminded each night for 30 days and routes ui work this way. No rule or setting changes.' })
     expect(proposalTitle(proposalQuestion(ui!).question)).toBe(UI)
     // Ten first reviews on each side: strong enough to recommend Yes, with no small-sample warning.
     const week = seededWeek()
@@ -132,14 +132,25 @@ describe('the nightly routing reflection', () => {
     const week = seededWeek()
     more(week, 'test', 'codex', 'gpt-6.1-sol', 'xhigh', 7, false)
     expect(routingReflection({ ...week, decided: ['Stop routing test work to codex gpt-6.1-sol xhigh'] })!.proposals.map(p => p.title)).toEqual([UI, PARSER, DOCS])
-    const approved = routingReflection({ ...week, approved: [{ title: UI, on: '2026-10-28' }] })!
-    expect(approved.proposals.map(p => p.title)).toEqual(['Stop routing test work to codex gpt-6.1-sol xhigh', PARSER, DOCS])
+    const approved = routingReflection({ ...week, approved: [{ title: UI, on: '2026-10-28', by: 'owner' }, { title: DOCS, on: '2026-10-29', by: 'pm' }] })!
+    expect(approved.proposals.map(p => p.title)).toEqual(['Stop routing test work to codex gpt-6.1-sol xhigh', PARSER])
     expect(approved.text.split('\n')).toEqual(expect.arrayContaining([
-      'Approved by the project owner: the Lead routes this way, and this list repeats every night until routing does it by itself:',
-      `- ${UI} (approved 2026-10-28)`]))
+      'Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
+      `- ${UI} (approved 2026-10-28)`,
+      // Left to the PM by the owner: never shown as the owner's own approval (delta review of #2276).
+      `- ${DOCS} (PM decided 2026-10-29)`]))
+    expect(approvedReminder([{ title: UI, on: '2026-10-28', by: 'owner' }])).toBe('Approved routing changes: route this way until routing does it '
+      + `by itself. This reminder repeats each night for 30 days after each approval.\n- ${UI} (approved 2026-10-28)`)
     // A project rule forbidding the model, or no grid first, already makes the change.
     expect(routingReflection({ ...seededWeek(), rules: [{ kind: 'forbidModel', engine: 'codex', model: 'gpt-6.1-sol' }] })!.proposals.map(p => p.title)).toEqual([PARSER, DOCS])
     expect(routingReflection({ ...seededWeek(), rules: [{ kind: 'noGridFirst' }] })!.proposals.map(p => p.title)).toEqual([UI, PARSER])
+  })
+
+  it('dates in the project\'s time zone, the default one for none or an unknown one', () => {
+    const late = Date.UTC(2026, 9, 30, 18, 0)
+    expect(localDate(late)).toBe('2026-10-31')
+    expect(localDate(late, 'Europe/Berlin')).toBe('2026-10-30')
+    expect(localDate(late, 'Mars/Olympus')).toBe('2026-10-31')
   })
 
   it('says after each proposal what happened to it', () => {

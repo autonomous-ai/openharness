@@ -171,11 +171,7 @@ export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraf
       fail('DECISIONS_FULL', `${asked} decisions you asked this person are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`)
     }
     await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
-    // An approved routing proposal (its first option, Yes: costs/reflection.ts APPROVE) stays: every night's report lists it
-    // until routing applies it.
-    // Spelled out: Prisma's NOT on Mongo kept rows with no `kind` too, every decision before it (review of #2276).
-    await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) },
-      OR: [...notReflection.OR as Prisma.SuperTabDecisionWhereInput[], { choice: { not: 0 } }] } })
+    await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) } } })
   }
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
@@ -197,10 +193,19 @@ export async function fullFor(tx: Tx, tabId: string, ask: { personId: string; as
 }
 
 /** A project's routing reflection decisions, newest first, through the project index: at most MAX_PROPOSALS are asked a
- *  night and answered ones go after the ledger's weeks, but for approved ones (store.ts postReflection). */
+ *  night, and answered ones go after the ledger's weeks (store.ts postReflection). */
 export async function reflectionDecisions(tx: Tx, tabId: string, projectId: string) {
   return tx.superTabDecision.findMany({ where: { tabId, projectId, kind: REFLECTION_DECISION },
-    select: { id: true, question: true, choice: true, answeredAt: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+    select: { id: true, question: true, choice: true, answeredAt: true, createdAt: true, delegated: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+}
+
+/** Days a routing reflection's proposal stays open unanswered: its week's numbers are stale by then (review of #2276). */
+export const REFLECTION_OPEN_DAYS = 7
+/** Removes a project's routing proposals left unanswered for REFLECTION_OPEN_DAYS, through the project index. Run on every
+ *  night the project's report is due, a report or not (delta review of #2276). */
+export async function expireReflections(tx: Tx, tabId: string, projectId: string, now: number): Promise<void> {
+  await tx.superTabDecision.deleteMany({ where: { tabId, projectId, kind: REFLECTION_DECISION,
+    createdAt: { lt: new Date(now - REFLECTION_OPEN_DAYS * 24 * 3_600_000) }, ...waiting } })
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {

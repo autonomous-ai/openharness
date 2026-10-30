@@ -105,7 +105,8 @@ async function swarm() {
       : { machineId: 'test-host', harnessId: 'h', engine: 'claude', model: 'sonnet', effort: 'medium', billing: 'subscription', startedAt: o.at, start: {},
         endedAt: o.at + HOUR, end: { 'claude-sonnet-5-5': { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } } } } })
   const reports = async (conversationId = 'lead') => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId } }))
-    .filter(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')
+    // The people's report: the Lead's own reminder of the same kind has the Lead as its recipient.
+    .filter(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection' && !m.recipientIds.length)
   return { store, tab, execute, lead, group, ship, stepUpFromGrid, seed, reports,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
@@ -140,7 +141,8 @@ describe('the nightly routing reflection', () => {
     expect(decisions).toEqual([expect.objectContaining({ personId: owner.sub, askerAgentId: f.lead, conversationId: 'lead', assignmentId: null,
       question: 'Start parser work on a subscription model instead of the grid? Expected saving: about 3 hours to ship a week. '
         + '3 of 3 parser tasks started on the grid stepped up after their grid attempt failed. Only 3 tasks.',
-      options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+      options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
+        'Not yet: ask again when there is more evidence'],
       // Three tasks are too few to recommend Yes (review of #2276).
       recommended: 2, kind: 'routing-reflection' })])
     expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('already')
@@ -152,7 +154,7 @@ describe('the nightly routing reflection', () => {
     expect((await f.store.messages(host, f.tab, 'lead', {})).messages.map(m => m.id)).toContain(report!.id)
   })
 
-  it('asks an answered proposal again only after 14 days, and lists an approved one every night, kept past the ledger weeks (review of #2276)', async () => {
+  it('asks an answered proposal again only after 14 days, and lists an approved one each night for 30 days, to people and to the Lead (reviews of #2276)', async () => {
     const f = await swarm()
     await f.ship()
     for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
@@ -175,22 +177,31 @@ describe('the nightly routing reflection', () => {
     expect(await night('2026-11-01', 2)).toContain(`${GRID_TITLE}: about 3 hours`)
     const again = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
     expect(again.map(d => proposalTitle(d.question))).toEqual([GRID_TITLE])
-    // Approved: every later night lists it, and asks nothing.
+    // Approved after midnight in Vietnam (18:10 UTC): every later night lists it under the local date, to people and to the Lead.
+    f.clock.now = NIGHT + 2 * DAY + 2 * HOUR
     await f.execute({ type: 'decision.answer', decisionId: again[0]!.id, choice: 0 })
     const approved = await night('2026-11-02', 3)
     expect(approved.split('\n')).toEqual(expect.arrayContaining([
-      'Approved by the project owner: the Lead routes this way, and this list repeats every night until routing does it by itself:',
-      `- ${GRID_TITLE} (approved 2026-11-01)`, 'No change proposed.']))
+      'Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
+      `- ${GRID_TITLE} (approved 2026-11-02)`, 'No change proposed.']))
     expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(2)
-    // Six weeks on, writing a decision removes those answered before the ledger's weeks: never the approved proposal.
-    const old = new Date(NIGHT - 42 * DAY)
-    await db.superTabDecision.updateMany({ where: { tabId: f.tab }, data: { answeredAt: old } })
-    await db.superTabDecision.create({ data: { id: randomUUID(), tabId: f.tab, batchId: 'plain', projectId: 'lead', conversationId: 'lead', personId: owner.sub,
-      askerAgentId: f.lead, question: 'Which week?', options: ['This', 'Next'], recommended: 0, unblocks: 'The plan', createdAt: old, answeredAt: old, choice: 0 } })
-    await f.execute({ type: 'decision.ask', conversationId: 'lead', personId: owner.sub, questions: [{ question: 'Ship it?', options: ['Yes', 'No'],
-      recommended: 0, unblocks: 'The release' }] }, host, f.lead)
-    expect((await db.superTabDecision.findMany({ where: { tabId: f.tab } })).map(d => d.question.split('?')[0]).sort()).toEqual(['Ship it', GRID_TITLE])
-    expect(await night('2026-11-03', 4)).toContain(`- ${GRID_TITLE} (approved`)
+    // The Lead's own reminder (delta review of #2276): to it alone, not a line people read.
+    const reminder = `Approved routing changes: route this way until routing does it by itself. This reminder repeats each night for 30 days `
+      + `after each approval.\n- ${GRID_TITLE} (approved 2026-11-02)`
+    const toLead = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead', text: reminder } }))
+    expect(toLead.map(m => m.recipientIds)).toEqual([[f.lead]])
+    expect((await f.store.messages(host, f.tab, 'lead', {})).messages.map(m => m.id)).not.toContain(toLead[0]!.id)
+    expect((await f.store.messages(host, f.tab, 'lead', {}, f.lead)).messages.map(m => m.id)).toContain(toLead[0]!.id)
+    // Thirty days on, the approval is no longer listed or reminded, and the change may be proposed again.
+    await db.superTabDecision.update({ where: { id: again[0]!.id }, data: { answeredAt: new Date(NIGHT - 28 * DAY) } })
+    const later = await night('2026-11-03', 4)
+    expect(later).not.toContain('Approved changes')
+    expect(later).toContain(`${GRID_TITLE}: about 3 hours`)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', recipientIds: { has: f.lead }, text: { startsWith: 'Approved routing' } } })).toBe(1)
+    // Left to the PM, an approval says the PM decided, never the owner.
+    const [third] = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
+    await db.superTabDecision.update({ where: { id: third!.id }, data: { choice: 0, delegated: true, answeredAt: new Date(f.clock.now) } })
+    expect(await night('2026-11-04', 5)).toContain(`- ${GRID_TITLE} (PM decided 2026-11-03)`)
   })
 
   it('keeps at most three proposals open, says when one was not asked, and lets one unanswered for 7 days expire (review of #2276)', async () => {
@@ -205,13 +216,22 @@ describe('the nightly routing reflection', () => {
     expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
     expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(3)
     expect((await f.reports()).at(-1)!.text).toContain("Only 3 tasks. Not asked: at most 3 proposals wait for the owner's answer at once.")
-    // Two days on, the three are 8 days old: they expire, and the proposal is asked.
+    // Two days on, the three are 8 days old. The owner also has 17 other open decisions from the Lead: 20 with the three, the
+    // most one asker may hold. The three expire before they are counted, so the proposal is asked (delta review of #2276).
+    await db.superTabDecision.createMany({ data: Array.from({ length: 17 }, (_, i) => ({ id: randomUUID(), tabId: f.tab, batchId: 'plain', projectId: 'lead',
+      conversationId: 'lead', personId: owner.sub, askerAgentId: f.lead, question: `Question ${i}?`, options: ['Yes', 'No'], recommended: 0, unblocks: 'x',
+      createdAt: new Date(NIGHT) })) })
     f.clock.now = NIGHT + 2 * DAY
     await f.seed(f.group, { at: f.clock.now - HOUR })
     expect(await f.store.postReflection(f.tab, 'lead', '2026-11-01')).toBe('posted')
-    expect((await db.superTabDecision.findMany({ where: { tabId: f.tab } })).map(d => proposalTitle(d.question)))
-      .toEqual(['Start parser work on a subscription model instead of the grid'])
+    const proposals = () => db.superTabDecision.findMany({ where: { tabId: f.tab, kind: 'routing-reflection' } })
+    expect((await proposals()).map(d => proposalTitle(d.question))).toEqual(['Start parser work on a subscription model instead of the grid'])
     expect((await f.reports()).at(-1)!.text).toContain('Only 3 tasks. Asked of the project owner.')
+    // Unanswered for 8 days, it expires on a night with nothing to report too.
+    f.clock.now = NIGHT + 10 * DAY
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-11-09')).toBe('empty')
+    expect(await proposals()).toEqual([])
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(17)
   })
 
   it('posts nothing for a day with no attempt, and skips a project with no routed work', async () => {

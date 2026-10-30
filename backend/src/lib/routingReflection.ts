@@ -3,6 +3,7 @@ import type { SuperTabState } from '../superTabs/model.js'
 import { projectsOf, type SwarmProject } from '../superTabs/projects.js'
 import type { SuperTabStore } from '../superTabs/store.js'
 import { weekStart } from '../superTabs/leaderboard/week.js'
+import { DEFAULT_TIME_ZONE } from '../superTabs/costs/reflection.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -20,8 +21,7 @@ import { logger } from '../utils/logger.js'
  *   a Swarm whose head read fails makes the next pass read the plan again.
  */
 export const REFLECTION_EVERY_MS = 15 * 60_000
-/** The zone of a project that set no digest: the owner's time zone is stored nowhere; the digest's is the one a project sets. */
-export const DEFAULT_TIME_ZONE = 'Asia/Ho_Chi_Minh'
+export { DEFAULT_TIME_ZONE }
 const HOUR = '23'
 /** (Swarm, project) pairs one pass reads at most: far more than projects route in two weeks. */
 export const MAX_CANDIDATES = 5000
