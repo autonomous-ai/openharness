@@ -23,13 +23,17 @@ void main() {
     expect(terminalGlyphText('A'.codeUnitAt(0)), 'A');
   });
 
-  test('private-use icons are the Nerd Font range, including the supplementary planes', () {
-    expect(isPrivateUseIcon(0xF07B), isTrue);
-    expect(isPrivateUseIcon(0xF0001), isTrue);
-    expect(isPrivateUseIcon(0x100001), isTrue);
-    expect(isPrivateUseIcon('A'.codeUnitAt(0)), isFalse);
-    expect(isPrivateUseIcon(0x2500), isFalse);
-    expect(isPrivateUseIcon(0x25CF), isFalse);
+  test('only the private-use icons the bundled face has are drawn with it', () {
+    expect(isBundledSymbol(0xF07B), isTrue);
+    expect(isBundledSymbol(0xE0B0), isTrue);
+    expect(isBundledSymbol(0xF0001), isTrue);
+    // SF Mono's Apple logo, and private-use characters the face lacks.
+    expect(isBundledSymbol(0xF8FF), isFalse);
+    expect(isBundledSymbol(0xF534), isFalse);
+    expect(isBundledSymbol(0x100001), isFalse);
+    // The face has a few non-private-use symbols too; the text face draws those.
+    expect(isBundledSymbol(0x23FB), isFalse);
+    expect(isBundledSymbol('A'.codeUnitAt(0)), isFalse);
   });
 
   test('an em-wide icon is scaled down to the text cell', () {
@@ -176,6 +180,69 @@ void main() {
       everyElement(0),
     );
   });
+
+  test(
+    'a private-use character the icon face lacks is drawn as text',
+    () async {
+      await _loadIconFace();
+      await _loadTextFace();
+      final cell = _iconCell(0xF8FF);
+      expect(
+        (await _raster(_painter(), cell, columns: 1)).map((p) => p.argb),
+        (await _raster(
+          _painter(symbols: false),
+          cell,
+          columns: 1,
+        )).map((p) => p.argb),
+      );
+    },
+  );
+
+  test(
+    'an underlined icon is underlined level with the text beside it',
+    () async {
+      await _loadIconFace();
+      await _loadTextFace();
+      final painter = _painter();
+      final text = await _underlineRows(painter, 0x20);
+      final icon = await _underlineRows(painter, 0xF07B);
+      expect(text, isNotEmpty);
+      // Where the icon's own ink lies under the line, it adds nothing there.
+      expect(icon, isNotEmpty);
+      expect(text.containsAll(icon), isTrue, reason: '$icon not in $text');
+    },
+  );
+}
+
+TerminalPainter _painter({bool symbols = true}) => TerminalPainter(
+  theme: TerminalThemes.defaultTheme,
+  textStyle: TerminalStyle(
+    fontSize: 13.0,
+    fontFamily: 'Roboto Mono',
+    fontFamilyFallback: [],
+    symbolFontFamily: symbols ? 'Symbols Nerd Font Mono' : null,
+  ),
+  textScaler: TextScaler.noScaling,
+);
+
+/// The pixel rows an underline adds to in [codePoint]'s cell.
+Future<Set<int>> _underlineRows(TerminalPainter painter, int codePoint) async {
+  final plain = await _raster(painter, _iconCell(codePoint), columns: 1);
+  final underlined = await _raster(
+    painter,
+    CellData(
+      foreground: 0,
+      background: 0,
+      flags: CellFlags.underline,
+      content: codePoint | (1 << CellContent.widthShift),
+    ),
+    columns: 1,
+  );
+  final width = painter.cellSize.width.ceil();
+  return {
+    for (var i = 0; i < plain.length; i++)
+      if (plain[i].argb != underlined[i].argb) i ~/ width,
+  };
 }
 
 CellData _iconCell(int codePoint) => CellData(

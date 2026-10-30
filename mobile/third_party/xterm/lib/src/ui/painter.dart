@@ -18,12 +18,47 @@ String terminalGlyphText(int charCode) => charCode == 0x23FA
     ? String.fromCharCode(0x25CF)
     : String.fromCharCode(charCode);
 
-/// A private-use code point: where Nerd Font icons live. Unicode assigns them
-/// no width; the grid counts each as one cell.
-bool isPrivateUseIcon(int codePoint) =>
-    (codePoint >= 0xE000 && codePoint <= 0xF8FF) ||
-    (codePoint >= 0xF0000 && codePoint <= 0xFFFFD) ||
-    (codePoint >= 0x100000 && codePoint <= 0x10FFFD);
+/// A private-use code point the bundled Symbols Nerd Font Mono 3.5.1 has an
+/// icon for. Unicode assigns them no width; the grid counts each as one cell.
+///
+/// Only these are drawn with the icon face. Any other private-use character,
+/// such as SF Mono's Apple logo at U+F8FF, stays on the text face at its size.
+bool isBundledSymbol(int codePoint) {
+  if (codePoint < 0xE000) return false;
+  for (final (first, last) in _bundledSymbolRanges) {
+    if (codePoint < first) return false;
+    if (codePoint <= last) return true;
+  }
+  return false;
+}
+
+/// The private-use ranges of the bundled Symbols Nerd Font Mono 3.5.1, read
+/// from its character map, in order.
+const _bundledSymbolRanges = <(int, int)>[
+  (0xE000, 0xE00A), // Pomicons
+  (0xE0A0, 0xE0A3), // Powerline symbols
+  (0xE0B0, 0xE0C8), // Powerline and Powerline Extra separators
+  (0xE0CA, 0xE0CA),
+  (0xE0CC, 0xE0D2),
+  (0xE0D4, 0xE0D4),
+  (0xE0D6, 0xE0D7),
+  (0xE200, 0xE2A9), // Font Awesome Extension
+  (0xE300, 0xE3E3), // Weather Icons
+  (0xE5FA, 0xE6BB), // Seti UI and custom
+  (0xE700, 0xE958), // Devicons
+  (0xEA60, 0xEA88), // Codicons
+  (0xEA8A, 0xEA8C),
+  (0xEA8F, 0xEAC7),
+  (0xEAC9, 0xEAC9),
+  (0xEACC, 0xEB09),
+  (0xEB0B, 0xEB4E),
+  (0xEB50, 0xEC5E),
+  (0xEC60, 0xEC84),
+  (0xED00, 0xEFCF), // Font Awesome
+  (0xF000, 0xF385), // Font Awesome and Font Logos
+  (0xF400, 0xF533), // Octicons
+  (0xF0001, 0xF1AF0), // Material Design Icons
+];
 
 /// Font size at which an icon whose advance is [symbolAdvance] (measured at
 /// [fontSize]) occupies [cellWidth]. Symbols Nerd Font Mono draws each icon
@@ -444,6 +479,9 @@ class TerminalPainter {
           // and stretched across the cell when painted.
           fontSize: separator ? _separatorFontSize : iconFontSize,
           height: separator ? 1.0 : null,
+          // Drawn at the text's place by [_paintIconUnderline]: the icon's own
+          // would follow its fitted size.
+          decoration: TextDecoration.none,
           // A missing icon stays on the text face rather than a blank.
           fontFamilyFallback: [
             _textStyle.fontFamily,
@@ -495,9 +533,36 @@ class TerminalPainter {
         canvas.drawParagraph(paragraph, offset.translate(dx, dy));
       }
       canvas.restore();
+      if (cellData.flags & CellFlags.underline != 0) {
+        _paintIconUnderline(canvas, offset, cellData, span);
+      }
       return;
     }
     canvas.drawParagraph(paragraph, offset);
+  }
+
+  final _underlineCellData = CellData.empty();
+
+  /// Underlines an icon's [span] cells as an underlined no-break space in the
+  /// text face would be, so the line runs on level with the text beside it.
+  void _paintIconUnderline(
+    Canvas canvas,
+    Offset offset,
+    CellData cellData,
+    int span,
+  ) {
+    _underlineCellData
+      ..foreground = cellData.foreground
+      ..background = cellData.background
+      ..flags = cellData.flags
+      ..content = 0xA0 | (1 << CellContent.widthShift);
+    for (var i = 0; i < span; i++) {
+      paintCellForeground(
+        canvas,
+        offset.translate(i * _cellSize.width, 0),
+        _underlineCellData,
+      );
+    }
   }
 
   /// The font size whose em, scaled, is the cell's height.
@@ -512,7 +577,7 @@ class TerminalPainter {
   double? _fittedSymbolFontSize;
 
   bool _symbolFace(int charCode) =>
-      _textStyle.symbolFontFamily != null && isPrivateUseIcon(charCode);
+      _textStyle.symbolFontFamily != null && isBundledSymbol(charCode);
 
   double get _symbolFontSize {
     final cached = _fittedSymbolFontSize;
