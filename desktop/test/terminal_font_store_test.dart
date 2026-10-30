@@ -181,6 +181,17 @@ void main() {
     expect(reopened.isDefault, isTrue);
   });
 
+  test('a Nerd Font draws its own icons', () async {
+    final store = TerminalFontStore(storage: _FakeStore());
+    await store.setSelection(const InstalledFontFamily('MesloLGS NF'));
+
+    expect(store.value.fontFamily, 'MesloLGS NF');
+    expect(store.value.symbolFontFamily, isNull);
+
+    await store.setSelection(const InstalledFontFamily('JetBrains Mono'));
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
+  });
+
   test(
     'the same choice is the same style object, preset or installed',
     () async {

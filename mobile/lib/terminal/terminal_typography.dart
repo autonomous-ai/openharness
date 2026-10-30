@@ -99,3 +99,14 @@ double get terminalFontSize => switch (defaultTargetPlatform) {
 /// named. This face contains only the icons, each one em wide, so the painter
 /// scales it to the cell measured from the text face.
 const terminalIconFontFamily = 'Symbols Nerd Font Mono';
+
+/// Whether [family] is a Nerd Font. Its own icons are sized for its cell, so
+/// the terminal draws them rather than [terminalIconFontFamily]'s.
+///
+/// Nerd Fonts' patcher adds `Nerd Font`, `Nerd Font Mono` or `Nerd Font Propo`
+/// to the family it patches, or `NF`, `NFM` or `NFP` where the long name is too
+/// long. Fonts that ship the icons themselves (Cascadia Code NF,
+/// powerlevel10k's MesloLGS NF, Maple Mono NF) follow the same convention.
+bool isNerdFontFamily(String family) => _nerdFontName.hasMatch(family);
+
+final _nerdFontName = RegExp(r'(?:^|\s)(?:Nerd Font|NFM?|NFP)(?:\s|$)');

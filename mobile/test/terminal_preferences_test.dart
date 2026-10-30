@@ -235,4 +235,42 @@ void main() {
     await theme.load();
     expect(theme.isDefault, isTrue);
   });
+
+  test('no preset is a Nerd Font, so each one draws the bundled icons', () {
+    for (final choice in TerminalFontChoice.values) {
+      expect(
+        isNerdFontFamily(choice.fontFamily),
+        isFalse,
+        reason: choice.label,
+      );
+    }
+  });
+
+  test('a Nerd Font is known by the suffix its patcher names it with', () {
+    for (final family in [
+      'JetBrainsMono Nerd Font',
+      'FiraCode Nerd Font Mono',
+      'Hack Nerd Font Propo',
+      'CaskaydiaCove Nerd Font',
+      'JetBrainsMono NF',
+      'JetBrainsMono NFM',
+      'JetBrainsMono NFP',
+      'MesloLGS NF',
+      'Cascadia Code NF',
+      'Maple Mono NF CN',
+    ]) {
+      expect(isNerdFontFamily(family), isTrue, reason: family);
+    }
+    for (final family in [
+      'JetBrains Mono',
+      'Cascadia Code',
+      'Menlo',
+      'Nerdy Mono',
+      'NFL Mono',
+      'Conf Mono',
+      'Mono nf',
+    ]) {
+      expect(isNerdFontFamily(family), isFalse, reason: family);
+    }
+  });
 }
