@@ -40,12 +40,15 @@ export async function buddiesHere(daemon: DaemonLike): Promise<boolean | null> {
  * Whether the harness running in [pane] is a Buddy, by this computer's launch record (service.ts `buddyCheck`, what turns its
  * guard on): the one way this guard and the CLI's usage wording (command.ts `buddyHere`) ask it (review of #2379). With the
  * command's [ancestors], a harness whose own pane, as the daemon reads it, is not among them is never asked about. A request
- * that fails is thrown, for each caller to read as it does: this guard refuses, the wording takes it for no Buddy.
+ * that fails is thrown, and a list of harnesses that does not come is `unsure`, for each caller to read as it does: this
+ * guard refuses, the wording takes it for no Buddy.
  */
 export async function paneBuddy(daemon: DaemonLike, pane: string, machineId: string, ancestors?: number[])
   : Promise<'buddy' | 'not a buddy' | 'no harness' | 'not in its pane' | 'unsure'> {
   const listed = await daemon.request('agents_list')
-  const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, machineId)
+  // An answer with no list is no answer: an error reply read as "no harness here" let a Buddy's pane go on (review of #2389).
+  if (!Array.isArray(listed.agents)) return 'unsure'
+  const caller = callerOf(listed.agents as Frame[], pane, machineId)
   if (!caller) return 'no harness'
   if (!await inDaemonPane(daemon, caller.agentId, ancestors)) return 'not in its pane'
   const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
