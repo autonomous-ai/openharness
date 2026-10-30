@@ -6,9 +6,13 @@ import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '
 import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
-  | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
+  | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean
+    /** The SSH alias the project's clone got in through (lib/projectFolder.ts `onCloned`). */
+    clonedVia?: { alias: string } }
   // `reason`: which check a refusal failed, where its code has several (a resume's RESUME_PREPARATION_FAILED).
-  | { state: 'failed'; error: string; detail?: string; reason?: string; preparedFolder?: string; existingFolder?: string }
+  | { state: 'failed'; error: string; detail?: string; reason?: string; preparedFolder?: string; existingFolder?: string
+    /** GitHub refused every way this computer had in to the repository. */
+    access?: 'denied' }
   | { state: 'unconfirmed' }
 
 export type AgentCreationStatus = AgentCreationOutcome
@@ -50,7 +54,8 @@ function validOutcome(outcome: AgentCreationOutcome | undefined): outcome is Age
     || (outcome.state === 'failed' && typeof outcome.error === 'string')
     || (outcome.state === 'created' && typeof outcome.agentId === 'string' && !!outcome.agentId
       && (outcome.level === undefined || outcome.level === 'native' || outcome.level === 'handoff')
-      && (outcome.resumed === undefined || typeof outcome.resumed === 'boolean')))
+      && (outcome.resumed === undefined || typeof outcome.resumed === 'boolean')
+      && (outcome.clonedVia === undefined || typeof outcome.clonedVia?.alias === 'string')))
 }
 
 export class AgentCreationReceiptError extends Error {

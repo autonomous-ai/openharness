@@ -14905,7 +14905,31 @@ class AppNotifier extends ChangeNotifier {
   Future<String> prepareLocalProjectFolder(
     ProjectFolderRequest request, {
     String label = 'harness',
-  }) => request.prepareLocal(label: label);
+  }) async {
+    String? via;
+    final folder = await request.prepareLocal(
+      label: label,
+      onClonedVia: (alias) => via = alias,
+    );
+    if (via case final alias?) _clonedViaFolders[folder] = alias;
+    return folder;
+  }
+
+  /// A folder this computer's own clone reached through an SSH alias, until
+  /// its creation tells the person ([_announceClonedVia]).
+  final _clonedViaFolders = <String, String>{};
+
+  /// The alias a machine's own clone went through (cli launches.ts
+  /// `clonedVia`), when it names a safe one.
+  static String? _clonedViaOf(Map<String, dynamic> result) {
+    final via = result['clonedVia'];
+    final alias = via is Map ? via['alias'] : null;
+    return alias is String && isSafeSshAlias(alias) ? alias : null;
+  }
+
+  void _announceClonedVia(String? alias) {
+    if (alias != null) agentChangeNotice?.call('Cloned via $alias');
+  }
 
   Future<String?> createAgent(
     String machineId, {
@@ -15742,6 +15766,16 @@ class AppNotifier extends ChangeNotifier {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
+        // Every way that machine has to GitHub was refused (cli launches.ts
+        // `access`): one short line, in the app's words, names the repository.
+        final denied = failure['access'] == 'denied'
+            ? GitHubRepository.parse('${choices['repositoryUrl'] ?? ''}')
+            : null;
+        if (denied != null) {
+          return creation._complete(
+            'No access to ${denied.slug} on $machineName.',
+          );
+        }
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
@@ -15768,6 +15802,10 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    _announceClonedVia(
+      _clonedViaFolders.remove(creation._preparedFolder) ??
+          _clonedViaOf(result),
+    );
     if (choices['prompt'] case final String prompt
         when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;

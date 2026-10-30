@@ -282,6 +282,31 @@ name or machine, offers nothing. A clone whose destination is already a
 checkout of the same repository (its `origin`, however git spells it) starts in
 that checkout instead of cloning; anything else there is still refused.
 
+## Pasting a path or a GitHub link
+
+The project search reads what was typed
+(docs/plans/2026-10-30-new-harness-paste-path-or-repository.md). A path, or a
+GitHub link (`github.com/…` or `git@<host>:…`), gets one action row above the
+doors, highlighted, so Enter does it. Anything else, a bare `owner/repo`
+included, filters the recent projects as before.
+
+- A path naming a folder: **Open \<path\>**. Otherwise **Browse \<folder\>/**,
+  which moves to the Open Folder prompt with the typed text. A half-typed path
+  that a recent project matches shows no Browse row: the project keeps the
+  highlight.
+- A repository link: **Clone owner/repo**, the same row the GitHub prompt shows.
+  Its detail names the SSH alias it goes through, and, on another computer,
+  that it uses that computer's GitHub access. A GitHub link that is no
+  repository is a disabled **Not a repository link**. On this computer, an
+  alias whose `ssh -G` host is not github.com is a disabled **\<alias\> isn't a
+  GitHub host**. Another computer's daemon checks its own aliases at launch.
+- While it clones the line reads **Cloning owner/repo…**. A clone refused
+  access tries the other transport, then up to three `~/.ssh/config` aliases
+  leading to github.com. It moves on only after a refusal, never after a network
+  failure or a timeout. Through an alias, the workspace says **Cloned via
+  \<alias\>** once. Refused everywhere: **No access to owner/repo on \<computer\>**,
+  with the task and choices kept.
+
 ## Regression coverage
 
 `tool/check_new_harness_coverage.mjs` requires 100% executable-line coverage of

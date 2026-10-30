@@ -24,6 +24,7 @@ import '../core/git_worktree.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
+import '../core/ssh_hosts.dart';
 import '../core/test_run.dart';
 import '../finder/finder_availability.dart';
 import '../widgets/engine_identity.dart';
@@ -1790,7 +1791,9 @@ class NewHarnessController extends ChangeNotifier {
   /// repository to clone, an agent that ran in that folder, or the Swarm's
   /// own checkout there.
   String? _remoteOf(String machineId, NewHarnessProject project) {
-    if (project.repository case final repository?) return repository.url;
+    if (project.repository case final repository?) {
+      return repository.shareableUrl;
+    }
     final folder = project.folder;
     if (folder == null) return null;
     final machine = app.stateOf(machineId);
@@ -1845,7 +1848,7 @@ class NewHarnessController extends ChangeNotifier {
   /// The GitHub repository a cloud coding agent works on: the one chosen to
   /// clone, else the chosen folder's own remote; null when neither is on GitHub.
   String? get cloudRepository {
-    final cloned = _project.repository?.url;
+    final cloned = _project.repository?.shareableUrl;
     if (cloned != null) return cloned;
     final folder = _project.folder;
     final machine = _machine;
@@ -2326,6 +2329,19 @@ class NewHarnessController extends ChangeNotifier {
   static const guestWorkspaceId = 'project:guest-workspace';
   static const guestFolderId = 'project:guest-folder:';
   static const repositoryId = 'project:repository';
+
+  /// The one action a pasted path or GitHub link gets at the top of the
+  /// project menu (docs/plans/2026-10-30-new-harness-paste-path-or-repository.md).
+  static const pasteOpenId = 'project:paste:open';
+  static const pasteBrowseId = 'project:paste:browse';
+  static const pasteInvalidId = 'project:paste:invalid';
+  static const cloneId = 'project:clone';
+  static const _pasteIds = {
+    pasteOpenId,
+    pasteBrowseId,
+    pasteInvalidId,
+    cloneId,
+  };
   static const storeId = 'agent:store';
   static const codingId = 'harness:coding';
   static const defaultModelId = 'model:subscription';
@@ -2389,37 +2405,44 @@ class NewHarnessController extends ChangeNotifier {
     }
   }
 
-  List<NewHarnessOption> _projectMenu() => asGuest
-      ? _guestPlaces()
-      : [
-          if (!_desktopChoices)
-            const NewHarnessOption(
-              id: repositoryId,
-              synthetic: true,
-              title: 'Clone Repository',
-              detail: 'Paste a GitHub repository URL',
-            ),
-          const NewHarnessOption(
-            id: existingProjectId,
-            synthetic: true,
-            title: 'Open Folder',
-            detail: 'Enter a path or browse folders',
-          ),
-          const NewHarnessOption(
-            id: newProjectId,
-            synthetic: true,
-            title: 'New Folder',
-            detail: 'Name a new folder',
-          ),
-          if (_desktopChoices)
-            const NewHarnessOption(
-              id: repositoryId,
-              synthetic: true,
-              title: 'GitHub',
-              detail: 'Clone a GitHub repository',
-            ),
-          ..._ranked(_recentProjects()),
-        ];
+  List<NewHarnessOption> _projectMenu() {
+    if (asGuest) return _guestPlaces();
+    final recent = _ranked(_recentProjects());
+    var pasted = _pasteAction();
+    // A half-typed path a recent project matches is that project: Browse
+    // would take the highlight from the answer already on screen.
+    if (pasted?.id == pasteBrowseId && recent.isNotEmpty) pasted = null;
+    return [
+      ?pasted,
+      if (!_desktopChoices)
+        const NewHarnessOption(
+          id: repositoryId,
+          synthetic: true,
+          title: 'Clone Repository',
+          detail: 'Paste a GitHub repository URL',
+        ),
+      const NewHarnessOption(
+        id: existingProjectId,
+        synthetic: true,
+        title: 'Open Folder',
+        detail: 'Enter a path or browse folders',
+      ),
+      const NewHarnessOption(
+        id: newProjectId,
+        synthetic: true,
+        title: 'New Folder',
+        detail: 'Name a new folder',
+      ),
+      if (_desktopChoices)
+        const NewHarnessOption(
+          id: repositoryId,
+          synthetic: true,
+          title: 'GitHub',
+          detail: 'Clone a GitHub repository',
+        ),
+      ...recent,
+    ];
+  }
 
   /// Takes the highlighted row as this field's answer and moves along.
   void accept([NewHarnessOption? row]) {
@@ -2461,6 +2484,12 @@ class NewHarnessController extends ChangeNotifier {
       return;
     }
     if (option?.id == browseId) return;
+    if (option?.id == pasteBrowseId) {
+      final typed = query.trim();
+      focusField(NewHarnessField.project);
+      setQuery(typed);
+      return;
+    }
     if (option == null) {
       // Return is never silent: nothing matched, so say so and how to go on.
       error = field == NewHarnessField.projectName && query.trim().isEmpty
@@ -3219,7 +3248,9 @@ class NewHarnessController extends ChangeNotifier {
         : kept >= 0
         ? kept
         : field == NewHarnessField.projectMenu
-        ? (firstProject >= 0
+        ? (options.isNotEmpty && _pasteIds.contains(options.first.id)
+              ? 0
+              : firstProject >= 0
               ? firstProject
               : options.indexWhere((option) => option.id == existingProjectId))
         : query.isEmpty && now >= 0
@@ -3772,17 +3803,124 @@ class NewHarnessController extends ChangeNotifier {
 
   List<NewHarnessOption> _repositoryOptions() {
     final repository = GitHubRepository.parse(query.trim());
-    return [
-      if (repository != null)
-        NewHarnessOption(
-          id: 'project:clone',
+    return [?(repository == null ? null : _cloneRow(repository))];
+  }
+
+  /// What a pasted path or GitHub link offers, or null for a search. A bare
+  /// `owner/repo` is a search here: `team/api` is as likely a folder name.
+  NewHarnessOption? _pasteAction() {
+    final typed = query.trim();
+    if (typed.isEmpty) return null;
+    if (_isPath(typed)) return _pathAction(typed);
+    if (!typed.contains('github.com/') &&
+        !RegExp(r'^git@[^:/\s]+:').hasMatch(typed)) {
+      return null;
+    }
+    final repository = GitHubRepository.parse(typed);
+    if (repository == null) {
+      return const NewHarnessOption(
+        id: pasteInvalidId,
+        synthetic: true,
+        title: 'Not a repository link',
+        detail: 'Use github.com/owner/repo',
+        enabled: false,
+        why: 'Use a link to a repository, like github.com/owner/repo.',
+      );
+    }
+    return _cloneRow(repository);
+  }
+
+  /// Open for a path that names a folder, else Browse, which goes on in the
+  /// Open Folder prompt with what was typed.
+  NewHarnessOption _pathAction(String typed) {
+    final full = _expand(typed);
+    final paths = _pathsFor(_machineId, full);
+    final trailing =
+        full.endsWith('/') ||
+        paths.style == p.Style.windows && full.endsWith('\\');
+    final parent = !paths.isAbsolute(full)
+        ? null
+        : trailing
+        ? paths.normalize(full)
+        : paths.dirname(full);
+    final names = parent == null ? null : _listings[parent];
+    if (parent != null && names == null) _requestListing(parent);
+    if (!trailing && names != null && names.contains(paths.basename(full))) {
+      return NewHarnessOption(
+        id: pasteOpenId,
+        synthetic: true,
+        title: 'Open ${tildePath(full)}',
+        detail: 'Folder on $machineLabel',
+        project: NewHarnessProject.folder(full, exact: true),
+        machineId: _machineId,
+      );
+    }
+    final shown = parent == null ? typed : tildePath(parent);
+    return NewHarnessOption(
+      id: pasteBrowseId,
+      synthetic: true,
+      title:
+          'Browse ${shown.endsWith(paths.separator) ? shown : '$shown${paths.separator}'}',
+      detail: 'Choose a folder on $machineLabel',
+    );
+  }
+
+  /// Reads this computer's `~/.ssh/config` for a pasted alias. A test gives
+  /// its own, so no suite reads the developer's.
+  @visibleForTesting
+  SshHosts sshHosts = SshHosts();
+
+  /// What each pasted alias stands for on this computer, '' when ssh could not
+  /// say; absent while it is being read.
+  final _aliasHosts = <String, String>{};
+
+  Future<void> _resolveAlias(String alias) async {
+    final host = await sshHosts.resolveHost(alias);
+    if (_disposed) return;
+    _aliasHosts[alias] = host ?? '';
+    if (field == NewHarnessField.projectMenu ||
+        field == NewHarnessField.projectRepository) {
+      _refresh();
+    }
+  }
+
+  /// Cloning [repository] where the harness will run, with the account it
+  /// goes through: an SSH alias, or the other computer's own GitHub access.
+  /// Another computer's aliases are its daemon's to check, at launch.
+  NewHarnessOption _cloneRow(GitHubRepository repository) {
+    final alias = repository.alias;
+    final local = _machine?.isLocalMachine == true;
+    if (local && alias != null) {
+      final host = _aliasHosts[alias];
+      if (host == null) {
+        // Offered as GitHub until ssh says otherwise: no flicker for the
+        // usual alias, and a launch checks again before it clones.
+        _aliasHosts[alias] = 'github.com';
+        unawaited(_resolveAlias(alias));
+      } else if (!isGitHubHost(host)) {
+        return NewHarnessOption(
+          id: pasteInvalidId,
           synthetic: true,
-          title: 'Clone ${repository.name}',
-          detail: location('~/harnesses/${repository.name}'),
-          project: NewHarnessProject.clone(repository),
-          machineId: _machineId,
-        ),
-    ];
+          title: "$alias isn't a GitHub host",
+          detail: 'Only GitHub repositories can be cloned here',
+          enabled: false,
+          why: '$alias does not lead to github.com on this computer.',
+        );
+      }
+    }
+    return NewHarnessOption(
+      id: cloneId,
+      synthetic: true,
+      title: 'Clone ${repository.slug}',
+      detail: [
+        if (alias != null) 'over SSH as $alias',
+        local
+            ? 'into ${location('~/harnesses/${repository.name}')}'
+            : 'on $machineLabel · uses that computer’s GitHub access',
+      ].join(' · '),
+      project: NewHarnessProject.clone(repository),
+      machineId: _machineId,
+    );
   }
 
   /// The most folders one listing offers. `node_modules` has five thousand; a
@@ -3977,7 +4115,8 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (current &&
         (field == NewHarnessField.project ||
-            field == NewHarnessField.projectName)) {
+            field == NewHarnessField.projectName ||
+            field == NewHarnessField.projectMenu)) {
       _refresh();
     }
   }
@@ -4306,7 +4445,11 @@ class NewHarnessController extends ChangeNotifier {
     busy = true;
     if (!(quiet && recheck)) {
       error = null;
-      status = recheck ? 'Checking on the harness…' : 'Starting harness…';
+      status = recheck
+          ? 'Checking on the harness…'
+          : _project.repository != null
+          ? 'Cloning ${_project.repository?.slug}…'
+          : 'Starting harness…';
       notifyListeners();
     }
     if (model != null && !recheck) {

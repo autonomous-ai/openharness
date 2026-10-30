@@ -13,7 +13,7 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
@@ -653,6 +653,36 @@ describe('agent_create with a receipt', () => {
     // Kept with the receipt: asked again, the answer is the same.
     expect(await status({ creationId: CREATION })).toStrictEqual(refused)
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('lets the person\'s own clone try every way in, says which alias worked, and calls a refusal everywhere denied', async () => {
+    const { ask, status, replies } = setup()
+    const remote = { engine: 'claude', projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app' }
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onCloned?.({ url: 'git@gh-work:acme/app.git', alias: 'gh-work' })
+      return '/projects/prepared'
+    })
+    const answer = async (payload: Record<string, unknown>) => {
+      const before = replies.length
+      await ask(payload)
+      await vi.waitFor(() => expect(replies.length).toBeGreaterThan(before))
+      return replies.at(-1)!
+    }
+    expect(await answer({ ...remote, creationId: CREATION })).toMatchObject({ state: 'created', agent: { id: 'new-agent' }, clonedVia: { alias: 'gh-work' } })
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: true })
+    expect(await status({ creationId: CREATION })).toMatchObject({ clonedVia: { alias: 'gh-work' } })
+    // A transport switch is no news: the account is the same.
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onCloned?.({ url: 'git@github.com:acme/app.git' })
+      return '/projects/prepared'
+    })
+    expect(await answer({ ...remote, creationId: `${CREATION}-plain` })).not.toHaveProperty('clonedVia')
+    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.'))
+    expect(await answer({ ...remote, creationId: `${CREATION}-denied` })).toStrictEqual({ creationId: `${CREATION}-denied`, state: 'failed',
+      failure: { code: 'CLONE_FAILED', detail: 'Could not access this repository.', access: 'denied' } })
+    // A Swarm agent's repository was cloned by its start, one address per transport and never an alias.
+    await answer({ ...remote, swarmRole: 'lead', creationId: `${CREATION}-swarm` })
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: false })
   })
 
   it('records the prepared folder of a launch that then failed, so the person can open it', async () => {

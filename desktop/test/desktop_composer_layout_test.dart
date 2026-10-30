@@ -648,7 +648,10 @@ void main() {
 
         await tester.enterText(_query, 'autonomous-ai/openharness');
         await tester.pumpAndSettle();
-        expect(find.text('Clone openharness').hitTestable(), findsOneWidget);
+        expect(
+          find.text('Clone autonomous-ai/openharness').hitTestable(),
+          findsOneWidget,
+        );
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(fixture.box.field, NewHarnessField.projectMenu);
