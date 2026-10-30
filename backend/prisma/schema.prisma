@@ -1186,6 +1186,9 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
+  /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
+  /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
+  kind           String?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])

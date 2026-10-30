@@ -415,6 +415,8 @@ export const NOTICE_READERS = {
   rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people', 'auto-review': 'people',
   'auto-archive': 'people', native: 'people',
+  // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
+  'routing-reflection': 'people',
   // No new Reviewer can start, or soon none will, tagging who can fix it (reviewCapacity.ts).
   'review-capacity': 'people',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.

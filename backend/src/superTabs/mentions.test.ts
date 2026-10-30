@@ -161,6 +161,17 @@ describe('a picked tag the text does not say', () => {
     expect(f.say(f.group, 'run `@peer`', owner, ['peer']).text).toBe('@peer run `@peer`')
   })
 
+  it('is not added again for a stored name ending in a dot that the text says', () => {
+    const f = fixture()
+    // Chosen before such names were refused (usernames.ts).
+    f.state.people.find(p => p.id === 'peer')!.username = 'peer.'
+    const sent = f.say(f.group, 'Ask @peer. today', owner, ['peer'])
+    expect(sent.text).toBe('Ask @peer. today')
+    expect(sent.mentions).toEqual(['peer'])
+    // Said only inside code, it still opens the line.
+    expect(f.say(f.group, 'run `@peer.`', owner, ['peer']).text).toBe('@peer. run `@peer.`')
+  })
+
   it('is written the same way when the command is retried', () => {
     const command = { type: 'message.send' as const, conversationId: '', text: 'Please look.', replyTo: null, recipientIds: [], mentions: ['peer'] }
     const first = fixture(), again = fixture()

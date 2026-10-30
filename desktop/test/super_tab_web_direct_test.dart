@@ -1,0 +1,342 @@
+// The web reads and writes Swarm chats straight from the backend
+// (docs/specs/2026-10-30-web-swarm-direct.md): with no machine of the
+// person's at all, the Swarm list, a project chat and the Buddy chat load and
+// send; with one connected, its socket still tells the browser what changed,
+// and the read it starts goes direct too. Native Desktop is unchanged.
+import 'dart:async';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/viewer/viewer_key_store.dart';
+import 'package:harness/viewer/viewer_services.dart';
+import 'package:harness/ws/ws_conn.dart';
+
+import 'support/buddy_fixture.dart';
+import 'support/web_swarm_backend.dart';
+import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show MemoryStore;
+
+const _tab = '0123456789abcdef01234567';
+const _buddyChat = 'buddy-owner-lead';
+
+/// One of the person's machines: records what it is asked, and answers a
+/// relayed Swarm call as its daemon would.
+class _Machine extends WsConn {
+  _Machine(String id, this.server)
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: id,
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+  final ConversationServer server;
+  final asked = <Map<String, dynamic>>[];
+
+  /// Never answers in time, as a machine on a slow link.
+  bool slow = false;
+  @override
+  bool get isReady => true;
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'super_tabs') asked.add(payload);
+    if (slow) throw WsRequestTimeout(type);
+    if (type == 'super_tabs' && payload['action'] == 'backend') {
+      return {
+        'ok': true,
+        'value': await server.request(
+          payload['method'] as String,
+          payload['path'] as String,
+          body: payload['body'] as Map<String, dynamic>?,
+        ),
+      };
+    }
+    return {};
+  }
+}
+
+Future<void> _until(bool Function() done, {String? what}) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!done()) {
+    if (DateTime.now().isAfter(deadline)) fail('timed out waiting: $what');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+void main() {
+  late ConversationServer server;
+  late WebSwarmBackend backend;
+  late Map<String, _Machine> machines;
+  late AppNotifier app;
+
+  setUp(() {
+    server = buddySwarm()..state['id'] = _tab;
+    giveBuddy(
+      server,
+      person: 'owner',
+      machineId: 'studio',
+      machineOwnerId: 'owner',
+    );
+    backend = WebSwarmBackend(server);
+    machines = {};
+    final session = AuthSession(storage: MemoryStore());
+    app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: session,
+      configStore: null,
+      // Every saved setting and Swarm view in memory: never this Mac's files.
+      paneLayoutStore: PaneLayoutStore(storage: MemoryStore()),
+      viewer: ViewerServices(
+        config: AppConfig.dev,
+        session: session,
+        keys: ViewerKeyStore(storage: MemoryStore()),
+      ),
+      connectionForTest: (id) => machines[id]!,
+    );
+    app.api = backend;
+    app.currentUser = const CurrentUserProfile(
+      id: 'owner',
+      email: 'owner@example.com',
+    );
+  });
+  tearDown(() => app.dispose());
+
+  void connectMachine(String id, {bool online = true, String? kind}) {
+    machines[id] = _Machine(id, server);
+    app.machineStates[id] =
+        MachineState(
+            Machine(
+              machineId: id,
+              authMode: MachineAuthMode.remote,
+              name: 'Studio',
+              sessionKind: kind,
+            ),
+          )
+          ..connectionStatus = online
+              ? ConnectionStatus.connected
+              : ConnectionStatus.disconnected
+          ..nodeOnline = online;
+  }
+
+  Future<SuperTabFailure> machineRefusal(String id) async {
+    try {
+      await app.superTabMachineRequest(id, {
+        'action': 'prepareContribution',
+        'tabId': _tab,
+        'scope': 'swarm',
+        'operationId': 'setup-1',
+      });
+    } on SuperTabFailure catch (failure) {
+      return failure;
+    }
+    fail('expected a SuperTabFailure');
+  }
+
+  test('with no machine at all, the Swarm list, a project chat and the Buddy '
+      'chat load and send straight from the backend', () async {
+    expect(app.machineStates, isEmpty);
+    await app.superTabs.refreshTabs();
+    expect(app.superTabs.discoveryError, isNull);
+    expect(backend.calls, contains(startsWith('GET /api/super-tabs/list')));
+
+    final c = await app.superTabs.open(_tab);
+    await c.refresh();
+    expect(c.error, isNull);
+    expect(c.snapshot, isNotNull);
+    expect(c.snapshot!.conversation(_buddyChat), isNotNull);
+
+    expect(await c.select(_buddyChat), isTrue);
+    expect(c.error, isNull);
+    c.setDraft(_buddyChat, 'Hello from the phone');
+    final sent = await c.send();
+    expect(sent, isNotNull);
+    expect(c.error, isNull);
+    expect(
+      server.messages.where((m) => m['text'] == 'Hello from the phone'),
+      hasLength(1),
+    );
+    expect(backend.calls, contains('POST /api/super-tabs/$_tab/commands'));
+  });
+
+  test('with a machine connected, nothing goes through it: its push still '
+      'starts a read, and that read is direct', () async {
+    connectMachine('studio');
+    app.superTabs.show(_tab);
+    final c = await app.superTabs.open(_tab);
+    await c.refresh();
+    expect(c.error, isNull);
+    final before = backend.calls.length;
+
+    server.append('A change on the server');
+    await app.handleEventForTest('studio', {
+      'type': 'swarm_changed',
+      'payload': {
+        'tabId': _tab,
+        'lastChangedAt': DateTime.now().millisecondsSinceEpoch,
+        'parts': ['main'],
+      },
+    });
+    await _until(
+      () => backend.calls.length > before,
+      what: 'a read after the push',
+    );
+    expect(
+      machines['studio']!.asked.where((p) => p['action'] == 'backend'),
+      isEmpty,
+    );
+  });
+
+  group('an action that needs a machine says why it cannot run', () {
+    test('the machine is offline', () async {
+      connectMachine('studio', online: false);
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_UNAVAILABLE');
+      expect(
+        failure.message,
+        'Studio is offline. Open Harness on it, then try again.',
+      );
+      expect(machines['studio']!.asked, isEmpty);
+    });
+
+    test('the machine runs a Harness Team account', () async {
+      connectMachine('studio', kind: 'team');
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_UNAVAILABLE');
+      expect(
+        failure.message,
+        'Studio runs Swarm agents for a Harness Team account, so it cannot '
+        'do this for you. Use another of your machines.',
+      );
+      expect(machines['studio']!.asked, isEmpty);
+    });
+
+    test('the machine does not answer in time', () async {
+      connectMachine('studio');
+      machines['studio']!.slow = true;
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_SLOW');
+      expect(
+        failure.message,
+        'Studio is taking too long to answer. Its connection may be slow. '
+        'Try again.',
+      );
+    });
+  });
+
+  group('privacy and recovery through the direct path', () {
+    test('access lost while a chat is open clears what it showed', () async {
+      server.append('Private plan');
+      final c = await app.superTabs.open(_tab);
+      await c.refresh();
+      expect(await c.select('lead'), isTrue);
+      await c.loadMessages('lead');
+      expect(c.messages('lead').map((m) => m.text), contains('Private plan'));
+
+      backend.forbidden = true;
+      await c.refresh();
+      expect(c.accessRevoked, isTrue);
+      expect(c.snapshot, isNull);
+      expect(c.messages('lead'), isEmpty);
+    });
+
+    test('an answer that lands after the account changed is dropped', () async {
+      final c = await app.superTabs.open(_tab);
+      await c.refresh();
+      backend.hold = Completer<void>();
+      final late = app.superTabs.request('GET', '/api/super-tabs/$_tab/parts');
+      app.currentUser = const CurrentUserProfile(
+        id: 'someone-else',
+        email: 'else@example.com',
+      );
+      backend.hold!.complete();
+      await expectLater(
+        late,
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (f) => f.code,
+            'code',
+            'ACCOUNT_CHANGED',
+          ),
+        ),
+      );
+      expect(app.superTabs.peek(_tab), isNull);
+    });
+
+    test('signed out, nothing is asked of the backend', () async {
+      app.currentUser = null;
+      final before = backend.calls.length;
+      await expectLater(
+        app.superTabs.request('GET', '/api/super-tabs/list'),
+        throwsA(
+          isA<SuperTabFailure>().having((f) => f.code, 'code', 'SIGNED_OUT'),
+        ),
+      );
+      expect(backend.calls, hasLength(before));
+    });
+
+    test(
+      'a first load with no connection says so, then recovers and sends',
+      () async {
+        backend.down = true;
+        final c = await app.superTabs.open(_tab);
+        await c.refresh();
+        expect(c.loading, isFalse);
+        expect(c.snapshot, isNull);
+        expect(c.error, 'Could not reach Harness. Check your connection.');
+
+        backend.down = false;
+        await c.refresh();
+        expect(c.error, isNull);
+        expect(c.snapshot, isNotNull);
+        expect(await c.select('lead'), isTrue);
+        c.setDraft('lead', 'Back online');
+        expect(await c.send(), isNotNull);
+        expect(
+          server.messages.where((m) => m['text'] == 'Back online'),
+          hasLength(1),
+        );
+      },
+    );
+  });
+
+  test('a project the backend is too old to create says to update it, and '
+      'nothing about its schema', () async {
+    server
+      ..refuse = {
+        'code': 'VALIDATION_ERROR',
+        'message': 'command.type: Invalid discriminator value. Expected machine.contribute',
+      }
+      ..refuseStatus = 400;
+    await expectLater(
+      app.superTabs.request(
+        'POST',
+        '/api/super-tabs/$_tab/commands',
+        body: {
+          'operationId': 'op-project',
+          'command': {'type': 'project.create', 'name': 'Web'},
+        },
+      ),
+      throwsA(
+        isA<SuperTabFailure>()
+            .having((f) => f.code, 'code', 'UPDATE_REQUIRED')
+            .having(
+              (f) => f.message,
+              'message',
+              'The Swarm service needs an update before you can create a '
+                  'project. Your draft is saved.',
+            ),
+      ),
+    );
+  });
+}

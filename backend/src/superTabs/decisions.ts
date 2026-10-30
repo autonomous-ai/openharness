@@ -27,9 +27,16 @@ export const decisionChoices = z.object({ options: z.array(line(200)).min(2).max
 export const decisionQuestion = decisionChoices.extend({ question: line(1000) }).strict()
 type Question = z.infer<typeof decisionQuestion>
 
+/** The kind of a decision the nightly routing reflection asks (costs/reflection.ts): about the project's routing, so its
+ *  owner's Buddy never reads it, and an approved one stays until routing applies it (review of #2276). */
+export const REFLECTION_DECISION = 'routing-reflection'
+/** Not a routing reflection's: rows written before `kind` have none. */
+const notReflection: Prisma.SuperTabDecisionWhereInput = { OR: [{ kind: { isSet: false } }, { kind: null }, { kind: { not: REFLECTION_DECISION } }] }
+
 /** A decision as asked, written by the store. */
 export interface DecisionDraft extends Question {
   id: string; batchId: string; conversationId: string; projectId: string; personId: string; askerAgentId: string; assignmentId: string | null
+  kind?: typeof REFLECTION_DECISION
 }
 /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
 export interface DecisionTarget {
@@ -38,13 +45,14 @@ export interface DecisionTarget {
   recommended: number; answeredAt: number | null
   /** When it was asked, and the task whose needs_human asked it: the leaderboard credits the answer (leaderboard/record.ts). */
   createdAt: number; assignmentId: string | null
+  kind?: string | null
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 export interface DecisionAnswer { id: string; choice: number; note: string | null; delegated?: true }
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
 export function askDecisions(state: SuperTabState, group: Conversation, personId: string, questions: Question[],
-  from: { operationId: string; askerAgentId: string; assignmentId: string | null }): DecisionDraft[] {
+  from: { operationId: string; askerAgentId: string; assignmentId: string | null; kind?: typeof REFLECTION_DECISION }): DecisionDraft[] {
   const asked = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Ask a person in this Swarm.', 400)
   if (!canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) {
     fail('INVALID_PERSON', `${asked.email} cannot read this conversation.`, 400)
@@ -52,7 +60,7 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
   for (const q of questions) if (q.recommended >= q.options.length) fail('INVALID_DECISION', 'A question must recommend one of its options.', 400)
   const projectId = groupProject(state, group).id
   return questions.map((q, index) => ({ ...q, id: stableId(from.operationId, 'decision', String(index)), batchId: from.operationId,
-    conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId }))
+    conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId, ...from.kind ? { kind: from.kind } : {} }))
 }
 
 /** Only the project's Lead asks with `decision.ask`, in its own project's conversations (a worker asks through needs_human). */
@@ -109,7 +117,8 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   const notice = given.delegate ? closed ? CLOSED_CHAT_DELEGATED_NOTICE : DELEGATED_NOTICE : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
-  const line = given.delegate && lead ? delegatedLine(state, project.id, lead, asked, choice) : null
+  // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
+  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, choice) : null
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
@@ -183,10 +192,26 @@ export async function fullFor(tx: Tx, tabId: string, ask: { personId: string; as
   return asked < MAX_OPEN_DECISIONS ? null : asked
 }
 
+/** A project's routing reflection decisions, newest first, through the project index: at most MAX_PROPOSALS are asked a
+ *  night, and answered ones go after the ledger's weeks (store.ts postReflection). */
+export async function reflectionDecisions(tx: Tx, tabId: string, projectId: string) {
+  return tx.superTabDecision.findMany({ where: { tabId, projectId, kind: REFLECTION_DECISION },
+    select: { id: true, question: true, choice: true, answeredAt: true, createdAt: true, delegated: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+}
+
+/** Days a routing reflection's proposal stays open unanswered: its week's numbers are stale by then (review of #2276). */
+export const REFLECTION_OPEN_DAYS = 7
+/** Removes a project's routing proposals left unanswered for REFLECTION_OPEN_DAYS, through the project index. Run on every
+ *  night the project's report is due, a report or not (delta review of #2276). */
+export async function expireReflections(tx: Tx, tabId: string, projectId: string, now: number): Promise<void> {
+  await tx.superTabDecision.deleteMany({ where: { tabId, projectId, kind: REFLECTION_DECISION,
+    createdAt: { lt: new Date(now - REFLECTION_OPEN_DAYS * 24 * 3_600_000) }, ...waiting } })
+}
+
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, createdAt: true, assignmentId: true } })
+      answeredAt: true, createdAt: true, assignmentId: true, kind: true } })
   return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null } : undefined
 }
 
@@ -204,7 +229,8 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   // A Buddy reads its person's own decisions in its project, by the person's index; each one's conversation is still
   // checked as the Buddy reads it (readableIn), so none in a private chat or after its person left (buddies.ts).
   const buddy = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
-  if (buddy) return { personId: buddy.buddyOf!.personId, projectId: agentProjectId(state, buddy) }
+  // Never a routing reflection's: those are about the project's routing, for its people (review of #2276).
+  if (buddy) return { personId: buddy.buddyOf!.personId, projectId: agentProjectId(state, buddy), AND: [notReflection] }
   const led = ledProject(state, actor.agentId)
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
