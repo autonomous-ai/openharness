@@ -3,6 +3,7 @@ import type { ContributedMachine } from './machines.js'
 import { createSuperTab, type Conversation, type SuperTabState } from './model.js'
 import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { RELAYED_QUOTA, reviewCapacityNotice } from './reviewCapacity.js'
+import { reviewRefusal } from './rules.js'
 
 // Overnight 2026-10-30, 12 pull requests waited hours for a review: every Codex Reviewer was out of weekly quota, a Claude
 // Reviewer may not check a Claude build, and nobody was told until people noticed in the morning (Tony: "don't let the
@@ -52,7 +53,7 @@ describe('the notice that new Reviewers cannot start', () => {
     // Claude Opus can still start on these machines, so reviews fall back to it (rules.ts judgeReview).
     expect(first!.text).toBe('Reviews of Claude Code builds fall back to Claude Code at its top tier: Codex is unavailable on every machine this project may use '
       + '(Mac Studio: out of quota; MacBookPro2021: signed out; MacBook Pro 19: out of quota). More Codex quota, Codex signed in on another machine, '
-      + 'or another machine in the Swarm would bring back reviews on another engine. @ken15 @huy @tony can fix it.')
+      + 'a paused machine resumed, or another machine in the Swarm would bring back reviews on another engine. @ken15 @huy @tony can fix it.')
     // A person's own numbers are never shown to the others.
     expect(first!.text).not.toMatch(/\d+ ?%/)
     expect(notice(state, built, anyMachine, NOW + HOUR)).toBeNull()
@@ -63,7 +64,17 @@ describe('the notice that new Reviewers cannot start', () => {
     studio.observation!.readiness!.engines![0]!.signedIn = false
     const { state, built } = swarm([studio])
     expect(notice(state, built)!.text).toBe('Reviews of Claude Code builds cannot start a new Reviewer: Codex is unavailable on every machine this project may use '
-      + '(Mac Studio: out of quota). More Codex quota, Codex signed in on another machine, or another machine in the Swarm would unblock them. @ken15 can fix it.')
+      + '(Mac Studio: out of quota). More Codex quota, Codex signed in on another machine, a paused machine resumed, or another machine in the Swarm would unblock them. @ken15 can fix it.')
+  })
+
+  it('says reviews fall back only when the server would let them: not while it counts a Codex agent on a host outside the contributions', () => {
+    // Re-review of #2275: the notice said "fall back to Claude Code" while rules.ts refused it.
+    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { windows: out })])
+    state.agents.push({ id: 'codex-elsewhere', name: 'Codex', machineId: 'elsewhere', harnessId: 'hx', contributorId: 'ken',
+      configuration: { engine: 'codex', model: 'default', effort: 'high' } } as never)
+    const reviewer = { machineId: 'studio', engine: 'claude', model: 'claude-opus-4-7', effort: 'high' }
+    expect(reviewRefusal(state, built.id, reviewer, DEFAULT_ROUTING_POLICY, anyMachine, NOW)).not.toBeNull()
+    expect(notice(state, built)!.text).toMatch(/^Reviews of Claude Code builds cannot start a new Reviewer: /)
   })
 
   it('counts a paused machine as unable to start a Reviewer, as the route does', () => {
@@ -77,7 +88,7 @@ describe('the notice that new Reviewers cannot start', () => {
     expect(warned).toMatchObject({ mentions: ['ken', 'tony'], source: { kind: 'review-capacity', engine: 'codex', cause: 'low' } })
     expect(warned!.text).toBe('Codex quota for reviewing Claude Code builds is close to running out on every machine this project may use '
       + '(Mac Studio: close to running out; MacBook Pro 19: out of quota). More Codex quota, Codex signed in on another machine, '
-      + 'or another machine in the Swarm would keep reviews going. @ken15 @tony can fix it.')
+      + 'a paused machine resumed, or another machine in the Swarm would keep reviews going. @ken15 @tony can fix it.')
     expect(notice(state, built)).toBeNull()
     state.machines![0]!.observation!.quotas[0]!.windows[0]!.usedPercent = 100
     expect(notice(state, built)).toMatchObject({ source: { cause: 'out' } })

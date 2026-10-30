@@ -5,7 +5,7 @@
 import type { Conversation, SuperTabState } from './model.js'
 import { canReadProject, groupProject, projectRules } from './projects.js'
 import { canStart, STANDING, standing, type Standing } from './reviewSeats.js'
-import { liftEffort, type MayRun } from './rules.js'
+import { liftEffort, otherFamilyReviews, type MayRun } from './rules.js'
 import type { RoutingPolicy } from './routingPolicy.js'
 import { usernameOf } from './usernames.js'
 
@@ -71,8 +71,11 @@ export function reviewCapacityNotice(state: SuperTabState, group: Conversation, 
   // A tag is a username; someone without one is not tagged, never named by their email (review of #2275).
   const mentions = [...new Set(places.map(p => p.contributorId))].filter(id => reads(id) && usernameOf(state, id))
   const who = mentions.map(id => `@${usernameOf(state, id)}`).join(' ')
-  const fixes = `More ${NAME[engine]} quota, ${NAME[engine]} signed in on another machine, or another machine in the Swarm`
-  const fallback = cause === 'out' && seats(state, group, built, policy, mayRun, now, 3).some(p => canStart(p.standing))
+  const fixes = `More ${NAME[engine]} quota, ${NAME[engine]} signed in on another machine, a paused machine resumed, or another machine in the Swarm`
+  // Reviews fall back only as the server's own judgement lets them (rules.ts judgeReview): it also counts an agent of the
+  // other engine on a host outside the contributions, which the machines above leave out (re-review of #2275).
+  const fallback = cause === 'out' && !otherFamilyReviews(state, { engine: built }, policy, mayRun, now)
+    && seats(state, group, built, policy, mayRun, now, 3).some(p => canStart(p.standing))
   const text = (cause === 'low'
     ? `${NAME[engine]} quota for reviewing ${NAME[built]} builds is close to running out on every machine this project may use (${list}). ${fixes} would keep reviews going.`
     : fallback
