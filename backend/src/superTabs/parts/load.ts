@@ -199,8 +199,10 @@ export async function lastChangedAt(tx: Transaction, tabIds: string[]): Promise<
   const newest = new Map<string, number>()
   if (!tabIds.length) return newest
   for (const kind of PART_KINDS) {
+    // Sorted as the (tabId, changedAt) index is, read backwards, the newest per Swarm is one key (DISTINCT_SCAN): a $max read every key of
+    // the Swarm's parts (prod's largest: 1,300 groups, 873 starts, 721 agents, 2026-10-30), on every list.
     const rows = await delegate(tx, kind).aggregateRaw({ pipeline: [{ $match: { tabId: { $in: tabIds } } },
-      { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as Array<{ _id: string; at: unknown }>
+      { $sort: { tabId: -1, changedAt: -1 } }, { $group: { _id: '$tabId', at: { $first: '$changedAt' } } }] }) as Array<{ _id: string; at: unknown }>
     for (const row of rows) {
       const at = row.at ? ms(row.at) : 0
       if (at > (newest.get(row._id) ?? 0)) newest.set(row._id, at)

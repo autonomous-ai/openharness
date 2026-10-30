@@ -14,7 +14,7 @@ import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readChanged, readLastChangedAt, readLight, readLightGroups, readParts } from '../cachedReads.js'
+import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
@@ -303,7 +303,9 @@ export class SwarmReads {
     const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
     const ids = page.filter(r => r.format === 2).map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
-    const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
+    // Each Swarm's newest change through the read cache, at its stamp: a list every few seconds no longer recomputes it.
+    const [heads, newest] = await Promise.all([transaction(this.db, tx => parts.loadChanged(tx, ids, new Date(0), ['head'])),
+      this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
     const mentions = withMentions ? await this.mentionCounts(user, page.map(r => r.id)) : undefined
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
