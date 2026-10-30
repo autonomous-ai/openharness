@@ -107,6 +107,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   /// The page last opened in the browser, for "Open GitHub again".
   String? _openedLink;
 
+  /// The state GitHub's page was opened for: the waiting screen stays until it changes or the person cancels.
+  String? _openedFor;
+
   @override
   void initState() {
     super.initState();
@@ -146,7 +149,10 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     if (mounted) {
       setState(() {
         _checking = false;
-        _inBrowser = false;
+        // Coming back to the app is not finishing on GitHub (2026-10-30: the waiting screen vanished the moment
+        // Harness came to the front, so nobody ever saw it). It ends when GitHub's answer changes, or on Cancel.
+        final now = widget.controller.githubAccessOf(widget.projectId)?.state;
+        if (now != _openedFor) _inBrowser = false;
       });
     }
   }
@@ -337,7 +343,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
           height: 18,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            color: grid.AppPalette.swarmAccent,
+            color: grid.AppPalette.accentOnSurface,
           ),
         ),
         heading: 'Finish in GitHub',
@@ -516,17 +522,35 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               child: Text(
                 heading,
                 key: const Key('super-project-github-heading'),
-                style: DesktopChrome.heading(),
+                style: DesktopChrome.heading().copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
         ),
-        for (final part in body) ...[const SizedBox(height: _gap + 2), part],
-        if (aside.isNotEmpty) ...[
-          const SizedBox(height: _gap),
-          Wrap(spacing: 4, children: aside),
+        for (final part in body) ...[
+          const SizedBox(height: DesktopChrome.groupGap),
+          part,
         ],
-        const SizedBox(height: _gap * 2),
+        if (aside.isNotEmpty) ...[
+          const SizedBox(height: _halfGap),
+          TextButtonTheme(
+            data: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: grid.AppPalette.accentOnSurface,
+                backgroundColor: Colors.transparent,
+                side: BorderSide.none,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+            child: Wrap(spacing: _gap * 2, children: aside),
+          ),
+        ],
+        const SizedBox(height: DesktopChrome.groupGap + _gap),
         // Wraps under large text rather than overflowing the dialog.
         SizedBox(
           width: double.infinity,
@@ -541,10 +565,19 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     ),
   );
 
-  Widget _body(String text, {Key? key, bool muted = false}) => Text(
+  /// A paragraph in the secondary text colour, as the design has it; [note] smaller, [primary] for what is allowed.
+  Widget _body(
+    String text, {
+    Key? key,
+    bool muted = false,
+    bool primary = false,
+  }) => Text(
     text,
     key: key,
-    style: DesktopChrome.text(color: muted ? DesktopChrome.muted : null),
+    style: DesktopChrome.text(
+      color: primary ? null : DesktopChrome.muted,
+      size: muted ? 13 : 14,
+    ),
   );
 
   Widget _repository(String repository) => Container(
@@ -584,7 +617,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         ),
       ),
       const SizedBox(width: 10),
-      Expanded(child: _body(text)),
+      Expanded(child: _body(text, primary: true)),
     ],
   );
 
@@ -643,6 +676,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         _busy = false;
         _inBrowser = true;
         _openedLink = link;
+        _openedFor = 'not-installed';
       });
     }
   }
@@ -666,6 +700,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         setState(() {
           _inBrowser = true;
           _openedLink = links.authorizeUrl;
+          _openedFor = 'not-approved';
         });
       }
     } on SuperTabFailure catch (failure) {
@@ -748,7 +783,7 @@ class _ProjectGitHubLineState extends State<ProjectGitHubLine>
                     width: 6,
                     height: 6,
                     decoration: BoxDecoration(
-                      color: grid.AppPalette.swarmAccent,
+                      color: grid.AppPalette.accentOnSurface,
                       shape: BoxShape.circle,
                     ),
                   ),

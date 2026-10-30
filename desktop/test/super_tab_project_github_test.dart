@@ -426,6 +426,12 @@ void main() {
       expect(launched.last, contains('/login/oauth/authorize'));
       expect(find.text('Finish in GitHub'), findsOneWidget);
       expect(find.text("What GitHub's page means"), findsOneWidget);
+      // Back in the app before finishing on GitHub: still waiting, not back at the question.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Finish in GitHub'), findsOneWidget);
       // Cancel goes back to the question; Continue opens GitHub again.
       await tester.ensureVisible(
         find.byKey(const Key('super-project-github-cancel')),
