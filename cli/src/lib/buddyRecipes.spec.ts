@@ -194,10 +194,11 @@ describe('the db-size script', () => {
     expect(JSON.parse(printed.join('')).collections).toEqual({ SuperTab: 12 })
   })
 
-  // What MongoDB 8.0's readWrite role adds to read (the same file): each one alone, beside every read action, is refused.
+  // What MongoDB 8.0's readWrite role adds to read (the same file), and the planner, operation and setting changes beside
+  // planCacheRead (security reviews of #2338): each one alone, beside every read action, is refused.
   it.each(['cleanupStructuredEncryptionData', 'compactStructuredEncryptionData', 'convertToCapped', 'createCollection', 'createIndex',
     'createSearchIndexes', 'dropCollection', 'dropIndex', 'dropSearchIndex', 'insert', 'remove', 'renameCollectionSameDB', 'update',
-    'updateSearchIndex', 'performRawDataOperations'])('refuses readAnyDatabase with %s added', action => {
+    'updateSearchIndex', 'performRawDataOperations', 'planCacheWrite', 'killop', 'setParameter'])('refuses readAnyDatabase with %s added', action => {
     const privileges = [...MONGO_8_0_READ_ANY_DATABASE, { resource: { db: 'harness', collection: '' }, actions: [action] }]
     const { calls, quit } = database(['readAnyDatabase'], { SuperTab: 12 }, 1, privileges)
     expect(quit).toBe(3)
