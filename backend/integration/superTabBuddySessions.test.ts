@@ -200,7 +200,7 @@ describe('a Buddy thread session', () => {
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: (await f.deliveriesTo(agentId)).find(d => d.messageId === queued)!.id } }))
       .toMatchObject({ status: 'cancelled' })
     const thread = await f.store.messages(peer, f.tab, f.chat, { thread: root })
-    expect(thread.messages.at(-1)).toMatchObject({ text: 'Session ended: you ended it.', buddySession: true,
+    expect(thread.messages.at(-1)).toMatchObject({ text: 'Session ended: you ended it.', buddySession: true, author: { kind: 'agent', id: agentId },
       source: { kind: 'buddy-session-ended', reason: 'ended', thread: root } })
     await expect(f.reply(root, 'Plain reply')).rejects.toMatchObject({ code: 'BUDDY_SESSION_ENDED' })
     const again = await f.session(root, 'Carry on')

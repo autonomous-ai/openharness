@@ -11,6 +11,7 @@ import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import 'buddy_sessions.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
@@ -26,6 +27,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.root,
     required this.row,
     required this.outgoing,
+    this.sessionActivity,
   });
 
   final SuperTabController controller;
@@ -36,6 +38,10 @@ class SuperTabThreadPanel extends StatefulWidget {
 
   /// Draws a reply on its way.
   final Widget Function(SuperTabOutgoing sent) outgoing;
+
+  /// What a thread's own Buddy session is doing, as this computer reads it;
+  /// without it, what the Swarm alone says.
+  final SuperTabSessionActivity? sessionActivity;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -48,6 +54,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   final _focus = FocusNode();
   final _scroll = ScrollController();
   bool _alsoSend = false;
+  // The reply starts this thread's own Buddy session (reader's Buddy chat).
+  bool _newSession = false;
   // Whether the list is scrolled away from its newest reply, the replies
   // there were when the thread opened or was last read to its end (set once
   // the thread's replies are known), and the latest replies and rows (replies
@@ -81,6 +89,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
+      _newSession = false;
     }
   }
 
@@ -163,6 +172,25 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   bool get _writable =>
       c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
 
+  /// The thread's last session ended: a reply here must start a new one.
+  bool get _sessionLocked =>
+      c.offersThreadSessions && c.threadSessionEnded(widget.root) != null;
+
+  /// Whether the composer offers New session: the reader's own Buddy chat,
+  /// with their Buddy running, in a thread no session answers now.
+  bool get _offersSession =>
+      c.offersThreadSessions && c.threadSession(widget.root) == null;
+
+  /// Whether this reply starts a session.
+  bool get _startsSession =>
+      _offersSession &&
+      (_sessionLocked || (_newSession && !c.buddySessionsFull));
+
+  /// A session's thread stays in the thread: Also send is not offered there,
+  /// nor for a reply that starts one.
+  bool get _offersAlsoSend =>
+      !_startsSession && c.threadSession(widget.root) == null;
+
   /// The files waiting to go with this thread's next reply.
   HarnessAttachments get _files =>
       c.threadAttachments(c.selectedId, widget.root);
@@ -186,14 +214,18 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final root = widget.root;
     c.setThreadDraft(root, _composer.text);
     await c.sendThreadReply(
-      alsoSend: _alsoSend,
+      alsoSend: _offersAlsoSend && _alsoSend,
+      newSession: _startsSession,
       // The reply is on its way (its files have gone up): the box is free for
       // the next one, unless another thread is shown by now.
       onSending: () {
         if (!mounted || widget.root != root) return;
         if (c.threadDraft(root).isEmpty) {
           _composer.clear();
-          setState(() => _alsoSend = false);
+          setState(() {
+            _alsoSend = false;
+            _newSession = false;
+          });
         }
       },
     );
@@ -254,6 +286,14 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               ),
             ),
             Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
+            SuperTabThreadSessionLine(
+              key: ValueKey('super-thread-session-${widget.root}'),
+              controller: c,
+              root: widget.root,
+              activityOf:
+                  widget.sessionActivity ??
+                  (session) => superTabSessionActivity(c, null, session),
+            ),
             Expanded(
               child: Stack(
                 children: [
@@ -455,38 +495,21 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               Row(
                 children: [
                   Expanded(
-                    child: MergeSemantics(
-                      child: Row(
-                        children: [
-                          Checkbox(
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: grid.AppDesktop.controlGap,
+                      children: [
+                        if (_offersSession) _sessionChoice(writable),
+                        if (_offersAlsoSend)
+                          _choice(
                             key: const ValueKey('super-thread-also-send'),
-                            visualDensity: VisualDensity.compact,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
                             value: _alsoSend,
+                            label: _alsoSendLabel,
                             onChanged: writable
-                                ? (on) =>
-                                      setState(() => _alsoSend = on ?? false)
+                                ? (on) => setState(() => _alsoSend = on)
                                 : null,
                           ),
-                          Flexible(
-                            child: GestureDetector(
-                              onTap: writable
-                                  ? () => setState(() => _alsoSend = !_alsoSend)
-                                  : null,
-                              child: MouseRegion(
-                                cursor: writable
-                                    ? SystemMouseCursors.click
-                                    : MouseCursor.defer,
-                                child: Text(
-                                  _alsoSendLabel,
-                                  style: DesktopChrome.control(),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                      ],
                     ),
                   ),
                   NewHarnessAttachButton(
@@ -517,4 +540,69 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       ),
     );
   }
+
+  /// New session, left of Also send: checked and locked once the thread's
+  /// session ended, unavailable (and saying why) at the limit.
+  Widget _sessionChoice(bool writable) {
+    final locked = _sessionLocked;
+    final full = !locked && c.buddySessionsFull;
+    final choice = _choice(
+      key: const ValueKey('super-thread-new-session'),
+      value: locked || (_newSession && !full),
+      label: full
+          ? 'New session · ${SuperTabController.maxBuddySessions} running, end one first'
+          : 'New session',
+      onChanged: writable && !locked && !full
+          ? (on) => setState(() => _newSession = on)
+          : null,
+    );
+    return Tooltip(
+      message: locked
+          ? 'This thread\'s session ended. Your reply starts a new one.'
+          : full
+          ? 'End a session to start another'
+          : 'Answer this thread in its own session, while your Buddy keeps '
+                'answering the chat',
+      child: choice,
+    );
+  }
+
+  /// A quiet checkbox and its label, both pressable, read as one control.
+  Widget _choice({
+    required Key key,
+    required bool value,
+    required String label,
+    required ValueChanged<bool>? onChanged,
+  }) => MergeSemantics(
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Checkbox(
+          key: key,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          value: value,
+          onChanged: onChanged == null ? null : (on) => onChanged(on ?? false),
+        ),
+        Flexible(
+          child: GestureDetector(
+            onTap: onChanged == null ? null : () => onChanged(!value),
+            child: MouseRegion(
+              cursor: onChanged == null
+                  ? MouseCursor.defer
+                  : SystemMouseCursors.click,
+              child: Text(
+                label,
+                style: DesktopChrome.control(
+                  color: onChanged == null && !value
+                      ? DesktopChrome.muted
+                      : null,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }

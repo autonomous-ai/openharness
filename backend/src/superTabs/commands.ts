@@ -904,7 +904,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (start) start.error = 'Its session ended before it started.'
     setSessions(chat, (chat.buddySessions ?? []).filter(e => e !== entry && e.startId !== entry.startId))
     message(chat.id, endedText(reason, detail), [], entry.thread, { kind: SESSION_ENDED_KIND, reason, thread: entry.thread })
-    Object.assign(effects.messages.at(-1)!, { thread: entry.thread, buddySession: true })
+    // Said by the session that ended, so the thread never shows its person saying it; a start that never ran has none.
+    const said = target ? { author: { kind: 'agent' as const, id: target.id, name: target.name, displayName: target.displayName ?? target.name,
+      membershipGeneration: target.membershipGeneration } } : {}
+    Object.assign(effects.messages.at(-1)!, { thread: entry.thread, buddySession: true, ...said })
   }
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */

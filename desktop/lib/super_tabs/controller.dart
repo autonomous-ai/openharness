@@ -1329,6 +1329,7 @@ class SuperTabController extends ChangeNotifier {
   /// is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
+    bool newSession = false,
     VoidCallback? onSending,
   }) async {
     final open = openedThread;
@@ -1357,7 +1358,9 @@ class SuperTabController extends ChangeNotifier {
       'text': text,
       'replyTo': open.root,
       'recipientIds': const <String>[],
-      if (alsoSend) 'alsoSend': true,
+      // A session's thread stays in the thread: never also sent.
+      if (alsoSend && !newSession) 'alsoSend': true,
+      if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     if (_pending case final pending? when !identical(pending, before)) {
@@ -1371,6 +1374,65 @@ class SuperTabController extends ChangeNotifier {
     final result = await sending;
     _forgetRefusedUploads(result);
     return result;
+  }
+
+  // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
+
+  /// How many thread sessions a Buddy chat may run at once (backend limit).
+  static const maxBuddySessions = 3;
+
+  /// The open thread's chat when it is the reader's own Buddy chat, where a
+  /// thread may have a session of its own; null anywhere else.
+  SuperTabConversation? get _ownBuddyChat {
+    final id = openedThread?.conversationId ?? selectedId;
+    final chat = snapshot?.conversation(id);
+    return chat != null &&
+            chat.isBuddyChat &&
+            chat.buddyOwnerId == accountId &&
+            !accessRevoked
+        ? chat
+        : null;
+  }
+
+  /// Whether the reader may start a session in a thread of the open chat:
+  /// their own Buddy chat, with their Buddy running.
+  bool get offersThreadSessions {
+    final chat = _ownBuddyChat;
+    return chat != null && buddy(chat.projectId) != null;
+  }
+
+  /// The live or starting session answering [root] in the reader's own Buddy
+  /// chat; null when none does, or anywhere else.
+  SuperTabBuddySession? threadSession(String root) =>
+      _ownBuddyChat?.sessionFor(root);
+
+  /// The session agent of [session], once it started.
+  SuperTabAgent? sessionAgent(SuperTabBuddySession session) =>
+      session.agentId == null ? null : snapshot?.agent(session.agentId!);
+
+  /// The line saying [root]'s last session ended, while no session answers
+  /// there: a plain reply would be refused, so a new one must start.
+  SuperTabMessage? threadSessionEnded(String root) {
+    if (_ownBuddyChat == null || threadSession(root) != null) return null;
+    return threadMessages(root).where((m) => m.sessionEnded).lastOrNull;
+  }
+
+  /// Whether the open Buddy chat already runs [maxBuddySessions] sessions.
+  bool get buddySessionsFull =>
+      (_ownBuddyChat?.buddySessions.length ?? 0) >= maxBuddySessions;
+
+  /// Ends [root]'s session in the reader's own Buddy chat. Closing the thread
+  /// pane only hides it; this stops it. False when refused or not sent.
+  Future<bool> endThreadSession(String root) async {
+    final chat = _ownBuddyChat;
+    if (chat == null || chat.sessionFor(root) == null) return false;
+    return await command({
+          'type': 'buddy.sessionEnd',
+          'conversationId': chat.id,
+          'thread': root,
+          'reason': 'ended',
+        }) !=
+        null;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -2152,9 +2214,11 @@ class SuperTabController extends ChangeNotifier {
       _indexed()?.buddyChats[projectId];
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
+  /// Its main session only: a thread's own session is never "the Buddy".
   SuperTabAgent? buddy(String projectId) => snapshot?.agents
       .where(
-        (a) => a.isBuddy && a.buddyOf == accountId && a.projectId == projectId,
+        (a) =>
+            a.isMainBuddy && a.buddyOf == accountId && a.projectId == projectId,
       )
       .firstOrNull;
 
@@ -2165,6 +2229,8 @@ class SuperTabController extends ChangeNotifier {
     final chat = _indexed()?.buddyChats[projectId]?.id;
     return snapshot?.buddyStarts.reversed.where((start) {
       final request = superTabMap(start['request']);
+      // A thread session's start is its thread's, never the Buddy's own.
+      if (request['buddySession'] != null) return false;
       return superTabMap(request['buddyOf'])['personId'] == accountId &&
           (request['projectId'] == projectId ||
               (chat != null && request['conversationId'] == chat));
