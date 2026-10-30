@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
-import 'swarm_home_keeper.dart';
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_home_top.dart';
@@ -232,11 +231,7 @@ class _SwarmPageState extends State<SwarmPage> {
             else
               ListenWhileInSight(
                 listenable: listens!,
-                builder: (context) => _topBar(
-                  context,
-                  pushed: pushed,
-                  updating: _updating(session.inbox),
-                ),
+                builder: (context) => _topBar(context, pushed: pushed),
               ),
             Expanded(
               child: session == null
@@ -274,13 +269,7 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// Home's top bar. At the root, the tab's title: the Swarm shown and a
   /// button to switch it; pushed over another page, back and "Swarm".
-  /// Either has a quiet "Updating…" under it while it shows the Home kept
-  /// ([_updating]).
-  Widget _topBar(
-    BuildContext context, {
-    required bool pushed,
-    bool updating = false,
-  }) {
+  Widget _topBar(BuildContext context, {required bool pushed}) {
     final session = _session;
     if (pushed) {
       return SwarmTopBar(
@@ -288,7 +277,6 @@ class _SwarmPageState extends State<SwarmPage> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         title: 'Swarm',
-        subtitle: updating ? 'Updating…' : null,
       );
     }
     if (session == null) return const SwarmTabHeader('Swarm');
@@ -300,7 +288,6 @@ class _SwarmPageState extends State<SwarmPage> {
       title,
       leading: named == null ? null : SwarmProjectTile(named.name),
       titleLabel: 'Swarm: $title. Switch Swarm',
-      subtitle: updating ? 'Updating…' : null,
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
     );
   }
@@ -592,15 +579,6 @@ class _SwarmPageState extends State<SwarmPage> {
   ];
 
 }
-
-/// Home shows the Home kept, not read again yet: the list not read, or a
-/// Swarm on it holding only what was kept. Not while no computer answers:
-/// the card says so then ([SwarmConnectionNotice]).
-bool _updating(SwarmInbox inbox) =>
-    inbox.swarms.isNotEmpty &&
-    !inbox.noComputer &&
-    (!inbox.loaded ||
-        inbox.swarms.any((swarm) => swarmHomeKept(inbox.reader(swarm.id))));
 
 /// Whether what waits on the person in every Swarm [shown] is read: the
 /// Swarm, and what waits in it since it was last read in full.

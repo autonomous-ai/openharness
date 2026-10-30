@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/material.dart';
@@ -2770,13 +2771,53 @@ void main() {
     const parts = '/api/super-tabs/$tab/parts';
     const notOpen = 'This chat is not open to you.';
 
-    /// Skeleton bubbles fill the chat: six to eight of them.
+    /// Skeleton bubbles fill the chat, from its foot up to its top.
     void skeleton(WidgetTester tester) {
       expect(key('swarm-chat-skeleton'), findsOneWidget);
-      expect(
-        tester.widgetList(key('swarm-skeleton-bubble')).length,
-        inInclusiveRange(6, 8),
+      // Those built just past the top count: one ending right at it is full.
+      final bubbles = find.byKey(
+        const ValueKey('swarm-skeleton-bubble'),
+        skipOffstage: false,
       );
+      final tops = [
+        for (final bubble in bubbles.evaluate())
+          tester
+              .getTopLeft(
+                find.byElementPredicate(
+                  (e) => e == bubble,
+                  skipOffstage: false,
+                ),
+              )
+              .dy,
+      ];
+      expect(
+        tops.reduce(math.min),
+        lessThanOrEqualTo(tester.getTopLeft(key('swarm-chat-skeleton')).dy),
+        reason: 'no gap above the first bubble',
+      );
+    }
+
+    for (final (name, size) in [
+      ('a small phone', const Size(320, 568)),
+      ('an iPhone 14', const Size(390, 844)),
+      ('a tablet', const Size(1024, 1366)),
+    ]) {
+      testWidgets('on $name the skeleton leaves no gap at the top', (
+        tester,
+      ) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final fake = backend([message('m1', 1, text: 'The plan')]);
+        final page = Completer<Object?>();
+        fake.routes[messages] = (_) => page.future;
+
+        await pump(tester, fake, settle: false);
+
+        skeleton(tester);
+        page.complete({'messages': <Object>[], 'next': null});
+        await tester.pumpAndSettle();
+      });
     }
 
     testWidgets('the first page shows skeleton bubbles, and nothing says the '
