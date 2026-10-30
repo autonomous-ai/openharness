@@ -32,7 +32,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { fullReviewOf, openReview, opensReviews, projectPullRequest, reviewHeldBy, reviewStampOf, supersedeReviews, swarmAuthor, verdictHandoff, verdictPending } from './autoReview.js'
+import { fullReviewOf, openReview, opensReviews, projectPullRequest, reviewersToPass, reviewHeldBy, reviewStampOf, supersedeReviews, swarmAuthor, verdictHandoff, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
@@ -2428,7 +2428,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
       if (command.status === 'done' && !reviewsPassed(assignment, reviewsWanted(group.task))) {
-        fail('REVIEWS_PENDING', `This task wants ${reviewsWanted(group.task)} independent reviews: it is done once that many different Reviewers pass its independent check at the revision handed over last.`)
+        const missing = reviewersToPass(state, group)
+        fail('REVIEWS_PENDING', `This task wants ${reviewsWanted(group.task)} independent reviews: it is done once that many different Reviewers pass its independent check at the revision handed over last.${
+          missing.length ? ` Still to pass it at this revision, after their review's pass verdict: ${missing.join(', ')}.` : ''}`)
       }
       let asked: string | undefined
       if (command.ask) {
@@ -2592,10 +2594,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           { by, passed: command.passed, handoff: review ? verdictHandoff(group, review) : assignment.handoffs ?? 0, ...(review ? { review: review.id } : {}) }]
           .slice(-MAX_VERDICTS)
       }
-      // A review's own verdict resets its Reviewer's earlier verdict on the work: only a pass given after it counts.
+      // A review's own verdict settles its Reviewer's pass on the work: a pass verdict keeps a pass given while this review was
+      // open (the same head), in either order; a Hold, or a pass given through an earlier review, is cleared (review 3 of #2382).
       const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       const held = group.assignment && `agent:${group.assignment.agentId}`
-      if (build?.assignment?.verdicts) for (const v of build.assignment.verdicts) if (v.review === group.id || v.by === held) v.handoff = -1
+      if (build?.assignment?.verdicts) for (const v of build.assignment.verdicts) {
+        if (v.review !== group.id && v.by !== held) continue
+        const kept = v.review === group.id && v.passed ? verdictHandoff(build, group) : -1
+        // Cleared is gone: a later pass verdict of the same review does not bring it back.
+        if (kept < 0) v.passed = false
+        v.handoff = kept
+      }
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       // Before the review's first verdict is kept: a check's verdict counts once per attempt.
       if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)

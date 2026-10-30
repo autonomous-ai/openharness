@@ -1832,25 +1832,48 @@ describe('Reviewer role', () => {
         const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
         f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, aActor)
         verdict(f, head2.find(r => r.assignment!.agentId === b)!, group, built, b, true)
-        expect(done).toThrow('This task wants 2 independent reviews')
+        const aAgent = f.state.agents.find(x => x.id === a)!
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${aAgent.displayName ?? aAgent.name}.`)
         // Only A's own review of head 2 completes it.
         verdict(f, head2.find(r => r.assignment!.agentId === a)!, group, built, a, true)
         done()
         expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
       })
 
-      it('never counts a pass given before its review\'s own pass verdict: the verdict resets it, and only a pass after it counts', () => {
+      // Review 3 of #2382 (Kai): both Reviewers passed the work, then recorded their reviews' pass verdicts, and done was refused.
+      it('keeps a pass on the work given before its review\'s own pass verdict for the same head, and clears it on a Hold, naming who must pass again', () => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         const done = () => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
         markReady(`Ready. ${pr}`)
         const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
         const actorOf = (review: Conversation): Actor => ({ kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' })
-        const passWork = (review: Conversation) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(review))
-        for (const review of reviews()) passWork(review)
-        for (const review of reviews()) f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(review))
-        expect(done).toThrow('This task wants 2 independent reviews')
-        for (const review of reviews()) passWork(review)
+        const nameOf = (review: Conversation) => { const a = f.state.agents.find(x => x.id === review.assignment!.agentId)!; return a.displayName ?? a.name }
+        const [one, two] = reviews()
+        for (const review of [one!, two!]) f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(review))
+        // Passed the work, but no review verdict yet: both are named.
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${nameOf(one!)}, ${nameOf(two!)}.`)
+        // One holds in its review's own check, though it passed that check: its pass on the work is cleared.
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: 'Ready: with fixes at head 1.' }, actorOf(two!))
+        f.run({ type: 'work.check', conversationId: one!.id, assignmentId: one!.assignment!.id, checkId: one!.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(one!))
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${nameOf(two!)}.`)
+        // Its review passes on a second look: the earlier pass on the work stays cleared until it passes the work again.
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(two!))
+        expect(done).toThrow(nameOf(two!))
+        f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(two!))
         done()
+      })
+
+      it('counts both passes when each Reviewer passes the work first and then records its review\'s pass verdict', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        for (const review of reviews()) {
+          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actor)
+          f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actor)
+        }
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
       })
 
       // Review 2 of #2382 (Kai): A's late pass on head 1 was carried to head 2 when A held head 2's review.
