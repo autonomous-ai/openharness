@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::terminal_themes::TERMINAL_THEMES;
 use crate::fleet::{ago, Reach, State};
 use crate::picker::{Picker, Row};
-use crate::theme::{self, engine_label, engine_mark, fg, state_mark};
+use crate::theme::{self, engine_label, engine_mark, fg};
 
 /// Which harnesses a list shows. Only All is reachable from a key today.
 #[allow(dead_code)]
@@ -278,29 +278,35 @@ fn folder_of(a: &crate::fleet::Agent) -> String {
 }
 
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
-    // As the desktop's Cmd-P lists them ("Recently active"): the one active last first — a query
-    // ranks by how well it matches, this order breaking ties. (C-b A lists those waiting on you.)
+    // By the time each row shows, the shortest first (the one that came to be as it is last) — a
+    // query ranks by how well it matches, this order breaking ties. (C-b A lists those waiting
+    // on you.)
+    let since = |a: &crate::fleet::Agent| a.state_since(app.fleet.state_of(a));
     let mut agents: Vec<&crate::fleet::Agent> = app.fleet.agents.values().collect();
-    agents.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)).then_with(|| a.id.cmp(&b.id)));
+    agents.sort_by(|a, b| since(b).cmp(&since(a)).then_with(|| a.name.cmp(&b.name)).then_with(|| a.id.cmp(&b.id)));
     let rows: Vec<Row> = agents.into_iter()
         .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
         .filter(|a| project.map(|p| a.project_root == p || a.cwd == p).unwrap_or(true))
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
         .map(|a| {
             let state = app.fleet.state_of(a);
-            let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&a.engine);
             // Headed by where it works — its machine and folder (the folder alone in one machine's
-            // list) — so a row is its status, its name and how long it has been as it is (waiting
-            // on you since its question, working since its turn began, done since it ended); what
-            // it is doing is in the preview. Only one waiting on you keeps its question in its row,
-            // as M-1…9 answer it from here with the preview hidden too.
+            // list) — so a row is its agent's icon, its name, and how it is in a word by how long
+            // it has been so (`idle 15s`: waiting on you since its question, working since its turn
+            // began, done since it ended); what it is doing is in the preview. Only one waiting on
+            // you keeps its question in its row, as M-1…9 answer it from here with the preview
+            // hidden too.
             let question = a.question.as_ref().filter(|_| state == State::NeedsInput).map(|q| q.prompt.clone()).unwrap_or_default();
             let folder = folder_of(a);
             let group = if machine.is_some() { folder } else { format!("{} · {folder}", app.fleet.machine_name(&a.machine_id)) };
             let since = a.state_since(state);
             let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
             let narrow = ago(since);
+            let status = match state {
+                State::NeedsInput => "waiting", State::Failed => "failed", State::Done => "done", State::Working => "working",
+                State::Starting => "starting", State::Unknown => "unknown", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
+            };
             let live = !matches!(state, State::Paused | State::Offline);
             // What a query finds it by besides its name: where it works, its engine, its pull
             // request, and its state in words ('failed, 'done, 'waiting, 'working, 'idle).
@@ -316,9 +322,9 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 .extra(format!("{} {} {} {} {} {} {} {} {} {}", a.project, a.branch, a.cwd, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
                 // How long it has been as it is changes as you look.
                 .volatile(false, narrow.chars().count())
-                .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
+                .lead(vec![span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(vec![span(question, fg(theme::ATTENTION))])
-                .right(narrow)
+                .right(format!("{status} {narrow}"))
                 .line_first(true)
         })
         .collect();
@@ -888,7 +894,7 @@ mod agent_row_tests {
         for (id, name) in [("local", "studio"), ("lab", "lab")] {
             app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: name.into(), local: id == "local", status: "online".into(), reach: crate::fleet::Reach::Ready });
         }
-        let at = |minute: u32| format!("2026-10-30T09:{minute:02}:00.000Z");
+        let at = |minute: u32| format!("2026-01-30T09:{minute:02}:00.000Z");
         let in_folder = |name: &str| json!({"name": name, "cwd": format!("/src/{name}"), "branch": "main"});
         app.fleet.merge_roster("local", &[
             json!({"id": "a1", "name": "fix login", "engine": "claude", "project": in_folder("webapp"), "updatedAt": at(50)}),
@@ -953,6 +959,34 @@ mod agent_row_tests {
         let line = |name: &str| rows.iter().find(|r| r.label == name).unwrap().detail.iter().map(|s| s.content.to_string()).collect::<String>();
         assert_eq!(line("rate limit"), "Use Redis?");
         assert_eq!(line("fix login"), "");
+    }
+
+    /// A row leads with its agent's icon alone; how it is, in a word, comes before the time
+    /// (`idle 15s`), not as a mark.
+    #[test]
+    fn a_rows_status_is_a_word_by_its_time() {
+        let mut app = app();
+        app.fleet.agents.get_mut(&("local".to_string(), "a2".to_string())).unwrap().working = true;
+        let rows = agent_rows(&app, Filter::All, None, None);
+        let row = |name: &str| rows.iter().find(|r| r.label == name).unwrap();
+        let lead: String = row("fix login").lead.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(lead, format!("{} ", engine_mark("claude").0));
+        assert!(row("fix login").right.starts_with("idle "), "{}", row("fix login").right);
+        assert!(row("rate limit").right.starts_with("working "), "{}", row("rate limit").right);
+        assert!(row("rate limit").right.ends_with(&ago(app.fleet.agents[&("local".to_string(), "a2".to_string())].state_since(State::Working))));
+    }
+
+    /// The list goes by the time each row shows: the shortest first (a turn that just began
+    /// before one last active a while ago), and its heading with it.
+    #[test]
+    fn the_shortest_time_comes_first() {
+        let mut app = app();
+        let a2 = app.fleet.agents.get_mut(&("local".to_string(), "a2".to_string())).unwrap();
+        a2.working = true;
+        a2.since = crate::fleet::now_ms();
+        let groups = by_group(&agent_rows(&app, Filter::All, None, None));
+        assert_eq!(groups[0], ("studio · api".to_string(), vec!["rate limit".to_string()]));
+        assert_eq!(groups[1].0, "studio · webapp");
     }
 
     /// One machine's harnesses (from the machines list) are headed by their folder alone.
