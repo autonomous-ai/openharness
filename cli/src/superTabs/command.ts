@@ -10,6 +10,7 @@ import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { isatty } from 'node:tty'
 import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
@@ -27,7 +28,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** The actions that take an id and then one JSON argument, and what that id names. */
 const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID', route: 'GROUP' }
 const stdinHint = (action: string) => `or send the JSON on stdin with - in its place: ${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
@@ -62,9 +63,23 @@ function jsonShapeError(positional: readonly string[]): string | null {
   return null
 }
 
+/** A message on stdin, for post's TEXT `-`.
+ *
+ *  `post GROUP - OPERATION_ID` posted a literal dash: three Reviewer verdicts on 2026-10-30, #2345's findings among them,
+ *  arrived as "-". So `-` reads the message from stdin, once, before anything is sent, and an empty or a terminal stdin is
+ *  refused: nothing is posted, and nothing waits on a terminal for input that never comes. */
+const POST_STDIN = "post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line)"
+function postStdin(stdin: () => string, terminal: () => boolean): string {
+  if (terminal()) throw new Error(`post - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: ${POST_STDIN}, or pass it as TEXT.`)
+  // A heredoc ends the message with one line break, which is not part of it.
+  const text = stdin().replace(/\r?\n$/, '')
+  if (!text.trim()) throw new Error(`post - read no message from stdin, so nothing was posted. Send the message on stdin: ${POST_STDIN}. A message that is only - goes on stdin too.`)
+  return text
+}
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
 const MAX_PROPOSAL_FILES = 5
-export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8')) {
+export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8'),
+  terminal: () => boolean = () => isatty(0)) {
   const positional: string[] = []
   let tabId = '', agentId = ''
   const target = { ...where }
@@ -111,10 +126,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       else if (flag === '--mention' && value?.trim()) mentions.push(value.trim())
       else throw new Error(USAGE)
     }
+    // TEXT `-` is the message on stdin; any other TEXT is the message itself, and stdin is never read.
+    const text = second === '-' ? postStdin(stdin, terminal) : second
     // A screenshot or a log may go without words.
-    if (!second.trim() && !attach.length) throw new Error(USAGE)
+    if (!text.trim() && !attach.length) throw new Error(USAGE)
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
-      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
+      command: { type: 'message.send', conversationId: first, text, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
     && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
     // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.
@@ -177,7 +194,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
 
 export async function superTabCommand(argv: readonly string[], deps: {
   where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
-  platform?: NodeJS.Platform
+  platform?: NodeJS.Platform; stdin?: () => string; terminal?: () => boolean
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -189,7 +206,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
     if (running.refused) throw new Error(running.refused)
     const pane = running.pane
     const local = (deps.where ?? (() => whereFor(pane)))()
-    const request = parseSuperTabArgs(argv, local)
+    const request = parseSuperTabArgs(argv, local, deps.stdin, deps.terminal)
     operationId = request.payload.operationId
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.

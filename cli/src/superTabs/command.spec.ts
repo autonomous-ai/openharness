@@ -39,6 +39,67 @@ it('reads a command\'s JSON from stdin for -', () => {
   expect(parseSuperTabArgs([...prefix, 'command', 'op-1', '-'], where, stdin).payload).toMatchObject({ operationId: 'op-1', command: { type: 'work.status', result: "it's '%h %s'" } })
   expect(stdin).toHaveBeenCalledOnce()
 })
+// 2026-10-30: three Reviewer verdicts posted with TEXT - arrived as a single dash, #2345's findings among them.
+it('reads a post\'s message from stdin for -, once, without its last line break', () => {
+  const stdin = vi.fn(() => "Ready: no\n- P1: it's '%h %s'\n"), terminal = vi.fn(() => false)
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-1', '--reply-to', 'm1'], where, stdin, terminal).payload).toMatchObject({ action: 'command',
+    operationId: 'op-1', command: { type: 'message.send', conversationId: 'lead', text: "Ready: no\n- P1: it's '%h %s'", replyTo: 'm1' } })
+  expect(stdin).toHaveBeenCalledOnce()
+  // A message that is only a dash goes on stdin; a CRLF ending is a line break too.
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-2'], where, () => '-\r\n', () => false).payload.command).toMatchObject({ text: '-' })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-3', '--attach', 'a.png'], where, () => 'with a file', () => false).payload)
+    .toMatchObject({ attach: [resolve('a.png')], command: { text: 'with a file' } })
+})
+it('refuses a post\'s - with an empty or a terminal stdin, naming the fix, and posts nothing', async () => {
+  for (const empty of ['', '\n', '  \n\n']) {
+    for (const tail of [[], ['--attach', 'a.png']]) {
+      expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-1', ...tail], where, () => empty, () => false))
+        .toThrow("post - read no message from stdin, so nothing was posted. Send the message on stdin: post GROUP - OPERATION_ID <<'MSG'")
+    }
+  }
+  // A terminal is never read: reading it would wait for input that never comes.
+  const stdin = vi.fn(() => 'never read')
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-1'], where, stdin, () => true))
+    .toThrow('post - reads the message from stdin, but stdin is a terminal, so nothing was posted.')
+  expect(stdin).not.toHaveBeenCalled()
+  const print = vi.fn(), close = vi.fn(), request = vi.fn(async () => ({ ok: true }))
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op'], { ...deps, stdin: () => '', terminal: () => false })).toBe(1)
+  expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op'], { ...deps, stdin, terminal: () => true })).toBe(1)
+  expect(print.mock.calls.map(([line]) => JSON.parse(line).error)).toEqual([expect.stringContaining('read no message from stdin'), expect.stringContaining('stdin is a terminal')])
+  expect(request).not.toHaveBeenCalled()
+})
+it('never reads stdin for a post whose TEXT is the message', () => {
+  const stdin = vi.fn(() => 'from stdin'), terminal = vi.fn(() => false)
+  for (const text of ['Ready', '--', '- ', ' -', '-x', '']) {
+    const tail = text ? [] : ['--attach', 'a.png']
+    expect(parseSuperTabArgs([...prefix, 'post', 'lead', text, 'op-1', ...tail], where, stdin, terminal).payload.command).toMatchObject({ text })
+  }
+  expect(stdin).not.toHaveBeenCalled()
+  expect(terminal).not.toHaveBeenCalled()
+})
+// An interrupted post is repeated with the same id and the same stdin; stdin is read before anything is sent, so the repeat
+// sends the same message under the same id, and the Swarm keeps one.
+it('repeats an interrupted stdin post with the same id and text, and it posts once', async () => {
+  const posted = new Map<string, unknown>(), print = vi.fn(), close = vi.fn()
+  let lose = true
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type !== 'super_tabs') return { agents: [] }
+    posted.set(String(payload.operationId), (payload.command as { text?: string }).text)
+    if (lose) { lose = false; throw new Error('Connection lost') }
+    return { ok: true }
+  })
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print, terminal: () => false }
+  const stdin = vi.fn(() => "Verdict: it's fine\n")
+  expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-verdict'], { ...deps, stdin })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'Connection lost', operationId: 'op-verdict' })
+  expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-verdict'], { ...deps, stdin })).toBe(0)
+  expect(stdin).toHaveBeenCalledTimes(2)
+  const sent = request.mock.calls.filter(([type]) => type === 'super_tabs').map(([, payload]) => payload)
+  expect(sent).toHaveLength(2)
+  expect(sent[1]).toEqual(sent[0])
+  expect([...posted]).toEqual([['op-verdict', "Verdict: it's fine"]])
+})
 it('reacts to a message as people do, and --off takes the reaction back', () => {
   expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-1'], where).payload).toEqual({ action: 'command', tabId: 'tab', agentId: 'agent',
     operationId: 'op-1', command: { type: 'message.react', conversationId: 'lead', messageId: 'msg-1', emoji: 'eyes', on: true } })
