@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { BUDDY_SESSION_ENGINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+import { SuperTabHostError } from './wire.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
@@ -1442,5 +1443,95 @@ describe('an agent that joins naming its model', () => {
     const result = await onFakeClock(() => resume(t.f))
     expect(switched).toBe(true)
     expect(result).toMatchObject({ ok: true, configuration: { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' } })
+  })
+})
+
+// Diego, 2026-10-30: a start the backend refused at dispatch (a pause, a rule, a held Team account) had already reserved
+// 2 GiB and 10 GiB on its machine, and nothing released them: each such start held its row for good.
+describe('a dispatch claim the backend refuses', () => {
+  /** The fixture, with its dispatch claim answered by `refuse` instead. */
+  function refused(refuse: () => Promise<Record<string, unknown>>, record: Record<string, unknown> = {}) {
+    const f = fixture(), scoped = f.scoped.getMockImplementation()!
+    let claimed = false
+    f.scoped.mockImplementation(async payload => {
+      if ((payload.command as Record<string, unknown> | undefined)?.type === 'agent.startDispatch') { claimed = true; return refuse() }
+      // What the backend's record says once the claim was refused: another run's claim or failure lands in between.
+      if (payload.action === 'startStatus' && claimed) return { ok: true, value: { ...structuredClone(f.start), ...record } }
+      return scoped(payload)
+    })
+    return f
+  }
+  const types = (f: ReturnType<typeof fixture>) => f.request.mock.calls.map(c => c[0] === 'super_tabs' ? `super_tabs:${String(c[1]?.action)}` : c[0])
+  const commands = (f: ReturnType<typeof fixture>) => f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown> | undefined).filter(Boolean)
+
+  it.each([
+    ['a refusal answered to the Lead', () => async () => ({ error: 'MACHINE_PAUSED', detail: 'New work is paused on this machine.', status: 409 })],
+    ['a refusal thrown to a contributed host', () => async () => { throw new SuperTabHostError('MACHINE_PAUSED', 'New work is paused on this machine.', 409) }],
+  ] as const)('cancels its creation, releases its capacity and fails the start with the reason: %s', async (_name, make) => {
+    const f = refused(make())
+    const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ error: 'START_FAILED', startId: 'start', detail: 'New work is paused on this machine.' })
+    expect(types(f)).toEqual(['agent_create_status', 'super_tabs:capacity', 'engines_probe', 'usage_read', 'super_tabs:reserveCapacity',
+      'agent_create_cancel', 'super_tabs:observeCapacity'])
+    expect(f.request.mock.calls.find(c => c[0] === 'agent_create_cancel')![1]).toEqual({ creationId: 'super-native-receipt' })
+    expect(f.scoped.mock.calls.find(c => (c[0].command as Record<string, unknown> | undefined)?.type === 'agent.startFailed')![0])
+      .toMatchObject({ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start', error: 'New work is paused on this machine.' } })
+    expect(f.close).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a lost reply', async () => { throw new Error('socket closed') }],
+    ['a lost backend reply', async () => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Could not reach this Super Tab.', 503) }],
+    ['a transport code', async () => ({ error: 'BACKEND_UNREACHABLE', detail: 'unreachable', status: 502 })],
+    ['a code with no status', async () => ({ error: 'SUPER_TAB_UNAVAILABLE', detail: 'This Super Tab is unavailable.' })],
+    ['a claim another run already holds', async () => ({ error: 'START_CLAIMED', detail: 'This native start was already requested.', status: 409 })],
+  ] as const)('keeps the creation and its capacity for %s', async (_name, refuse) => {
+    const f = refused(refuse)
+    await expect(startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).rejects.toThrow()
+    expect(types(f)).not.toContain('agent_create_cancel')
+    expect(types(f)).not.toContain('agent_create')
+    expect(commands(f).some(c => c!.type === 'agent.startFailed')).toBe(false)
+  })
+
+  // The backend checks a pause, a rule and the machine before it checks the claim, so a run that claimed the start a moment
+  // earlier and is creating it now can make this run's claim read as a pause.
+  it.each([{ dispatched: true }, { harnessId: 'native' }, { dispatched: undefined }])('keeps the creation when the start record is %o', async record => {
+    const f = refused(async () => ({ error: 'PAUSED', detail: 'New work is paused in this Super Tab.', status: 409 }), record)
+    await expect(startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).rejects.toThrow('New work is paused in this Super Tab.')
+    expect(types(f)).not.toContain('agent_create_cancel')
+  })
+
+  it('keeps the creation when the start record cannot be read', async () => {
+    const f = refused(async () => ({ error: 'PAUSED', detail: 'New work is paused in this Super Tab.', status: 409 }))
+    const scoped = f.scoped.getMockImplementation()!
+    let claimed = false
+    f.scoped.mockImplementation(async payload => {
+      if ((payload.command as Record<string, unknown> | undefined)?.type === 'agent.startDispatch') claimed = true
+      return payload.action === 'startStatus' && claimed ? { error: 'BACKEND_UNREACHABLE', status: 502 } : scoped(payload)
+    })
+    await expect(startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).rejects.toThrow('New work is paused in this Super Tab.')
+    expect(types(f)).not.toContain('agent_create_cancel')
+  })
+
+  it.each([
+    ['its reply is lost', async () => { throw new Error('Cancellation reply interrupted') }],
+    ['it names another creation', async () => ({ creationId: 'another-creation-id', state: 'cancelled' })],
+    ['the creation launched after all', async () => ({ creationId: 'super-native-receipt', state: 'created', agent: { id: 'native' } })],
+  ] as const)('does not release the capacity when the cancel is not confirmed: %s', async (_name, cancel) => {
+    const f = refused(async () => ({ error: 'RULE_REFUSED', detail: 'Only these machines.', status: 403 }))
+    const request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => type === 'agent_create_cancel' ? cancel() : request(type, payload, ms))
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ error: 'START_UNCERTAIN', startId: 'start', creationId: 'super-native-receipt', detail: expect.stringContaining('Only these machines.') })
+    expect(types(f)).not.toContain('super_tabs:observeCapacity')
+    expect(commands(f).some(c => c!.type === 'agent.startFailed')).toBe(false)
+  })
+
+  it('releases without failing again a start the backend already failed', async () => {
+    const f = refused(async () => ({ error: 'MACHINE_PAUSED', detail: 'New work is paused on this machine.', status: 409 }), { error: 'Timed out.' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ error: 'START_FAILED', detail: 'New work is paused on this machine.' })
+    expect(types(f)).toContain('super_tabs:observeCapacity')
+    expect(commands(f).some(c => c!.type === 'agent.startFailed')).toBe(false)
   })
 })

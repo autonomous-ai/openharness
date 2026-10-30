@@ -48,6 +48,12 @@ const unavailable = (detail: string): Json => ({ error: 'CAPACITY_UNAVAILABLE', 
  *  so a reservation held past its start counted the agent twice: on Ken's MacBook Pro (2026-10-28) three settled builders
  *  using about 0.4 GiB held 6 GiB, and a start was refused with 7.85 GiB free. The window covers an agent still loading. */
 export const START_WINDOW_MS = 5 * 60_000
+/** How long a start may hold its reservation while its machine has no creation for it: the backend's own start deadline
+ *  (backend liveness.ts START_PREPARE_MS). A run reserves, claims its dispatch and sends agent_create within about two
+ *  minutes, and one the backend refused at dispatch never sends it: such rows (2 GiB and 10 GiB each) were held for good on
+ *  Diego's Mac (2026-10-30), and at MAX_ACTIVE of them every start there failed. A released row answers START_FINISHED to
+ *  any later run of its start, so none of them can create; each run that confirms the row restarts its deadline. */
+export const START_DEADLINE_MS = 15 * 60_000
 const memoryOf = (core: CoreApi) => {
   const read = createHarnessResourcesReader(() => core.agents.live())
   return async () => new Map((await read()).agents.flatMap(row => row.memoryBytes === null ? [] : [[row.agentId, row.memoryBytes] as const]))
@@ -145,6 +151,7 @@ export class CapacityReservations implements ReservationBook {
   }
 
   private async reconcile(rows: Reservation[], closed?: AbortSignal): Promise<void> {
+    const deadline = this.now() - START_DEADLINE_MS
     for (let index = 0; index < rows.length; index += 8) {
       const observations = await Promise.all(rows.slice(index, index + 8).map(async row => {
         const observation = await this.native(row.creation_id)
@@ -154,14 +161,19 @@ export class CapacityReservations implements ReservationBook {
         const released = observation?.state === 'failed' || observation?.state === 'cancelled'
           || (!!harnessId && await this.core.agents.stopped?.(harnessId).catch(() => false) === true)
           || (observation?.state === 'created' && await this.core.agents.gone?.(harnessId!).catch(() => false) === true)
-        return { row, harnessId, released }
+        // Only a confirmed missing creation: a pending, unconfirmed or unreadable one may still launch.
+        const expired = observation?.state === 'missing' && !harnessId
+        return { row, harnessId, released, expired }
       }))
       this.transaction(() => {
-        for (const { row, harnessId, released } of observations) {
+        for (const { row, harnessId, released, expired } of observations) {
           // A later reconciliation may already have learned the native ID.
           // Missing/unavailable observations never erase that durable identity.
-          this.db.prepare(`UPDATE reservations SET harness_id = COALESCE(harness_id, ?), released = ?
-            WHERE creation_id = ? AND fingerprint = ? AND released = 0`).run(harnessId, released ? 1 : 0, row.creation_id, row.fingerprint)
+          // The deadline is checked on the row as it is now: a run may have confirmed it again since it was read.
+          this.db.prepare(`UPDATE reservations SET harness_id = COALESCE(harness_id, ?),
+            released = CASE WHEN ? = 1 THEN 1 WHEN ? = 1 AND harness_id IS NULL AND created_at <= ? THEN 1 ELSE 0 END
+            WHERE creation_id = ? AND fingerprint = ? AND released = 0`)
+            .run(harnessId, released ? 1 : 0, expired ? 1 : 0, deadline, row.creation_id, row.fingerprint)
         }
       }, closed)
     }
@@ -224,9 +236,14 @@ export class CapacityReservations implements ReservationBook {
       if (existing.volume !== destination.volume) return unavailable('The destination filesystem changed after this start reserved capacity. Inspect the machine before retrying this start.')
       // Re-read under the same lock as new admissions: another request may have
       // recorded a stop while this one was sampling the destination.
-      return this.transaction(() => this.db.prepare('SELECT released FROM reservations WHERE creation_id = ?').get(creationId)?.released === 0
-        ? { ok: true, reservationId: creationId }
-        : { error: 'START_FINISHED', detail: 'This native start has ended. Create a new start request.' }, closed)
+      // A run that confirms a start not yet created goes on to dispatch and create it: its deadline starts again.
+      return this.transaction(() => {
+        if (this.db.prepare('SELECT released FROM reservations WHERE creation_id = ?').get(creationId)?.released !== 0) {
+          return { error: 'START_FINISHED', detail: 'This native start has ended. Create a new start request.' }
+        }
+        this.db.prepare('UPDATE reservations SET created_at = ? WHERE creation_id = ? AND released = 0 AND harness_id IS NULL').run(this.now(), creationId)
+        return { ok: true, reservationId: creationId }
+      }, closed)
     }
     if (native?.state !== 'missing') return unavailable('The machine could not confirm that this start is new. Resume its existing receipt before starting another agent.')
     const freeMemory = bytes(resources?.memoryTotalBytes) && bytes(resources?.memoryUsedBytes) && resources.memoryUsedBytes <= resources.memoryTotalBytes
