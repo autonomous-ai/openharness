@@ -427,7 +427,14 @@ in the route alike, so Sonnet (2), Haiku (1) and any model the table does not
 name build nothing. Two exceptions: a model a person named, and a grid model
 for low-risk docs, tests or fixtures (below). The server refuses an agent's
 start, assignment or pick otherwise, and lets a person through with a warning.
-An owner who wants Sonnet Builders rates Sonnet 3 in their table.
+An owner who wants Sonnet Builders rates Sonnet 3 in their table. A Claude agent
+that reports no model is rated 1, since Claude Code's own default depends on
+the account and can be Sonnet; a person's own start without a model therefore
+posts a warning.
+
+**No Haiku by default.** Haiku's row is off too (review of #2314): an older CLI
+on a newer server picked it for easy work that the server refuses, on every
+route. With it off, every row the default table offers is rated 3.
 
 **Cheap first.** A grid model builds only low-risk work of kind `docs`,
 `tests` or `fixtures`, singular or plural (Ken, 2026-10-30), and ranks first

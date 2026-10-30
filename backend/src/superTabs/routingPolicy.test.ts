@@ -20,6 +20,10 @@ describe('routing policy', () => {
   it('turns Sonnet off in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
     const sonnet = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.filter(m => m.engine === 'claude' && m.model === 'sonnet')
     expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'medium', quality: 2, enabled: false })])
+    // Haiku too (review of #2314): an older CLI on the new server picked it for easy work the server refuses, on every route.
+    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.model === 'haiku')).toEqual([expect.objectContaining({ quality: 1, enabled: false })])
+    // What an older CLI's route can still pick from the default table builds: every row it may pick is rated 3.
+    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.enabled).every(m => m.quality === 3)).toBe(true)
     expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([false])
     // An owner who saved the table before keeps Sonnet on; it is their row.
     const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: true } : m) }

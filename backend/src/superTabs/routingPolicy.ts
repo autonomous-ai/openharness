@@ -74,7 +74,9 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
     // Off since 2026-10-30 (Ken: no Sonnet Builders). Kept as a row so an owner can turn it back on; an owner's saved table keeps
     // its own Sonnet row as it is, and a forbidModel rule rules Sonnet out there.
     { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false },
-    { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
+    // Off since 2026-10-30 too (review of #2314): a build needs 3, and an older CLI on the new server picked Haiku for easy work
+    // that the server then refused, again on every route. With it off, an older CLI picks a model rated 3.
+    { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: false },
   ],
   floor: { low: 1, medium: 2, high: 3 },
   quotaReserve: 10,
