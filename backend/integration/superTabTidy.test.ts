@@ -450,6 +450,24 @@ describe('a review nobody reviews', () => {
     expect(await f.isArchived()).toBe(true)
   })
 
+  // Review of #2322: a Ready committed inside the close's write saw the review still open and opened none; the close then
+  // archived it, and the work was left with no review, silently (the 10-28 failure).
+  it('stays open when a Ready for review with a new pull request commits during its close, so the work keeps a review', async () => {
+    const f = await waiting()
+    let during: (() => Promise<unknown>) | null = () => f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
+    const hooked = db.$extends({ query: { superTabDecision: { async findFirst({ args, query }) {
+      if (during && (args.where as { conversationId?: string } | undefined)?.conversationId === f.review.key) { const run = during; during = null; await run() }
+      return query(args)
+    } } } })
+    const closing = new SuperTabStore(hooked as unknown as PrismaClient, () => f.clock.now)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, closing, github({ [PR]: 'merged' }), f.clock.now)
+    expect(during).toBeNull()
+    expect(await f.isArchived()).toBe(false)
+    expect(await f.closeLines()).toEqual([])
+    expect((await f.reviews()).filter(row => !row.archived)).toHaveLength(1)
+  })
+
   it('is cancelled by its Lead with "current": it archives with the reason, and what waited there for the Lead ends', async () => {
     const f = await waiting()
     const waitingFor = await db.superTabDelivery.findMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'queued' } })

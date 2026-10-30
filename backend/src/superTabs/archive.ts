@@ -59,6 +59,8 @@ export async function markFinishedGroups(db: PrismaClient): Promise<number> {
   const answer = await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
     { q: { workFinished: { $exists: false }, deleted: false, 'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true },
     // Open groups only (the mark's index leads with it and archived): the reviews waiting for a Reviewer on 2026-10-30.
+    // Measured on prod that day: about 290 index keys and documents examined, 1 ms; it marked 35. Remove it in the
+    // release after #2322's, once every part has been written or marked by it.
     { q: { workFinished: { $in: [false, null] }, archived: false, deleted: false, 'data.reviewOf': { $type: 'string' },
       $or: [{ 'data.assignment': null }, { 'data.assignment.status': { $in: ['done', 'stopped', 'cancelled', 'lost'] } }] }, u: { $set: { workFinished: true } }, multi: true },
   ] })

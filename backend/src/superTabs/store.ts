@@ -2694,7 +2694,10 @@ export class SuperTabStore {
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
       await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } },
         data: { status: 'cancelled', holdReason: null, holdSince: null } })
-      await this.save(tx, loaded, state, clock.next())
+      // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
+      // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
+      // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
+      await this.save(tx, loaded, state, clock.next(), review ? [{ kind: 'group', key: group.reviewOf! }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
     })

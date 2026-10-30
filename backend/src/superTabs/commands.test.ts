@@ -1840,6 +1840,20 @@ describe('Reviewer role', () => {
         .toEqual([`Review opened by itself for #1, but no Reviewer is free. Route it and start one.`])
     })
 
+    // Review of #2322: a review whose Reviewer stopped had an ended attempt, which the CLI names for "current", so it answered
+    // "already ended" and stayed open while its pull request was.
+    it('lets the Lead cancel a review whose Reviewer stopped, by "current" or by the ended attempt\'s id', () => {
+      for (const named of ['current', 'ended']) {
+        const { f, leadActor, markReady, reviews } = ready()
+        markReady(`Ready. ${pr}`)
+        const review = reviews()[0]!, attempt = review.assignment!.id
+        f.run({ type: 'work.status', conversationId: review.id, assignmentId: attempt, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+        const effects = f.run({ type: 'work.cancel', conversationId: review.id, assignmentId: named === 'current' ? 'current' : attempt, reason: 'Merged' }, leadActor)
+        expect(reviews()[0]).toMatchObject({ archived: true, assignment: { status: 'stopped' } })
+        expect(effects.messages.map(m => [m.text, m.recipients])).toEqual([['The Lead cancelled this task: Merged.', []]])
+      }
+    })
+
     it('opens a new review on the next Ready for review once the archive pass closed the open one (tidy.ts)', () => {
       const { f, leadActor, reviewer, fresh, markReady, reviews } = ready()
       for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)

@@ -2304,8 +2304,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const allowed = isLead || (actor.kind === 'person' && actor.userId === state.ownerId)
       // A task nobody was ever assigned, such as a review no Reviewer was free for, has no assignment to name: its Lead or
       // the tab owner cancels it by "current", and it archives with the reason (Ken, 2026-10-30: 28 reviews waited for a
-      // Reviewer with no way out). A named id, a chat, or anyone else is refused as before.
-      if (!assignment && command.assignmentId === 'current' && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
+      // Reviewer with no way out). So does a review whose Reviewer stopped or finished, by "current" or that ended attempt's
+      // id (the CLI fills "current" with it). A named id, a chat, or anyone else is refused as before.
+      const unassigned = !assignment && command.assignmentId === 'current'
+      const reviewEnded = !!group.reviewOf && !!assignment && ['stopped', 'done'].includes(assignment.status)
+        && (command.assignmentId === 'current' || command.assignmentId === assignment.id)
+      if ((unassigned || reviewEnded) && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
         message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         // Its line is a report the Lead acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
