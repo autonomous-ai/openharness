@@ -671,6 +671,7 @@ class SwarmNewProjectSteps {
       check();
       _started = true;
     }
+    final name = swarmRepositoryName(startRepository ?? repositoryUrl);
     if (!_named) {
       await _send(
         () => {
@@ -679,7 +680,7 @@ class SwarmNewProjectSteps {
           'command': {
             'type': 'project.rename',
             'projectId': projectId,
-            'name': swarmRepositoryName(startRepository ?? repositoryUrl),
+            'name': name,
           },
         },
         (_) {},
@@ -687,15 +688,12 @@ class SwarmNewProjectSteps {
       check();
       _named = true;
     }
-    // Read before the project opens, so its screen finds it: once more when
-    // the read joined was asked before the project was.
-    for (
-      var i = 0;
-      i < 2 && reader.snapshot?.projectById(projectId) == null;
-      i++
-    ) {
+    // Read before the project opens, so its screen finds it by its name:
+    // once more when the read joined was asked before the name was.
+    for (var i = 0; i < 2; i++) {
       await reader.refresh();
       check();
+      if (reader.snapshot?.projectById(projectId)?.name == name) break;
     }
     return projectId;
   }
@@ -959,6 +957,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    // Signed out or another account: its session is gone, and nothing of it
+    // is listened to again.
+    if (_closing || SwarmScope.of(context) != widget.session) {
+      _close();
+      return const SizedBox.shrink();
+    }
     final readers = [for (final id in widget.swarmIds) ?_inbox.reader(id)];
     return ListenableBuilder(
       listenable: Listenable.merge([widget.session, _inbox, ...readers]),
