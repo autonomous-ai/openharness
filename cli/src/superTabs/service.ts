@@ -354,6 +354,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // only that host's admission/receipt, never its account or private roster.
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
         if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
+        if (payload.action === 'returnCapacity') return await reservations().giveBack(payload.creationId, closed)
         // A backend-issued context scopes provenance only. Existing machine
         // control is still required to open/write the native terminal itself.
         if (payload.action === 'prepareNative' || payload.action === 'renewNative') {
