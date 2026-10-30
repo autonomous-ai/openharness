@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -10,6 +11,12 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
+
+/// How long a queued delivery's claims fail before its sender is told, and how
+/// long a queued message waits with no claim fields before the same (prod 10-30,
+/// v1.3.71: claims failed for two hours and nothing showed).
+const superTabClaimFailingNotice = Duration(seconds: 60);
+const superTabQueuedNotice = Duration(minutes: 2);
 
 /// The line under the chat's newest own message, shown only while it sends,
 /// when it was not sent, or when its delivery needs a hand; a message that
@@ -23,7 +30,7 @@ class SuperTabMessageReceipt extends StatefulWidget {
     required this.onAddLead,
     required this.machineName,
     this.app,
-    this.now = DateTime.now,
+    this.now,
   });
   final SuperTabMessage message;
   final SuperTabController controller;
@@ -31,7 +38,9 @@ class SuperTabMessageReceipt extends StatefulWidget {
   final void Function(SuperTabDelivery delivery, String resolution) onResolve;
   final VoidCallback onAddLead;
   final String Function(String machineId) machineName;
-  final DateTime Function() now;
+
+  /// Defaults to the package clock, which tests move (a const default cannot).
+  final DateTime Function()? now;
 
   @override
   State<SuperTabMessageReceipt> createState() => _SuperTabMessageReceiptState();
@@ -74,7 +83,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     if (mounted) setState(() {});
   }
 
-  void _clock(bool needed) {
+  void _clock(bool needed, [Duration? until]) {
     _timer?.cancel();
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     if (!needed ||
@@ -82,7 +91,9 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         (lifecycle != null && lifecycle != AppLifecycleState.resumed)) {
       return;
     }
-    _timer = Timer(const Duration(milliseconds: 500), _changed);
+    // A notice threshold is one wake-up at its time, not a tick every 500 ms.
+    final wait = until ?? const Duration(milliseconds: 500);
+    _timer = Timer(wait.isNegative ? Duration.zero : wait, _changed);
   }
 
   @override
@@ -101,7 +112,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     final name =
         c.snapshot?.agentName(delivery?.agentId ?? '', fallback: 'Lead') ??
         'Lead';
-    final now = widget.now();
+    final now = widget.now?.call() ?? clock.now();
     final machine = c.snapshot?.machines
         .where((m) => m['machineId'] == agent?.machineId)
         .firstOrNull;
@@ -129,6 +140,32 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         delivery?.pending == true &&
         message.createdAt != null &&
         now.difference(message.createdAt!) < const Duration(seconds: 3);
+    // A queued delivery to a running agent on an online, readable Swarm that is
+    // not getting in: its claims fail, or no claim fields came (an older backend)
+    // and it just sits. Either reason shows the line, so it never drops out
+    // when the other one starts.
+    final queued =
+        delivery?.status == 'queued' &&
+        agent != null &&
+        agent.downSince == null &&
+        !offline &&
+        !c.backendUnreachable;
+    final failingSince = delivery?.claimFailingSince;
+    final failingAt = failingSince?.add(superTabClaimFailingNotice);
+    final queuedAt = message.createdAt?.add(superTabQueuedNotice);
+    final stuck =
+        queued &&
+        ((failingAt != null && !failingAt.isAfter(now)) ||
+            (queuedAt != null && !queuedAt.isAfter(now)));
+    // Until a threshold is crossed the receipt must tick by itself: no snapshot
+    // arrives to rebuild it. The earlier of the two is the next to cross.
+    final upcoming = [
+      failingAt,
+      queuedAt,
+    ].whereType<DateTime>().where((t) => t.isAfter(now));
+    final nextAt = queued && !stuck && upcoming.isNotEmpty
+        ? upcoming.reduce((a, b) => a.isBefore(b) ? a : b)
+        : null;
     final error = Theme.of(context).colorScheme.error;
     var color = error;
     var icon = AppIcons.triangleAlert;
@@ -175,12 +212,24 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
+    } else if (stuck) {
+      // Queued to an online computer with no line read as delivered (prod 10-30).
+      // Nothing to do for the sender: Send again would queue behind the same failure.
+      color = grid.AppPalette.warn;
+      icon = AppIcons.clock;
+      title = 'Not delivered yet';
+      final host =
+          machine?['name'] as String? ?? widget.machineName(agent.machineId);
+      note = failingSince != null
+          ? "$host is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can."
+          : "$host is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.";
     } else if (fresh) {
       color = DesktopChrome.muted;
       title = 'Sending…';
       sending = true;
     }
-    _clock(fresh || (delivery?.pending == true && offline));
+    final ticking = fresh || (delivery?.pending == true && offline);
+    _clock(ticking || nextAt != null, ticking ? null : nextAt?.difference(now));
     if (title == null) return const SizedBox.shrink();
     final style = superTabReceiptStyle(color);
     final parts = <Widget>[
