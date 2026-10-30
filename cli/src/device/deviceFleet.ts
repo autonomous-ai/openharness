@@ -25,11 +25,17 @@ const RESET_AFTER_FAILURES = 2
  */
 const READS = new Set(['agents_list', 'agent_recent', 'models_list'])
 
-/** What the dial's tile says for a turn, stop or answer that did not reach its machine. */
+/**
+ * What the dial's tile says for a turn, stop or answer that may not have reached its machine.
+ *
+ * "May not", never "not": the refusal behind most of these is a clear frame from the relay, which could
+ * forge one for a turn the far side did run. Telling the person to send it again would invite the very
+ * double run that re-sending automatically was ruled out for (security review 1 on #2356).
+ */
 function notDelivered(type: string, name: string): string {
-  if (type === 'cancel') return `Stop not delivered to ${name}.`
-  if (type === 'question_response') return `Answer not delivered to ${name}. Answer again.`
-  return `Not delivered to ${name}. Send it again.`
+  if (type === 'cancel') return `Stop may not have reached ${name}. Check before stopping again.`
+  if (type === 'question_response') return `Answer may not have reached ${name}. Check before answering again.`
+  return `May not have reached ${name}. Check before sending again.`
 }
 
 /** Split `runtime-v1:<sid>:<engine>:<model>@<effort>` into the two words the dial's chips show. */
@@ -427,7 +433,7 @@ export class DeviceFleet implements MachineFleet {
   private onUndelivered(what: Undelivered): void {
     if (!what.agentId) return
     const name = this.opts.list.find(what.machineId)?.name || 'that computer'
-    this.emit({ machineId: what.machineId, kind: 'error', agentId: what.agentId, text: notDelivered(what.type, name), recap: 'Not delivered' })
+    this.emit({ machineId: what.machineId, kind: 'error', agentId: what.agentId, text: notDelivered(what.type, name), recap: 'May not have arrived' })
   }
 
   private emit(event: FleetEvent): void {

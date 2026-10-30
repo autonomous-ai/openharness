@@ -61,6 +61,8 @@ const DENIED_QUIET_MS = 10 * 60_000
 /** Frames held per machine while its session renews, and for how long. The restart replay is a few dozen. */
 const HELD_MAX = 64
 const HELD_TTL_MS = 30_000
+/** And by size: the socket takes frames of any size, so a count alone would let a relay park megabytes. */
+const HELD_MAX_BYTES = 2 * 1024 * 1024
 /** What the person sent each machine, kept under its session so a refusal can name what was not delivered. */
 const SENT_KEPT = 32
 /** A refusal with no counter names what was sealed this recently. */
@@ -101,6 +103,8 @@ export interface DeviceLinkOpts {
   log: (line: string) => void
   /** The clock, for the renewal limit. Tests only. */
   now?: () => number
+  /** How long a hello waits for its welcome. Tests only; 15 s otherwise. */
+  handshakeTimeoutMs?: number
 }
 
 /** The lane's side of a machine's E2EE session: whether it is up. Its keys are the gateway's. */
@@ -156,10 +160,12 @@ export class DeviceLink {
    * its new process's keys, before anything here knows it restarted. Dropped, those questions vanished
    * from the dial for good: the far side replays only when a commander joins, not when a session renews.
    */
-  private readonly held = new Map<string, Array<{ frame: DeviceFrame; at: number }>>()
-  /** When each machine's session was last thrown away on the far side's word, and last started for a frame. */
+  private readonly held = new Map<string, Array<{ frame: DeviceFrame; at: number; bytes: number }>>()
+  /** When each machine's session was last thrown away on the far side's word, last started for a frame, and
+   *  last dropped on an offline notice: each limited per machine (RENEW_EVERY_MS). */
   private readonly renewedAt = new Map<string, number>()
   private readonly startedAt = new Map<string, number>()
+  private readonly offlineAt = new Map<string, number>()
   /** What the person sent under each machine's current session, and under the one before it. */
   private readonly sent = new Map<string, SentUnder>()
   private readonly sentBefore = new Map<string, SentUnder>()
@@ -233,10 +239,13 @@ export class DeviceLink {
     const session: LaneSession = { ready: false }
     this.sessions.set(machineId, session)
     const handshake = new Promise<void>((resolve, reject) => {
+      // Unanswered (or answered only with welcomes that do not verify — see onWelcome): the session that
+      // never came up is let go here and at the gateway, with whatever was held for it.
       const timer = setTimeout(() => {
+        if (this.sessions.get(machineId) === session) { this.failCrypto(machineId, new Error('the machine did not answer the E2EE hello')); return }
         this.cryptoWaiters.delete(machineId)
         reject(new Error('the machine did not answer the E2EE hello'))
-      }, RPC_TIMEOUT_MS)
+      }, this.opts.handshakeTimeoutMs ?? RPC_TIMEOUT_MS)
       this.cryptoWaiters.set(machineId, { resolve, reject, timer })
       // The gateway starts the session and words the hello. It goes in clear AND tagged: the backend routes
       // a device frame by its outer machineId, so without the tag the handshake for a background machine
@@ -306,6 +315,21 @@ export class DeviceLink {
       clearTimeout(waiter.timer)
       waiter.reject(new Error(SESSION_GONE))
     }
+  }
+
+  /** The backend says a machine went offline: its session goes, at most once per machine per RENEW_EVERY_MS. */
+  private wentOffline(machineId: string): void {
+    if (!this.sessions.has(machineId) && !this.hasPending(machineId)) return
+    if (!this.allow(this.offlineAt, machineId)) {
+      this.opts.log(`device: ${machineId} reported offline again moments after the last — its session is kept`)
+      return
+    }
+    this.sessionGone(machineId, true)
+  }
+
+  private hasPending(machineId: string): boolean {
+    for (const waiter of this.pending.values()) if (waiter.machineId === machineId) return true
+    return false
   }
 
   /** What was sent under a machine's session, kept as "the one before" once that session goes. */
@@ -583,13 +607,28 @@ export class DeviceLink {
     })
   }
 
+  /**
+   * A welcome is read only while this daemon's hello for that machine waits for one.
+   *
+   * The relay can send any frame, including a replayed old welcome or garbage. Read against a session that
+   * is up, one that did not verify used to throw the session away — and with it, after this lane began
+   * holding frames, the restart replay — with no limit and no line (security review 1 on #2356: three
+   * forged welcomes in 30 s cost three drops and four hellos). So one with no hello waiting is ignored, and
+   * one that does not verify is ignored too: the hello waits on for the real one, or times out.
+   */
   private async onWelcome(machineId: string, payload: Record<string, unknown>): Promise<void> {
     const session = this.sessions.get(machineId)
-    if (!session) return
+    if (!session || session.ready || !this.cryptoWaiters.has(machineId)) {
+      this.opts.log(`device: ignored an e2e_welcome from ${machineId || '?'} — no hello of this daemon is waiting for one`)
+      return
+    }
     const welcomed = await this.opts.seal.welcome(machineId, payload).catch(() => false)
     // Given up while the gateway read it (the socket closed, a reset): a newer session is not this one's.
     if (this.sessions.get(machineId) !== session) return
-    if (!welcomed) { this.failCrypto(machineId, new Error('E2EE_HANDSHAKE_FAILED')); return }
+    if (!welcomed) {
+      this.opts.log(`device: ignored an e2e_welcome from ${machineId} that does not verify — still waiting for the hello's own`)
+      return
+    }
     session.ready = true
     const waiter = this.cryptoWaiters.get(machineId)
     if (waiter) { clearTimeout(waiter.timer); this.cryptoWaiters.delete(machineId); waiter.resolve() }
@@ -609,12 +648,15 @@ export class DeviceLink {
    * Keep a sealed frame from a machine with no session up, and start one for it unless one is on its way.
    * `renewing`: the caller just threw the old session away for it, which was already limited.
    */
-  private hold(machineId: string, frame: DeviceFrame, renewing: boolean): void {
+  private hold(machineId: string, frame: DeviceFrame, bytes: number, renewing: boolean): void {
     const list = this.held.get(machineId) ?? []
+    const total = list.reduce((sum, held) => sum + held.bytes, 0)
     if (list.length >= HELD_MAX) {
       this.opts.log(`device: held too many frames for ${machineId} while its session renews — dropped ${frame.type ?? '?'}`)
+    } else if (total + bytes > HELD_MAX_BYTES) {
+      this.opts.log(`device: held too much for ${machineId} while its session renews — dropped ${frame.type ?? '?'} (${bytes} bytes)`)
     } else {
-      list.push({ frame, at: this.now() })
+      list.push({ frame, at: this.now(), bytes })
       this.held.set(machineId, list)
     }
     if (this.handshakes.has(machineId)) return
@@ -710,7 +752,8 @@ export class DeviceLink {
 
   private async onMessage(raw: WebSocket.RawData): Promise<void> {
     let frame: DeviceFrame
-    try { frame = JSON.parse(raw.toString()) as DeviceFrame } catch { return }
+    const text = raw.toString()
+    try { frame = JSON.parse(text) as DeviceFrame } catch { return }
 
     // WHICH MACHINE THIS CAME FROM. The backend tags every commander frame with it (hub.ts
     // deliverUpLocal), and with N machines attached at once it is the only thing that says which key
@@ -743,7 +786,7 @@ export class DeviceLink {
     const wrapped = isWrapped(frame.payload)
     // Sealed by a linked machine while no session with it is up — after a drop, or before the first call:
     // held, and read once one is (see `held`).
-    if (wrapped && from && !session?.ready && this.opts.peer(from)) { this.hold(from, frame, false); return }
+    if (wrapped && from && !session?.ready && this.opts.peer(from)) { this.hold(from, frame, text.length, false); return }
     // A frame that was never sealed (a control frame) is read as it is, as the session itself would read it
     // (lib/e2ee/relayClient.ts `unwrapIncoming`): only a sealed one goes to the gateway to be opened.
     if (session?.ready && wrapped) {
@@ -752,7 +795,7 @@ export class DeviceLink {
         // The gateway restarted under the lane and holds no session: kept, and read under the next one.
         this.forget(from, session)
         this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — the E2EE session with ${from} is gone, holding it for a new one`)
-        this.hold(from, frame, false)
+        this.hold(from, frame, text.length, false)
         return
       }
       if ('unknownEpoch' in opened) {
@@ -763,7 +806,7 @@ export class DeviceLink {
         }
         this.opts.log(`device: ${from} restarted (a new epoch) — renewing its E2EE session, holding what it sends until then`)
         this.sessionGone(from)
-        this.hold(from, frame, true)
+        this.hold(from, frame, text.length, true)
         return
       }
       if ('unreadable' in opened) {
@@ -828,11 +871,12 @@ export class DeviceLink {
     }
     // A machine the backend says went offline took its session with it: its daemon is gone or going, and the
     // one that comes back holds none. Dropped now, so the next call says hello instead of sealing for nobody.
-    // Still passed on below: these are the wheel's dots.
-    if (type === 'node_status' && from && payload.online === false) this.sessionGone(from, true)
+    // Still passed on below: these are the wheel's dots. Limited per machine like every other drop on
+    // another's word: the notice comes through the relay too, and repeated it would cost a hello each call.
+    if (type === 'node_status' && from && payload.online === false) this.wentOffline(from)
     if (type === 'machines_status' && Array.isArray(payload.statuses)) {
       for (const row of payload.statuses as Array<{ machineId?: unknown; online?: unknown }>) {
-        if (typeof row?.machineId === 'string' && row.machineId && row.online === false) this.sessionGone(row.machineId, true)
+        if (typeof row?.machineId === 'string' && row.machineId && row.online === false) this.wentOffline(row.machineId)
       }
     }
 

@@ -108,7 +108,7 @@ describe('DeviceFleet', () => {
     expect(resets).toEqual([])
   })
 
-  it('shows a turn, a stop or an answer that did not reach its machine on that agent\'s tile, never as sent', async () => {
+  it('shows a turn, a stop or an answer that may not have reached its machine on that agent\'s tile, never inviting a blind resend', async () => {
     // Diego, 10-30: after the far daemon restarted, a dial turn vanished with nothing on the dial to say so.
     const { fleet, undelivered } = make()
     const seen: FleetEvent[] = []
@@ -120,10 +120,10 @@ describe('DeviceFleet', () => {
     undelivered({ machineId: 'm1', type: 'message' })
     undelivered({ machineId: 'gone', type: 'message', agentId: 'a4' })
     expect(seen).toEqual([
-      { machineId: 'm1', kind: 'error', agentId: 'a1', text: 'Not delivered to office-imac. Send it again.', recap: 'Not delivered' },
-      { machineId: 'm1', kind: 'error', agentId: 'a2', text: 'Stop not delivered to office-imac.', recap: 'Not delivered' },
-      { machineId: 'm1', kind: 'error', agentId: 'a3', text: 'Answer not delivered to office-imac. Answer again.', recap: 'Not delivered' },
-      { machineId: 'gone', kind: 'error', agentId: 'a4', text: 'Not delivered to that computer. Send it again.', recap: 'Not delivered' },
+      { machineId: 'm1', kind: 'error', agentId: 'a1', text: 'May not have reached office-imac. Check before sending again.', recap: 'May not have arrived' },
+      { machineId: 'm1', kind: 'error', agentId: 'a2', text: 'Stop may not have reached office-imac. Check before stopping again.', recap: 'May not have arrived' },
+      { machineId: 'm1', kind: 'error', agentId: 'a3', text: 'Answer may not have reached office-imac. Check before answering again.', recap: 'May not have arrived' },
+      { machineId: 'gone', kind: 'error', agentId: 'a4', text: 'May not have reached that computer. Check before sending again.', recap: 'May not have arrived' },
     ])
   })
 
