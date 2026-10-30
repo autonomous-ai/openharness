@@ -1754,7 +1754,12 @@ class NewHarnessController extends ChangeNotifier {
           _engine == 'claude' &&
           _model == null &&
           !asGuest &&
-          integration?.leadModels?.refusal('claude', kLeadModel.model) == null
+          (integration?.leadModels?.modelOn(
+                'claude',
+                kLeadModel.model,
+                kLeadModel.effort,
+              ) ??
+              true)
       ? (model: kLeadModel.model, effort: kLeadModel.effort)
       : null;
 

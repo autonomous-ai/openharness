@@ -479,10 +479,12 @@ describe('custom role sets', () => {
     expect(turnedOff.request).not.toHaveProperty('model')
     expect(turnedOff.request).not.toHaveProperty('effort')
     expect(turnedOff.lines).toEqual(['Builder starts on its engine\u2019s own model, not gpt-6.1-sol at medium: the routing policy turns off Codex gpt-6.1-sol.'])
+    // A rule the plain start already breaks comes first; the default is still judged by the next (re-review of #2274).
+    f.run({ type: 'rule.set', projectId: p.projectId, rule: { kind: 'minEffort', engine: 'codex', effort: 'high' }, text: 'At least high.' } as Command, peer)
     f.run({ type: 'rule.set', projectId: p.projectId, rule: { kind: 'forbidModel', engine: 'codex', model: 'sol' }, text: 'No Sol.' } as Command, peer)
     const ruled = startWith()
     expect(ruled.request).not.toHaveProperty('model')
-    expect(ruled.lines).toEqual(['Builder starts on its engine\u2019s own model, not gpt-6.1-sol at medium: the owner\'s rule "No Sol." rules out Codex gpt-6.1-sol.'])
+    expect(ruled.lines).toContain('Builder starts on its engine\u2019s own model, not gpt-6.1-sol at medium: the owner\'s rule "No Sol." rules out Codex gpt-6.1-sol.')
   })
 
   it('starts and assigns by a role id that exists in the custom set and matches the agent\'s kind', () => {

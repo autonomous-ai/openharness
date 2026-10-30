@@ -1574,47 +1574,94 @@ void main() {
       expect(start.containsKey('effort'), isFalse);
     });
 
-    test(
-      'with every Opus row of the Swarm’s model list off, a Claude PM on its own Mac launches on its engine’s own model',
-      () async {
-        final f = SuperTabLaunchFixture();
-        Map<String, dynamic> row(String model, String effort, bool on) => {
-          'engine': 'claude',
-          'model': model,
-          'effort': effort,
-          'quality': 3,
-          'cost': 3,
-          'enabled': on,
-        };
-        f.connection.server.routingPolicy = {
-          'policy': {
-            'version': 1,
-            'models': [
-              row('opus', 'high', false),
-              row('opus', 'xhigh', false),
-              row('sonnet', 'medium', true),
-            ],
-            'floor': {'low': 1, 'medium': 2, 'high': 3},
-            'quotaReserve': 10,
-            'notes': '',
-          },
-          'warnings': <String>[],
-          'overridden': <String>[],
-          'override': null,
-        };
-        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-        final box = await f.box(engine: 'claude', newProject: true);
-        expect(box.leadLaunchModel, isNull);
-        expect(box.leadModelLabel, 'Default model');
-        expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-        final sent = [
-          for (final call in f.connection.calls)
-            if (call.$1 == 'agent_create') call.$2,
-        ];
-        expect(sent.single.containsKey('model'), isFalse);
-        expect(sent.single.containsKey('effort'), isFalse);
-      },
-    );
+    test('with Opus at xhigh off and at high on in the Swarm’s model list, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String effort, bool on) => {
+        'engine': 'claude',
+        'model': 'opus',
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [row('high', true), row('xhigh', false)],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+    });
+
+    test('with every Opus row of the Swarm’s model list off, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String model, String effort, bool on) => {
+        'engine': 'claude',
+        'model': model,
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [
+            row('opus', 'high', false),
+            row('opus', 'xhigh', false),
+            row('sonnet', 'medium', true),
+          ],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+      // As the server judges it (backend commands.ts): the xhigh row
+      // decides, and any Opus row only when the list has none at xhigh
+      // (re-review of #2274).
+      LeadModelList list(List<(String, bool)> opus) => LeadModelList.of({
+        'models': [for (final (effort, on) in opus) row('opus', effort, on)],
+      });
+      expect(
+        list([('high', true), ('xhigh', false)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(
+        list([('high', false), ('xhigh', true)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isTrue,
+      );
+      expect(list([('high', true)]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(
+        list([('high', false)]).modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(list([]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final sent = [
+        for (final call in f.connection.calls)
+          if (call.$1 == 'agent_create') call.$2,
+      ];
+      expect(sent.single.containsKey('model'), isFalse);
+      expect(sent.single.containsKey('effort'), isFalse);
+    });
   });
 
   test(

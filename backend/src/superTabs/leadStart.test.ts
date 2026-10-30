@@ -250,6 +250,13 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
     const named = swarm()
     named.lead('owner-mac', { effort: 'high' }, owner, policyWith(m => m.model === 'opus' && m.effort === 'xhigh'))
     expect(requestOf(named)).toMatchObject({ model: 'opus', effort: 'high' })
+    // Each rule on its own (re-review of #2274): one the plain request already breaks never lets the default through another.
+    const two = swarm()
+    two.run({ type: 'rule.set', projectId: two.app.projectId, rule: { kind: 'minEffort', effort: 'high' }, text: 'At least high.' } as Command)
+    two.run({ type: 'rule.set', projectId: two.app.projectId, rule: { kind: 'forbidModel', model: 'opus' }, text: 'No Opus.' } as Command)
+    const both = two.lead('owner-mac')
+    expect(requestOf(two)).not.toHaveProperty('model')
+    expect(linesOf(two, both)).toContain('Product Manager starts on its engine\u2019s own model, not opus at xhigh: the owner\'s rule "No Opus." rules out Claude opus.')
     // Allowed: no line.
     const plain = swarm()
     expect(linesOf(plain, plain.lead('owner-mac'))).toEqual([])

@@ -677,11 +677,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const model = filled.model!, engineName = filled.engine === 'codex' ? 'Codex' : 'Claude'
     const rows = policy.models.filter(m => m.engine === filled.engine && m.model === model)
     const exact = rows.find(m => m.effort === (filled.effort ?? 'default'))
-    const rules = groupRules(conversationId), target = (r: T) => startTarget({ ...r, machineId })
-    const rule = broken(rules, target(filled), machineName, macOf)
+    // Each rule on its own: one the plain request already breaks never hides another the default breaks (re-review of #2274).
+    const target = (r: T) => startTarget({ ...r, machineId })
+    const rule = groupRules(conversationId).map(r => !broken([r], target(request), machineName, macOf) && broken([r], target(filled), machineName, macOf)).find(Boolean)
     const why = !rows.length ? `the routing policy has no row for ${engineName} ${model}.`
       : !(exact ? exact.enabled : rows.some(m => m.enabled)) ? `the routing policy turns off ${engineName} ${model}${exact ? ` at ${exact.effort}` : ''}.`
-      : rule && !broken(rules, target(request), machineName, macOf) ? rule.replace(/^./, c => c.toLowerCase())
+      : rule ? rule.replace(/^./, c => c.toLowerCase())
       : null
     if (!why) return filled
     effects.messages.push({ id: stableId(operationId, 'role-default'), conversationId, author: sender, replyTo: null, recipients: [], source: RULE_ROW,
