@@ -494,6 +494,17 @@ describe('no secret leaves in a post or a proposal', () => {
     expect(bash(`harness super-tab post chat '${text}' op-1`)).toBe('allow')
   })
 
+  // Since #2355 a post's TEXT - reads stdin, which the secret check above cannot see: refused in wide mode as in its folder.
+  it('refuses a post or a proposal read from stdin, wide or not', () => {
+    for (const guard of [script, narrow]) {
+      for (const command of ['harness super-tab post chat - op-1', "harness super-tab post chat '-' op-1 --reply-to m1", 'harness super-tab propose op-1 -']) {
+        const refused = answer('Bash', { command, description: 'x' }, guard)
+        expect(refused.permissionDecision).toBe('deny')
+        expect(refused.permissionDecisionReason).toContain('Harness cannot check it for secrets')
+      }
+    }
+  })
+
   it.each([
     ['a code block', 'Logs:\n```\nerror at line 1\n```'],
     ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')],
