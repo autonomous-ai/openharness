@@ -270,16 +270,19 @@ fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(t
 #[derive(Clone, Debug, Default)]
 pub struct PopupLook { pub lines: String, pub style: String, pub border_style: String }
 
+/// The folder a harness works in, as its group heading names it: its project, else the last
+/// part of where it works.
+fn folder_of(a: &crate::fleet::Agent) -> String {
+    if !a.project.is_empty() { return a.project.clone() }
+    std::path::Path::new(&a.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "No folder".into())
+}
+
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
-    let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
-    // The project in each row when the harnesses work in more than one.
-    let projects = { let mut p: Vec<&str> = app.fleet.agents.values().map(|a| a.project.as_str()).filter(|p| !p.is_empty()).collect(); p.sort(); p.dedup(); p.len() > 1 };
-    let open: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
     // As the desktop's Cmd-P lists them ("Recently active"): the one active last first — a query
     // ranks by how well it matches, this order breaking ties. (C-b A lists those waiting on you.)
     let mut agents: Vec<&crate::fleet::Agent> = app.fleet.agents.values().collect();
     agents.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)).then_with(|| a.id.cmp(&b.id)));
-    agents.into_iter()
+    let rows: Vec<Row> = agents.into_iter()
         .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
         .filter(|a| project.map(|p| a.project_root == p || a.cwd == p).unwrap_or(true))
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
@@ -287,34 +290,17 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let state = app.fleet.state_of(a);
             let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&a.engine);
-            // (No headings by state: the list is one, the one active last first — its mark says
-            // what each is doing.)
-            let is_open = open.contains(&a.key());
-            // Its one line: the question it asks, what it is doing now, what its last turn came to,
-            // why it failed — the rest in the finder's dim.
-            let (line, loud) = match state {
-                State::NeedsInput => (a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default(), true),
-                State::Working => (a.doing.clone().unwrap_or_else(|| "Working".into()), false),
-                State::Done => (a.did.clone().unwrap_or_else(|| "Finished".into()), false),
-                State::Failed => (Some(a.launch_error.clone()).filter(|e| !e.is_empty()).or_else(|| a.did.clone()).unwrap_or_else(|| "Failed to start".into()), true),
-                State::Starting => ("Starting".into(), false),
-                _ => (a.did.clone().unwrap_or_default(), false),
-            };
-            let quiet = matches!(state, State::Ready | State::Paused | State::Offline);
-            // An idle one's line is where it works (its last turn in the preview).
-            let line = if quiet && line.is_empty() { [a.project.clone(), a.branch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ") } else { line };
-            let detail = vec![span(line, if loud { fg(theme::ATTENTION) } else if quiet { fg(theme::MUTED) } else { Style::default() })];
-            // Where it works and how long it has been as it is (waiting on you since its question,
-            // working since its turn began, done since it ended).
+            // Headed by where it works — its machine and folder (the folder alone in one machine's
+            // list) — so a row is its status, its name and how long it has been as it is (waiting
+            // on you since its question, working since its turn began, done since it ended); what
+            // it is doing is in the preview. Only one waiting on you keeps its question in its row,
+            // as M-1…9 answer it from here with the preview hidden too.
+            let question = a.question.as_ref().filter(|_| state == State::NeedsInput).map(|q| q.prompt.clone()).unwrap_or_default();
+            let folder = folder_of(a);
+            let group = if machine.is_some() { folder } else { format!("{} · {folder}", app.fleet.machine_name(&a.machine_id)) };
             let since = a.state_since(state);
-            // Right: the machine (when there are several) and how long — the name and its line
-            // come first; where it works is searchable and in the preview's title.
-            // Its pull request, where it has one (what it cost is in the preview).
             let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
-            let _ = is_open;
             let narrow = ago(since);
-            let right = [pr.clone(), if projects { a.project.clone() } else { String::new() }, if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, ago(since)]
-                .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
             let live = !matches!(state, State::Paused | State::Offline);
             // What a query finds it by besides its name: where it works, its engine, its pull
             // request, and its state in words ('failed, 'done, 'waiting, 'working, 'idle).
@@ -325,17 +311,27 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             // Its pull request's state in words too: 'pr, 'open, 'merged.
             let pr_words = a.pr.as_ref().map(|p| format!("pr {}", p.state.to_lowercase())).unwrap_or_default();
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
+                .group(group)
                 .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
-                .extra(format!("{} {} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
-                // What it is doing now and how long it has been as it is change as you look.
-                .volatile(matches!(state, State::Working | State::Starting), narrow.chars().count())
+                .extra(format!("{} {} {} {} {} {} {} {} {} {}", a.project, a.branch, a.cwd, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
+                // How long it has been as it is changes as you look.
+                .volatile(false, narrow.chars().count())
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
-                .detail(detail)
-                .right(right)
-                .right_narrow(narrow)
-                .line_first(loud)
+                .detail(vec![span(question, fg(theme::ATTENTION))])
+                .right(narrow)
+                .line_first(true)
         })
-        .collect()
+        .collect();
+    grouped_in_order(rows)
+}
+
+/// [rows] with each group's rows together, in the order of each group's first row (the one
+/// active last's group first), each group's rows in their own order.
+pub fn grouped_in_order(mut rows: Vec<Row>) -> Vec<Row> {
+    let mut first: Vec<Option<String>> = Vec::new();
+    for r in &rows { if !first.contains(&r.group) { first.push(r.group.clone()) } }
+    rows.sort_by_key(|r| first.iter().position(|g| *g == r.group));
+    rows
 }
 
 /// The Claude Code and Codex conversations Harness did not start that C-b s's query found by what
@@ -876,6 +872,96 @@ pub fn route_rows(reply: &Value) -> Vec<Row> {
     }).collect();
     rows.sort_by_key(|r| !r.id.ends_with(best) || best.is_empty());
     rows
+}
+
+#[cfg(test)]
+mod agent_row_tests {
+    use super::*;
+    use crate::app::App;
+    use serde_json::json;
+
+    /// studio (this computer) and lab, harnesses in webapp and api on both, one with no folder.
+    fn app() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        app.fleet.local_id = "local".into();
+        for (id, name) in [("local", "studio"), ("lab", "lab")] {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: name.into(), local: id == "local", status: "online".into(), reach: crate::fleet::Reach::Ready });
+        }
+        let at = |minute: u32| format!("2026-10-30T09:{minute:02}:00.000Z");
+        let in_folder = |name: &str| json!({"name": name, "cwd": format!("/src/{name}"), "branch": "main"});
+        app.fleet.merge_roster("local", &[
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": in_folder("webapp"), "updatedAt": at(50)}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": in_folder("api"), "updatedAt": at(40)}),
+            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": in_folder("webapp"), "updatedAt": at(30)}),
+            json!({"id": "a4", "name": "scratch", "engine": "claude", "updatedAt": at(5)}),
+        ]);
+        app.fleet.merge_roster("lab", &[
+            json!({"id": "b1", "name": "train", "engine": "codex", "project": in_folder("webapp"), "updatedAt": at(45)}),
+            json!({"id": "b2", "name": "ops shell", "engine": "terminal", "project": {"cwd": "/home/me/ops"}, "updatedAt": at(20)}),
+        ]);
+        app
+    }
+
+    fn by_group(rows: &[Row]) -> Vec<(String, Vec<String>)> {
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for r in rows {
+            let g = r.group.clone().unwrap_or_default();
+            match out.last_mut() { Some((last, names)) if *last == g => names.push(r.label.clone()), _ => out.push((g, vec![r.label.clone()])) }
+        }
+        out
+    }
+
+    /// C-b s: one heading per machine and folder, the one active last first, each harness under its
+    /// own once (never a heading twice), its folder from where it works when it has no project.
+    #[test]
+    fn harnesses_are_grouped_by_machine_and_folder() {
+        let app = app();
+        let groups = by_group(&agent_rows(&app, Filter::All, None, None));
+        assert_eq!(groups, vec![
+            ("studio · webapp".to_string(), vec!["fix login".to_string(), "release notes".to_string()]),
+            ("lab · webapp".to_string(), vec!["train".to_string()]),
+            ("studio · api".to_string(), vec!["rate limit".to_string()]),
+            ("lab · ops".to_string(), vec!["ops shell".to_string()]),
+            ("studio · No folder".to_string(), vec!["scratch".to_string()]),
+        ]);
+    }
+
+    /// A row is its status, name and time: where it works is its heading, not said again in it.
+    #[test]
+    fn a_row_says_no_machine_or_folder() {
+        let mut app = app();
+        app.fleet.agents.get_mut(&("local".to_string(), "a1".to_string())).unwrap().pr = Some(crate::fleet::Pr { number: 4812, state: "Open".into(), url: String::new() });
+        let rows = agent_rows(&app, Filter::All, None, None);
+        let row = rows.iter().find(|r| r.label == "fix login").unwrap();
+        for word in ["studio", "webapp", "4812"] { assert!(!row.right.contains(word), "{word} in {:?}", row.right); }
+        assert!(row.detail.iter().all(|s| s.content.is_empty()), "{:?}", row.detail);
+        assert!(!row.right.is_empty(), "how long it has been as it is");
+        // Still found by where it works and its pull request.
+        assert!(row.extra.contains("studio") && row.extra.contains("webapp") && row.extra.contains("4812"), "{}", row.extra);
+    }
+
+    /// A harness waiting on you keeps its question in its row: M-1…9 answer it from the list, the
+    /// preview hidden or not.
+    #[test]
+    fn a_waiting_harness_keeps_its_question() {
+        let mut app = app();
+        app.fleet.agents.get_mut(&("local".to_string(), "a2".to_string())).unwrap().question = Some(crate::fleet::Question {
+            request_id: "r1".into(), answer_key: String::new(), prompt: "Use Redis?".into(), options: vec![], multi: false, since: std::time::Instant::now(),
+        });
+        let rows = agent_rows(&app, Filter::All, None, None);
+        let line = |name: &str| rows.iter().find(|r| r.label == name).unwrap().detail.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert_eq!(line("rate limit"), "Use Redis?");
+        assert_eq!(line("fix login"), "");
+    }
+
+    /// One machine's harnesses (from the machines list) are headed by their folder alone.
+    #[test]
+    fn one_machines_list_heads_by_folder() {
+        let app = app();
+        let groups: Vec<String> = by_group(&agent_rows(&app, Filter::All, Some("lab"), None)).into_iter().map(|(g, _)| g).collect();
+        assert_eq!(groups, ["webapp", "ops"]);
+    }
 }
 
 #[cfg(test)]
