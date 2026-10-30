@@ -25,6 +25,7 @@ import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
+import { startMessageReadStats } from './superTabs/messageReadStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -147,6 +148,8 @@ async function start(): Promise<void> {
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
   const stopRetryStats = startRetryStats()
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
+  // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
+  const stopMessageReadStats = startMessageReadStats()
 
   app.setErrorHandler(errorHandler)
 
@@ -222,11 +225,12 @@ async function start(): Promise<void> {
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
       // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
-      // The last partial minute of both logs, once the drain and the usage flush have run their queries.
+      // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
       stopRetryStats()
       stopRouteLatency()
       stopMachineReportLog()
+      stopMessageReadStats()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)
