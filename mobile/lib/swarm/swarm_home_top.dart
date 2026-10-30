@@ -7,7 +7,6 @@ import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -20,9 +19,8 @@ import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// The top of Swarm Home, direction C, as Tony's prototype C1 draws it
-/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]),
-/// Jump to… under it ([SwarmJumpField]), and While you were away
-/// ([SwarmAwayCard]).
+/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]) and
+/// While you were away ([SwarmAwayCard]).
 
 /// Whether Home offers Swarm [swarmId]: the account's, and its read not
 /// taken away, though the list may still have it until it is read again.
@@ -187,53 +185,6 @@ class _Glyph extends StatelessWidget {
     width: 32,
     child: Icon(icon, size: 22, color: AppPalette.textSecondary),
   );
-}
-
-/// Jump to…: a search field's look over Home's list, a button that opens
-/// the search ([onTap]).
-class SwarmJumpField extends StatelessWidget {
-  const SwarmJumpField({super.key, required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: 'Jump to',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: AppPalette.swarmSearchSurface,
-        borderRadius: BorderRadius.circular(AppCard.radius),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: minTouchTarget),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-              child: Row(
-                children: [
-                  Icon(
-                    LucideIcons.search300,
-                    size: 20,
-                    color: AppPalette.textFaint,
-                  ),
-                  const SizedBox(width: AppSpace.s),
-                  Text(
-                    'Jump to…',
-                    style: AppType.body(color: AppPalette.textFaint),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// How many tasks of [snapshot] their agents said Done after [since]: work

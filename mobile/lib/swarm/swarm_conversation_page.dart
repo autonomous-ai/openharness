@@ -2379,19 +2379,18 @@ class SwarmChatSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     label: 'Loading messages',
-    child: SingleChildScrollView(
+    child: ListView.builder(
       key: const ValueKey('swarm-chat-skeleton'),
-      // From the foot, as the messages are; those that do not fit are cut
-      // off at the top.
+      // From the foot, as the messages are, the bubbles over and over: any
+      // screen is full up to its top, where the last one is cut off.
       reverse: true,
       physics: const NeverScrollableScrollPhysics(),
       padding: _listPadding,
-      child: Column(
-        children: [
-          for (final (lines, width) in _bubbles)
-            _SkeletonBubble(lines: lines, width: width),
-        ],
-      ),
+      itemBuilder: (_, i) {
+        final (lines, width) =
+            _bubbles[(_bubbles.length - 1 - i) % _bubbles.length];
+        return _SkeletonBubble(lines: lines, width: width);
+      },
     ),
   );
 }

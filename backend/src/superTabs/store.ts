@@ -1221,6 +1221,12 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
       }
+      // A settle that carries its agent's model is that machine's reading, taken only from the grant that started it
+      // (commands.ts settledConfiguration). A grant that cannot be read leaves the reading out; the settle itself never fails on it.
+      if (command.type === 'agent.startSettled' && command.configuration) {
+        const start = original.starts?.find(s => s.id === command.startId)
+        if (start) context.contribution = await this.contribution(tx, original, actor, start.request, true).catch(() => undefined)
+      }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
@@ -1438,7 +1444,8 @@ export class SuperTabStore {
       }
       await this.endRuns(tx, tabId, original, effects.state)
       const committed = await this.save(tx, loaded, effects.state, stamp, touchesFor(command, actor, original, effects, context))
-      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
+      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind'
+        || command.type === 'agent.startSettled') {
         for (const target of effects.state.agents) {
           if (target.configurationVersion !== receiptId) continue
           const previous = original.agents.find(a => a.id === target.id)

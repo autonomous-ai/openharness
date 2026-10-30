@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -722,6 +723,72 @@ void main() {
     expect(i.error, 'This Swarm is being moved. Try again in a moment.');
   });
 
+  group('a list that could not be read goes in the log', () {
+    late _Log log;
+
+    setUp(() {
+      final before = appLog;
+      log = _Log();
+      appLog = log;
+      addTearDown(() => appLog = before);
+    });
+
+    test('what threw, with its stack, once however many polls fail, and '
+        'again after a read that worked', () async {
+      final fake = backend({'a': []});
+      final listed = fake.routes['/api/super-tabs/list']!;
+      fake.routes['/api/super-tabs/list'] = (_) =>
+          throw const FormatException('Bad answer');
+      final i = inbox(fake);
+
+      await i.refresh();
+      await i.refresh();
+
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.error);
+      expect(log.events.single.error, isA<FormatException>());
+      expect(log.events.single.stackTrace, isNotNull);
+
+      fake.routes['/api/super-tabs/list'] = listed;
+      await i.refresh();
+      expect(i.error, isNull);
+      expect(log.events, hasLength(1), reason: 'a read that worked');
+
+      fake.routes['/api/super-tabs/list'] = (_) =>
+          throw const FormatException('Bad answer');
+      await i.refresh();
+      expect(log.events, hasLength(2));
+    });
+
+    test("a server's refusal is a warning naming its code, once for the "
+        'same words, again for other ones', () async {
+      final fake = FakeSwarm();
+      void refuse(String code, String words) =>
+          fake.routes['/api/super-tabs/list'] = (_) =>
+              throw SuperTabFailure(code, words, statusCode: 503);
+      refuse('SWARM_MIGRATING', 'Being moved.');
+      final i = inbox(fake);
+
+      await i.refresh();
+      await i.refresh();
+
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.warn);
+      expect(log.events.single.message, contains('SWARM_MIGRATING 503'));
+
+      refuse('INTERNAL', 'Broken.');
+      await i.refresh();
+      expect(log.events, hasLength(2));
+      expect(log.events.last.message, contains('INTERNAL 503'));
+    });
+
+    test('a read that works logs nothing', () async {
+      await inbox(backend({'a': []})).refresh();
+
+      expect(log.events, isEmpty);
+    });
+  });
+
   test('without a computer it asks again within seconds, on a backoff, '
       'not at the next poll', () {
     fakeAsync((async) {
@@ -922,4 +989,30 @@ void main() {
       isFalse,
     );
   });
+}
+
+class _Log implements AppLog {
+  final events =
+      <
+        ({
+          AppLogLevel level,
+          String message,
+          Object? error,
+          StackTrace? stackTrace,
+        })
+      >[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => events.add((
+    level: level,
+    message: message,
+    error: error,
+    stackTrace: stackTrace,
+  ));
 }

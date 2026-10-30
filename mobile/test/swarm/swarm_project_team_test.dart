@@ -20,15 +20,29 @@ void main() {
     ).state,
   );
 
-  Map<String, dynamic> work(String agentId, String status, {int? number}) =>
-      groupData(
-        'work-$agentId',
-        title: 'Task of $agentId',
-        number: number,
-        agentIds: [agentId],
-        status: status,
-        workerId: agentId,
-      );
+  Map<String, dynamic> work(
+    String agentId,
+    String status, {
+    int? number,
+    Duration? since,
+  }) {
+    final g = groupData(
+      'work-$agentId',
+      title: 'Task of $agentId',
+      number: number,
+      agentIds: [agentId],
+      status: status,
+      workerId: agentId,
+    );
+    if (since == null) return g;
+    return {
+      ...g,
+      'assignment': <String, dynamic>{
+        ...g['assignment'] as Map<String, dynamic>,
+        'progressAt': now.subtract(since).millisecondsSinceEpoch,
+      },
+    };
+  }
 
   SwarmTeamAgent of(List<SwarmTeamAgent> team, String agentId) =>
       team.singleWhere((a) => a.agent.id == agentId);
@@ -266,6 +280,224 @@ void main() {
         '1 needs input · 1 waiting · 2 working',
       );
       expect(swarmTeamAgentsLine(const []), '');
+    });
+  });
+  group('its time since its last progress', () {
+    test("is said in the desktop's words", () {
+      String age(Duration d) => swarmAgentAge(d);
+      expect(age(Duration.zero), 'now');
+      expect(age(const Duration(seconds: 59)), 'now');
+      expect(
+        age(const Duration(seconds: -30)),
+        'now',
+        reason: 'a phone clock a little behind the Swarm',
+      );
+      expect(age(const Duration(minutes: 1)), '1m');
+      expect(age(const Duration(minutes: 59, seconds: 59)), '59m');
+      expect(age(const Duration(hours: 1)), '1h');
+      expect(age(const Duration(hours: 23, minutes: 59)), '23h');
+      expect(age(const Duration(days: 1)), '1d');
+      expect(age(const Duration(days: 12, hours: 5)), '12d');
+    });
+
+    test('ends the line of every state that holds a task', () {
+      final team = swarmProjectAgents(
+        swarm(
+          agents: [
+            agent('a-input', displayName: 'Ana'),
+            agent('a-stuck', displayName: 'Bo'),
+            agent('a-review', displayName: 'Cy'),
+            {
+              ...agent('a-limit', displayName: 'Di'),
+              'limitedUntil': DateTime(
+                2026,
+                10,
+                30,
+                9,
+                5,
+              ).toUtc().toIso8601String(),
+            },
+            {
+              ...agent('a-down', displayName: 'Ed'),
+              'downSince': '2026-10-30T01:00:00Z',
+            },
+            agent('a-work', displayName: 'Gu'),
+            agent('a-check', displayName: 'Hu'),
+            {...agent('a-stop', displayName: 'Lu'), 'workDecision': 'stop'},
+          ],
+          groups: [
+            work('a-input', 'needs_human', since: const Duration(minutes: 4)),
+            work('a-stuck', 'blocked', since: const Duration(hours: 2)),
+            work('a-review', 'review', since: const Duration(minutes: 40)),
+            work('a-limit', 'working', since: const Duration(minutes: 12)),
+            work('a-down', 'working', since: const Duration(days: 3)),
+            work('a-work', 'working', since: const Duration(seconds: 20)),
+            work('a-check', 'reconciling', since: const Duration(minutes: 7)),
+            work('a-stop', 'working', since: const Duration(hours: 5)),
+          ],
+        ),
+        project,
+        now: now,
+      );
+
+      expect(
+        {for (final a in team) a.agent.id: a.line},
+        {
+          'a-input': 'Needs input · Task of a-input · 4m',
+          'a-stuck': 'Stuck · Task of a-stuck · 2h',
+          'a-review': 'Waiting for review · Task of a-review · 40m',
+          'a-limit': 'Limited until 09:05 · Task of a-limit · 12m',
+          'a-down': 'Offline · Task of a-down · 3d',
+          'a-work': 'Working · Task of a-work · now',
+          'a-check': 'Checking · Task of a-check · 7m',
+          'a-stop': 'Stopped · Task of a-stop · 5h',
+        },
+      );
+    });
+
+    test('is none with no task, or none the Swarm sent a time for', () {
+      final team = swarmProjectAgents(
+        swarm(
+          agents: [
+            agent('a-idle', displayName: 'Ana'),
+            {...agent('a-done', displayName: 'Bo'), 'workDecision': 'awaiting'},
+            agent('a-old', displayName: 'Cy'),
+          ],
+          groups: [work('a-old', 'working', number: 12)],
+        ),
+        project,
+        now: now,
+      );
+
+      expect(of(team, 'a-idle').line, 'Idle');
+      expect(of(team, 'a-done').line, 'Done');
+      expect(
+        of(team, 'a-old').line,
+        'Working · #12 Task of a-old',
+        reason: 'an older server, or a read without the time, says no age',
+      );
+    });
+
+    test('starts again when its state changes: the agent posting it is '
+        'progress', () {
+      List<SwarmTeamAgent> read(String status, Duration since) =>
+          swarmProjectAgents(
+            swarm(
+              agents: [agent('a1', displayName: 'Ana')],
+              groups: [work('a1', status, since: since)],
+            ),
+            project,
+            now: now,
+          );
+
+      expect(
+        of(read('working', const Duration(hours: 2)), 'a1').line,
+        'Working · Task of a1 · 2h',
+      );
+      expect(
+        of(read('needs_human', Duration.zero), 'a1').line,
+        'Needs input · Task of a1 · now',
+      );
+    });
+
+    test('counts by the time it is given', () {
+      final snapshot = swarm(
+        agents: [agent('a1', displayName: 'Ana')],
+        groups: [work('a1', 'working', since: const Duration(minutes: 4))],
+      );
+      String at(Duration later) => of(
+        swarmProjectAgents(snapshot, project, now: now.add(later)),
+        'a1',
+      ).line;
+
+      expect(at(Duration.zero), 'Working · Task of a1 · 4m');
+      expect(at(const Duration(seconds: 59)), 'Working · Task of a1 · 4m');
+      expect(at(const Duration(minutes: 1)), 'Working · Task of a1 · 5m');
+      expect(at(const Duration(hours: 1)), 'Working · Task of a1 · 1h');
+    });
+
+    test("is never another project's, nor a Buddy chat's, nor a private "
+        "chat's the viewer is not in: no title and no time", () {
+      final team = swarmProjectAgents(
+        swarm(
+          agents: [
+            agent('a-there', displayName: 'Ash'),
+            agent('a-buddy', displayName: 'Bo'),
+            agent('a-private', displayName: 'Cy'),
+            agent('a-mine', displayName: 'Di'),
+          ],
+          groups: [
+            {
+              ...work('a-there', 'working', since: const Duration(hours: 3)),
+              'projectId': 'project-2',
+            },
+            {
+              ...work('a-buddy', 'working', since: const Duration(hours: 3)),
+              'kind': 'buddy',
+              'buddyOwnerId': 'diego',
+            },
+            {
+              ...work('a-private', 'working', since: const Duration(hours: 3)),
+              'audience': {
+                'people': [
+                  {'id': 'diego', 'generation': 'gen-diego'},
+                ],
+              },
+            },
+            {
+              ...work('a-mine', 'working', since: const Duration(hours: 3)),
+              'audience': {
+                'people': [
+                  {'id': me, 'generation': 'gen-$me'},
+                ],
+              },
+            },
+          ],
+        ),
+        project,
+        now: now,
+        viewerId: me,
+      );
+
+      for (final id in ['a-there', 'a-buddy', 'a-private']) {
+        expect(of(team, id).task, isNull, reason: id);
+        expect(of(team, id).age, isNull, reason: id);
+        expect(of(team, id).line, 'Working', reason: id);
+      }
+      expect(of(team, 'a-mine').line, 'Working · Task of a-mine · 3h');
+    });
+
+    test('of an agent id or name reused in another project is not this '
+        "agent's", () {
+      final team = swarmProjectAgents(
+        swarm(
+          agents: [
+            agent('a-nova', displayName: 'Nova'),
+            {...agent('b-nova', displayName: 'Nova'), 'projectId': 'project-2'},
+          ],
+          groups: [
+            {
+              ...work('b-nova', 'working', since: const Duration(hours: 6)),
+              'projectId': 'project-2',
+            },
+            {
+              ...groupData(
+                'reused',
+                title: 'Reused id',
+                agentIds: ['a-nova'],
+                status: 'working',
+                workerId: 'a-nova',
+              ),
+              'projectId': 'project-2',
+            },
+          ],
+        ),
+        project,
+        now: now,
+      );
+
+      expect([for (final a in team) a.agent.id], ['a-nova']);
+      expect(of(team, 'a-nova').line, 'Working');
     });
   });
 }

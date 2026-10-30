@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { inspectCapacity, startAgent } from './start.js'
+import { inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
@@ -57,6 +57,15 @@ function fixture(options: { state?: Record<string, unknown> | Error; githubApp?:
   return { scoped, start, request, open, close, loseJoin: () => { lostJoin = true }, forget: () => { nativeState = 'missing' } }
 }
 const switchCall = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.find(c => c[0] === 'agent_update')
+/** Runs a start on a fake clock: an agent whose frame names no model is waited for (MODEL_REPORT_WAIT_MS) before it joins. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers()
+  try {
+    const result = run()
+    await vi.runAllTimersAsync()
+    return await result
+  } finally { vi.useRealTimers() }
+}
 
 describe('Swarm permission mode', () => {
   it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
@@ -209,7 +218,7 @@ describe('Swarm permission mode', () => {
     f.request.mockImplementation(async (type, payload) => type === 'agent_create_status'
       ? { creationId: f.start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', permissionMode: 'ask' } }
       : request(type, payload))
-    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))).toMatchObject({ ok: true })
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create' || c[0] === 'agent_update')).toBe(false)
   })
 
@@ -536,7 +545,7 @@ it.each(['pending', 'unconfirmed', 'created'])('preserves native %s evidence whe
   f.request.mockImplementation(async (type, payload) => type === 'agent_create_cancel'
     ? { creationId: f.start.creationId, state, agent: { id: 'native', engine: 'claude' } }
     : request(type, payload))
-  const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+  const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
   expect(result).toMatchObject(state === 'created' ? { ok: true, harnessId: 'native' } : { error: 'START_PENDING', state })
   expect(f.start.error).toBeNull()
   expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
@@ -1313,5 +1322,85 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     const { routeDecisionId: _id, ...request } = unrouted.first.request
     expect(await unrouted.lead({ ...unrouted.first, request })).toMatchObject({ error: 'START_FAILED', detail: TOKEN })
     expect(unrouted.of('route.record')).toEqual([])
+  })
+})
+
+// Scholes, 2026-10-30: a Codex agent at its own default named no model when it joined, and the work assigned to it 34 s after its
+// start (median) was recorded with none. The start waits a bounded time for the model, and settles with what the agent runs.
+describe('an agent that joins naming its model', () => {
+  /** A Codex launch whose frame names no model at creation; agents_list names [model] from its [after]th read, or never. */
+  const codexLaunch = (options: { after?: number; model?: string; request?: Record<string, unknown>; joined?: boolean } = {}) => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    let reads = 0
+    const frame = { id: 'native', engine: 'codex', contextWindow: 400000, engineVersion: '0.165.0' }
+    f.request.mockImplementation(async (type, payload) => {
+      if (type === 'agent_create') { await request(type, payload); return { creationId: f.start.creationId, state: 'created', agent: frame } }
+      if (type === 'agent_create_status') {
+        const answer = await request(type, payload)
+        return answer.state === 'created' ? { ...answer, agent: frame } : answer
+      }
+      if (type === 'agents_list') {
+        reads++
+        const named = options.after !== undefined && reads >= options.after
+        return { agents: [{ ...frame, selectedModel: named ? `runtime-v1:native:codex:${options.model ?? 'gpt-6.1-sol@auto'}` : null }] }
+      }
+      if (type === 'agent_update') return { agent: { ...frame, selectedModel: `runtime-v1:native:codex:${String((payload as { selectedModel: string }).selectedModel).split(':').pop()}` } }
+      return request(type, payload)
+    })
+    Object.assign(f.start.request, { engine: 'codex', ...options.request })
+    if (options.joined) Object.assign(f.start, { harnessId: 'native', dispatched: true })
+    const joined = () => f.scoped.mock.calls.map(c => c[0].command as Record<string, any> | undefined).find(c => c?.type === 'agent.started')
+    return { f, joined, reads: () => reads }
+  }
+  const resume = (f: ReturnType<typeof fixture>) => startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true }, f.scoped, where, f.open)
+
+  it('joins with the model Codex names at its first turn, and hands it to the settle', async () => {
+    const t = codexLaunch({ after: 3 })
+    const result = await onFakeClock(() => resume(t.f))
+    expect(t.joined()!.configuration).toEqual({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto', contextWindow: 400000, engineVersion: '0.165.0' })
+    expect(result).toMatchObject({ ok: true, configuration: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto' } })
+    expect(t.reads()).toBe(3)
+  })
+
+  it('joins without a model after the bounded wait when the engine never names one, and hands none to the settle', async () => {
+    const t = codexLaunch()
+    vi.useFakeTimers()
+    try {
+      const began = Date.now()
+      const run = resume(t.f)
+      await vi.runAllTimersAsync()
+      const result = await run
+      expect(Date.now() - began).toBeGreaterThanOrEqual(MODEL_REPORT_WAIT_MS - 1_000)
+      expect(Date.now() - began).toBeLessThanOrEqual(MODEL_REPORT_WAIT_MS + 1_000)
+      expect(t.joined()!.configuration).toMatchObject({ engine: 'codex', model: null, effort: null })
+      expect(result).toMatchObject({ ok: true })
+      expect(result).not.toHaveProperty('configuration')
+      expect(t.reads()).toBeLessThanOrEqual(MODEL_REPORT_WAIT_MS / 1_000 + 1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not wait for a grid model, or for an agent that already joined', async () => {
+    const grid = codexLaunch({ request: { gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab' } })
+    await resume(grid.f)
+    expect(grid.reads()).toBe(0)
+    expect(grid.joined()!.configuration.model).toBeNull()
+    const joined = codexLaunch({ joined: true })
+    expect(await resume(joined.f)).toMatchObject({ ok: true })
+    expect(joined.reads()).toBe(0)
+    expect(joined.joined()).toBeUndefined()
+  })
+
+  it('hands the settle the routed model a switch put in, not the one the engine launched with', async () => {
+    const t = codexLaunch({ after: 1, model: 'gpt-6.1-sol@auto', request: { model: 'gpt-6-astra', effort: 'xhigh' } })
+    const reads = t.f.request.getMockImplementation()!
+    let switched = false
+    t.f.request.mockImplementation(async (type, payload) => {
+      if (type === 'agent_update') switched = true
+      if (type === 'agents_list' && switched) return { agents: [{ id: 'native', engine: 'codex', selectedModel: 'runtime-v1:native:codex:gpt-6-astra@xhigh' }] }
+      return reads(type, payload)
+    })
+    const result = await onFakeClock(() => resume(t.f))
+    expect(switched).toBe(true)
+    expect(result).toMatchObject({ ok: true, configuration: { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' } })
   })
 })
