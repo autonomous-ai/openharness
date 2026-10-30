@@ -229,6 +229,7 @@ class LeadModelList {
     this.disabledEngines = const {},
     this.disabledModels = const {},
     this.gridModels = true,
+    this.rows = const {},
   });
 
   /// Engines the list has no enabled model of.
@@ -239,6 +240,21 @@ class LeadModelList {
 
   /// Whether the list lets work run on models served on the Swarm's grid.
   final bool gridModels;
+
+  /// Whether each row is on, as (engine, model, effort).
+  final Map<(String, String, String), bool> rows;
+
+  /// Whether [engine] may run [model] at [effort], as the Swarm judges a
+  /// role's default (backend commands.ts): that effort's row when the list
+  /// has one, else any row of the model. A model the list does not name is
+  /// left to the Swarm.
+  bool modelOn(String engine, String model, String effort) {
+    final named = {
+      for (final MapEntry(:key, :value) in rows.entries)
+        if (key.$1 == engine && key.$2 == model) key.$3: value,
+    };
+    return named.isEmpty || (named[effort] ?? named.values.any((on) => on));
+  }
 
   /// Why the list rules [engine] out, or null.
   String? engineRefusal(String engine) => disabledEngines.contains(engine)
@@ -259,6 +275,7 @@ class LeadModelList {
   /// Read from the Swarm's routing policy; null reads as an empty list.
   factory LeadModelList.of(Map<String, dynamic>? policy) {
     final byModel = <(String, String), bool>{};
+    final rows = <(String, String, String), bool>{};
     final byEngine = <String, bool>{};
     for (final row in policy?['models'] as List? ?? const []) {
       if (row case {
@@ -266,6 +283,10 @@ class LeadModelList {
         'model': final String model,
         'enabled': final bool enabled,
       }) {
+        if (row['effort'] case final String effort) {
+          rows[(engine, model, effort)] =
+              (rows[(engine, model, effort)] ?? false) || enabled;
+        }
         byModel[(engine, model)] =
             (byModel[(engine, model)] ?? false) || enabled;
         byEngine[engine] = (byEngine[engine] ?? false) || enabled;
@@ -280,6 +301,7 @@ class LeadModelList {
         for (final MapEntry(:key, :value) in byModel.entries)
           if (!value) key,
       },
+      rows: rows,
       gridModels: switch (policy?['localModels']) {
         {'enabled': false} => false,
         _ => true,

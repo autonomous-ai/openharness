@@ -816,7 +816,8 @@ describe('agent_create with a receipt', () => {
     await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
     await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
     await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 5)
+    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, false)
+    await vi.waitFor(() => expect(replies).toHaveLength(5))
     expect(preTrustClaudeProject).toHaveBeenCalledOnce()
     // Claude Code only: a Codex Lead's checkout is not trusted for it.
     await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
@@ -825,6 +826,23 @@ describe('agent_create with a receipt', () => {
     vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
     await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
     expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+  })
+
+  // 2026-10-30: a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of that
+  // checkout, which Claude Code had never been told to trust; the PM sat at the question, shown as Idle in the Swarm.
+  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in full mode', async () => {
+    const { ask, replies } = setup()
+    const launch = async (payload: Record<string, unknown>, local: boolean, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }, local); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
+    const worktree = { projectSource: 'worktree', gitSource: '/Users/me/openharness', branchName: 'lively-meteor' }
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 1)
+    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
+    // Not relayed, not outside a Swarm or full mode, not for Codex: those stay the person's question.
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, false, 2)
+    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 3)
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'auto' }, true, 4)
+    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
   })
 
   // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was
