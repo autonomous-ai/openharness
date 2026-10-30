@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'model.dart';
+import 'swarm_message_link.dart';
 import 'swarm_message_row.dart'
     show swarmChatCard, swarmChatHair, swarmChatText;
 
@@ -16,7 +20,8 @@ typedef SwarmReactorName = String Function(String kind, String id);
 /// The counts under a message, as Desktop draws them (`reactions.dart`): each
 /// emoji and how many gave it, the reader's own marked. A tap takes theirs
 /// back or adds it; holding one names who gave it. Without [onReact] (a
-/// reader who cannot post) the counts only show.
+/// reader who cannot post) the counts only show. With [onAdd], an
+/// add-reaction chip after the counts opens the picker (Swarm Home C).
 class SwarmReactionBar extends StatelessWidget {
   const SwarmReactionBar({
     super.key,
@@ -25,6 +30,7 @@ class SwarmReactionBar extends StatelessWidget {
     required this.readerId,
     required this.nameOf,
     this.onReact,
+    this.onAdd,
   });
 
   final String messageId;
@@ -32,6 +38,7 @@ class SwarmReactionBar extends StatelessWidget {
   final String readerId;
   final SwarmReactorName nameOf;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +58,11 @@ class SwarmReactionBar extends StatelessWidget {
                 final react? => () => react(reaction.emoji),
                 null => null,
               },
+            ),
+          if (onAdd case final add?)
+            _AddChip(
+              key: ValueKey('swarm-add-reaction-$messageId'),
+              onTap: add,
             ),
         ],
       ),
@@ -135,13 +147,61 @@ class _Count extends StatelessWidget {
   }
 }
 
-/// Opens the reactions a message can carry in a sheet, with a light tap of
-/// the phone as a long-press gives: Desktop's seven, the reader's own marked.
-/// Answers the one picked, or null when the sheet closed without one.
+/// After a message's counts: a finger's size to tap, drawn as a count is,
+/// with a face and a plus; a tap opens the picker.
+class _AddChip extends StatelessWidget {
+  const _AddChip({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Add reaction',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          child: Center(
+            widthFactor: 1,
+            child: Container(
+              height: 30,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+              decoration: ShapeDecoration(
+                color: swarmChatCard(tty),
+                shape: StadiumBorder(
+                  side: BorderSide(color: swarmChatHair(tty)),
+                ),
+              ),
+              child: Icon(
+                LucideIcons.smilePlus,
+                size: 16,
+                color: AppPalette.textSecondary,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Opens a message's long-press sheet, with a light tap of the phone: the
+/// reactions it can carry (Desktop's seven, the reader's own marked) where
+/// the reader may [react], then Copy link to message with its [link], which
+/// copies it and says so. Answers the reaction picked, or null when the sheet
+/// closed without one.
 Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
   BuildContext context, {
   required List<SuperTabReactionCount> reactions,
   required String readerId,
+  bool react = true,
+  SwarmMessageLink? link,
 }) {
   HapticFeedback.lightImpact();
   final mine = {
@@ -152,14 +212,27 @@ Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
     context: context,
     backgroundColor: AppGlass.rowFill,
     shape: AppControl.sheetShape,
-    builder: (context) => _Picker(mine: mine),
+    builder: (context) => _Picker(mine: mine, react: react, link: link),
   );
 }
 
 class _Picker extends StatelessWidget {
-  const _Picker({required this.mine});
+  const _Picker({required this.mine, required this.react, this.link});
 
   final Set<SuperTabReactionEmoji> mine;
+  final bool react;
+  final SwarmMessageLink? link;
+
+  /// Desktop's Copy link to message: the link on the clipboard, the sheet
+  /// closed, and "Link copied".
+  Future<void> _copy(BuildContext context, SwarmMessageLink link) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    Navigator.of(context).pop();
+    await Clipboard.setData(ClipboardData(text: link.url));
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('Link copied'), duration: Durations.long4),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -187,53 +260,95 @@ class _Picker extends StatelessWidget {
                 shape: const StadiumBorder(),
               ),
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Seven at 50 points are wider than a 375-point phone's
-                // sheet: each shares the row, never under a finger's 44.
-                for (final emoji in SuperTabReactionEmoji.values)
-                  Flexible(
-                    child: Semantics(
-                      button: true,
-                      selected: mine.contains(emoji),
-                      label:
-                          '${emoji.key.replaceAll('_', ' ')}'
-                          '${mine.contains(emoji) ? ', yours' : ''}',
-                      excludeSemantics: true,
-                      onTap: () => Navigator.of(context).pop(emoji),
-                      child: GestureDetector(
-                        key: ValueKey('swarm-react-${emoji.key}'),
-                        behavior: HitTestBehavior.opaque,
+            if (react)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  // Seven at 50 points are wider than a 375-point phone's
+                  // sheet: each shares the row, never under a finger's 44.
+                  for (final emoji in SuperTabReactionEmoji.values)
+                    Flexible(
+                      child: Semantics(
+                        button: true,
+                        selected: mine.contains(emoji),
+                        label:
+                            '${emoji.key.replaceAll('_', ' ')}'
+                            '${mine.contains(emoji) ? ', yours' : ''}',
+                        excludeSemantics: true,
                         onTap: () => Navigator.of(context).pop(emoji),
-                        child: Container(
-                          constraints: const BoxConstraints(
-                            maxWidth: 50,
-                            minHeight: 50,
-                            maxHeight: 50,
-                          ),
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: mine.contains(emoji)
-                                ? accent.withValues(alpha: 0.18)
-                                : null,
-                            border: mine.contains(emoji)
-                                ? Border.all(color: accent)
-                                : null,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            emoji.glyph,
-                            style: const TextStyle(
-                              fontSize: AppIconSize.standalone,
+                        child: GestureDetector(
+                          key: ValueKey('swarm-react-${emoji.key}'),
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => Navigator.of(context).pop(emoji),
+                          child: Container(
+                            constraints: const BoxConstraints(
+                              maxWidth: 50,
+                              minHeight: 50,
+                              maxHeight: 50,
+                            ),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: mine.contains(emoji)
+                                  ? accent.withValues(alpha: 0.18)
+                                  : null,
+                              border: mine.contains(emoji)
+                                  ? Border.all(color: accent)
+                                  : null,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              emoji.glyph,
+                              style: const TextStyle(
+                                fontSize: AppIconSize.standalone,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
+                ],
+              ),
+            if (link case final link?)
+              SizedBox(
+                width: double.infinity,
+                child: Semantics(
+                  button: true,
+                  child: InkWell(
+                    key: const ValueKey('swarm-copy-link'),
+                    borderRadius: BorderRadius.circular(AppControl.radius),
+                    onTap: () => _copy(context, link),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        minHeight: minTouchTarget,
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          AppSpace.m,
+                          react ? AppSpace.m : AppSpace.s,
+                          AppSpace.m,
+                          AppSpace.s,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              LucideIcons.link300,
+                              size: 20,
+                              color: AppPalette.textPrimary,
+                            ),
+                            const SizedBox(width: AppSpace.m),
+                            Text(
+                              'Copy link to message',
+                              style: AppType.body(
+                                color: AppPalette.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-              ],
-            ),
+                ),
+              ),
           ],
         ),
       ),

@@ -102,6 +102,9 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }
 }
+/** Said of an engine in a Harness Team account that spends its owner's subscription through the owner's relay: the
+ *  route reads that subscription's allowance from the owner's Mac (routeCommand.ts), matching this exact sentence. */
+export const RELAYED_QUOTA = "This account runs on its owner's subscription; its allowance is read on the owner's machine."
 const VENDOR: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI' }
 /** Why [engine]'s allowance could not be read from the account reader's [reply], or null when it was. Words only: no
  *  account, token or plan. [relayed]: a Harness Team account, whose engines spend the owner's subscription through the
@@ -112,7 +115,7 @@ export function quotaUnknownReason(reply: Json, engine: string, relayed: boolean
   const vendor = VENDOR[engine] ?? 'The vendor'
   if (!reading) return 'The allowance reader on this machine did not answer.'
   if (reading.outcome === 'signedOut') {
-    if (relayed) return "This account runs on its owner's subscription; its allowance is read on the owner's machine."
+    if (relayed) return RELAYED_QUOTA
     return typeof reading.message === 'string' && /expired/i.test(reading.message)
       ? 'The stored sign-in has expired; it renews the next time the engine runs here.'
       : 'No subscription sign-in is stored on this machine.'

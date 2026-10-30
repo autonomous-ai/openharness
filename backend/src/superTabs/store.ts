@@ -59,7 +59,7 @@ import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, r
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySaveSchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -559,7 +559,7 @@ export class SuperTabStore {
 
   async saveAccountPolicy(user: AuthUser, revision: number, input: RoutingPolicy) {
     this.personOnly(user)
-    const policy = routingPolicySchema.parse(input)
+    const policy = routingPolicySaveSchema.parse(input)
     return transaction(this.db, async tx => {
       const id = this.policyId(user)
       const row = await tx.routingPolicy.findUnique({ where: { id } })
