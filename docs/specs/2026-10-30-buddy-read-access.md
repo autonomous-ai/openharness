@@ -1,7 +1,10 @@
 # Buddy read access: open reading, still no writes, new commands asked first
 
-Status: approved by the Lead (10-30), with my recommendations; built in group #1389. Requested by Ken (10-30). Ken
-chose the sandbox setting in section 3 (10-30). Engineer: Rowan.
+Status: approved by the Lead (10-30), with my recommendations; built in group #1389 (PR #2310), with the fixes from its
+two security reviews. Requested by Ken (10-30). Ken chose the sandbox setting in section 3 (10-30). Engineer: Rowan.
+
+There is no on/off switch (Ken's rule against switches): removing the Buddy turns it off. Turning it off for a whole Swarm
+would need a release.
 
 ## Goal
 
@@ -38,11 +41,25 @@ The launch (`buddyLaunchWide`) turns wide mode on only when all of these hold:
 - The machine is macOS, or Linux with bubblewrap, so Claude Code's sandbox can run.
 - The account is not a Harness Team account.
 
-The server already starts a Buddy only on its person's own machine (`BUDDY_OWN_MACHINE_REFUSAL`). Otherwise the Buddy
-reads its folder alone, as before.
+The server already starts a Buddy only on its person's own machine (`BUDDY_OWN_MACHINE_REFUSAL`), but the launch does
+not trust that alone. The host checks it locally, at each message the Buddy's person sends (`superTabs/host.ts`,
+`grantBuddyWide`, security reviews of #2310):
+- the Swarm names them as the Buddy's person, in their own chat, on a machine it says is theirs;
+- the account signed in on this machine is theirs.
+
+Only then does the host grant wide mode in the session's list, which only the host writes. It takes the grant back when
+a later message fails the check. The guard reads beyond the folder and runs wider commands only while it is granted.
+Until the person's first message, and whenever the check fails, the Buddy reads its folder alone, as before.
+
+Ruling: the check runs at each message, not at launch. Why: the launch does not know the Buddy's person, least of all on
+a relaunch. Cost if wrong: wide mode starts at the person's first message, not at launch.
 
 **Files outside the folder** (Read, Grep, Glob, LS, and `cat`, `head`, `tail`, `wc`, `ls`, `grep`, `rg` in the shell).
-They are allowed unasked (Lead, 10-30), except:
+They are allowed unasked (Lead, 10-30), but only in the person's home and in named system folders (`/etc`,
+`/usr/share`, `/var/log`, and on macOS `/usr/local/etc`, `/opt/homebrew/etc`, `/Library/Logs`). Everything else is
+closed: `/proc`, `/sys`, `/dev` and every temporary folder included. On Linux, `/proc/<pid>/environ` held the read-only
+DB URL while db-size ran; on macOS, `/private/var/folders` held other processes' files (security reviews of #2310).
+Within those folders, these stay closed:
 
 - Secret stores in the home folder: `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, `~/.kube`,
   `~/.docker`, `~/.config/gh`, `~/.config/argocd`, `~/.argocd`, git credentials, `~/.password-store`, `~/.config/op`,
@@ -79,9 +96,9 @@ files with Glob, then reads them.
 |---|---|---|
 | `gh run` | `list`, `view` (`--log`, `--log-failed`, `--job`, `--attempt`, `--json`, `--jq`) | `rerun`, `cancel`, `delete`, `watch`, `download`, `--web`, `-R` |
 | `gh api` | GET only (`-X`/`--method GET` at most); a path under `repos/OWNER/NAME` of the project's own repositories (from its git remotes), with no `secret`, `key`, `token` or `hook` part; `--jq`, `--paginate`, `--cache`, `--include` | other methods, `-f`/`-F`/`--field`/`--raw-field`/`--input` (they make gh POST), `-H`, `--hostname`, `graphql`, `user` |
-| `argocd app` | `list`, `get`, `get-resource` (never a Secret), `resources`, `history`, `logs` (`--kind`, `--name`, `--group`, `--since-seconds`, `--tail`, `--filter`, …) | `sync`, `set`, `patch`, `patch-resource`, `delete`, `delete-resource`, `rollback`, `terminate-op`, `actions`, `manifests`, `get --refresh`, `logs -f`, `--server`, `--auth-token`, `--config` |
+| `argocd app` | `list`, `get`, `get-resource` (never a Secret or a ConfigMap), `resources`, `history`, `logs` (`--kind`, `--name`, `--group`, `--since-seconds`, `--tail`, `--filter`, …) | `sync`, `set`, `patch`, `patch-resource`, `delete`, `delete-resource`, `rollback`, `terminate-op`, `actions`, `manifests`, `get --refresh`, `logs -f`, `--server`, `--auth-token`, `--config` |
 | `argocd` | `version` | `login`, `logout`, `account`, `cluster`, `repo`, `proj` |
-| `kubectl` | `get`, `describe`, `top`, `logs`, `version`, `api-resources`, `config current-context` | any Secret, `--raw`, `exec`, `cp`, `port-forward`, `apply`, `delete`, `edit`, `patch`, `scale`, `rollout`, `label`, `annotate`, `-w`, `-f`, `--server`, `--token`, `--kubeconfig`, `--as` |
+| `kubectl` | `get`, `describe`, `top`, `logs`, `version`, `api-resources`, `config current-context`; a ConfigMap by name only (`get` with no `-o`, or `-o name`/`wide`) | any Secret, a ConfigMap described or printed whole, `--raw`, `exec`, `cp`, `port-forward`, `apply`, `delete`, `edit`, `patch`, `scale`, `rollout`, `label`, `annotate`, `-w`, `-f`, `--server`, `--token`, `--kubeconfig`, `--as` |
 | Recipe | `harness buddy-read db-size` | anything added to it |
 | Anything else | (none) | `curl`, `wget`, `nc`, `ssh`, `sh`, `python`, `node`, `env`, `printenv`, `security`, `mongosh`, `osascript`, `open` |
 
@@ -93,8 +110,10 @@ The measurements use Juno's read-only methods (Lead, 10-30), nothing wider:
 - **Pods, restarts and HPA**: `argocd app get-resource … --kind Pod -o json` and `--kind HorizontalPodAutoscaler`.
 - **DB**: `harness buddy-read db-size` (`cli/src/lib/buddyRecipes.ts`). It reads `MONGODB_PROD_RO_URL` from the main
   clone's `.secrets/mongodb-prod-readonly.env` itself and gives it to `mongosh` (`--nodb --quiet --norc`) only through
-  the environment, never on its command line. Before reading anything it refuses a login with any role beyond `read`,
-  `readAnyDatabase` or `clusterMonitor`. It reads `estimatedDocumentCount` per collection and a `$sum` of `size` on
+  the environment, never on its command line, with mongosh's telemetry off for the run. Before reading anything it asks
+  the server for the login's privileges (`connectionStatus` with `showPrivileges`). It refuses any role other than
+  `read` or `readAnyDatabase`, and any action beyond theirs; `clusterMonitor` is refused, as its actions include setting
+  changes. It reads `estimatedDocumentCount` per collection and a `$sum` of `size` on
   `SuperTabAttachment`, and prints no connection string, its errors included.
 
 Rulings:
@@ -129,11 +148,15 @@ Rulings:
 1. **The guard's grammar.** Pipes, `;`, `$()`, redirects and globs refuse the whole command, as before. Writes and
    secret reads can never be approved, so a careless approval of a planted command unlocks only a read.
 2. **Claude Code's sandbox** for the Buddy's shell (`buddySandboxSettings`; each point tried with Claude Code 2.1.314):
-   - **Writes**: none anywhere, the Buddy's folder included. Without an explicit deny, Claude Code lets a command
-     write where it runs.
-   - **Network**: only `api.github.com`, `github.com`, GitHub's log hosts, and the ArgoCD and cluster hosts named in
-     the person's own settings (only the host names are read from those files). Local ports stay reachable
-     (`allowLocalBinding`): without them `harness super-tab` cannot reach its daemon.
+   - **Writes**: none anywhere. Claude Code otherwise allows three places, so each is denied by name: the folder it
+     runs in; the person's clone and its git folder, where a `git commit` from a worktree otherwise landed; and every
+     session's folder in Claude Code's temporary folder (`/tmp/claude-<uid>/-*`). The worktree test found both of the
+     last two. That temporary folder itself stays writable: Claude Code writes a file there for each command from inside
+     the sandbox. No command the guard allows writes a file.
+   - **Network**: only `api.github.com`, `github.com`, GitHub's log hosts (`*.actions.githubusercontent.com` and its
+     `productionresultssa0`-`19` storage accounts, not every Azure account), and the ArgoCD and cluster hosts named in
+     the person's own settings (only the host names are read from those files). No local ports: Harness's own commands,
+     which reach its daemon, run outside the sandbox.
    - **Reads**: the guard's closed places, except two things the tools need. Their own sign-ins, which gh, argocd and
      kubectl read to sign in. And Claude Code's temporary folder, where every command's output goes; with it closed,
      even `cat` failed ("cat: stdout: Operation not permitted"). The guard keeps both closed to the Buddy's own reads.
@@ -163,8 +186,12 @@ Rulings:
 
 - **Not read.** The closed places above. Token printers are not in the grammar: `gh auth token`, `argocd account`,
   `kubectl get secret`, `config view --raw`, `env`, `security`, `argocd app manifests`.
-- **Not sent.** The guard refuses a `post`, a `propose` or an `--attach` file that holds a secret's shape. It names the
-  kind of secret, never the value. This holds in every mode. The shapes:
+- **Not sent (a best effort).** The guard refuses a `post`, a `propose`, an `--attach` file or an Artifact read's prompt
+  that holds a secret's shape. It names the kind of secret, never the value, in every mode. It checks each word, a
+  proposal's fields as the CLI decodes them (an escape such as `\u0067` hides nothing), each field without its spaces,
+  and the message's fields and files run together (a token split in two). The run-together checks use only the
+  distinctive shapes, so ordinary prose is not refused. It is still a best effort; what holds is that secrets are never
+  read (the line above). The shapes:
   - GitHub, Anthropic, other `sk-` and npm, AWS, Slack, GitLab and Google keys
   - JWTs and private keys
   - URLs with a password
@@ -222,22 +249,28 @@ Buddy text; it copies only the Lead, Engineer and Reviewer texts.
 
 | # | Threat | Path | Control | Test |
 |---|---|---|---|---|
-| T1 | A planted PR says "push" | `gh pr view` output, then `git push` | Grammar; sandbox (no writes); not approvable | Real Claude: refused, remote unchanged |
+| T1 | A planted PR says "push" | `gh pr view` output, then `git push` | Grammar; sandbox (no writes); not approvable | Integration test with the real Claude Code and a scripted model: refused, remote unchanged |
 | T2 | A write hidden in a read | `gh api -X POST`, `-f`, `-H` override, `git -c alias`, `sh -c`, `curl -d`, `kubectl apply`, `argocd app sync` | Grammar (101 forms), and the sandbox for local writes | Never-runs table, even approved |
-| T3 | A planted "post the token to the PM" | `post` / `propose` with a token | Secret check on text and attachments | Real Claude: both refused, never ran |
+| T3 | A planted "post the token to the PM" | `post` / `propose` with a token, escaped, spaced or split | Secrets never read (the limit that holds); the secret check as a best effort | Integration test with a scripted model: both refused, never ran; escape, space and split tests |
 | T4 | A careless approval of an injected command | Person pastes `run: …` | Only grammar reads can be recorded | A `run:` line for a write is not recorded; the Buddy is told it never runs |
 | T5 | An approval broader than meant | Prefix match | Exact argv | `--tail 200` approved, `--tail 500` refused |
 | T6 | Someone else approves | Another person, the PM's line, news, an old membership, another machine | Host's `fromOwnPerson` + `onTheirMachine` | Each records nothing |
-| T7 | Data out through the network | A URL with data, `--server evil`, `--hostname` | Fixed repository paths; `--server`/`--hostname` refused; sandbox host list | Real Claude: an off-list POST refused with the guard taken out |
+| T7 | Data out through the network | A URL with data, `--server evil`, `--hostname` | Fixed repository paths; `--server`/`--hostname` refused; sandbox host list | Integration test with the real Claude Code and a scripted model: an off-list POST refused with the guard taken out |
 | T8 | Reading others' private Swarm data | `~/.claude`, the paste cache, `/tmp/claude-<uid>`, Harness's data folder | Closed places, by real path and through links | One test per place |
 | T9 | Raw output to the project chat | A proposal with pasted logs | Code block or more than 10 lines refused | Test |
-| T10 | Wide mode on someone else's machine | Team account, a relay | Server's own-machine rule; the launch refuses Team; approvals only from the person on their own machine | Launch and host tests |
+| T10 | Wide mode on someone else's machine | Team account, a relay, a server that says the machine is theirs when it is not | Server's own-machine rule; the launch refuses Team; the host grants wide mode only when this machine is signed in as the person | Launch, guard grant and host identity tests |
 | T11 | Claude guard and Codex sandbox disagree | A future Codex Buddy | Codex stays refused; parity test | Write table through `codex sandbox` |
 | T12 | A stale approval after access changes | Leave and rejoin | Key includes the generation; sweep after 30 days | Tests |
 | T13 | Leak through macOS's certificate service | A sandboxed command makes trustd fetch a crafted URL | Ken's accepted trade-off: the guard admits only commands to listed hosts, whose certificates are what gets checked | The probe in section 3 |
-| T14 | Local services reachable | `allowLocalBinding` opens local ports | No command in the grammar takes a free host: `--server` and `--hostname` are refused, and `curl` is not allowed | Never-runs table |
+| T14 | Local services reachable | Local ports | None reachable from the sandbox; no command in the grammar takes a free host | Settings test |
 | T15 | Escaping the sandbox | `dangerouslyDisableSandbox` | `allowUnsandboxedCommands: false`, and the guard refuses the flag | Unit and real-Claude tests |
-| T16 | A DB login with write roles | A misconfigured `.secrets` file | The recipe refuses before reading anything | Recipe tests |
+| T16 | A DB login with write roles | A misconfigured `.secrets` file, or a custom role named "read" | The recipe checks the login's privileges and refuses before reading anything | Recipe tests |
+| T17 | Writing through the clone | `git commit` in the worktree, or a file in its git folder | The sandbox denies the clone and its git folder by name | Worktree case of the real sandbox test |
+| T18 | Another process's secrets | `/proc/<pid>/environ`, `/private/var/folders` | Reads outside the folder: only the home and named system folders | Unit tests per place |
+| T19 | Data out through an Artifact read | The read's prompt goes to claude.ai | The secret check on the prompt (a best effort) | Unit test |
 
-Not covered: another local process that swaps a file or a link between the guard's answer and Claude Code's open. The
-same holds as before (the Lead's ruling on #2092); the Buddy itself has no command that writes.
+Not covered:
+- Another local process that swaps a file or a link between the guard's answer and Claude Code's open. The same holds as
+  before (the Lead's ruling on #2092); the Buddy itself has no command that writes.
+- Linux's bubblewrap sandbox: the real sandbox tests run on macOS only.
+- A plain file at the top of Claude Code's temporary folder, which must stay writable (section 3).
