@@ -17,6 +17,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.taggedYou = false,
   });
   final String text;
   final Map<int, String> references;
@@ -25,6 +26,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// The names a Lead tagged in this message. Each reads highlighted where
   /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
+
+  /// The message tags the reader, so its row is washed in the accent: a tag
+  /// takes the stronger accent in light, to stay 4.5:1 on its pill there.
+  final bool taggedYou;
 
   static Uri? webLink(String? href) {
     final uri = href == null ? null : Uri.tryParse(href);
@@ -79,7 +84,17 @@ class SuperTabMessageText extends StatelessWidget {
         _WorkgroupReference(references),
         if (mentions.isNotEmpty) _Mention(mentions),
       ],
-      builders: {'pre': _CodeBlock(), 'mention': _MentionName()},
+      builders: {
+        'pre': _CodeBlock(),
+        'mention': _MentionName(
+          taggedYou
+              ? grid.AppTheme.pick(
+                  grid.AppCard.accentStrong,
+                  grid.AppPalette.accentOnSurface,
+                )
+              : grid.AppPalette.accentOnSurface,
+        ),
+      },
       paddingBuilders: {'a': _CompactLinkLabel()},
       styleSheet: desktopMarkdownStyleSheet(context),
       onTapLink: (_, href, _) {
@@ -253,6 +268,8 @@ class _Mention extends md.InlineSyntax {
 }
 
 class _MentionName extends MarkdownElementBuilder {
+  _MentionName(this.ink);
+  final Color ink;
   @override
   Widget? visitElementAfterWithContext(
     BuildContext context,
@@ -263,7 +280,7 @@ class _MentionName extends MarkdownElementBuilder {
     TextSpan(
       text: element.textContent,
       style: (parentStyle ?? const TextStyle()).copyWith(
-        color: grid.AppPalette.accentOnSurface,
+        color: ink,
         backgroundColor: grid.AppSurface.accentWash,
         fontWeight: FontWeight.w600,
       ),

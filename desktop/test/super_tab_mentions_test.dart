@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -122,21 +123,35 @@ String minutesAgo(int minutes) => DateTime.now()
 
 /// The texts painted as tags, in order.
 List<String> tagRuns(WidgetTester tester) => [
+  for (final (text, _) in tagStyles(tester)) text,
+];
+
+/// Each tag painted, with its ink.
+List<(String, Color?)> tagStyles(WidgetTester tester) => [
   for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
     ..._tagRuns(rich.text, null),
 ];
 
-Iterable<String> _tagRuns(InlineSpan span, TextStyle? inherited) sync* {
+Iterable<(String, Color?)> _tagRuns(
+  InlineSpan span,
+  TextStyle? inherited,
+) sync* {
   if (span is! TextSpan) return;
   final style = inherited?.merge(span.style) ?? span.style;
   if (span.text case final text?
       when style?.backgroundColor == grid.AppSurface.accentWash &&
-          style?.color == grid.AppPalette.accentOnSurface) {
-    yield text;
+          style?.fontWeight == FontWeight.w600) {
+    yield (text, style?.color);
   }
   for (final child in span.children ?? const <InlineSpan>[]) {
     yield* _tagRuns(child, style);
   }
+}
+
+/// WCAG contrast of [a] on [b].
+double contrast(Color a, Color b) {
+  final (x, y) = (a.computeLuminance(), b.computeLuminance());
+  return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
 }
 
 /// The table of tags and non-tags the backend and the phone pass too.
@@ -1096,13 +1111,25 @@ void main() {
               .color,
           grid.AppPalette.accentOnSurface,
         );
-        // The tag in the text stays its pill.
-        expect(tagRuns(tester), ['@diego']);
+        // The tag in the text stays its pill, its ink readable on the pill
+        // over the wash (WCAG AA for text, 4.5:1).
+        final (tag, ink) = tagStyles(tester).single;
+        expect(tag, '@diego');
+        final behind = Color.alphaBlend(
+          grid.AppSurface.accentWash,
+          Color.alphaBlend(
+            grid.AppSurface.accentWash,
+            grid.AppTheme.surfacePalette.background,
+          ),
+        );
+        expect(contrast(ink!, behind), greaterThanOrEqualTo(4.5));
 
         // The same message, read by someone else: plain.
         await showView(tester, server, account: 'ken', brightness: brightness);
         await shot(tester, 'tagged-other-${brightness.name}');
         expect(tagged('message-1'), findsNothing);
+        // A tag in a message that is not yours keeps the pill it had.
+        expect(tagStyles(tester).single.$2, grid.AppPalette.accentOnSurface);
         expect(
           find.byKey(const ValueKey('super-tagged-bar-message-1')),
           findsNothing,

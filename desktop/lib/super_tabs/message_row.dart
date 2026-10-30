@@ -477,6 +477,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       references: widget.references,
                                       onOpenGroup: widget.onOpenGroup,
                                       mentions: widget.mentions,
+                                      taggedYou: taggedYou,
                                     ),
                                   ),
                                 ),

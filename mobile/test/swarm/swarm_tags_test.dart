@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -194,6 +195,20 @@ void main() {
       expect(bar.left.width, 3);
       expect(bar.left.color, AppPalette.accentOnSurface);
       expect(pills(tester), contains('@diego'));
+      // The tag's ink stays readable on its pill over the wash (WCAG AA for
+      // text, 4.5:1), on the chat's own ground.
+      final ground = Theme.of(tester.element(tagged('m1')))
+          .scaffoldBackgroundColor;
+      final behind = Color.alphaBlend(
+        AppSurface.accentWash,
+        Color.alphaBlend(AppSurface.accentWash, ground),
+      );
+      final ink = AppPalette.accentOnSurface;
+      final (x, y) = (ink.computeLuminance(), behind.computeLuminance());
+      expect(
+        (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05),
+        greaterThanOrEqualTo(4.5),
+      );
 
       // The same message, read by someone else: plain, its tag still a pill.
       await showChat(tester, reader: 'ken', brightness: palette.brightness);
