@@ -312,6 +312,14 @@ const DENIED = WIDE ? realRoots(WIDE.denied) : []
 // /proc/<pid>/environ held the read-only DB URL while db-size ran; on macOS /private/var/folders held other processes'
 // files).
 const READABLE = WIDE ? realRoots(WIDE.readable) : []
+// Whether the host granted wide mode to this session: it checked, at its person's last message, that they are the account
+// signed in on this machine (superTabs/host.ts, security reviews 1 and 2 of #2310). Without it, the folder alone.
+function granted() {
+  if (!WIDE) return false
+  try { return JSON.parse(readFileSync(READS, 'utf8')).wide === true } catch { return false }
+}
+const NOT_GRANTED = 'Reading beyond your folder opens once your owner writes to you in your chat, on their own computer signed in as ' +
+  'them. It was refused, and nobody will be asked. Tell your owner in one line.'
 const NEVER = ['/proc', '/sys', '/dev']
 const HOME = WIDE ? realOf(WIDE.home) : null
 // Where people's homes are (/Users, /home): every one but the person's own stays closed. macOS's Shared folder is nobody's.
@@ -326,7 +334,7 @@ function otherHome(real) {
 // by name all the way down (Glob), so nothing closed may lie under it. The path as given and its real path are both
 // judged: a link named innocently into ~/.ssh is refused, and so is one named .env.
 function outsideAllowed(path, kind) {
-  if (!WIDE || typeof path !== 'string') return false
+  if (!WIDE || typeof path !== 'string' || !granted()) return false
   const real = realOf(path)
   if (!real || !HOME) return false
   if (!READABLE.some((root) => under(real, root)) || NEVER.some((root) => under(real, root))) return false
@@ -672,6 +680,7 @@ function decide(input) {
   if (bashAllowed(tool.command)) return true
   const w = words(tool.command)
   if (!w || !widerRead(w)) return false
+  if (!granted()) { reason = NOT_GRANTED; return false }
   if (approved(w)) return true
   reason = ASK(tool.command)
   return false
@@ -746,7 +755,7 @@ interface ListedLink { url: string; at: number }
 /** `session`: the native session the host delivered these to, whose lists go when the Swarm ends it (`forgetBuddyReads`).
  *  `approvals`: its person's approvals on this machine (`recordBuddyApprovals`), set by the host once it checked a message
  *  was theirs; the guard reads no approvals without it. */
-interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[]; approvals?: string }
+interface List { version: 1; session: string; files: ListedFile[]; links: ListedLink[]; approvals?: string; wide?: boolean }
 
 /** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. */
 function heldList(file: string, session: string): List {
@@ -755,8 +764,8 @@ function heldList(file: string, session: string): List {
     const held = JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown; files?: unknown; links?: unknown }
     if (held.session !== session) return none
     const entries = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : []
-    const approvals = (held as { approvals?: unknown }).approvals
-    return { version: 1, session, ...(typeof approvals === 'string' ? { approvals } : {}),
+    const { approvals, wide } = held as { approvals?: unknown; wide?: unknown }
+    return { version: 1, session, ...(typeof approvals === 'string' ? { approvals } : {}), ...(typeof wide === 'boolean' ? { wide } : {}),
       files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size', 'sha256']
         .every(field => typeof entry[field] === 'string') && Number.isFinite(entry.at)),
       links: entries(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string' && Number.isFinite(entry.at)) }
@@ -817,6 +826,7 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
   const held = heldList(reads.file, sent.session)
   const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
   const list: List = { version: 1, session: sent.session, ...(held.approvals ? { approvals: held.approvals } : {}),
+    ...(held.wide !== undefined ? { wide: held.wide } : {}),
     files: [...fresh(held.files).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
     links: [...fresh(held.links).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) }
   writeWhole(reads.file, list)
@@ -852,6 +862,17 @@ function classify(node: string, guard: string, commands: readonly string[]): { w
   const judged = JSON.parse(run.stdout) as { wide?: unknown; verdicts?: unknown }
   if (!Array.isArray(judged.verdicts) || judged.verdicts.length !== commands.length) throw new Error('The Buddy\'s guard judged no commands.')
   return { wide: judged.wide === true, verdicts: judged.verdicts as { read: boolean; argv: string[] | null }[] }
+}
+
+/**
+ * Grants a Buddy session wide mode, or takes it back ([wide]), in its list ([reads]), keeping what else the list holds. The
+ * host decides at each of its person's own messages: theirs, in their own Buddy chat, on their own machine, and the account
+ * signed in on this machine (superTabs/host.ts). The guard reads beyond the folder only while it is granted. Throws when
+ * it cannot write, so the host tries the delivery again.
+ */
+export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide: boolean }): void {
+  mkdirSync(dirname(reads.file), { recursive: true, mode: 0o700 })
+  writeWhole(reads.file, { ...heldList(reads.file, input.session), wide: input.wide })
 }
 
 /** Whether [text] has a line approving commands or forgetting them: the host judges it only then. */

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PERMISSION_MODES } from './engineLaunch.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
-import { buddyApprovalsOf, buddyLaunchWide, buddyReadsOf, judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
+import { buddyApprovalsOf, buddyLaunchWide, buddyReadsOf, grantBuddyWide, judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
 import { fakeModel, type Call } from '../testing/fakeClaudeModel.js'
 
 /**
@@ -107,7 +107,9 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
       calls.readKey.input.file_path = join(home, '.ssh', 'id_ed25519')
       calls.catKey.input.command = `cat '${join(home, '.ssh', 'id_ed25519')}'`
       calls.readNotes.input.file_path = join(home, 'notes.txt')
-      // Its person approved one read in their chat, as the host records it (superTabs/host.ts).
+      // Its person wrote to it on their own Mac, signed in as them, and approved one read there, as the host records both
+      // (superTabs/host.ts).
+      grantBuddyWide(buddyReadsOf(key), { session: 'harness', wide: true })
       const judged = judgeBuddyApprovals({ node: process.execPath, guard: join(folder, '.claude', 'buddy-guard.mjs'), text: 'run: argocd app list' })
       expect(judged.approve.map((entry) => entry.command)).toEqual(['argocd app list'])
       recordBuddyApprovals({ reads: buddyReadsOf(key), session: 'harness', approvals: buddyApprovalsOf('peer:g'), judged, messageId: 'm' })

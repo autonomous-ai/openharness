@@ -34,7 +34,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyReadsOf, forgetBuddyReads, hasBuddyApprovals, judgeBuddyApprovals,
+import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, hasBuddyApprovals, judgeBuddyApprovals,
   recordBuddyApprovals, type JudgedApprovals } from '../lib/buddyGuard.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
@@ -1171,9 +1171,16 @@ export class SuperTabHost {
     const links = artifactLinks(message.text)
     // And the commands it approves in wide mode, by "run:" lines of its own (docs/specs/2026-10-30-buddy-read-access.md).
     const runs = this.isBuddy(entry) && hasBuddyApprovals(message.text)
-    const buddySession = this.isBuddy(entry) && (files.paths.length || links.length || runs) ? this.core.agents.byAgent(entry.harnessId) : undefined
+    // And whether it reads beyond its folder (docs/specs/2026-10-30-buddy-read-access.md): decided at each message a person
+    // sends it, as the Swarm says now and as this machine is signed in.
+    const fromPerson = object(message.author).kind === 'person' && result.buddyNews !== true
+    const buddySession = this.isBuddy(entry) && (files.paths.length || links.length || runs || fromPerson) ? this.core.agents.byAgent(entry.harnessId) : undefined
     const key = buddySession?.swarmSkill?.key
     const own = key ? await this.fromOwnPerson(entry, message, result.buddyNews === true) : null
+    // Wide mode only for its own person, on their own machine, signed in here as them: the Swarm's word that the machine is
+    // theirs is checked against this machine's own sign-in (security reviews 1 and 2 of #2310).
+    const signedIn = own?.onTheirMachine ? (await this.core.account.identity().catch(() => null))?.accountId : undefined
+    const wide = !!own?.onTheirMachine && !!signedIn && signedIn === String(object(message.author).id)
     const sent = key && own ? { key, session: entry.harnessId, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     const elsewhere = own && !own.onTheirMachine ? links : []
     // Judged by the Buddy's own guard, before the lease as the downloads are: only on its person's own machine. A guard that
@@ -1181,7 +1188,7 @@ export class SuperTabHost {
     let approving: { judged: JudgedApprovals; approvals: string } | null = null
     if (runs && key && own) {
       const author = object(message.author)
-      const judged = own.onTheirMachine && buddySession?.cwd
+      const judged = wide && buddySession?.cwd
         ? judgeBuddyApprovals({ node: process.execPath, guard: join(buddySession.cwd, '.claude', 'buddy-guard.mjs'), text: message.text })
         : { wide: false, approve: [], refused: [], forgot: false }
       approving = { judged, approvals: buddyApprovalsOf(`${String(author.id)}:${String(author.membershipGeneration)}`) }
@@ -1203,6 +1210,7 @@ export class SuperTabHost {
     if (sent) {
       try {
         allowBuddyReads(buddyReadsOf(sent.key), sent)
+        grantBuddyWide(buddyReadsOf(sent.key), { session: sent.session, wide })
         if (approving) recordBuddyApprovals({ reads: buddyReadsOf(sent.key), session: sent.session, approvals: approving.approvals, judged: approving.judged,
           messageId: String(message.id) })
       } catch (error) { this.authorized.delete(id); throw error }

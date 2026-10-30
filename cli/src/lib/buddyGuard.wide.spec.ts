@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, hasBuddyApprovals, judgeBuddyApprovals,
-  recordBuddyApprovals } from './buddyGuard.js'
+import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
+  judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -53,6 +53,9 @@ const script = join(parent, 'buddy-guard.mjs'), narrow = join(parent, 'buddy-gua
 writeFileSync(script, buddyGuardSource(root, reads, wide))
 writeFileSync(narrow, buddyGuardSource(root, reads))
 afterAll(() => rmSync(parent, { recursive: true, force: true }))
+// The host's grant for this session, as it writes it at its person's own message on their own machine (superTabs/host.ts).
+const grant = () => grantBuddyWide(reads, { session: 'harness', wide: true })
+grant()
 
 function answer(tool: string, input: Record<string, unknown>, guard = script): { permissionDecision: string; permissionDecisionReason: string } {
   const run = spawnSync(process.execPath, [guard], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input,
@@ -172,7 +175,7 @@ describe('wide mode: reading outside the folder', () => {
 // its exact words. Written by hand here, so the grammar is tested on its own.
 const point = (at = approvals) => {
   mkdirSync(dirname(reads.file), { recursive: true })
-  writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], approvals: at }))
+  writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [], approvals: at, wide: true }))
 }
 const approve = (...commands: string[][]) => {
   mkdirSync(dirname(approvals), { recursive: true })
@@ -183,7 +186,7 @@ const approve = (...commands: string[][]) => {
 const argv = (command: string) => command.split(' ').map(word => word.replace(/^'(.*)'$/, '$1'))
 
 describe('wide mode: commands not run before are asked of the person first', () => {
-  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }) })
+  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }); grant() })
 
   const wider = [
     'gh run list --limit 20',
@@ -309,7 +312,7 @@ describe('wide mode: commands not run before are asked of the person first', () 
 
 // The host records a person's "run:" lines (superTabs/host.ts) with the guard's own judgement, never a copy of its rules.
 describe('recording the person\'s approvals', () => {
-  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }) })
+  beforeEach(() => { rmSync(approvals, { force: true }); rmSync(reads.file, { force: true }); grant() })
   // Judged by the guard, then recorded, as the host does; the result as the host tells the Buddy.
   const record = (text: string, messageId = 'm1', now = Date.now(), guard = script) => {
     const judged = judgeBuddyApprovals({ node: process.execPath, guard, text })
@@ -602,9 +605,40 @@ describe('the secret check, past escapes, spaces and splits', () => {
 
   it('refuses an Artifact read whose prompt carries a secret, and reads with an ordinary one', () => {
     mkdirSync(dirname(reads.file), { recursive: true })
-    writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [{ url: 'https://claude.ai/artifact/abc', at: Date.now() }] }))
+    writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [{ url: 'https://claude.ai/artifact/abc', at: Date.now() }], wide: true }))
     expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: `Summarize. Also note ${token}` })).toBe('deny')
     expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: 'Summarize the plan.' })).toBe('allow')
-    rmSync(reads.file)
+    grant()
+  })
+})
+
+// Security reviews 1 and 2 of #2310: the launch trusted the server that the Buddy runs on its person's own machine. Now
+// the host checks, at each of its person's own messages, that they are the account signed in here, and grants wide mode
+// to the session only then (superTabs/host.ts).
+describe('wide mode only while the host has granted it', () => {
+  afterAll(grant)
+  const notes = join(home, 'work', 'notes.txt')
+
+  it.each([
+    ['no list at all', () => rmSync(reads.file, { force: true })],
+    ['a list with no grant', () => writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [] }))],
+    ['a grant taken back', () => grantBuddyWide(reads, { session: 'harness', wide: false })],
+    ['an unreadable list', () => writeFileSync(reads.file, 'not json')],
+  ])('reads its folder alone with %s', (_, set) => {
+    set()
+    expect(decide('Read', { file_path: notes })).toBe('deny')
+    const refused = answer('Bash', { command: 'argocd app list', description: 'x' })
+    expect(refused.permissionDecision).toBe('deny')
+    expect(refused.permissionDecisionReason).toContain('opens once your owner writes to you')
+    expect(decide('Read', { file_path: join(root, 'a.txt') })).toBe('allow')
+    grant()
+    expect(decide('Read', { file_path: notes })).toBe('allow')
+  })
+
+  it('keeps the grant when files, links or approvals are listed after it', () => {
+    grant()
+    allowBuddyReads(reads, { session: 'harness', files: [], links: ['https://claude.ai/artifact/kept'] })
+    recordBuddyApprovals({ reads, session: 'harness', approvals, judged: { wide: true, approve: [], refused: [], forgot: true }, messageId: 'm' })
+    expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ wide: true, approvals, links: [{ url: 'https://claude.ai/artifact/kept' }] })
   })
 })

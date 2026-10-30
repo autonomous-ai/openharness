@@ -1081,6 +1081,8 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     t.row.agent.id = AGENT
     t.from(String(message.conversationId ?? 'chat'))
     vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key } } as never)
+    // Its person's own Mac, signed in as them.
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'peer', email: 'peer@example.com' })
     const state = { agents: read.agents ?? [buddyAgent], conversations: read.conversations ?? [buddyChat] }
     let refuse = false
     const reads: string[] = []
@@ -1107,7 +1109,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     const { host, shot, delivered } = buddyOn()
     await host.tick()
     const stat = lstatSync(shot, { bigint: true })
-    const list = { version: 1, session: 'harness',
+    const list = { version: 1, session: 'harness', wide: true,
       files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3', sha256: sha256('png'), at: expect.any(Number) }],
       links: [{ url: LINK, at: expect.any(Number) }] }
     expect(delivered).toHaveLength(1)
@@ -1204,11 +1206,28 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect([listed(), reads]).toEqual([null, []])
   })
 
-  it('reads nothing for a message with no files and no Artifact link', async () => {
+  // Each message its person sends decides whether it reads beyond its folder (security reviews 1 and 2 of #2310): one read
+  // of the Swarm, by what changed since the last, and a list with the grant alone.
+  it('reads the Swarm once for a message with no files and no Artifact link, to grant wide mode, and lists nothing else', async () => {
     const { host, delivered, reads } = buddyOn({ text: 'Thanks! https://example.com/artifact/x', attachments: [] })
     await host.tick()
     expect(delivered).toHaveLength(1)
-    expect([listed(), reads]).toEqual([null, []])
+    expect(reads).toHaveLength(1)
+    expect(listed()).toEqual({ version: 1, session: 'harness', wide: true, files: [], links: [] })
+  })
+
+  it.each([
+    ['another account signed in on this machine', { accountId: 'sam', email: 'sam@example.com' }],
+    ['no account it can read', null],
+  ])('keeps it to its folder with %s, and takes back a grant given before', async (_, identity) => {
+    const first = buddyOn({ text: 'Hello', attachments: [] })
+    await first.host.tick()
+    expect(listed()).toMatchObject({ wide: true })
+    const second = buddyOn({ text: 'Hello again', attachments: [], id: 'message-2' })
+    vi.mocked(second.t.core.account.identity).mockResolvedValue(identity)
+    await second.host.tick()
+    expect(second.delivered).toHaveLength(1)
+    expect(listed()).toMatchObject({ wide: false })
   })
 
   it('delivers nothing while its access cannot be read, then lists and delivers once it can', async () => {
@@ -1306,10 +1325,12 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     })
 
     it.each([
-      ['a Buddy on someone else\'s machine', { agents: [{ ...buddyAgent, machineOwnerId: 'sam' }] }, true],
-      ['a guard not in wide mode', {}, false],
-    ])('records nothing for %s, and has it tell its person wider reads are off', async (_, read, wide) => {
-      const { host, delivered } = approving({ text: 'run: argocd app list' }, read, {}, folderWith(wide))
+      ['a Buddy on someone else\'s machine', { agents: [{ ...buddyAgent, machineOwnerId: 'sam' }] }, true, 'peer'],
+      ['a guard not in wide mode', {}, false, 'peer'],
+      ['a machine signed in as another account', {}, true, 'sam'],
+    ])('records nothing for %s, and has it tell its person wider reads are off', async (_, read, wide, signedIn) => {
+      const { t, host, delivered } = approving({ text: 'run: argocd app list' }, read, {}, folderWith(wide))
+      vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: signedIn, email: `${signedIn}@example.com` })
       await host.tick()
       expect(recorded()).toEqual([])
       expect(delivered[0]!.text).toContain('Your owner sent run: lines, but wider reads are off for you on this computer, so nothing was approved.')
