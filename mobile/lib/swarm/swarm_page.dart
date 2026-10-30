@@ -152,14 +152,7 @@ class _SwarmPageState extends State<SwarmPage> {
   }
 
   void _openProject(BuildContext context, String swarmId, String projectId) =>
-      unawaited(
-        Navigator.of(context).push(
-          phoneRoute(
-            (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
-            listensForItself: true,
-          ),
-        ),
-      );
+      openSwarmProject(context, swarmId: swarmId, projectId: projectId);
 
   /// The projects quiet for a day are listed under Other projects.
   bool _quietOpen = false;

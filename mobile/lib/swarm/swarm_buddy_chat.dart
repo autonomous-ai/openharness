@@ -24,7 +24,8 @@ import 'swarm_style.dart';
 
 /// Opens the person's Buddy chat in [projectId] over [context]'s page, on the
 /// server first when the read holds none ([openSwarmBuddyChat]). Answers what
-/// went wrong as a sentence to show, or null once it is open.
+/// went wrong as a sentence to show, or null once it is open — or once there
+/// is nothing to open: the page gone, or the Swarm taken away meanwhile.
 Future<String?> openSwarmBuddy(
   BuildContext context,
   SwarmReader reader,
@@ -35,12 +36,15 @@ Future<String?> openSwarmBuddy(
   try {
     id = await openSwarmBuddyChat(reader, projectId);
   } on SuperTabFailure catch (failure) {
-    return failure.message;
+    return reader.accessRevoked ? null : failure.message;
   } catch (_) {
-    return 'Could not open your Buddy chat. Try again.';
+    return reader.accessRevoked
+        ? null
+        : 'Could not open your Buddy chat. Try again.';
   }
+  if (reader.accessRevoked || !context.mounted) return null;
   if (id == null) return 'Your Buddy chat is not ready yet. Try again.';
-  if (context.mounted) openSwarmConversation(context, swarmId, id);
+  openSwarmConversation(context, swarmId, id);
   return null;
 }
 
