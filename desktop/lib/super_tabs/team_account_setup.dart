@@ -95,14 +95,24 @@ class _Words {
       'Teammates\' agents in your Swarms run on this computer in a separate '
       'account, Harness Team. They cannot read your files or use your GitHub login. '
       'They use this computer\'s Claude Code and Codex subscriptions, so nobody signs in again.';
-  static const _computerExists = 'Harness Team is already set up on this computer.';
+  static const _computerExists =
+      'Harness Team is already set up on this computer.';
   static const _computerUpdate =
       'This computer\'s Harness is too old to set it up from here. Update Harness, '
       'or run harness team setup in a terminal.';
-  static const _computerCannot = 'Harness Team cannot be set up on this computer right now.';
-  static const _computerUnreachable = 'Could not reach Harness on this computer. Try again.';
+  static const _computerCannot =
+      'Harness Team cannot be set up on this computer right now.';
+  static const _computerUnreachable =
+      'Could not reach Harness on this computer. Try again.';
 
-  final String title, account, prompt, started, exists, update, cannot, unreachable;
+  final String title,
+      account,
+      prompt,
+      started,
+      exists,
+      update,
+      cannot,
+      unreachable;
 
   /// For the daemon's `no-prompt` (cli/src/team/autoSetup.ts): no desktop session to ask in, so the terminal is the
   /// way. Null where that never happens.

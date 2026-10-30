@@ -656,6 +656,134 @@ void main() {
     },
   );
 
+  group('thread marks kept on the server', () {
+    Future<SuperTabController> read(ConversationServer server) async {
+      final c = server.controller();
+      addTearDown(() async {
+        await pumpEventQueue();
+        c.dispose();
+      });
+      await c.refresh();
+      await c.loadMessages('lead');
+      return c;
+    }
+
+    /// A reply in message-1's thread from the peer, as a poll brings it.
+    Future<void> peerReplies(
+      ConversationServer server,
+      SuperTabController c,
+    ) async {
+      server.append('One more thing.');
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1'
+        ..['author'] = peer;
+      await c.refresh();
+      await c.loadMessages('lead');
+    }
+
+    test('a thread opened only on another device reads as read here; a later '
+        'reply past it is unread', () async {
+      final server = threaded();
+      // The chat itself was not read anywhere past the root.
+      server.markReadElsewhere('lead', 1);
+      server.markThreadReadElsewhere('lead', 'message-1', 3);
+      final c = await read(server);
+      expect(c.threadReadMark('message-1'), 3);
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+      await peerReplies(server, c);
+      expect(c.thread('lead', 'message-1')!.lastSequence, 5);
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+    });
+
+    test(
+      'another person\'s thread mark never reads the reader\'s thread',
+      () async {
+        final server = threaded();
+        server.markReadElsewhere('lead', 1);
+        server.markThreadReadElsewhere('lead', 'message-1', 3, reader: 'peer');
+        final c = await read(server);
+        expect(c.snapshot!.threadMarks, isEmpty);
+        expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+      },
+    );
+
+    test('opening a thread sends its mark once, forward only', () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', 1);
+      final c = await read(server);
+      c.select('lead');
+      c.openThread('message-1');
+      await pumpEventQueue();
+      c.closeThread();
+      c.openThread('message-1');
+      await pumpEventQueue();
+      expect(server.threadMarkPosts, [
+        {'conversationId': 'lead', 'root': 'message-1', 'sequence': 3},
+      ]);
+      c.closeThread();
+      await peerReplies(server, c);
+      c.openThread('message-1');
+      await pumpEventQueue();
+      expect(server.threadMarkPosts.last, {
+        'conversationId': 'lead',
+        'root': 'message-1',
+        'sequence': 5,
+      });
+      expect(server.threadMarkPosts, hasLength(2));
+      // Read back on the next poll as every device gets it.
+      await c.refresh();
+      expect(c.snapshot!.threadMarks['lead'], {'message-1': 5});
+    });
+
+    test('a lower server mark never makes a thread read here unread', () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', 1);
+      final c = await read(server);
+      c.select('lead');
+      server.failThreadMarks = true;
+      c.openThread('message-1');
+      await pumpEventQueue();
+      c.closeThread();
+      server.failThreadMarks = false;
+      // Another device marked it read only through its first reply.
+      server.markThreadReadElsewhere('lead', 'message-1', 2);
+      await c.refresh();
+      expect(c.threadReadMark('message-1'), 3);
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+    });
+
+    test('on a server without thread marks, a thread opened here still reads '
+        'as read here, and the next one opened is tried again', () async {
+      final server = threaded()..oldServer = true;
+      server.markReadElsewhere('lead', 1);
+      final c = await read(server);
+      c.select('lead');
+      c.openThread('message-1');
+      await pumpEventQueue();
+      expect(server.threadMarkPosts, hasLength(1));
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+      c.closeThread();
+      await peerReplies(server, c);
+      c.openThread('message-1');
+      await pumpEventQueue();
+      expect(server.threadMarkPosts, hasLength(2));
+      expect(c.snapshot!.threadMarks, isEmpty);
+    });
+
+    test('once access is lost, an open thread sends no mark', () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', 1);
+      final c = await read(server);
+      c.select('lead');
+      c.accessRevoked = true;
+      c.openThread('message-1');
+      await peerReplies(server, c);
+      await pumpEventQueue();
+      expect(server.threadMarkPosts, isEmpty);
+    });
+  });
+
   testWidgets('the read mark passes thread replies after the last row shown', (
     tester,
   ) async {

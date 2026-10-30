@@ -77,7 +77,8 @@ async function capThreadMarks(db: PrismaClient, tabId: string, personId: string)
   if (over <= 0) return
   const oldest = await readBy(db, 'SuperTabThreadMark', 'moved', [{ $match: { tabId, personId } }, { $sort: { updatedAt: 1 } }, { $limit: over },
     { $project: { _id: 1 } }])
-  await db.superTabThreadMark.deleteMany({ where: { id: { in: oldest.map(row => row._id as string) } } })
+  // A plain $in on _id: Prisma's `in` plans slowly (parts/indexed.ts).
+  await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q: { _id: { $in: oldest.map(row => row._id as string) } }, limit: 0 }] })
 }
 
 /** The person's marks in this tab, by conversation; with `since`, only those moved at or after it. */

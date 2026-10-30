@@ -85,6 +85,7 @@ class SwarmPartsBackend {
           'otherProjectsWork',
           'githubApp',
           'readMarks',
+          'threadMarks',
           'teamAccounts',
         }.contains(entry.key))
           entry.key: entry.value,
@@ -167,6 +168,13 @@ class SwarmPartsBackend {
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
+    // Their own thread marks alone, by conversation, absent when none.
+    if ((state['threadMarks'] as Map?)?[reader ?? 'owner'] case final Map marks
+        when marks.isNotEmpty)
+      'threadMarks': {
+        for (final MapEntry(:key, :value) in marks.entries)
+          key: Map<String, dynamic>.from(value as Map),
+      },
   };
 
   List<MapEntry<String, _HeldPart>> _ordered() =>
@@ -599,6 +607,77 @@ class ConversationServer {
     return marks[conversationId] = kept;
   }
 
+  /// The thread marks this device sent, in order: {conversationId, root,
+  /// sequence}.
+  final threadMarkPosts = <Map<String, dynamic>>[];
+
+  /// Every thread-mark write fails: as offline, or with [oldServer] as a
+  /// backend without thread marks answers (no such route).
+  bool failThreadMarks = false;
+  bool oldServer = false;
+
+  /// While set, thread-mark writes wait for it: an answer that arrives late.
+  Completer<void>? holdThreadMarks;
+
+  /// A thread mark [reader] made on another device, as the backend keeps it.
+  void markThreadReadElsewhere(
+    String conversationId,
+    String root,
+    int sequence, {
+    String reader = 'owner',
+  }) => _keepThreadMark(conversationId, root, sequence, reader);
+
+  int _keepThreadMark(
+    String conversationId,
+    String root,
+    int sequence,
+    String reader,
+  ) {
+    final marks =
+        (((state['threadMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+          reader,
+          () => <String, dynamic>{},
+        ) as Map).putIfAbsent(conversationId, () => <String, dynamic>{}) as Map;
+    final kept = max(marks[root] as int? ?? 0, sequence);
+    return marks[root] = kept;
+  }
+
+  Future<Map<String, dynamic>> _markThreadRead(
+    String conversationId,
+    String root,
+    int sequence,
+    String? reader,
+  ) async {
+    threadMarkPosts.add({
+      'conversationId': conversationId,
+      'root': root,
+      'sequence': sequence,
+    });
+    if (holdThreadMarks case final hold?) await hold.future;
+    if (oldServer) {
+      throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+    }
+    if (failThreadMarks) {
+      throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+    }
+    final newest =
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == conversationId,
+                )['lastMessageSequence']
+            as int? ??
+        0;
+    return {
+      'sequence': _keepThreadMark(
+        conversationId,
+        root,
+        min(sequence, newest),
+        reader ?? 'owner',
+      ),
+    };
+  }
+
   /// The backend's read-mark route (readMarks.ts): forward only, never past
   /// the conversation's newest message.
   Map<String, dynamic> _markRead(
@@ -804,6 +883,18 @@ class ConversationServer {
         : null;
     if (read != null) {
       return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
+    final threadRead = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/read$')
+              .firstMatch(path)
+        : null;
+    if (threadRead != null) {
+      return _markThreadRead(
+        Uri.decodeComponent(threadRead.group(1)!),
+        Uri.decodeComponent(threadRead.group(2)!),
+        body!['sequence'] as int,
+        reader,
+      );
     }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
@@ -1255,7 +1346,11 @@ class ConversationServer {
       leaderboardReads.add(path);
       if (failLeaderboardReads > 0) {
         failLeaderboardReads--;
-        throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
       }
       final board = leaderboard;
       if (board == null) {
