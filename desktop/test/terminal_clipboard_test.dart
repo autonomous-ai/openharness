@@ -286,6 +286,73 @@ void main() {
     },
   );
 
+  onPlatform(
+    TargetPlatform.windows,
+    'an image upload the machine stops confirming is given up and says how far it got',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.terminalImagePasteAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final controls = <String>[];
+      final session =
+          TerminalSession(
+              machineId: 'm',
+              agentId: 'a0',
+              agentName: 'a0',
+              engineId: 'claude',
+              uploadStallTimeout: const Duration(seconds: 1),
+              send: (type, _) async {
+                controls.add(type);
+                return true;
+              },
+              sendBinary: (frame) async {
+                frames.add(frame);
+                return true;
+              },
+            )
+            ..status = TerminalSessionStatus.controlling
+            ..streamId = 'stream-a0';
+      final png = Uint8List(terminalUploadChunkBytes * 2);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(imageChannel, (_) async => png);
+      clipboard = null;
+      await mount(tester, app, session);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      await session.handleFrame('terminal_chunked_upload_begin_result', {
+        'streamId': session.streamId,
+        'accepted': true,
+      });
+      await tester.pump();
+      expect(frames, hasLength(2));
+      await session.handleFrame('terminal_chunked_upload_progress', {
+        'streamId': session.streamId,
+        'bytesWritten': terminalUploadChunkBytes,
+        'totalBytes': png.length,
+      });
+      await tester.pump();
+      expect(find.textContaining('stopped at'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(
+        find.text(
+          'The image upload stopped at 50%: part of it never reached the '
+          'machine. Paste again to retry.',
+        ),
+        findsOneWidget,
+      );
+      expect(controls.last, 'terminal_chunked_upload_cancel');
+      expect(session.uploadProgress, isNull);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
+
   for (final platform in [
     TargetPlatform.macOS,
     TargetPlatform.linux,

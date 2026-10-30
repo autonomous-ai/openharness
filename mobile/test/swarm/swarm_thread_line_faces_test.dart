@@ -72,4 +72,29 @@ void main() {
     // Their size is unchanged.
     expect(tester.getSize(find.byWidget(left)).width, SwarmThreadLine.face);
   });
+
+  testWidgets('the PM wears manager blue as on its own messages, another '
+      'agent its own colour', (tester) async {
+    final snapshot = swarm();
+    Future<SwarmChatAvatar> lead(Map<String, String> roles) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SwarmThreadLine(
+              thread: thread,
+              faces: swarmThreadFaces(snapshot, thread, roles: roles),
+              onOpen: () {},
+            ),
+          ),
+        ),
+      );
+      return tester
+          .widgetList<SwarmChatAvatar>(find.byType(SwarmChatAvatar))
+          .elementAt(1);
+    }
+
+    expect((await lead({'agent-lead': 'PM'})).pm, isTrue);
+    expect((await lead({'agent-lead': 'Builder'})).pm, isFalse);
+    expect((await lead(const {})).pm, isFalse);
+  });
 }
