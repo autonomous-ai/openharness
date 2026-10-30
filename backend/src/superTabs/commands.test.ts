@@ -1818,6 +1818,22 @@ describe('Reviewer role', () => {
         expect([reviewer, fresh]).toContain(third.assignment!.agentId)
       })
 
+      it('never gives the missing review to the Reviewer of an open one that stopped before its verdict', () => {
+        const { f, leadActor, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const [first, second] = reviews()
+        // `second`'s Reviewer stopped with no verdict: its review stays open, and the Reviewer is free again.
+        f.run({ type: 'work.status', conversationId: second!.id, assignmentId: second!.assignment!.id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+        verdict(f, first!, group, built, first!.assignment!.agentId, false)
+        // `first`'s Reviewer leaves: the stopped one is the only free Reviewer.
+        f.run({ type: 'agent.release', agentId: first!.assignment!.agentId, decision: 'stop' }, leadActor)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        markReady(`Fixed, head 2. ${pr}`)
+        const added = reviews().filter(r => r.id !== first!.id && r.id !== second!.id)
+        expect(added).toHaveLength(1)
+        expect(added[0]!.assignment).toBeNull()
+      })
+
       it('gives each re-check back to its own earlier Reviewer, never both to one', () => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         markReady(`Ready. ${pr}`)
