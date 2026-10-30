@@ -114,6 +114,22 @@ describe('five-part task commands', () => {
       expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
     })
   }
+  it('renders a task\'s review plan into its brief as the backend does', async () => {
+    const t = setup()
+    const review = { focus: ' Check revoked access first. ', reviews: 2 }
+    expect(await send(t, { type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks })).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
+      command: { type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks,
+        brief: `${brief}\n\nReview:\nCheck revoked access first.\nTwo independent reviews, each by a different Reviewer.` } })
+  })
+  it('tells the Lead an older server takes no review plan, and sends nothing more', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST'
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.task: Unrecognized key: "review"' } } } as never : original(...args))
+    expect(await send(t, { type: 'work.define', conversationId: 'group', task: { ...task, review: { reviews: 2 } }, checks }))
+      .toMatchObject({ error: 'REVIEW_PLAN_UNSUPPORTED', detail: expect.stringContaining('review focus in its constraints') })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
+  })
   it('preserves other errors and never repeats a failed compatibility retry', async () => {
     for (const [status, code, message, count] of [
       [403, 'FORBIDDEN', 'Unrecognized key: "task"', 1], [400, 'VALIDATION_ERROR', 'Invalid title', 1],

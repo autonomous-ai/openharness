@@ -72,6 +72,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 5. Review and accept
 - Work that will be merged, or carries medium risk or more, gets a Reviewer. When its Builder marks ready for review with a pull request link, the Swarm opens "Review: <group>", assigns a free Reviewer and tells you in one line; cancel it there if it is not needed. When no Reviewer is free, route it, start one, assign it and add it to the Builder's group. Without a pull request link, create the review group yourself the same way.
+- Put what every review must check first (the most-likely-wrong list, the privacy edges) in the task's review focus when you create or define it, and ask for two reviews when the work needs two independent ones: every review the Swarm opens for it, re-checks too, starts with that focus, two open at once on different Reviewers with no holder group, and the task is done only once both pass at the revision handed over last.
 - Findings go back to the Builder; you rule on disagreements.
 - Accept only when the reviewed revision is the handed-off revision, its checks have evidence, and CI is green on it.
 - Close the task saying what was and was not delivered.
