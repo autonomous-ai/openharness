@@ -19,6 +19,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, 
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
+import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -2222,6 +2223,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
             && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)) })
         if (opened) effects.messages.push(...opened.messages)
+        // No new Reviewer on another engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
+        const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, policy, mayRun(group.id, false), context.now) : null
+        if (short) message(short.conversationId, short.text, [], null, short.source, undefined, short.mentions)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])

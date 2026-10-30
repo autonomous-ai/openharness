@@ -1594,6 +1594,18 @@ describe('Reviewer role', () => {
       return { ...setup, fresh, built, builderActor, markReady, reviews }
     }
 
+    // Overnight 2026-10-30 reviews waited hours with every other-engine Reviewer out of quota, and nobody was told.
+    it('tells the project chat once when no new Reviewer on another engine than the Builder\'s can start, tagging who can fix it', () => {
+      const { f, markReady } = ready()
+      teamMachine(f, 'owner')
+      f.state.machines![0]!.observation!.quotas = [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }]
+      const said = markReady(`Ready: yes.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')
+      expect(said).toMatchObject([{ conversationId: f.state.projects![0]!.leadConversationId, recipients: [], mentions: ['owner'] }])
+      expect(said[0]!.text).toBe('Reviews of Codex builds cannot start a new Reviewer: Claude Code is unavailable on every machine this project may use (Studio: out of quota). '
+        + 'More Claude Code quota, Claude Code signed in on another machine, or another machine in the Swarm would unblock them. @owner can fix it.')
+      expect(markReady(`Ready: yes, again.\n${pr}`).messages.filter(m => m.source?.kind === 'review-capacity')).toEqual([])
+    })
+
     it('opens "Review: <group>" with the handoff, the checks and the link, assigns a free Reviewer and adds it to the reviewed group', () => {
       const { f, lead, group, reviewer, fresh, markReady, reviews } = ready()
       f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })

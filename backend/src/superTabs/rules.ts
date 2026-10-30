@@ -141,7 +141,7 @@ function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gri
 }
 /** The effort a new agent on a row starts at: the row's, or the owner's minimum when the row leaves it to the engine (cli
  *  superTabs/route.ts liftEffort). */
-function liftEffort(rules: SwarmRule[] | undefined, engine: string, effort: string): string {
+export function liftEffort(rules: SwarmRule[] | undefined, engine: string, effort: string): string {
   if (rank(effort) >= 0) return effort
   const least = Math.max(-1, ...(rules ?? []).flatMap(({ rule }) => rule.kind === 'minEffort' && (!rule.engine || rule.engine === engine) ? [rank(rule.effort)] : []))
   return least < 0 ? effort : EFFORTS[least]!
