@@ -44,6 +44,7 @@ import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { AppError } from '../errors/index.js'
 import type { Machine } from '@prisma/client'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
+import { markCpuKind } from './selfProfile.js'
 import {
   VoiceQuotaExceededError,
   voiceQuotaService,
@@ -1249,6 +1250,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     },
   )
   device.on('message', (raw: RawData, isBinary: boolean) => {
+    markCpuKind(isBinary ? 'device-ws binary' : 'device-ws text')
     if (isBinary) {
       if (voiceActive) {
         const buf = raw as Buffer
