@@ -428,7 +428,7 @@ void main() {
                   builder: (_, child) =>
                       SwarmScope(notifier: host, child: child!),
                   // The Swarm tabs, as the phone's root has them.
-                  home: SwarmTabsPage(settings: (_) => const SizedBox()),
+                  home: SwarmTabsPage(onSettings: (_) {}),
                 ),
                 Positioned.fill(
                   child: IgnorePointer(

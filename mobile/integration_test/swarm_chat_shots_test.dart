@@ -513,6 +513,15 @@ class _Computers extends ChangeNotifier implements SwarmComputers {
 
   @override
   void add(BuildContext context) {}
+
+  @override
+  List<SwarmOwnComputer> get own => const [];
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async => throw UnimplementedError();
 }
 
 class _Walk {

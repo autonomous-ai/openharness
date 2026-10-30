@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -9,6 +11,7 @@ import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_buddies_fixture.dart';
@@ -123,9 +126,13 @@ FakeSwarm _asking() {
 }
 
 /// Swarm's own tabs, with a stand-in for the phone's Settings.
-const _tabs = SwarmTabsPage(settings: _settings);
+const _tabs = SwarmTabsPage(onSettings: _settings);
 
-Widget _settings(BuildContext context) => const Text('the settings');
+void _settings(BuildContext context) => unawaited(
+  Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => const Text('the settings'))),
+);
 
 void main() {
   late SwarmHost host;
@@ -214,7 +221,7 @@ void main() {
   testWidgets('a tab tapped shows its screen, and the others stay as they '
       'were, out of sight', (tester) async {
     final made = <SwarmTab>[];
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes(made)));
+    await pump(tester, SwarmTabsPage(tabs: _probes(made)));
     await tester.tap(find.text('home taps 0'));
     await tester.pump();
 
@@ -244,7 +251,7 @@ void main() {
   testWidgets('each screen is made the first time its tab opens, and only '
       'then', (tester) async {
     final made = <SwarmTab>[];
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes(made)));
+    await pump(tester, SwarmTabsPage(tabs: _probes(made)));
     expect(made, [SwarmTab.home]);
 
     await open(tester, SwarmTab.buddies);
@@ -261,13 +268,7 @@ void main() {
     // A count the test can move: the projects pinned.
     SwarmTabBadge? pins(SwarmSession session) =>
         (count: session.home.pins.length, warn: true);
-    await pump(
-      tester,
-      SwarmTabsPage(
-        settings: _settings,
-        tabs: _probes([], activity: pins),
-      ),
-    );
+    await pump(tester, SwarmTabsPage(tabs: _probes([], activity: pins)));
     final badge = find.byKey(const ValueKey('swarm-tab-badge-activity'));
     expect(badge, findsNothing, reason: 'none for a count of 0');
 
@@ -302,7 +303,7 @@ void main() {
   testWidgets('every tab takes a thumb: at least 44 points each way, the bar '
       'across the foot, above the home indicator', (tester) async {
     tester.view.padding = const FakeViewPadding(bottom: 34 * 3);
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
 
     for (final tab in SwarmTab.values) {
       final size = tester.getSize(tabOf(tab));
@@ -324,7 +325,7 @@ void main() {
         'more, and each opens its own screen', (tester) async {
       final tabs = _probes([]);
       if (count == 3) tabs.removeWhere((e) => e.tab == SwarmTab.buddies);
-      await pump(tester, SwarmTabsPage(settings: _settings, tabs: tabs));
+      await pump(tester, SwarmTabsPage(tabs: tabs));
 
       final rects = [for (final e in tabs) tester.getRect(tabOf(e.tab))];
       expect(rects, hasLength(count));
@@ -345,7 +346,7 @@ void main() {
   testWidgets('back on another tab goes to Home; on Home it is not held', (
     tester,
   ) async {
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
     await open(tester, SwarmTab.activity);
 
@@ -365,7 +366,7 @@ void main() {
         valueListenable: hidden,
         builder: (context, value, child) =>
             OutOfSight(hidden: value, child: child!),
-        child: SwarmTabsPage(settings: _settings, tabs: _probes([])),
+        child: SwarmTabsPage(tabs: _probes([])),
       ),
     );
     await open(tester, SwarmTab.activity);
@@ -387,7 +388,7 @@ void main() {
 
   testWidgets('a screen under the tabs can open another tab; nothing else '
       'can', (tester) async {
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
 
     await tester.tap(find.text('home to You'));
     await tester.pumpAndSettle();
@@ -419,6 +420,61 @@ void main() {
       'Activity',
     );
     expect(find.byKey(const ValueKey('tty-back')), findsNothing);
+    expect(find.text('Ship it?'), findsOneWidget);
+  });
+
+  testWidgets('While you were away on Home opens the Activity tab, not a '
+      'page over Home', (tester) async {
+    var now = DateTime.now();
+    final tabs = [
+      for (final entry in swarmTabs(onSettings: _settings))
+        entry.tab == SwarmTab.home
+            ? SwarmTabEntry(
+                tab: entry.tab,
+                label: entry.label,
+                icon: entry.icon,
+                screen: (_) => SwarmPage(now: () => now),
+              )
+            : entry,
+    ];
+    await pump(
+      tester,
+      SwarmTabsPage(onSettings: _settings, tabs: tabs),
+      fake: _asking(),
+    );
+    // The app hidden for an hour, then shown again.
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    now = now.add(const Duration(hours: 1));
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+
+    final away = find.byKey(const ValueKey('swarm-away'));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('swarm-away-needs')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(away);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SwarmActivityView), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('tty-back')),
+      findsNothing,
+      reason: 'the tab, not a page',
+    );
     expect(find.text('Ship it?'), findsOneWidget);
   });
 
@@ -478,12 +534,23 @@ void main() {
     expect(reads(), 3);
   });
 
-  testWidgets('You opens the phone\'s Settings', (tester) async {
+  testWidgets('You opens the person\'s own page, and its Settings the '
+      'phone\'s, over the tabs', (tester) async {
     await pump(tester, _tabs);
 
     await open(tester, SwarmTab.you);
 
+    expect(find.byType(SwarmYouPage), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
+      'You',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('swarm-you-settings')));
+    await tester.pumpAndSettle();
+
     expect(find.text('the settings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-tab-you')), findsNothing);
   });
 
   testWidgets('Activity open mutes the notices it shows, and '

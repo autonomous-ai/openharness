@@ -21,6 +21,8 @@ import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
+import { createSwarmSkillAdoption } from '../superTabs/inCore/adoption.js'
+import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../superTabs/retention.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
@@ -196,6 +198,18 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ ok: true, session: { swarmSkill } })
     registry.load()
     expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
+  })
+
+  // Security review 2 of #2255: opening an old Buddy after the Mac was offline over a week (a lapsed local roster) opened it
+  // without its role, with no role read at all.
+  it('opens an old Buddy with its role after the local roster lapsed', async () => {
+    rewrite({ startedBy: 'agent' })
+    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: saved.agentId, machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
+    const role = vi.fn(async () => ({ role: 'buddy' as const }))
+    deps.adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(dir).has(id),
+      authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: () => 0, cancelled: () => false }) })
+    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'buddy', key: saved.agentId } } })
+    expect(role).toHaveBeenCalledOnce()
   })
 
   it('does not resume a session that changed during role adoption', async () => {
