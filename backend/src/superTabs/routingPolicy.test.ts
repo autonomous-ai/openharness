@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, priorFor, routingOverrideSchema, routingPolicySchema } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
 import type { PriorsTable } from './benchmarkPriors/priors.js'
 
 describe('routing policy', () => {
@@ -42,6 +42,49 @@ describe('routing policy', () => {
     // The owner's own version of a built-in row takes its place, not one of their 40.
     expect(parses([...own(40), { ...sol, enabled: false }])).toBe(true)
     expect(parses([...own(41), sol])).toBe(false)
+  })
+
+  describe('a built-in row added on read (review of #2271 at 1d9499646)', () => {
+    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
+    const codexDefault = DEFAULT_ROUTING_POLICY.models.find(m => m.engine === 'codex' && m.model === 'default')!
+    const claudeRows = DEFAULT_ROUTING_POLICY.models.filter(m => m.engine === 'claude')
+    const solOf = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.find(m => m.model === 'gpt-6.1-sol')
+
+    it('is on only while its engine\'s default row is on, so an owner who turned Codex off keeps it off', () => {
+      const off = effectivePolicy({ ...DEFAULT_ROUTING_POLICY, models: [...claudeRows, { ...codexDefault, enabled: false }] }, null)
+      expect(solOf(off.policy.models)).toEqual({ ...sol, enabled: false })
+      const absent = effectivePolicy({ ...DEFAULT_ROUTING_POLICY, models: claudeRows }, null)
+      expect(solOf(absent.policy.models)).toEqual({ ...sol, enabled: false })
+      const on = effectivePolicy({ ...DEFAULT_ROUTING_POLICY, models: [...claudeRows, codexDefault] }, null)
+      expect(solOf(on.policy.models)).toEqual(sol)
+      // A tab override without the row and with Codex off, over no saved account policy.
+      const tab = effectivePolicy(null, { models: [...claudeRows, { ...codexDefault, enabled: false }] })
+      expect(solOf(tab.policy.models)).toEqual({ ...sol, enabled: false })
+    })
+
+    it('comes from the account policy when a tab override saved without it', () => {
+      const account = { ...DEFAULT_ROUTING_POLICY, models: [...claudeRows, codexDefault, { ...sol, enabled: false, quality: 2 }] }
+      const tab = effectivePolicy(account, { models: [...claudeRows, codexDefault] })
+      expect(solOf(tab.policy.models)).toEqual({ ...sol, enabled: false, quality: 2 })
+      // The account's row on, but this tab turned Codex off: it stays off here.
+      const accountOn = { ...DEFAULT_ROUTING_POLICY, models: [...claudeRows, codexDefault, sol] }
+      const codexOff = effectivePolicy(accountOn, { models: [...claudeRows, { ...codexDefault, enabled: false }] })
+      expect(solOf(codexOff.policy.models)).toEqual({ ...sol, enabled: false })
+      expect(solOf(effectivePolicy(accountOn, { models: [...claudeRows, codexDefault] }).policy.models)).toEqual(sol)
+    })
+  })
+
+  it('refuses saving a second row for a built-in model, and still reads an old policy saved with one', () => {
+    const own = Array.from({ length: 39 }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
+    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
+    const twice = { ...DEFAULT_ROUTING_POLICY, models: [...own, sol, { ...sol, enabled: false }] }
+    const refused = routingPolicySaveSchema.safeParse(twice)
+    expect(refused.success).toBe(false)
+    expect(refused.error?.issues.map(i => i.message)).toEqual(['Only one row for codex gpt-6.1-sol.'])
+    expect(routingOverrideSaveSchema.safeParse({ models: twice.models }).success).toBe(false)
+    expect(routingPolicySaveSchema.safeParse({ ...twice, models: [...own, sol] }).success).toBe(true)
+    // Saved before this check: still read as saved, never as unreadable.
+    expect(effectivePolicy(twice, null)).toEqual({ policy: twice, warnings: [], overridden: [] })
   })
 
   it('falls back to the default with a warning for a corrupt account policy or override', () => {

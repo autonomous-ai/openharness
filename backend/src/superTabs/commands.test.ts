@@ -638,6 +638,12 @@ describe('tab.routingPolicy', () => {
     expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } })).toThrow()
     expect(() => f.run({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } } as never)).toThrow()
   })
+  it('refuses a second row for a built-in model', () => {
+    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
+    expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [sol, { ...sol, enabled: false }] } }))
+      .toThrow('Only one row for codex gpt-6.1-sol.')
+    expect(commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [sol] } })).toBeTruthy()
+  })
 })
 
 describe('tab.tidy', () => {
