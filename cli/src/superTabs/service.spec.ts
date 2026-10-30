@@ -457,13 +457,16 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const core = fakeCore()
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, creationOf: vi.fn(() => null), stop }))
+  const giveBack = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
   expect(await service.requests.super_tabs({ action: 'reserveCapacity', creationId: 'native-creation-id' }, visitor, closed)).toMatchObject({ ok: true })
   expect(reserve).toHaveBeenCalledWith({ action: 'reserveCapacity', creationId: 'native-creation-id' }, closed)
   expect(await service.requests.super_tabs({ action: 'observeCapacity', creationId: 'native-creation-id' }, visitor)).toMatchObject({ released: true })
+  expect(await service.requests.super_tabs({ action: 'returnCapacity', creationId: 'native-creation-id' }, visitor, closed)).toMatchObject({ returned: true })
+  expect(giveBack).toHaveBeenCalledWith('native-creation-id', closed)
   expect(factory).toHaveBeenCalledTimes(1)
   service.port.disconnected(); expect(stop).toHaveBeenCalledTimes(1)
   await service.requests.super_tabs({ action: 'reserveCapacity' }, visitor)
@@ -478,7 +481,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
 it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
   const core = fakeCore()
   const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
-  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), creationOf, stop: vi.fn() }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), creationOf, stop: vi.fn() }))
   let options: SuperTabHostOptions = {}
   const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
     options = given

@@ -45,10 +45,18 @@ function requireSuccess(reply: Json): Json {
  *  Lead's daemon relays it or a contributed host's request throws it (wire.ts). A lost reply, a transport code or a server
  *  error may follow a recorded command and proves nothing. START_CLAIMED can mean another run of this start holds the
  *  claim and is creating it now: its row is left to the ledger's deadline (reservations.ts START_DEADLINE_MS). */
-function refusedByBackend(error: unknown): error is Error {
+function refusedByBackend(error: unknown): error is Error & { code: string } {
   const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown }
   return error instanceof Error && typeof code === 'string' && code !== 'START_CLAIMED' && typeof status === 'number' && status >= 400 && status < 500
 }
+/** The backend's dispatch refusals (commands.ts agent.startDispatch, machines.ts admitMachineStart) that this start can never
+ *  pass: a routing rule, its engine, its machine grant revoked or gone, the machine removed or outside the contribution, and
+ *  the Team refusals the backend itself fails a start for (machines.ts LASTING_TEAM_REFUSALS). Any other code, unknown ones
+ *  included, may pass by itself (a pause, an offline or full machine, a held Team account, a decision the Lead owes): that
+ *  start keeps waiting, as its host retries it on every pass (superTabs/machines.ts). */
+const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_REFUSED', 'STEPPED_UP', 'BUILD_REFUSED', 'SWARM_ENGINE',
+  'FORBIDDEN', 'HOST_REQUIRED', 'CONTRIBUTION_REVOKED', 'MACHINE_REMOVED', 'OUTSIDE_CONTRIBUTION', 'NOT_SWARM_MACHINE', 'BUDDY_WINDOWS',
+  'TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE'])
 /** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
@@ -345,11 +353,17 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
   /** A dispatch the backend refused (a pause, a rule, the machine held or paused) sends no agent_create, and its reservation
    *  was held for good (Diego, 2026-10-30). The backend checks those before the claim itself, so a run that claimed this
    *  start a moment ago and is creating it now can make this one's claim read as one of them: only a start its record
-   *  shows unclaimed and not launched is cancelled. The durable cancellation fences any late copy of a create, and the
-   *  ledger then releases the row. */
-  const releaseRefused = async (refused: Error): Promise<Json> => {
+   *  shows unclaimed and not launched gives anything back. One refused for now keeps waiting with its reservation given
+   *  back, so its next run reserves again (the review of #2361: a paused machine's starts were lost). One refused for good
+   *  is cancelled, which fences any late copy of a create, its row released and the start failed with the reason. */
+  const releaseRefused = async (refused: Error & { code: string }): Promise<Json> => {
     const record = await scoped({ action: 'startStatus', startId }).then(requireSuccess).catch(() => null)
     if (record?.dispatched !== false || record.harnessId) throw refused
+    if (!LASTING_REFUSALS.has(refused.code)) {
+      // An older daemon without the action keeps the row, as before; the ledger's deadline gives it back then.
+      await target.request('super_tabs', { action: 'returnCapacity', creationId }, 10_000).catch(() => null)
+      throw refused
+    }
     const cancelled = await target.request('agent_create_cancel', { creationId }, 10_000).catch((): Json => ({}))
     if (cancelled.error || cancelled.creationId !== creationId || cancelled.state !== 'cancelled') {
       return { error: 'START_UNCERTAIN', startId, creationId,

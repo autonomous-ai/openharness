@@ -356,7 +356,7 @@ it('serializes real concurrent processes using one disk ledger', async () => {
 
 // Diego, 2026-10-30: a start the backend refused at dispatch never sent agent_create, and its row (2 GiB, 10 GiB) was held
 // for good: every later start on that machine counted it, and at 256 such rows every start there failed.
-it('releases a start whose creation is still missing at the start deadline, so a later start is admitted', async () => {
+it('gives back a start whose creation is still missing at the start deadline, so a later start is admitted', async () => {
   const f = setup(), book = f.open(), start = (n: number) => input(n, 2 * GiB, 10 * GiB)
   free(f, 3 * GiB); freeDisk(f, 15 * GiB)
   expect(await book.reserve(start(1))).toMatchObject({ ok: true })
@@ -367,9 +367,13 @@ it('releases a start whose creation is still missing at the start deadline, so a
   free(f, 3 * GiB)
   f.clock.now += 7 * 24 * 60 * MINUTE
   expect(await book.reserve(start(2))).toMatchObject({ ok: true })
-  expect(await book.observe(id(1))).toMatchObject({ ok: true, released: true, harnessId: null })
-  // The ledger is what fences a late launch: a run of the released start is refused before it may send agent_create.
-  expect(await book.reserve(start(1))).toMatchObject({ error: 'START_FINISHED' })
+  expect(await book.observe(id(1))).toMatchObject({ error: 'CAPACITY_RECEIPT_MISSING' })
+  // The review of #2361: the start may still be waiting in the backend after a host gap this long. Its next run is
+  // admitted again against what is free then, never ended: refused while start 2 holds the memory, then admitted.
+  expect(await book.reserve(start(1))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('memory') })
+  free(f, 30 * GiB); freeDisk(f, 30 * GiB)
+  expect(await book.reserve(start(1))).toMatchObject({ ok: true, reservationId: id(1) })
+  expect(await book.observe(id(1))).toMatchObject({ ok: true, released: false, harnessId: null })
 })
 
 it('times the deadline from the last run that confirmed the reservation, so a resumed start is not released under it', async () => {
@@ -409,13 +413,13 @@ it('keeps a launched creation that reads as missing past the deadline: its learn
   expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
 })
 
-it('releases a deadline row once, and never counts it below zero', async () => {
+it('gives a deadline row back once, and never counts it below zero', async () => {
   const f = setup(), book = f.open()
   free(f, 3 * GiB)
   await book.reserve(agentInput(1))
   f.clock.now += START_DEADLINE_MS
-  expect(await book.observe(id(1))).toMatchObject({ released: true })
-  expect(await book.observe(id(1))).toMatchObject({ released: true })
+  expect(await book.observe(id(1))).toMatchObject({ error: 'CAPACITY_RECEIPT_MISSING' })
+  expect(await book.observe(id(1))).toMatchObject({ error: 'CAPACITY_RECEIPT_MISSING' })
   // Only the new start holds: with 3 GiB free one more 2 GiB start fits and a second does not.
   expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
   expect(await book.reserve(agentInput(3))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
@@ -444,4 +448,45 @@ it('does not release a row a run confirmed again while another start was reading
   native.open()
   expect(await later).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
   expect(await book.observe(id(1))).toMatchObject({ released: false })
+})
+
+// The review of #2361: a dispatch the backend refused for now (a paused machine, a held Team account) keeps its start
+// waiting, so its row is given back and its next run reserves again.
+it('gives back the reservation of a start its machine has no creation for, and admits that start again later', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  expect(await book.giveBack(id(1))).toEqual({ ok: true, reservationId: id(1), returned: true })
+  expect(await book.giveBack(id(1))).toEqual({ ok: true, reservationId: id(1), returned: false })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+  expect(await book.reserve(agentInput(1))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  free(f, 5 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true, reservationId: id(1) })
+})
+
+it.each([
+  ['pending', { creationId: id(1), state: 'pending' as const }],
+  ['launched', { creationId: id(1), state: 'created' as const, agentId: 'agent-1' }],
+  ['unreadable', null],
+])('keeps the reservation of a %s creation when asked to give it back', async (_name, observation) => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  await book.reserve(agentInput(1))
+  f.native.set(id(1), observation)
+  expect(await book.giveBack(id(1))).toMatchObject({ error: 'CREATION_PRESENT' })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+})
+
+it('keeps a launched row whose creation later reads as missing, and gives back only the creation named', async () => {
+  const f = setup(), book = f.open()
+  free(f, 5 * GiB)
+  await book.reserve(agentInput(1)); await book.reserve(agentInput(2))
+  f.launch(1)
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'agent-1' })
+  f.native.set(id(1), { creationId: id(1), state: 'missing' })
+  expect(await book.giveBack(id(1))).toEqual({ ok: true, reservationId: id(1), returned: false })
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'agent-1', released: false })
+  expect(await book.observe(id(2))).toMatchObject({ ok: true, released: false })
+  expect(await book.giveBack('not a creation id')).toEqual({ error: 'INVALID_REQUEST' })
 })

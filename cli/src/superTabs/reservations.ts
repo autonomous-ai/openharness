@@ -26,6 +26,7 @@ interface Reservation {
 export interface ReservationBook {
   reserve(input: Json, closed?: AbortSignal): Promise<Json>
   observe(creationId: unknown, closed?: AbortSignal): Promise<Json>
+  giveBack(creationId: unknown, closed?: AbortSignal): Promise<Json>
   creationOf(harnessId: string): string | null
   stop(): void
 }
@@ -51,8 +52,9 @@ export const START_WINDOW_MS = 5 * 60_000
 /** How long a start may hold its reservation while its machine has no creation for it: the backend's own start deadline
  *  (backend liveness.ts START_PREPARE_MS). A run reserves, claims its dispatch and sends agent_create within about two
  *  minutes, and one the backend refused at dispatch never sends it: such rows (2 GiB and 10 GiB each) were held for good on
- *  Diego's Mac (2026-10-30), and at MAX_ACTIVE of them every start there failed. A released row answers START_FINISHED to
- *  any later run of its start, so none of them can create; each run that confirms the row restarts its deadline. */
+ *  Diego's Mac (2026-10-30), and at MAX_ACTIVE of them every start there failed. Past it the row is given back, not ended:
+ *  the start may still be waiting in the backend (a host asleep or down for longer), and its next run reserves again
+ *  against what is free then. Each run that confirms the row restarts its deadline. */
 export const START_DEADLINE_MS = 15 * 60_000
 const memoryOf = (core: CoreApi) => {
   const read = createHarnessResourcesReader(() => core.agents.live())
@@ -167,13 +169,13 @@ export class CapacityReservations implements ReservationBook {
       }))
       this.transaction(() => {
         for (const { row, harnessId, released, expired } of observations) {
+          // The deadline is checked on the row as it is now: a run may have confirmed it again since it was read.
+          if (expired) this.db.prepare(`DELETE FROM reservations WHERE creation_id = ? AND fingerprint = ? AND released = 0
+            AND harness_id IS NULL AND created_at <= ?`).run(row.creation_id, row.fingerprint, deadline)
           // A later reconciliation may already have learned the native ID.
           // Missing/unavailable observations never erase that durable identity.
-          // The deadline is checked on the row as it is now: a run may have confirmed it again since it was read.
-          this.db.prepare(`UPDATE reservations SET harness_id = COALESCE(harness_id, ?),
-            released = CASE WHEN ? = 1 THEN 1 WHEN ? = 1 AND harness_id IS NULL AND created_at <= ? THEN 1 ELSE 0 END
-            WHERE creation_id = ? AND fingerprint = ? AND released = 0`)
-            .run(harnessId, released ? 1 : 0, expired ? 1 : 0, deadline, row.creation_id, row.fingerprint)
+          this.db.prepare(`UPDATE reservations SET harness_id = COALESCE(harness_id, ?), released = ?
+            WHERE creation_id = ? AND fingerprint = ? AND released = 0`).run(harnessId, released ? 1 : 0, row.creation_id, row.fingerprint)
         }
       }, closed)
     }
@@ -202,6 +204,20 @@ export class CapacityReservations implements ReservationBook {
     const row = this.db.prepare('SELECT harness_id, released FROM reservations WHERE creation_id = ?').get(creationId)
     return row ? { ok: true, reservationId: creationId, harnessId: row.harness_id, released: row.released === 1 }
       : { error: 'CAPACITY_RECEIPT_MISSING', detail: 'This start has no capacity receipt. Inspect the machine before starting another agent.' }
+  }
+
+  /** Gives back the reservation of a start whose dispatch the backend refused for now (superTabs/start.ts): the start keeps
+   *  waiting, and its next run reserves again against what is free then. Only while its machine confirms no creation for it:
+   *  a launched, pending or unreadable one may hold an agent, and keeps its row. */
+  async giveBack(creationId: unknown, closed?: AbortSignal): Promise<Json> {
+    if (!creationIdValid(creationId)) return { error: 'INVALID_REQUEST' }
+    this.check(closed)
+    const native = await this.native(creationId)
+    if (native?.state !== 'missing') return { error: 'CREATION_PRESENT', detail: 'This start may still launch on the machine, so its reservation stays.' }
+    return this.transaction(() => {
+      const gone = this.db.prepare('DELETE FROM reservations WHERE creation_id = ? AND released = 0 AND harness_id IS NULL').run(creationId) as { changes?: number }
+      return { ok: true, reservationId: creationId, returned: gone?.changes === 1 }
+    }, closed)
   }
 
   /** The Swarm start that created this harness: every start confirms the harness its native receipt names before it
