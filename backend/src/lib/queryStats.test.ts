@@ -30,6 +30,20 @@ it('totals every query of each route, however small, beside the top shapes', () 
   })
 })
 
+it('outside a measured window counts nothing but still warns of a slow query', () => {
+  const { s, infos, warns } = stats({ slowMs: 100 })
+  s.measure(false)
+  s.record('User', 'findMany', { where: { email: 'a@b.c' } }, 3, [])
+  s.record('User', 'findMany', { where: { email: 'a@b.c' } }, 150, [])
+  s.flush()
+  expect(infos[0]!.context).toMatchObject({ queries: 0 })
+  expect(warns.map(w => w.message)).toEqual(['slow query'])
+  s.measure(true)
+  s.record('User', 'findMany', { where: { email: 'a@b.c' } }, 3, [])
+  s.flush()
+  expect(infos[1]!.context).toMatchObject({ queries: 1 })
+})
+
 describe('filterShape', () => {
   it('keeps the keys of a Prisma filter and replaces every value with ?', () => {
     const shape = filterShape('findMany', { where: { tabId: 'tab-secret-1', OR: [{ status: { in: ['open', 'held'] } }, { owner: { email: 'alice@example.com' } }] },
