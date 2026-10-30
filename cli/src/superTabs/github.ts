@@ -27,9 +27,12 @@ function githubDir(core: CoreApi, session: Session | undefined): string | null {
   return skill?.github ? swarmGitHubSessionDir(core.dataDir, skill.key) : null
 }
 
-/** Refusals that mean the session must not keep a token: anything the backend decided, and no app on the server. A
- *  backend that could not be reached decides nothing, and an unexpired token stays. */
-export const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || error.code === 'GITHUB_APP_NOT_CONFIGURED'
+/** Refusals that mean the session must not keep a token: anything the backend decided, no app on the server, and an app
+ *  GitHub refuses (backend github/app.ts `misconfigured`: GitHub answered 401 to the app's own credentials; security review
+ *  of #2390). A backend that could not be reached, or GitHub not answering it (GITHUB_UNAVAILABLE), decides nothing, and an
+ *  unexpired token stays. */
+const DECIDED_5XX = new Set(['GITHUB_APP_NOT_CONFIGURED', 'GITHUB_APP_MISCONFIGURED'])
+export const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || DECIDED_5XX.has(error.code)
 
 /**
  * The token of [harnessId]'s task: asked as each Swarm membership this machine's roster lists for that harness (one,
