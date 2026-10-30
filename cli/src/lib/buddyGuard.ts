@@ -561,8 +561,9 @@ const WIDE_COMMANDS = {
     config: { positional: (p) => p.length === 1 && p[0] === 'current-context' },
   },
 }
-// Harness's own read-only measurements (lib/buddyRecipes.ts): their names alone, nothing added.
-const RECIPES = new Set(['db-size', 'backend-cpu'])
+// Harness's own read-only measurements (lib/buddyRecipes.ts): their names alone, nothing added. API CPU has none: it is
+// Juno's ArgoCD logs read, run as it is (Lead, 10-30).
+const RECIPES = new Set(['db-size'])
 
 // Whether [w] is one of wide mode's reads, whatever its approval.
 function widerRead(w) {
