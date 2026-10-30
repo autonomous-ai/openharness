@@ -6,8 +6,8 @@ import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
@@ -24,6 +24,7 @@ import { LimitResume } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
+import { projectsRoot } from '../lib/projectFolder.js'
 
 type Json = Record<string, unknown>
 // A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
@@ -141,6 +142,9 @@ export interface SuperTabHostOptions {
   startReceipt?: (harnessId: string) => string | null
   /** The home whose Claude Code data an ended Buddy session's own traces are removed from; this user's, unless a spec says. */
   claudeHome?: string
+  /** Harness's worktrees folder, where every Buddy session's folder is (lib/gitProject.ts): a scrub the journal saved names
+   *  only a folder there. This user's, unless a spec says. */
+  worktrees?: string
   /** The machine's host form and Swarm reads, shared with the service's other readers (superTabs/service.ts). */
   sources?: SwarmSources
   /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
@@ -150,6 +154,28 @@ export interface SuperTabHostOptions {
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
   () => readAuthSession()?.machineId || computerId())
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
+/** Whether [cwd] is a folder this host records a Buddy session's scrub for: a worktree, `<worktrees>/<repository>/<leaf>`
+ *  (lib/gitProject.ts; the backend starts every Buddy session in one), as written and once its symlinks are resolved, so
+ *  neither a `..` nor a link leads the scrub to another folder's transcripts (follow-up to security review 1 of #2345). One
+ *  already removed still is: its missing part cannot lead anywhere, and its traces must still go. */
+function buddyWorktree(cwd: string, worktrees: string): boolean {
+  const leafOf = (root: string, path: string) => { const parts = relative(root, path).split(sep); return parts.length === 2 && parts.every(p => p && p !== '..') }
+  try {
+    const home = realpathSync(worktrees)
+    if (!isAbsolute(cwd) || normalize(cwd) !== cwd || cwd.endsWith(sep) || !(leafOf(worktrees, cwd) || leafOf(home, cwd))) return false
+    // The deepest part of it that is there, resolved; a part that is not there at all (lstat: not even a dangling link) is kept as named.
+    let found = cwd
+    const missing: string[] = []
+    for (;;) {
+      try { found = realpathSync(found); break } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || lstatSync(found, { throwIfNoEntry: false })) return false
+        missing.unshift(basename(found))
+        found = dirname(found)
+      }
+    }
+    return leafOf(home, join(found, ...missing))
+  } catch { return false }
+}
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
  *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
@@ -296,6 +322,7 @@ export class SuperTabHost {
   private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
   private readonly startReceipt: (harnessId: string) => string | null
   private readonly claudeHome: string
+  private readonly worktrees: string
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
@@ -355,6 +382,7 @@ export class SuperTabHost {
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
     this.claudeHome = options.claudeHome ?? homedir()
+    this.worktrees = options.worktrees ?? join(projectsRoot(), 'worktrees')
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -383,14 +411,15 @@ export class SuperTabHost {
         }
         this.journal.entries[id] = entry
       }
-      // Only a target this host could have written: its own agent id, a Claude Code session in a folder. Another is dropped,
-      // never trusted, so a hand-edited journal cannot point the scrub elsewhere than a session folder's own traces.
+      // Only a target this host could have written: its own agent id, a Claude Code session in a Buddy's worktree here. Another
+      // is dropped, never trusted, so a hand-edited or corrupted journal cannot point the scrub at another folder's transcripts
+      // (follow-up to security review 1 of #2345). Said by agent id alone: the folder is what may not be trusted, or shown.
       for (const [agentId, value] of Object.entries(object(saved.scrubs))) {
         const t = object(value)
-        if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && t.cwd.startsWith('/')
+        if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && buddyWorktree(t.cwd, this.worktrees)
           && (t.sessionId === null || typeof t.sessionId === 'string') && t.codexHome === null) {
           (this.journal.scrubs ??= {})[agentId] = { agentId, sessionId: t.sessionId as string | null, cwd: t.cwd, engine: 'claude', codexHome: null }
-        }
+        } else this.log(`Dropped a saved Buddy session scrub this host did not write: ${identifier(agentId) ? `agent ${agentId}` : 'an unreadable agent id'}`)
       }
     }
     this.persist()
