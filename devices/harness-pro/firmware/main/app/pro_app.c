@@ -690,7 +690,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
 {
     const char *why = NULL;
     pro_app_lock();
-    const pod_agent_t *pa = id_ok(agent_id) ? pod_model_find(&s_pod.model, agent_id) : NULL;
+    // Words for a Swarm face go to its chat (the round's rule): the terminal's pane type, machine and question gate nothing there.
+    const pod_agent_t *pa = id_ok(agent_id) && !pod_ui_talking_to_swarm(&s_pod) ? pod_model_find(&s_pod.model, agent_id) : NULL;
     if (pod_ui_updating(&s_pod) || atomic_load(&s_updating)) {   // the flag alone: an offer's gate holds voice off before its screen
         why = "Updating";   // a recording over a firmware write would starve it (owner, 2026-10-11)
     } else if (!s_linked) {

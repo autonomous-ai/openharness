@@ -290,24 +290,26 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         }
         break;
     case POD_A_TALK:
-        if (f->view == POD_V_LEAD && !f->agent[0] && arg && f->lead_id[0]) {   // a remote Lead (arg: the daemon routes it): its own Swarm id is the talk's target
+        if (f->view == POD_V_LEAD) {   // the round's rule: the Lead's `local` whenever set (roster or not: the daemon pins the face by it), else its own Swarm id when arg says the daemon routes it
+            const pod_swarm_t *sw = NULL;
+            const pod_lead_t *l = pod_nav_lead(n, m, &sw);
+            const char *id = !l ? NULL : l->local[0] ? l->local : arg && f->lead_id[0] ? f->lead_id : NULL;
+            if (!id) break;
             n->talk_prev = POD_V_LEAD;
+            n->talk_buddy = l->chat == POD_CHAT_BUDDY && l->has_buddy;   // the voice view signs the face pinned now, whatever the desktop flips mid-recording
+            if (n->talk_buddy) {
+                pod_copy_str(n->talk_name, sizeof n->talk_name, l->buddy.name);
+                pod_copy_str(n->talk_engine, sizeof n->talk_engine, l->buddy.engine);
+            }
             f->view = POD_V_TALK;
             n->talk_started_ms = now_ms;
-            return out_fx(POD_FX_VOICE_BEGIN, f->lead_id);
-        }
-        if (f->view == POD_V_LEAD) {   // a local Lead: talk to its harness (a remote one has none unless arg says so: f->agent is empty)
-            const pod_agent_t *talk_to = pod_model_find(m, f->agent);
-            if (!talk_to || talk_to->state == POD_OFFLINE) break;
-            n->talk_prev = POD_V_LEAD;
-            f->view = POD_V_TALK;
-            n->talk_started_ms = now_ms;
-            return out_fx(POD_FX_VOICE_BEGIN, f->agent);
+            return out_fx(POD_FX_VOICE_BEGIN, id);
         }
         if (f->view == POD_V_AGENT || f->view == POD_V_RECAP) {
             const pod_agent_t *talk_to = pod_model_find(m, f->agent);
             if (!talk_to || talk_to->state == POD_OFFLINE) break;   // an offline machine has nobody to hear it
             n->talk_prev = f->view;
+            n->talk_buddy = false;
             f->view = POD_V_TALK;
             n->talk_started_ms = now_ms;
             return out_fx(POD_FX_VOICE_BEGIN, f->agent);

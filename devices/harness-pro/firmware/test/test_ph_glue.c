@@ -2031,7 +2031,6 @@ static void lead_talk(void) {
     swarm_home(4);
     pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
     snprintf(sw->leads[1].local, ID_MAX, "a1");   // Alpha is this Lead's harness
-    snprintf(sw->leads[2].local, ID_MAX, "nobody");   // a harness the roster does not hold: nothing to talk to
     tap_lead(1, 3000);
     CHECK(!strcmp(top()->agent, "a1") && take() == 3);
     render(3500);
@@ -2048,7 +2047,7 @@ static void lead_talk(void) {
     pod_nav_act(&U.nav, &U.model, POD_A_NEXT, 0, 6100);
     CHECK(top()->view == POD_V_TALK && top()->lead == 1);
     pod_ui_talk_over(&U);
-    // a remote Lead, or one whose harness is not on the roster, has no talk control
+    // a remote Lead (no local harness, no swarm.remote) has no talk control; one whose local harness is off the roster does: see local_lead_not_in_roster_talks_with_local
     swipe(600, 400, 200, 410, 7000);
     CHECK(top()->lead == 2 && !top()->agent[0]);
     render(7500);
@@ -2384,6 +2383,50 @@ static void buddy_talk_names_buddy(void) {
     render(6500);
     CHECK(talk_text("Alpha", PH_ROOM_INK) && !talk_text("Mira", 0));   // the PM side: the agent, as today
 }
+static void talk_name_pinned_at_begin(void) {
+    buddy_lead_open();
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    l->chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    l->chat = POD_CHAT_PM;   // a desktop side flip mid-recording: the daemon posts to the face it pinned at voice.begin
+    render(4500);
+    CHECK(talk_text("Mira", 0xC49BFF) && !talk_text("Alpha", 0) && !talk_text("Lead", 0));
+    pod_ui_talk_over(&U);
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);   // PM side now: the next talk pins the agent
+    l->chat = POD_CHAT_BUDDY;
+    render(6500);
+    CHECK(talk_text("Alpha", PH_ROOM_INK) && !talk_text("Mira", 0));
+}
+static void local_lead_not_in_roster_talks_with_local(void) {
+    swarm_home(4);
+    snprintf(buddy_swarm()->leads[2].local, ID_MAX, "zz");   // a harness the Pro's agent list does not hold
+    pod_ui_set_swarm_remote(&U, true);
+    tap_lead(2, 3000);
+    take();
+    render(3300);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "zz"));   // the round's rule: `local` whenever set, so the daemon pins the face
+    render(4500);
+    CHECK(talk_text("Lead", 0));
+    pod_ui_talk_over(&U);
+    pod_ui_set_swarm_remote(&U, false);   // and without swarm.remote it still talks with its local id
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+}
+static void buddy_talk_not_blocked_by_question(void) {
+    buddy_lead_open();   // l1: local a1
+    pod_model_question(&U.model, "a1", "Proceed?");   // the terminal's question: words for a Swarm face go to its chat
+    CHECK(pod_model_eff(&U.model, pod_model_find(&U.model, "a1")) == POD_ASKING);
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    pod_ui_talk_over(&U);
+    buddy_swarm()->leads[1].chat = POD_CHAT_PM;
+    render(4500);
+    CHECK(tap_(MID_X, MID_Y, 5000).fx == POD_FX_VOICE_BEGIN);
+}
 static void pill_pressed_until_frame(void) {
     buddy_lead_open();
     tap_(435, 38, 4000);
@@ -2533,6 +2576,9 @@ int main(void) {
     buddy_screen_talks_with_lead_id();
     buddy_talk_uses_buddy_engine_pet();
     buddy_talk_names_buddy();
+    talk_name_pinned_at_begin();
+    local_lead_not_in_roster_talks_with_local();
+    buddy_talk_not_blocked_by_question();
     pill_pressed_until_frame();
     buddy_notice_sets_dot_only();
     opening_buddy_clears_dot();

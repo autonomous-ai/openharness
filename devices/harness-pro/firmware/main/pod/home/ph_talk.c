@@ -65,7 +65,7 @@ static talk_who_t talk_who(const pod_nav_t *nav, const pod_model_t *m)
 {
     talk_who_t w = { pod_view_agent_of(nav, m), NULL, NULL, PH_ROOM_INK };
     const pod_lead_t *l = pod_nav_lead(nav, m, NULL);
-    if (l && l->chat == POD_CHAT_BUDDY && l->has_buddy) return (talk_who_t){ NULL, l->buddy.engine, l->buddy.name, BUDDY_INK };
+    if (nav->talk_buddy) return (talk_who_t){ NULL, nav->talk_engine, nav->talk_name, BUDDY_INK };   // the face pinned at begin: a side flip mid-recording renames nothing
     if (w.agent) { w.engine = w.agent->engine; w.name = w.agent->name; }
     else if (l) { w.engine = l->engine; w.name = "Lead"; }
     return w;

@@ -1723,6 +1723,14 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
+    // buddy_talk_not_blocked_by_question: a talk opened from a Lead view (a Swarm face) goes to its chat, so the terminal's question, pane type and offline machine block nothing
+    pro_app_question("a1", "r1", "Which?", NULL, POD_ATTN_NONE);
+    memset(&U.nav, 0, sizeof U.nav);
+    U.nav.depth = 1; U.nav.stack[0].view = POD_V_TALK; snprintf(U.nav.stack[0].swarm, ID_MAX, "sw1");
+    CHECK(pro_app_voice_block_reason("a1") == NULL && pro_app_voice_block_reason("a2") == NULL && pro_app_voice_block_reason("a4") == NULL);
+    pod_nav_init(&U.nav);
+    CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
+    pro_app_question_close("a1");
     // A Super Tab wait is not answered here: talking to the agent is how it is unblocked.
     pro_app_question("a1", "supertab:as1:needs_human", "Which?", "Launch v2", POD_ATTN_DECISION);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
