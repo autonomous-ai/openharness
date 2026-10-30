@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA } from './capacity.js'
-import type { Assessment, Policy, Probe } from './route.js'
+import { ELSEWHERE, type Assessment, type Policy, type Probe } from './route.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -788,7 +788,9 @@ describe('what the route log says about each candidate', () => {
     const other = frame({ project: git({ name: 'web', remote: 'github.com/acme/web', root: '/w/web', cwd: '/w/web' }) })
     const s = scoped(world())
     await routeTask(withCwd, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: other } })), () => 'op', describeGit())
-    expect(memberLabel(s)).toContain('different repo')
+    // A build leaves it out, with why (Diego, 2026-10-30): it would build in the other repository's worktree.
+    expect(labels(s).some(l => l.startsWith('Member Multiply'))).toBe(false)
+    expect(recorded(s).command.decision.excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason: ELSEWHERE })
     const t = scoped(world())
     await routeTask(withCwd, t, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })), () => 'op', describeGit())
     expect(memberLabel(t)).toContain('repo unknown · last active unknown')
