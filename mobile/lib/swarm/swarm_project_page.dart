@@ -10,6 +10,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -272,11 +273,11 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
 /// the end ([showSwarmProjectSheet]); under it four tabs
 /// ([SwarmProjectTab.homeB]) — its chat with everyone, the person's Buddy
 /// chat, its tasks ([SwarmProjectTasks]) and its leaderboard. Swarm Home C
-/// (Tony, 2026-10-30) has two ([SwarmProjectTab.homeC]): its chat and its
-/// team, under its #name over how many humans and agents it has and what
-/// they are doing; the team is a tab there, so the header has no team
-/// button. Only the tab shown is built: a chat out of sight reads nothing
-/// and marks nothing read.
+/// (Tony, 2026-10-30) is its chat alone ([SwarmProjectTab.homeC]), filling the
+/// screen under its #name over how many humans and agents it has and what
+/// they are doing; ☰ at the header's end opens its leaderboard and its team as
+/// sheets. Only the tab shown is built: a chat out of sight reads nothing and
+/// marks nothing read, a sheet over it counting as out of sight.
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
@@ -316,8 +317,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       ? widget.tab
       : widget.tabs.first;
 
-  /// Swarm Home C's page: Chat and Team.
-  bool get _homeC => widget.tabs.contains(SwarmProjectTab.team);
+  /// Swarm Home C's page: its chat alone, its leaderboard and team in sheets.
+  bool get _homeC => widget.tabs.length == 1;
 
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
@@ -342,11 +343,17 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// what it shows itself.
   ({Object inputs, Widget body})? _body;
 
+  /// The sheet the menu opened, while it is up. What it shows is the
+  /// project's: it closes with the page, and when the account, the read or
+  /// the project is gone ([_closeSheet]).
+  ModalRoute<void>? _sheet;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
     if (session == _session) return;
+    _closeSheet();
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
     _session = session?..enter();
@@ -357,6 +364,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   @override
   void dispose() {
+    _closeSheet();
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
     _buddy?.dispose();
@@ -425,11 +433,58 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void _open(String conversationId) =>
       openSwarmConversation(context, widget.swarmId, conversationId);
 
+  /// Opens one of the menu's sheets, on the page's own navigator, under the
+  /// shell's [SwarmScope]: a chat opened from it goes over it, and back comes
+  /// back to it. Kept from before it is pushed, so losing the project before
+  /// its first frame still closes it.
+  void _openSheet(WidgetBuilder builder) {
+    if (_sheet != null || !mounted) return;
+    final route = swarmSheetRoute<void>(context, builder: builder);
+    setState(() => _sheet = route);
+    unawaited(
+      Navigator.of(context).push(route).whenComplete(() {
+        if (mounted && _sheet == route) setState(() => _sheet = null);
+      }),
+    );
+  }
+
+  void _openLeaderboardSheet() => _openSheet(
+    (_) => SwarmLeaderboardPage(
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+      sheet: true,
+    ),
+  );
+
+  void _openTeamSheet() => _openSheet(
+    (_) => SwarmProjectTeamSheet(
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+      onOpen: _open,
+    ),
+  );
+
+  /// Closes the sheet open, if any, and a dialog or sheet over it, with what
+  /// it shows (Approve's question): once this frame is done, as a page that
+  /// lost its project, or is going away, may not change the navigator while
+  /// it does.
+  void _closeSheet() {
+    final sheet = _sheet;
+    _sheet = null;
+    if (sheet == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!sheet.isActive) return;
+      final navigator = sheet.navigator!;
+      navigator.popUntil((top) => top == sheet || top is! PopupRoute);
+      navigator.removeRoute(sheet);
+    });
+  }
+
   /// The header: back, [project]'s name over its team — "Updating…" while
   /// counted from the Home kept, and with several Swarms which one — and the
   /// team at its end, after Remove Buddy on the Buddy tab. Swarm Home C
   /// writes the name as a channel's, #name, puts how many humans and agents
-  /// before the team's dots, and has no team button: Team is a tab.
+  /// before the team's dots, and has ☰ in the team's place.
   Widget _header(
     SwarmSession session,
     SwarmReader reader,
@@ -472,7 +527,12 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         children: [
           if (_tab == SwarmProjectTab.buddy && _buddy != null)
             SwarmBuddyMenuButton(actions: _buddy!),
-          if (!_homeC)
+          if (_homeC)
+            _ProjectMenu(
+              onLeaderboard: _openLeaderboardSheet,
+              onTeam: _openTeamSheet,
+            )
+          else
             SwarmIconButton(
               key: const ValueKey('swarm-project-team'),
               icon: LucideIcons.users300,
@@ -540,12 +600,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       projectId: project.id,
       header: false,
     ),
-    SwarmProjectTab.team => SwarmProjectTeam(
-      session: session,
-      reader: reader,
-      projectId: project.id,
-      onOpen: _open,
-    ),
   };
 
   @override
@@ -557,6 +611,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       onPressed: () => Navigator.of(context).maybePop(),
     );
     if (session == null) {
+      _closeSheet();
       return _Frame(
         top: SwarmTopBar(leading: back, title: ''),
       );
@@ -579,25 +634,32 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 _header(session, reader, snapshot, project, back),
                 // The chat's news moves with the Lead's tags too: they build
                 // the tabs alone.
-                ListenableBuilder(
-                  listenable: asks ?? Listenable.merge(const []),
-                  builder: (context, _) => SwarmProjectTabBar(
-                    tabs: widget.tabs,
-                    selected: _tab,
-                    chatNews: chat == null || _tab == SwarmProjectTab.chat
-                        ? swarmNoNews
-                        : swarmChatNews(reader, asks, chat),
-                    onSelect: (tab) => setState(() {
-                      _tab = tab;
-                      _messageId = _decisionId = null;
-                    }),
+                if (!_homeC)
+                  ListenableBuilder(
+                    listenable: asks ?? Listenable.merge(const []),
+                    builder: (context, _) => SwarmProjectTabBar(
+                      tabs: widget.tabs,
+                      selected: _tab,
+                      chatNews: chat == null || _tab == SwarmProjectTab.chat
+                          ? swarmNoNews
+                          : swarmChatNews(reader, asks, chat),
+                      onSelect: (tab) => setState(() {
+                        _tab = tab;
+                        _messageId = _decisionId = null;
+                      }),
+                    ),
                   ),
-                ),
               ],
             ),
-            body: _bodyOf(session, reader, project),
+            // Under a sheet the chat is not seen, so nothing it gets is read.
+            body: TickerMode(
+              enabled: _sheet == null,
+              child: _bodyOf(session, reader, project),
+            ),
           );
         }
+        // Nothing of the project to show: no sheet of it stays.
+        _closeSheet();
         // Why there is no project to show: still reading, or a read that
         // failed or finished without it.
         final why = switch (reader) {
@@ -658,6 +720,45 @@ class _Frame extends StatelessWidget {
             if (body case final body?) Expanded(child: body),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// ☰ at the end of a Swarm Home C project's header: a small menu, on the
+/// design system's menu surface (the theme's), of its Leaderboard and its Team.
+/// It goes with the header: losing the project closes it.
+class _ProjectMenu extends StatelessWidget {
+  const _ProjectMenu({required this.onLeaderboard, required this.onTeam});
+
+  final VoidCallback onLeaderboard, onTeam;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    Widget row(String key, String label, VoidCallback onTap) => MenuItemButton(
+      key: ValueKey(key),
+      style: ButtonStyle(
+        minimumSize: const WidgetStatePropertyAll(
+          Size(AppSpace.xl * 6, minTouchTarget),
+        ),
+        foregroundColor: WidgetStatePropertyAll(AppPalette.textPrimary),
+        textStyle: WidgetStatePropertyAll(AppType.body()),
+      ),
+      onPressed: onTap,
+      child: Text(label),
+    );
+    return MenuAnchor(
+      alignmentOffset: const Offset(0, AppSpace.xs),
+      menuChildren: [
+        row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
+        row('swarm-project-menu-team', 'Team', onTeam),
+      ],
+      builder: (context, menu, _) => SwarmIconButton(
+        key: const ValueKey('swarm-project-menu'),
+        icon: LucideIcons.menu300,
+        label: 'Menu',
+        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
   }
