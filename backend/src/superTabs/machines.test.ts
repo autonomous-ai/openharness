@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, machineObservationSchema, servedLocalModels, type ContributedMachine } from './machines.js'
+import { admitMachineStart, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
+  type MachineObservation } from './machines.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -199,4 +200,64 @@ it('keeps durable release receipts authoritative over stale observations and ret
   expect(machineSlots(f.state, pool)).toBe(0)
   f.state.harnessReservations = [{ machineId: 'host', harnessId: 'finished', generation: 'new-runtime', renewed: true }]
   expect(machineSlots(f.state, pool)).toBe(1)
+})
+
+describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const pool = (extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId: 'host', name: 'Mac', contributorId: 'owner',
+    membershipGeneration: 'tab', generation: 'g1', cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false, ...extra })
+  const quota = (engine: string) => ({ engine, known: true, windows: [] })
+  const tokens = { opus: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }
+  const reading = (extra: Partial<MachineObservation> = {}): MachineObservation => ({ ...sent, runningHarnessIds: ['a'], stoppedHarnessIds: ['z'],
+    ...extra } as MachineObservation)
+  const stored = (extra: Partial<MachineObservation> = {}, at = NOW, preparable = (_id: string) => true) =>
+    storedObservation(pool(), reading(extra), { team: false, now: at, preparable })
+
+  it('keeps what a full report keeps: running sessions\' progress and tokens, its own preparing starts, contributed engines\' quotas', () => {
+    const kept = storedObservation(pool(), reading({ harnessProgress: { a: 5, b: 6 }, harnessTokens: { a: tokens, b: tokens },
+      preparingStartIds: ['s1', 's2'], quotas: [quota('claude'), quota('codex')], privacy: { mode: 'dedicated' } }),
+    { team: false, now: NOW, preparable: id => id === 's1' })
+    expect(kept).toMatchObject({ receivedAt: NOW, sessionKind: 'computer', harnessProgress: { a: 5 }, harnessTokens: { a: tokens },
+      preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
+    expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
+    // Only a team session's privacy check is kept.
+    expect(kept.privacy).toBeUndefined()
+    const team = storedObservation(pool(), reading({ privacy: { mode: 'dedicated' } }), { team: true, now: NOW, preparable: () => true })
+    expect(team).toMatchObject({ sessionKind: 'team', privacy: { mode: 'dedicated', seenAt: NOW } })
+  })
+
+  it('names a start preparing only when this machine launched it and it neither runs nor failed', () => {
+    const start = (extra: Record<string, unknown>) => ({ id: 's', request: { machineId: 'host' }, dispatched: true, ...extra }) as unknown as AgentStart
+    expect(preparableStart(start({}), 'host')).toBe(true)
+    expect(preparableStart(start({}), 'other')).toBe(false)
+    expect(preparableStart(start({ dispatched: false }), 'host')).toBe(false)
+    expect(preparableStart(start({ harnessId: 'h' }), 'host')).toBe(false)
+    expect(preparableStart(start({ error: 'failed' }), 'host')).toBe(false)
+  })
+
+  it('reads as the reading alone only when every decision it feeds is the same', () => {
+    const before = stored({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] })
+    const same = (extra: Partial<MachineObservation>) => readingOnly(before, stored({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'], ...extra }, NOW + 15_000))
+    // The reading alone: resources, quotas, tools, tokens, privacy, a later progress time, the same sets in another order.
+    expect(same({})).toBe(true)
+    expect(same({ resources: { ...sent.resources, cpuPercent: 90 }, tools: { git: true }, harnessTokens: { a: tokens } })).toBe(true)
+    expect(same({ harnessProgress: { a: 9 } })).toBe(true)
+    expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['b', 'a'] }))).toBe(true)
+    // A decision may differ.
+    expect(same({ runningHarnessIds: ['a', 'b'] })).toBe(false)
+    expect(same({ stoppedHarnessIds: [] })).toBe(false)
+    expect(same({ stoppedReservations: [{ harnessId: 'z', generation: 'g1' }] })).toBe(false)
+    expect(same({ preparingStartIds: [] })).toBe(false)
+    // Progress renews a worker's lease (liveness.ts reportRenewedAt): a map added or gone, an entry gone or earlier.
+    expect(same({ harnessProgress: undefined })).toBe(false)
+    expect(same({ harnessProgress: {} })).toBe(false)
+    expect(same({ harnessProgress: { a: 4 } })).toBe(false)
+    expect(readingOnly(stored({}), stored({ harnessProgress: { a: 5 } }))).toBe(false)
+    expect(readingOnly(undefined, before)).toBe(false)
+    // Sessions are compared as sets: a session repeated is not one that stayed.
+    expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['a', 'a'] }))).toBe(false)
+    // A reading from the other kind of session decides who may host the machine (store.ts teamByRecord).
+    const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
+    expect(readingOnly(before, team)).toBe(false)
+  })
 })

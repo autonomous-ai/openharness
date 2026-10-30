@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentStart, Assignment, SuperTabState } from './model.js'
-import { LEASE_MS, QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
+import { LEASE_MS, loseTasks, nextLossAt, QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
 
@@ -425,5 +425,27 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     task(state).assignment!.status = 'done'
     sweepForLead(state, NOW + MINUTE)
     expect(task(state).liveness).toBeUndefined()
+  })
+})
+
+describe('the next time a machine\'s worker can lose its task (DB 2.5)', () => {
+  const progress = 1_000_000
+  /** Its machine reported at [at], its session's screen last changed at `progress`. */
+  const reported = (at: number, task = assignment({ leaseUntil: 1 })) => swarm(task, { receivedAt: at, harnessProgress: { h: progress } })
+  const ownLoss = (state: SuperTabState, now: number) => (loseTasks(state, now, worker => worker.machineId === 'm'), state.conversations[1]!.assignment!.status)
+
+  it('is when its lease ends, so a report up to then loses nothing and the first after it loses the task', () => {
+    const at = nextLossAt(reported(progress + 26 * MINUTE), 'm')!
+    expect(at).toBeGreaterThan(progress)
+    expect(ownLoss(reported(at), at)).toBe('working')
+    expect(ownLoss(reported(at + 1), at + 1)).toBe('lost')
+  })
+
+  it('is none for another machine, a task waiting for review, or no task', () => {
+    expect(nextLossAt(reported(progress), 'other')).toBeUndefined()
+    expect(nextLossAt(reported(progress, assignment({ status: 'review', result: 'Ready for review', leaseUntil: 1 })), 'm')).toBeUndefined()
+    const idle = reported(progress)
+    idle.conversations[1]!.assignment = null
+    expect(nextLossAt(idle, 'm')).toBeUndefined()
   })
 })

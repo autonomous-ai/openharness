@@ -168,6 +168,11 @@ describe('old Swarm role adoption', () => {
       expect(t.role).toHaveBeenCalledOnce()
       expect(t.wait).not.toHaveBeenCalled()
     })
+    it('reads and writes nothing for a relaunch already cancelled', async () => {
+      const t = setup(row({ startedBy: 'agent' })); t.cancel()
+      expect(await t.adopt.lookup!(t.saved, t.current)).toBeNull()
+      expect(t.role).not.toHaveBeenCalled()
+    })
     it('answers null when the relaunch is cancelled or the session rebound while it reads', async () => {
       const cancelled = setup(); cancelled.role.mockImplementation(async () => { cancelled.cancel(); return { role: 'buddy' as const } })
       expect(await cancelled.adopt.lookup!(cancelled.saved, cancelled.current)).toBeNull()
@@ -177,9 +182,15 @@ describe('old Swarm role adoption', () => {
     })
     it('gives the row as it is for a session in no Swarm, one already tagged, or the person\'s own outside the roster', async () => {
       const none = setup(); none.role.mockResolvedValue(null)
-      expect(await none.adopt.lookup!(none.saved, none.current)).toMatchObject({ row: none.saved })
+      const noneLooked = await none.adopt.lookup!(none.saved, none.current)
+      expect(noneLooked).toMatchObject({ row: none.saved })
       const tagged = setup(row({ swarmSkill: { role: 'buddy', key: 'old-session' } }))
-      expect(await tagged.adopt.lookup!(tagged.saved, tagged.current)).toMatchObject({ row: tagged.saved })
+      const taggedLooked = await tagged.adopt.lookup!(tagged.saved, tagged.current)
+      expect(taggedLooked).toMatchObject({ row: tagged.saved })
+      // The caller commits whatever it was given: for these rows that writes nothing.
+      for (const looked of [noneLooked, taggedLooked]) { if (!looked || looked === 'unavailable') throw new Error('expected a row'); looked.commit() }
+      expect(none.saved.swarmSkill).toBeUndefined()
+      expect(tagged.saved.swarmSkill).toEqual({ role: 'buddy', key: 'old-session' })
       const own = setup()
       const adopt = createSwarmSkillAdoption({ role: own.role, authority: () => () => true, save: vi.fn(), candidate: () => false })
       expect(await adopt.lookup!(own.saved, own.current)).toMatchObject({ row: own.saved })
@@ -225,6 +236,26 @@ describe('old Swarm role adoption', () => {
     t.role.mockImplementation(async () => { if (change === 'cancel') t.cancel(); else t.change(); return { role: 'lead' as const } })
     expect(await t.adopt(t.saved, t.current)).toBeNull()
     expect(t.saved.swarmSkill).toBeUndefined()
+  })
+  it('holds for two real seconds before reading again, and says so on the console, when the core gives it no wait or log', async () => {
+    vi.useFakeTimers()
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const t = setup(row({ startedBy: 'agent' })); t.role.mockResolvedValueOnce(undefined)
+      const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: () => true })
+      let done = false
+      const adopting = adopt(t.saved, t.current).then(row => { done = true; return row })
+      await vi.advanceTimersByTimeAsync(1_999)
+      expect(done).toBe(false)
+      expect(t.role).toHaveBeenCalledOnce()
+      expect(said).toHaveBeenCalledWith('[swarm] old-sess held · its Swarm role could not be read; it opens once a read answers')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await adopting).toMatchObject({ swarmSkill: { role: 'lead', key: 'old-session' } })
+      expect(t.role).toHaveBeenCalledTimes(2)
+    } finally {
+      said.mockRestore()
+      vi.useRealTimers()
+    }
   })
   it('does not read or write for an already-cancelled operation', async () => {
     const t = setup(); t.cancel()

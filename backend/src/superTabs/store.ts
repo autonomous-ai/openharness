@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -32,16 +32,18 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
-import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
-import { clock, insertParts, loadActive, loadLightGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts } from './parts/light.js'
-import { guardedWrite } from './parts/write.js'
+import { guardedWrite, partId } from './parts/write.js'
+import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
-import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
+import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
+import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
@@ -54,7 +56,7 @@ import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
-import { accrueLent } from './leaderboard/lent.js'
+import { accrueLent, addLent, lentAgents } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
 import { APPROVE, APPROVED_DAYS, approvedReminder, LAPSED_DAYS, localDate, MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type Approved, type Proposal, type ReflectionInput } from './costs/reflection.js'
@@ -290,6 +292,9 @@ export interface SuperTabStoreHooks {
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
    *  out, this server remembers alone. */
   polls?: PollMemory
+  /** What each machine's full report saw, for its next reports, and each Swarm's sweep clock, shared by every server (Redis
+   *  in production, machineReports.ts). Left out, this server remembers alone. */
+  reports?: ReportMemory
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
@@ -300,6 +305,11 @@ export interface SuperTabStoreHooks {
    *  (lib/swarmClientPushes.ts). Called after the write commits; it must not throw. */
   swarmChanged?: (change: SwarmChanged) => void
 }
+
+/** A report call's host checks that need no Swarm (SuperTabStore.machineHost): the caller's account row for the machine. */
+export interface MachineHost { owned: Machine | null }
+/** A machine part as a reading-only report reads it (parts/load.ts loadMachineParts). */
+export interface MachinePart { version: number; deleted: boolean; data: MachineData }
 
 /** Which people's apps should read a Swarm again, the commit's time, and which of its stamps moved. */
 export interface SwarmChanged { tabId: string; userIds: string[]; lastChangedAt: number; parts: Array<'main' | 'machine'> }
@@ -476,6 +486,7 @@ export class SuperTabStore {
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.polls = hooks.polls ?? localPollMemory(now)
+    this.reports = hooks.reports ?? localReportMemory(now)
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
@@ -2401,23 +2412,106 @@ export class SuperTabStore {
     })
   }
 
-  /** When each Swarm's time checks last ran on a machine's report, on this server (liveness.ts SWEEP_EVERY_MS). */
-  private readonly swept = new Map<string, number>()
+  private readonly reports: ReportMemory
 
-  /** Whether a machine's report runs its Swarm's time checks now; decided once per report, not per transaction attempt. */
-  private sweepDue(tabId: string, now: number): boolean {
-    const last = this.swept.get(tabId)
-    if (last !== undefined && now - last < SWEEP_EVERY_MS) return false
-    this.swept.set(tabId, now)
-    return true
+  /** The caller's own account row for the machine and the host checks that need no Swarm: once per report call, which a
+   *  batch of readings shares (DB 2.5). */
+  async machineHost(user: AuthUser, machineId: string): Promise<MachineHost> {
+    const owned = await this.db.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.hostFor(this.db, user, machineId, owned)
+    return { owned }
   }
 
-  async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
+  /**
+   * A machine's reading for one Swarm. A reading whose decisions cannot differ from its last full report's is stored on its
+   * machine part alone (fastReading); any other runs in full. Whether it runs the Swarm's time checks is decided once, on a
+   * clock every server shares (machineReports.ts), and only for a reading that passed the checks: a refused one would
+   * hold up every server's sweep of that Swarm (review of #2378).
+   */
+  async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation, host?: MachineHost,
+    part?: MachinePart | null): Promise<{ version: number }> {
     const observation = machineObservationSchema.parse(input)
-    const sweep = this.sweepDue(tabId, this.now())
-    return transaction(this.db, async tx => {
-      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-      await this.hostFor(tx, user, machineId, owned)
+    const checked = host ?? await this.machineHost(user, machineId)
+    const fast = await this.fastReading(user, tabId, machineId, observation, checked, part)
+    countReport(fast && 'version' in fast ? 'fast' : 'full')
+    return fast && 'version' in fast ? fast : this.fullReading(user, tabId, machineId, observation, fast ? true : null, checked)
+  }
+
+  /**
+   * A machine's readings for several Swarms in one call (DB 2.5, POST /api/super-tabs/hosts/:machineId/readings): its host
+   * checks once, the machine parts of all of them in one read, then each reading as the per-Swarm route takes it, one after
+   * another. Each Swarm is answered on its own: a reading the schema refuses, or a Swarm the caller cannot reach, fails that
+   * Swarm alone, with the error the per-Swarm route would throw.
+   */
+  async observeMachines(user: AuthUser, machineId: string, readings: ReadonlyArray<{ tabId: string; observation: unknown }>):
+    Promise<Array<{ tabId: string; error?: unknown }>> {
+    const host = await this.machineHost(user, machineId)
+    const parts = await loadMachineParts(this.db, readings.map(r => partId(r.tabId, machineId)))
+    const results: Array<{ tabId: string; error?: unknown }> = []
+    for (const { tabId, observation } of readings) {
+      try {
+        await this.observeMachine(user, tabId, machineId, observation as MachineObservation, host, parts.get(partId(tabId, machineId)) ?? null)
+        results.push({ tabId })
+      } catch (error) {
+        results.push({ tabId, error })
+      }
+    }
+    return results
+  }
+
+  /**
+   * A heartbeat stored without loading its Swarm (DB 2.5 spec, sections 1–2), or null to run it in full. It needs the
+   * Swarm unchanged since this machine's last full report (its `main` stamp then, no bump owed here), no removal, none of
+   * its workers' leases due, and a reading that feeds no decision differently (machines.ts readingOnly). It stores what
+   * the full report would: the same reading, Lent for the count that report recorded, the same push to the same people.
+   */
+  private async fastReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, host: MachineHost,
+    loaded?: MachinePart | null): Promise<{ version: number } | { sweep: true } | null> {
+    if (stampOwed(tabId)) return null
+    const [stamps, record] = await Promise.all([readStamps([tabId]), this.reports.get(tabId, machineId)])
+    const now = this.now()
+    // A record holds for RECORD_TTL_MS after its own full report, whatever other machines of the Swarm write since.
+    if (!record || stamps?.get(tabId)?.main !== record.stamp || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
+    // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
+    if ((record.team && !isTeamSession(user)) || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
+    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
+    if (row?.format !== 2) return null
+    const part = loaded !== undefined ? loaded : (await loadMachineParts(this.db, [partId(tabId, machineId)])).get(partId(tabId, machineId))
+    const pool = part && !part.deleted ? part.data.contribution : null
+    if (!part || !pool || pool.contributorId !== user.sub || pool.generation !== observation.generation || pool.removal) return null
+    const data = structuredClone(part.data), mine = data.contribution!
+    const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id) })
+    if (!readingOnly(mine.observation, reading)) return null
+    addLent(mine, now, record.lentCount)
+    mine.observation = reading
+    const suspended = JSON.stringify(mine.engineSuspensions)
+    readingClearsSuspensions(mine, now)
+    if (JSON.stringify(mine.engineSuspensions) !== suspended) return null
+    // Its sweep due: the full report runs it, with the slot this reading, which passed the checks, just took.
+    if (await this.reports.sweepDue(tabId, now)) return { sweep: true }
+    const stamp = clock.next()
+    let version: number
+    try {
+      version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data }, stamp))
+    } catch (error) {
+      // A conflict, or Mongo's transient refusal, is the full report's to retry.
+      if (retryable(error)) return null
+      throw error
+    }
+    try {
+      this.hooks.swarmChanged?.({ tabId, userIds: record.members, lastChangedAt: stamp, parts: ['machine'] })
+    } catch (error) {
+      logger.warn('[super-tab] reading push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
+    }
+    return { version }
+  }
+
+  /** [sweep]: whether the Swarm's sweep slot was taken already, or null for this report to ask once its checks pass. */
+  private async fullReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, sweep: boolean | null,
+    { owned }: MachineHost): Promise<{ version: number }> {
+    // The Swarm's stamp before anything is loaded: the next reports may skip the load only while it holds (machineReports.ts).
+    const before = (await readStamps([tabId]))?.get(tabId)?.main
+    const { version, record } = await transaction(this.db, async (tx): Promise<{ version: number; record?: Omit<ReportRecord, 'stamp'> }> => {
       // Only the conversations its checks read (parts/load.ts loadObserved): the whole Swarm was ~1.1 MB a report (#876).
       const loaded = loadedFrom(await this.row(tx, user, tabId), await loadObserved(tx, tabId, machineId)), state = cloneData(loaded.state)
       await this.hostFor(tx, user, machineId, owned, state)
@@ -2427,6 +2521,8 @@ export class SuperTabStore {
         return found
       })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      // Asked once per report, never again on a retried attempt, which would find the slot taken by itself.
+      sweep ??= await this.reports.sweepDue(tabId, this.now())
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
@@ -2447,23 +2543,10 @@ export class SuperTabStore {
       }
       if (!state.machines?.includes(pool)) return saved()
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
-      const team = isTeamSession(user)
-      // Its privacy check counts only from the Harness Team account's own session; an ordinary sign-in's claim is dropped.
-      // Progress is kept for running sessions only: their leases are read from it (liveness.ts).
-      const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
-      const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => observation.runningHarnessIds.includes(id)))
-      // Token counts too: an attempt's run reads its session's totals from them (costs/attempts.ts).
-      const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => observation.runningHarnessIds.includes(id)))
-      // A machine says preparing only of the starts it launched that are neither running nor failed (liveness.ts).
-      const preparing = preparingStartIds?.filter(id => state.starts?.some(s => s.id === id && s.request.machineId === machineId
-        && s.dispatched && !s.harnessId && !s.error))
-      const privacy = observedPrivacy(pool.observation?.privacy, reported, team, now)
+      const reading = storedObservation(pool, observation, { team: isTeamSession(user), now,
+        preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)) })
       accrueLent(state, pool, now)
-      pool.observation = { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
-        // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
-        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
-        ...(tokens ? { harnessTokens: tokens } : {}),
-        ...(preparing ? { preparingStartIds: preparing } : {}) }
+      pool.observation = reading
       // A reading that shows a suspended engine signed in with quota offered again (engineHealth.ts); posts nothing.
       readingClearsSuspensions(pool, now)
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
@@ -2481,8 +2564,16 @@ export class SuperTabStore {
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
-      return saved(checked)
+      const written = await saved(checked)
+      // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
+      const mine = state.machines?.find(m => m.machineId === machineId)
+      return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),
+        removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextLossAt(state, machineId) ?? Infinity, now + DEADLINE_CAP_MS),
+        team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
+        preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
     })
+    if (record && before !== undefined && !stampOwed(tabId)) await this.reports.set(tabId, machineId, { ...record, stamp: before })
+    return { version }
   }
 
   async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {

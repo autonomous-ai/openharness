@@ -119,6 +119,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // has no git login of its own (routes/superTabs.ts).
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
+  // The same readings for all of its Swarms in one call (DB roadmap 2.5).
+  { method: 'POST', url: '/api/super-tabs/hosts/:machineId/readings', scope: 'machine' },
   // Reads as one of its agents.
   { method: 'GET', url: '/api/super-tabs/:tabId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/parts', scope: 'agent' },

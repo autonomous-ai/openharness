@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { SwarmCache } from './cache.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { configureSwarmStamps, noteChange, readStamps, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
 
 /** A loader that counts its calls and returns a fresh object each time, numbered. */
@@ -185,5 +185,35 @@ describe('SwarmCache', () => {
     const view = await cache.at(['t1'])
     await view.get('t2', 'base', 'main', load); await view.get('t2', 'base', 'main', load)
     expect(load.calls).toBe(2)
+  })
+})
+
+describe('the stamps a machine report reads (DB 2.5)', () => {
+  afterEach(() => configureSwarmStamps(null))
+  /** A database whose transaction runs its body on a client the cache records changes against. */
+  const db = { $transaction: async <T>(body: (tx: object) => Promise<T>) => body({}) }
+
+  it('reads them, or none without stamps, while they fail, or late', async () => {
+    expect(await readStamps(['t1'])).toBeNull()
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    await stamps.bump('t1', ['main'])
+    expect((await readStamps(['t1']))?.get('t1')).toEqual({ main: 1, machine: 0 })
+    stamps.down = true
+    expect(await readStamps(['t1'])).toBeNull()
+    stamps.down = false
+    stamps.slowMs = 300
+    expect(await readStamps(['t1'])).toBeNull()
+  })
+
+  it('knows a Swarm whose change committed here before Redis took its bump, until it is paid', async () => {
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    stamps.down = true
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main'))
+    expect([stampOwed('t1'), stampOwed('t2')]).toEqual([true, false])
+    stamps.down = false
+    await vi.waitFor(() => expect(stampOwed('t1')).toBe(false), { timeout: 5_000 })
+    expect(stamps.bumps).toEqual([{ tabId: 't1', scopes: ['main'] }])
   })
 })
