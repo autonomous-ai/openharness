@@ -560,6 +560,13 @@ class SwarmNewProjectSteps {
   /// A start was sent and has not answered: a retry repeats it as it is.
   bool get starting => _start != null && !_started;
 
+  /// The Swarm took its Product Manager's start: only its name is left.
+  bool get started => _started;
+
+  /// A start was sent, answered or not: its machine and repository stay as
+  /// sent, whatever the machine's room says now.
+  bool get startSent => _start != null;
+
   /// The machine of the start under way, if any.
   String? get startMachine =>
       superTabMap(_start?['command'] ?? const {})['machineId'] as String?;
@@ -1110,7 +1117,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     final machineId = steps?.startMachine ?? _machineId;
     final machine = machines.where((m) => m.id == machineId).firstOrNull;
     final sent = steps?.sent ?? false;
-    final starting = steps?.starting ?? false;
+    final startSent = steps?.startSent ?? false;
     final blocked = _blocked(snapshot, machines, machine, repository);
     final swarmName =
         _inbox.swarms.where((s) => s.id == swarmId).firstOrNull?.name ??
@@ -1182,7 +1189,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               detail: repository == null
                   ? null
                   : swarmRepositoryKey(repository),
-              onTap: starting || _busy
+              onTap: startSent || _busy
                   ? null
                   : () => setState(() => _picking = _Pick.repository),
             ),
@@ -1191,7 +1198,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               label: 'PM runs on',
               value: machine?.name ?? 'Choose',
               detail: machine?.detail,
-              onTap: starting || _busy
+              onTap: startSent || _busy
                   ? null
                   : () => setState(() => _picking = _Pick.machine),
             ),
@@ -1241,7 +1248,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               blocked == null &&
                   repository != null &&
                   machineId != null &&
-                  (machine != null || starting)
+                  (machine != null || startSent)
               ? () => unawaited(_create(swarmId, reader, repository, machineId))
               : null,
         ),
@@ -1262,8 +1269,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     if (repository == null) {
       return 'Choose the repository this project works in.';
     }
-    // A start under way is repeated as it was sent, whatever the list says.
-    if (_steps?.starting ?? false) return null;
+    // A start sent is repeated as it was, or is done, whatever the list
+    // says now: the Product Manager it started may fill its machine.
+    if (_steps?.startSent ?? false) return null;
     if (!machines.any((m) => m.startable)) return swarmLeadNoMachine;
     if (machine == null) return swarmLeadChooseMachine;
     if (!machine.startable) {
@@ -1320,6 +1328,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     setState(
       () => _error = steps.projectId == null
           ? 'Couldn’t create the project: $why'
+          : steps.started
+          ? 'The project is made and its Product Manager is starting. '
+                'Naming it didn’t finish: $why'
           : 'The project is made. Its Product Manager didn’t start: $why',
     );
   }

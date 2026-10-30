@@ -518,6 +518,30 @@ void main() {
         );
       },
     );
+
+    test('a name that fails once its Product Manager started is retried '
+        'under its operation, and starts nothing more', () async {
+      var fail = true;
+      swarm.answer = (command) {
+        if (command['type'] == 'project.rename' && fail) {
+          fail = false;
+          throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.');
+        }
+        return null;
+      };
+      final steps = SwarmNewProjectSteps(reader);
+      await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
+      expect(steps.started, isTrue);
+      expect(steps.startSent, isTrue);
+
+      // Its machine is full now, with the Product Manager on it.
+      swarm.machines = [leadPool('mac-1', name: 'Studio', slots: 0)];
+      await run(steps, machineId: 'elsewhere');
+      expect(swarm.commands('lead.start'), hasLength(1));
+      final renames = swarm.commands('project.rename');
+      expect(renames, hasLength(2));
+      expect(renames[0]['operationId'], renames[1]['operationId']);
+    });
   });
 
   group('Swarm Home', () {
@@ -803,6 +827,43 @@ void main() {
         swarm.projects.where((p) => p['name'] == 'openharness'),
         hasLength(1),
       );
+    });
+
+    testWidgets('a name that fails once its Product Manager started says '
+        'so, and Try again names it without starting another, though its '
+        'machine is full now', (tester) async {
+      final swarm = NewProjectSwarm();
+      var fail = true;
+      swarm.answer = (command) {
+        if (command['type'] == 'project.rename' && fail) {
+          fail = false;
+          // The Product Manager took the machine's last agent.
+          swarm.machines = [leadPool('mac-1', name: 'Studio.local', slots: 0)];
+          throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.');
+        }
+        return null;
+      };
+      final host = await pump(tester, [swarm]);
+      await tap(tester, 'swarm-new-project');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'The project is made and its Product Manager is starting. '
+          'Naming it didn’t finish: The Swarm didn’t answer.',
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-new-project-note'), findsNothing);
+      await tap(tester, 'swarm-new-project-create');
+      expect(swarm.commands('lead.start'), hasLength(1));
+      final renames = swarm.commands('project.rename');
+      expect(renames, hasLength(2));
+      expect(renames[0]['operationId'], renames[1]['operationId']);
+      expectHomeCProject('openharness');
     });
 
     testWidgets('its Swarm\'s read taken away while it is open closes it at '
