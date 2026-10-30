@@ -2026,6 +2026,24 @@ class AppNotifier extends ChangeNotifier {
       );
     }
 
+    // On the web only what acts on a machine comes here (adding it, sharing
+    // its terminal, waking it): one that cannot do it says why, never the
+    // catch-all (docs/specs/2026-10-30-web-swarm-direct.md).
+    final machine = viewer == null ? null : machineStates[machineId];
+    final name = machine?.machine.displayName;
+    if (machine != null && machine.isOffline) {
+      throw SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        '$name is offline. Open Harness on it, then try again.',
+      );
+    }
+    if (machine != null && machine.machine.isTeamAccount) {
+      throw SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        '$name runs Swarm agents for a Harness Team account, so it cannot do '
+            'this for you. Use another of your machines.',
+      );
+    }
     final Map<String, dynamic> result;
     try {
       result = await _conn(machineId).request(
@@ -2038,6 +2056,16 @@ class AppNotifier extends ChangeNotifier {
         failure.code,
         failure.detail,
         (failure.payload['status'] as num?)?.toInt() ?? 0,
+      );
+    } on WsRequestTimeout {
+      if (machine == null) rethrow;
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+      throw SuperTabFailure(
+        'MACHINE_SLOW',
+        '$name is taking too long to answer. Its connection may be slow. '
+            'Try again.',
       );
     }
     if (!_authWorkCurrent(revision)) {

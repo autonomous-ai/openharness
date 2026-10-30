@@ -76,6 +76,9 @@ class _Machine extends WsConn {
       );
   final ConversationServer server;
   final asked = <Map<String, dynamic>>[];
+
+  /// Never answers in time, as a machine on a slow link.
+  bool slow = false;
   @override
   bool get isReady => true;
   @override
@@ -85,6 +88,7 @@ class _Machine extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     if (type == 'super_tabs') asked.add(payload);
+    if (slow) throw WsRequestTimeout(type);
     if (type == 'super_tabs' && payload['action'] == 'backend') {
       return {
         'ok': true,
@@ -143,7 +147,7 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  void connectMachine(String id) {
+  void connectMachine(String id, {bool online = true, String? kind}) {
     machines[id] = _Machine(id, server);
     app.machineStates[id] =
         MachineState(
@@ -151,10 +155,27 @@ void main() {
               machineId: id,
               authMode: MachineAuthMode.remote,
               name: 'Studio',
+              sessionKind: kind,
             ),
           )
-          ..connectionStatus = ConnectionStatus.connected
-          ..nodeOnline = true;
+          ..connectionStatus = online
+              ? ConnectionStatus.connected
+              : ConnectionStatus.disconnected
+          ..nodeOnline = online;
+  }
+
+  Future<SuperTabFailure> machineRefusal(String id) async {
+    try {
+      await app.superTabMachineRequest(id, {
+        'action': 'prepareContribution',
+        'tabId': _tab,
+        'scope': 'swarm',
+        'operationId': 'setup-1',
+      });
+    } on SuperTabFailure catch (failure) {
+      return failure;
+    }
+    fail('expected a SuperTabFailure');
   }
 
   test('with no machine at all, the Swarm list, a project chat and the Buddy '
@@ -209,5 +230,42 @@ void main() {
       machines['studio']!.asked.where((p) => p['action'] == 'backend'),
       isEmpty,
     );
+  });
+
+  group('an action that needs a machine says why it cannot run', () {
+    test('the machine is offline', () async {
+      connectMachine('studio', online: false);
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_UNAVAILABLE');
+      expect(
+        failure.message,
+        'Studio is offline. Open Harness on it, then try again.',
+      );
+      expect(machines['studio']!.asked, isEmpty);
+    });
+
+    test('the machine runs a Harness Team account', () async {
+      connectMachine('studio', kind: 'team');
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_UNAVAILABLE');
+      expect(
+        failure.message,
+        'Studio runs Swarm agents for a Harness Team account, so it cannot '
+        'do this for you. Use another of your machines.',
+      );
+      expect(machines['studio']!.asked, isEmpty);
+    });
+
+    test('the machine does not answer in time', () async {
+      connectMachine('studio');
+      machines['studio']!.slow = true;
+      final failure = await machineRefusal('studio');
+      expect(failure.code, 'MACHINE_SLOW');
+      expect(
+        failure.message,
+        'Studio is taking too long to answer. Its connection may be slow. '
+        'Try again.',
+      );
+    });
   });
 }
