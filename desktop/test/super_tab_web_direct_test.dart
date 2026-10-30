@@ -309,4 +309,34 @@ void main() {
       },
     );
   });
+
+  test('a project the backend is too old to create says to update it, and '
+      'nothing about its schema', () async {
+    server
+      ..refuse = {
+        'code': 'VALIDATION_ERROR',
+        'message': 'command.type: Invalid discriminator value. Expected machine.contribute',
+      }
+      ..refuseStatus = 400;
+    await expectLater(
+      app.superTabs.request(
+        'POST',
+        '/api/super-tabs/$_tab/commands',
+        body: {
+          'operationId': 'op-project',
+          'command': {'type': 'project.create', 'name': 'Web'},
+        },
+      ),
+      throwsA(
+        isA<SuperTabFailure>()
+            .having((f) => f.code, 'code', 'UPDATE_REQUIRED')
+            .having(
+              (f) => f.message,
+              'message',
+              'The Swarm service needs an update before you can create a '
+                  'project. Your draft is saved.',
+            ),
+      ),
+    );
+  });
 }
