@@ -249,7 +249,7 @@ class SwarmMessageRow extends StatelessWidget {
   /// PM's private line answered in the project chat.
   final Widget? below;
 
-  /// Null where the person cannot post: picks a reaction.
+  /// Opens its long-press sheet: reactions, Copy link to message.
   final VoidCallback? onLongPress;
 
   @override
