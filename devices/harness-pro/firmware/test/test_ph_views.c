@@ -1608,6 +1608,34 @@ int main(void) {
         N.stack[1].scroll = 9999;   // past the end: the view clamps
         fresh(); ph_view_lead(&F, &N, &M, 1000);
         CHECK(text_prefix("forty") || text_run("Lead"));
+        {   // lead_view_group_shows_chat_name / lead_view_lead_chat_unchanged / lead_view_chat_name_capped: the chat the desktop has open is named under the project (PM and group chats only)
+            pod_lead_t *cl = &M.swarms[0].leads[2];
+            asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
+            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            static ht_run_t base[HT_RUNS]; const int nbase = S.count; memcpy(base, S.runs, sizeof(ht_run_t) * (size_t)nbase);
+            cl->chat = POD_CHAT_LEAD; snprintf(cl->chat_name, sizeof cl->chat_name, "ignored");   // lead_view_lead_chat_unchanged: even with a name, a Lead chat draws today's view
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase && !memcmp(base, S.runs, sizeof(ht_run_t) * (size_t)nbase) && !text_run("ignored"));
+            cl->chat = POD_CHAT_BUDDY;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase && !text_run("ignored"));
+            cl->chat = POD_CHAT_GROUP; snprintf(cl->chat_name, sizeof cl->chat_name, "review-cable-fit");   // lead_view_group_shows_chat_name
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *cn = text_run("review-cable-fit");
+            CHECK(cn && cn->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(cn) && cn->y + ph_sb_22.height * 15 / 32 >= 118 && cn->y + ph_sb_22.height * 15 / 32 <= 122 && S.count == nbase + 1);
+            cl->chat = POD_CHAT_PM; snprintf(cl->chat_name, sizeof cl->chat_name, "PM");
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(text_run("PM") && text_run("PM")->fg == ht_rgb(PH_ROOM_MUTED));
+            cl->chat = POD_CHAT_GROUP; cl->chat_name[0] = 0;   // no name: nothing extra
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase);
+            memset(cl->chat_name, 'W', 48); cl->chat_name[48] = 0;   // lead_view_chat_name_capped
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *cap = text_prefix("WWW");
+            CHECK(cap && cap->w <= 640 + 2 && strstr(cap->text, "\xe2\x80\xa6") && strlen(cap->text) < 48);
+            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
+        }
         // The model does not hold the Lead (a dropped link): nothing is drawn, nothing breaks
         pod_model_link(&M, false);
         fresh(); ph_view_lead(&F, &N, &M, 1000);
