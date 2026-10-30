@@ -227,6 +227,16 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
     claude.lead('owner-mac')
     expect(requestOf(claude)).not.toHaveProperty('model')
   })
+  it('never takes another project\'s role default', () => {
+    const f = swarm()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: 'Other work.' }).result.projectId as string
+    f.run({ type: 'project.roles.create', projectId: other, roles: [{ id: 'lead', name: 'PM', kind: 'lead', text: '# PM',
+      defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' } }] } as Command)
+    f.run({ type: 'project.skills', projectId: other, mode: 'custom' } as Command)
+    f.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(f)).toMatchObject({ engine: 'codex', leadFor: { projectId: f.app.projectId } })
+    expect(requestOf(f)).not.toHaveProperty('model')
+  })
 })
 
 describe('a Product Manager\'s start, once its host reports it', () => {
