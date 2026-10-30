@@ -291,6 +291,12 @@ describe('adding a Buddy', () => {
       worktree: true, name: 'peer\'s Buddy', buddyOf: { personId: 'peer', generation: 'first' } })
     expect(start.request.role).toBeUndefined()
   })
+  it('asks its machine for memory and disk, never for a CPU reading under 100%: one busy sample must not refuse it (Diego, 10-30)', () => {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId, 'peer-mac')
+    const start = f.state.starts!.find(s => s.id === added.result.startId)!
+    expect(start.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
+  })
 
   it('makes the started agent a Buddy in its owner\'s chat, and says it is ready there', () => {
     const f = fresh()
