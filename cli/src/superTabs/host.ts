@@ -205,6 +205,14 @@ const endingKey = (target: HostAgent) => `${target.tabId}:${target.agent.id}:${t
  *  (backend commands.ts, `stableId(machineId, harnessId)`): this host's own record of which agent each of its sessions is. */
 const agentIdOf = (machineId: string, harnessId: string) =>
   createHash('sha256').update(JSON.stringify([machineId, harnessId])).digest('hex').slice(0, 24)
+/** A person's Buddy chat in a project (backend buddies.ts `buddyChatId`, `stableId('buddy', projectId, personId, generation)`). */
+export const buddyChatIdOf = (projectId: string, personId: string, generation: string) =>
+  createHash('sha256').update(JSON.stringify(['buddy', projectId, personId, generation])).digest('hex').slice(0, 24)
+/** A Buddy's thread session (spec 2026-10-30-buddy-thread-sessions) ends after this long with its screen unchanged, nothing
+ *  waiting for it and nothing delivered to it: a session still working on a long question changes its screen. */
+export const BUDDY_SESSION_IDLE_MS = 30 * 60_000
+/** How long a thread session's terminal may be missing before it counts as stopped, so a slow read is never taken for one. */
+export const BUDDY_SESSION_GONE_MS = 60_000
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.next`
@@ -262,6 +270,10 @@ export class SuperTabHost {
   /** Per agent's list, when it was last read, what it held, and whether any of it is still in this host's hands: input in
    *  flight needs a fresh read each second for its 2.5 s lease (accept), so only a list with nothing to do may wait. */
   private readonly lists = new Map<string, { readAt: number; ids: string[]; busy: boolean }>()
+  /** Each of this machine's thread sessions, by `tabId:agentId`: when it last did anything, since when its terminal is gone,
+   *  and its end once asked of the backend. */
+  private readonly threadSessions = new Map<string, { activeAt: number; missingSince?: number; ending?: 'idle' | 'stopped'; ended?: true
+    running: boolean; failures: number; retryAt: number }>()
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
@@ -854,6 +866,7 @@ export class SuperTabHost {
         }
       }
     }
+    this.watchThreadSessions(data)
     await this.leases()
     // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
     this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
@@ -883,6 +896,52 @@ export class SuperTabHost {
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
     }, error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+  }
+
+  /** A Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions) end on their own, so none is left running on its
+   *  person's machine: idle for BUDDY_SESSION_IDLE_MS, with no screen change, nothing waiting for it and nothing delivered
+   *  in that time, or its terminal gone for BUDDY_SESSION_GONE_MS. This host asks the backend as the machine's owner, who is
+   *  the Buddy's person (a Buddy runs only on its person's own machine); the backend then ends it, and this host closes it
+   *  as any session the backend ends (endSession). Asked once, retried with backoff while the backend does not answer. */
+  private watchThreadSessions(data: unknown[]): void {
+    const present = new Set<string>()
+    for (const item of data) {
+      const row = object(item), agent = object(row.agent), session = object(agent.buddySession), buddyOf = object(agent.buddyOf)
+      if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
+      if (row.closeSession === true || row.stopRequested === true || !identifier(session.thread)) continue
+      if (!identifier(buddyOf.personId) || !identifier(buddyOf.generation)) continue
+      const key = `${row.tabId}:${agent.id}`, now = this.now()
+      present.add(key)
+      let state = this.threadSessions.get(key)
+      if (!state) this.threadSessions.set(key, state = { activeAt: now, running: false, failures: 0, retryAt: 0 })
+      // A delivery waiting for it is work, and so is a screen that changed.
+      const list = this.lists.get(`list:${row.tabId}:${agent.id}`)
+      if (list?.ids.length) state.activeAt = now
+      const shown = this.terminal.progressOf([agent.harnessId])[agent.harnessId]
+      if (typeof shown === 'number' && shown > state.activeAt) state.activeAt = shown
+      const live = !!this.core.agents.byAgent(agent.harnessId) && this.core.agents.terminalAvailable(agent.harnessId)
+      if (live) delete state.missingSince
+      else state.missingSince ??= now
+      // Idle only on a list read this pass or lately that is empty: one never read says nothing of what waits.
+      const reason = !live ? (now - state.missingSince! >= BUDDY_SESSION_GONE_MS ? 'stopped' : null)
+        : list && !list.ids.length && now - state.activeAt >= BUDDY_SESSION_IDLE_MS ? 'idle' : null
+      if (!reason && !state.ending) continue
+      state.ending ??= reason!
+      if (state.ended || state.running || now < state.retryAt) continue
+      const projectId = identifier(agent.projectId) ? agent.projectId : 'lead'
+      const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
+      state.running = true
+      const ending = state.ending, short = String(agent.harnessId).slice(0, 8)
+      void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}`,
+        command: { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
+        .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
+        .catch(error => {
+          state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
+          this.log(`Could not end thread session ${short} in Swarm ${row.tabId} (${ending}): ${error instanceof Error ? error.message : String(error)}`)
+        })
+        .finally(() => { state.running = false })
+    }
+    for (const key of this.threadSessions.keys()) if (!present.has(key)) this.threadSessions.delete(key)
   }
 
   /** Deleting a project left its Lead's session running, and removing an agent left its session behind (owner, 2026-10-23:

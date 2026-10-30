@@ -728,6 +728,28 @@ describe('the Buddy skill talks in its owner\'s chat and waits for nothing (Scho
   })
 })
 
+// Spec 2026-10-30-buddy-thread-sessions: a thread session runs with the same guard and rules as the main Buddy. Its folder
+// is locked by the same launch, so its files differ only where they name its own folder, its own list and its own launch.
+describe('a Buddy\'s thread session\'s folder', () => {
+  it.each([['folder only', false], ['wide mode', true]] as const)('is locked exactly as the main Buddy\'s, in %s', (_, wide) => {
+    const home = fixture(), dataDir = join(home, '.data')
+    const wideOf = (launch: string) => wide ? () => buddyWideOf({ home, dataDir, tmpDirs: ['/tmp/claude-501'], repos: ['autonomous-ai/openharness'], launch }) : folderOnly
+    const sessions = [['main-key', 'launch-main'], ['session-key', 'launch-session']].map(([key, launch]) => {
+      const root = realpathSync(fixture())
+      prepareSwarmSkill(root, { role: 'buddy', key: key!, mode: 'default' }, wideOf(launch!))
+      const neutral = (text: string) => text.split(root).join('<FOLDER>').split(buddyReadsOf(key!).file).join('<READS>').split(launch!).join('<LAUNCH>')
+      return { root, key, launch, settings: readFileSync(join(root, '.claude', 'settings.local.json'), 'utf8'), guard: readFileSync(join(root, '.claude', 'buddy-guard.mjs'), 'utf8'), neutral }
+    })
+    const [main, session] = sessions as [typeof sessions[0], typeof sessions[0]]
+    expect(session.guard).not.toBe(main.guard)
+    expect(session.neutral(session.guard)).toBe(main.neutral(main.guard))
+    expect(session.neutral(session.settings)).toBe(main.neutral(main.settings))
+    // Each names only its own list and launch.
+    expect(session.guard).not.toContain(buddyReadsOf(main.key!).file)
+    if (wide) expect(session.guard).not.toContain(main.launch)
+  })
+})
+
 describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', () => {
   it('runs every Claude Code tool call past its guard, refuses the rest without asking, denies file editing, and leaves its files read-only', () => {
     const workspace = fixture()

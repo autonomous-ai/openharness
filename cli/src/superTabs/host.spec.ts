@@ -10,7 +10,8 @@ import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
@@ -2617,6 +2618,99 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
   return { ...t, host, rows, commands, keepLeadAlive, closeMember, poll, live: (value: boolean) => { live = value } }
 }
 const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+// Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
+// with it. Its host asks the backend to end it, as the machine's owner, when idle or when its terminal is gone.
+describe('ending a Buddy\'s thread sessions', () => {
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const sessionRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', projectId: 'proj', buddyOf: BUDDY_OF, buddySession: { thread: 'root-1', from: 7 } }, ...extra })
+  const ends = (t: ReturnType<typeof lifeFixture>) => t.commands.filter(c => (c.command as Record<string, unknown>)?.type === 'buddy.sessionEnd')
+  const chat = buddyChatIdOf('proj', 'peer', 'g')
+  let progress: ReturnType<typeof vi.spyOn> | undefined
+  afterEach(() => { progress?.mockRestore(); progress = undefined })
+
+  it('ends one idle for 30 minutes, once, naming its own chat and thread, as the backend computes the chat', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    await t.poll()
+    await t.poll(BUDDY_SESSION_IDLE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect(ends(t)[0]).toEqual({ operationId: 'buddy-session-end-agent', command: { type: 'buddy.sessionEnd', conversationId: chat, thread: 'root-1', reason: 'idle' } })
+    // The backend's own id for the person's chat (backend buddies.ts buddyChatId).
+    expect(chat).toBe(createHash('sha256').update(JSON.stringify(['buddy', 'proj', 'peer', 'g'])).digest('hex').slice(0, 24))
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(ends(t)).toHaveLength(1)
+  })
+
+  it('never ends one still working: a screen that keeps changing keeps it, however long the question takes', async () => {
+    let clock = 0
+    progress = vi.spyOn(TerminalHost.prototype, 'progressOf').mockImplementation(() => ({ harness: clock }))
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    for (let i = 0; i < 24; i++) { clock += 5 * 60_000; await t.poll(5 * 60_000) }
+    expect(ends(t)).toEqual([])
+    // Its screen stops changing: idle 30 minutes later, not before.
+    const still = clock
+    progress.mockImplementation(() => ({ harness: still }))
+    await t.poll(BUDDY_SESSION_IDLE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+  })
+
+  it('never ends one a delivery waits for', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    const backendOf = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => method === 'GET' && path.includes('/agents/agent/deliveries')
+      ? { status: 200, body: { data: [{ id: 'waiting', conversationId: chat, status: 'queued' }] } } : backendOf(method, path, body)
+    for (let i = 0; i < 4; i++) await t.poll(BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+  })
+
+  it('ends one whose terminal is gone for a minute as stopped, and never one gone for less', async () => {
+    const t = lifeFixture([sessionRow()])
+    await t.poll()
+    await t.poll(BUDDY_SESSION_GONE_MS - 1)
+    expect(ends(t)).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect((ends(t)[0]!.command as Record<string, unknown>).reason).toBe('stopped')
+  })
+
+  it('never ends the main Buddy, another machine\'s session or one the backend is already ending', async () => {
+    const main = { ...sessionRow(), agent: { ...sessionRow().agent, buddySession: undefined } }
+    const other = sessionRow({ agent: { ...sessionRow().agent, id: 'elsewhere', machineId: 'machine-2' } })
+    const closing = sessionRow({ closeSession: true, agent: { ...sessionRow().agent, id: 'closing', harnessId: 'closing' } })
+    const t = lifeFixture([main, other, closing])
+    for (let i = 0; i < 3; i++) await t.poll(BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+  })
+
+  it('asks again with backoff while the backend does not answer, with the same operation', async () => {
+    const t = lifeFixture([sessionRow()])
+    const backendOf = t.core.account.backend
+    let refusals = 2
+    t.core.account.backend = async (method, path, body) => (body as any)?.command?.type === 'buddy.sessionEnd' && refusals-- > 0
+      ? (t.commands.push(body as Record<string, unknown>), { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } })
+      : backendOf(method, path, body)
+    await t.poll()
+    await t.poll(BUDDY_SESSION_GONE_MS)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    await t.poll(4_999)
+    expect(ends(t)).toHaveLength(1)
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(2))
+    await t.poll(10_000)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(3))
+    expect(new Set(ends(t).map(c => c.operationId))).toEqual(new Set(['buddy-session-end-agent']))
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(ends(t)).toHaveLength(3)
+  })
+})
 
 describe('keeping a Swarm Lead alive', () => {
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
