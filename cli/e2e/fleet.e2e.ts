@@ -178,6 +178,30 @@ describe('two machines in one fleet', () => {
     onA.close()
   })
 
+  // Diego, 10-30: a slow but working Mac was treated as dead. Its replies came 5 to 25 s after the 15 s every request
+  // waited, two timeouts threw its session away, its agents left the carousel and turns to them were refused.
+  it('B slow to answer stays on A\'s carousel with its session, and its turns go through', async () => {
+    const f = await fresh({ dialOnA: true })
+    const { a, b, backend } = f
+    const { onA, onB, agentId } = await linked(f)
+    const sessions = () => a.daemon.log().split(`[device] device: e2e session ready ${b.machineId}`).length - 1
+    const before = sessions()
+    // From here B answers 20 s late: past the 15 s a request used to wait, inside the 45 s an agent list waits now.
+    backend.slowUp.set(b.machineId, 20_000)
+    await new Promise((resolve) => setTimeout(resolve, 75_000))
+    const log = a.daemon.log()
+    expect(log).not.toContain('in a row — dropped its E2EE session')
+    expect(log).not.toContain('dropped off the carousel')
+    expect(sessions()).toBe(before)
+    // Still on the carousel, still reachable: ⌘K picks it, and the turn reaches B.
+    expect((await routeTask(onA, 'fix the parser')).agentId).toBe(agentId)
+    const started = onB.next(isTurn('turn_started', agentId), 30_000, 'turn_started on B')
+    expect(await routeSend(onA, agentId, 'to a slow machine b')).toMatchObject({ ok: true })
+    expect((await started).payload?.userMessage).toBe('to a slow machine b')
+    onA.close()
+    onB.close()
+  }, 300_000)
+
   it('the dial\'s routing failing through the port leaves the dial serving A, and ⌘K serving both machines', async () => {
     const f = await fresh({ dialOnA: true, envA: { HARNESSD_TEST_FAULTS: 'fleet.sendTurn' } })
     const { a, b } = f

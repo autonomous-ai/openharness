@@ -778,3 +778,84 @@ describe('the lane\'s own bounds', () => {
     expect(heard.find((frame) => frame.agentId === 'a2')).toMatchObject({ type: 'commander_question' })
   })
 })
+
+// Diego, 10-30: a slow but working Mac was treated as dead. Its late replies had no waiter and were only logged, and two
+// timeouts in a row threw away a session that had just answered: 20 unmatched agents_list_result, 42 session drops.
+describe('a late reply from a slow machine', () => {
+  /** A lane with LINKED's session up, and what its proof-of-life hook heard. */
+  async function upWithAlive() {
+    const lane$ = await lane()
+    await lane$.link.online()
+    await lane$.link.establish(LINKED)
+    const alive: string[] = []
+    lane$.link.onAlive((machineId) => { alive.push(machineId) })
+    return { ...lane$, alive }
+  }
+
+  it('is proof of life when it opens under the machine\'s own session, matched or not, once each', async () => {
+    const { server, seal, link, lines, alive } = await upWithAlive()
+    seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'timed-out-long-ago', agents: [] } } })
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 7 } } })
+    await until('the late reply', () => lines.some((line) => line.includes('unmatched agents_list_result')))
+    expect(alive).toEqual([LINKED])
+    // An answer that came in time is proof too.
+    const answer = link.rpc('models_list', {}, LINKED)
+    await until('the request', () => seal.seal.mock.calls.some(([, frame]) => frame.type === 'models_list'))
+    seal.open.mockResolvedValueOnce({ frame: { type: 'models_list_result', machineId: LINKED, payload: { requestId: askedId(seal, LINKED, 'models_list'), models: [] } } })
+    server.send({ type: 'models_list_result', machineId: LINKED, payload: { __e2e: { n: 8 } } })
+    await answer
+    expect(alive).toEqual([LINKED, LINKED])
+  })
+
+  it('is no proof when the relay could have made it: in the clear, under the group key, unreadable, or for another session', async () => {
+    const { server, seal, link, lines, alive, heard } = await upWithAlive()
+    // In the clear: the relay can write any of these.
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'forged', agents: [] } })
+    // Under the group key, which every commander of the machine holds.
+    seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'group', agents: [] } } })
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { k: 'g', n: 1, epoch: 'e' } } })
+    // Sealed, but not under this session's keys.
+    seal.open.mockResolvedValueOnce({ unreadable: true })
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 9 } } })
+    // From a machine with no session at all.
+    server.send({ type: 'agents_list_result', machineId: CLOUD, payload: { requestId: 'cloud', agents: [] } })
+    await until('every frame read', () => lines.filter((line) => line.includes('unmatched agents_list_result')).length === 3
+      && lines.some((line) => line.includes('could not decrypt agents_list_result')))
+    // Opened under a session that was thrown away while the gateway read it.
+    let release!: (opened: { frame: Frame }) => void
+    seal.open.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 10 } } })
+    await until('the slow open', () => seal.open.mock.calls.length === 3)
+    expect(link.resetSession(LINKED)).toBe(true)
+    release({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'stale', agents: [] } } })
+    await until('the stale reply', () => lines.filter((line) => line.includes('unmatched agents_list_result')).length === 4)
+    expect(alive).toEqual([])
+    expect(heard.filter((frame) => frame.type === 'agents_list_result')).toEqual([])
+  })
+
+  it('is proof once a frame held for a renewed session opens under it', async () => {
+    const { server, seal, link, alive } = await upWithAlive()
+    expect(link.resetSession(LINKED)).toBe(true)
+    seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'held', agents: [] } } })
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 0 } } })
+    await until('the held reply, under the new session', () => alive.length === 1)
+    expect(alive).toEqual([LINKED])
+    expect(seal.hello).toHaveBeenCalledTimes(2)
+  })
+
+  it('has longer to answer an agent list, a background read, than anything a person waits on', async () => {
+    const { link, lines } = await upWithAlive()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const list = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
+      const models = link.rpc('models_list', {}, LINKED).catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await models).toEqual(new Error('models_list timed out'))
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(lines.some((line) => line.includes('agents_list timed out'))).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await list).toEqual(new Error('agents_list timed out'))
+      expect(lines).toContain('device: agents_list timed out after 45000 ms')
+    } finally { vi.useRealTimers() }
+  })
+})

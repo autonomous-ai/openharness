@@ -1221,13 +1221,13 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
     const ops: string[] = []
     const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      ops.push(`${model}.${operation}${operation === 'aggregateRaw' && JSON.stringify(args).includes('"$max"') ? ':max' : ''}`)
+      ops.push(`${model}.${operation}${operation === 'aggregateRaw' && JSON.stringify(args).includes('"$first":"$changedAt"') ? ':newest' : ''}`)
       return query(args)
     } } } }) as unknown as PrismaClient
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
     // The newest change is one Mongo `$group` per part kind, and never a Prisma groupBy.
-    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:max$/.test(op))
+    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:newest$/.test(op))
     const first = await hosts.changes(owner, machineId, { full: true })
     expect(newestReads()).toHaveLength(7)
     expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])

@@ -7,6 +7,7 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { FleetRouter, type FleetLocal } from './fleetRouter.js'
+import { DeviceFleet } from '../device/deviceFleet.js'
 
 vi.mock('../lib/transcriptActivity.js', () => ({ transcriptActivityAt: vi.fn(async () => null) }))
 
@@ -165,6 +166,45 @@ describe('which machine an agent is on', () => {
     vi.spyOn(Date, 'now').mockReturnValue(now + 120_000)
     await settled(router)
     expect(log).not.toHaveBeenCalled()
+  })
+
+  // Diego, 10-30: a slow but working Mac's agents left the carousel and turns to them were refused, though its replies
+  // were arriving, late (15 carousel drops in a day). The real fleet, over a lane whose list times out each time.
+  it('keeps a slow machine on the carousel, with its session and its turns, while late replies of its own prove it alive', async () => {
+    const rows = [{ ...REMOTE, local: false, agentCount: 1 }]
+    let alive: (machineId: string) => void = () => {}
+    const link = {
+      selectedMachine: '', onFrame: () => () => {}, onUndelivered: () => () => {},
+      onAlive: (cb: (machineId: string) => void) => { alive = cb; return () => {} },
+      rpc: vi.fn(async (): Promise<Record<string, unknown>> => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] })),
+      resetSession: vi.fn(() => true), sendSealed: vi.fn(async () => {}),
+    }
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link: link as never, hasPeerLink: () => true, log: () => {} })
+    const log = vi.fn()
+    const router = new FleetRouter(localOf({ log }), fleet)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    // Slow from here: every list times out, and the reply to the one before arrives while the next is out.
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('agents_list timed out') })
+    const now = Date.now()
+    for (const later of [60_000, 120_000, 180_000]) {
+      vi.spyOn(Date, 'now').mockReturnValue(now + later)
+      expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    }
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('dropped off the carousel'))
+    expect(link.resetSession).not.toHaveBeenCalled()
+    expect(router.sendTurn('r1', 'still there?')).toEqual({ ok: true })
+    expect(link.sendSealed).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', machineId: 'other' }))
+    // Gone for real: nothing of its own comes back, so its tiles go, its session is thrown away, and the verdict turns
+    // refuse on is that it did not answer.
+    link.rpc.mockImplementation(async () => { throw new Error('agents_list timed out') })
+    for (const later of [240_000, 300_000]) {
+      vi.spyOn(Date, 'now').mockReturnValue(now + later)
+      await settled(router)
+    }
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (agents_list timed out)')
+    expect(link.resetSession).toHaveBeenCalledWith('other')
+    expect(fleet.reachable('other')).toMatchObject({ ok: false })
   })
 
   it('keeps a machine’s agents while the backend cannot be asked, and drops them when the machine says offline', async () => {

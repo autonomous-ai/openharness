@@ -440,7 +440,9 @@ export class FleetRouter implements FleetRouting {
         })
         .catch((err) => {
           const before = this.remoteAgents.get(m.id)
-          const stale = before && Date.now() - before.at > REMOTE_GRACE_MS
+          // A machine that answered under its own session while this list was out is slow, not gone (Diego, 10-30:
+          // 15 carousel drops in a day of a Mac whose late replies kept arriving): its last good list stays.
+          const stale = before && Date.now() - before.at > REMOTE_GRACE_MS && fleet.reachable?.(m.id)?.ok !== true
           if (stale) this.remoteAgents.set(m.id, { agents: [], at: Date.now(), asked: Date.now() })
           if (before?.agents.length && stale) {
             this.local.log(`cable: ${m.name} dropped off the carousel (${(err as Error).message})`)

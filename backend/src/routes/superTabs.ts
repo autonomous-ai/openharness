@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { z } from 'zod'
+import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
@@ -10,6 +10,7 @@ import { operationSchema } from '../superTabs/commands.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
+import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
@@ -149,6 +150,28 @@ export const NOT_AVAILABLE = { code: 'NOT_FOUND', message: 'This is not availabl
 const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['NOT_FOUND', 'JOIN_UNAVAILABLE', WORKSPACE_ACCESS_REVOKED])
 const unreachable = (error: SuperTabError) => error.unreachable || UNREACHABLE_CODES.has(error.code)
 
+/** At most this many Swarms' readings in one call; the most a machine was seen in is 21 (DB roadmap 2.5). */
+export const READINGS_MAX = 64
+/** A reading is a few KB, at most ~700 KB at its schema's limits (see HOT_BODY_LIMIT), so a batch gets a limit of its own. */
+export const READINGS_BODY_LIMIT = 8 * 1024 * 1024
+/** Each observation is checked on its own (machineObservationSchema, in the store), so one a backend refuses fails only its
+ *  Swarm, and the host sends that one again through the per-Swarm route with its older fields (cli superTabs/machines.ts). */
+const readingsBody = z.object({ readings: z.array(z.object({ tabId: id, observation: z.unknown() }).strict()).min(1).max(READINGS_MAX)
+  .refine(list => new Set(list.map(r => r.tabId)).size === list.length, 'Name each Swarm once.') }).strict()
+
+/** One reading's refusal in a batch, answered as the per-Swarm route answers it: a Swarm the caller cannot reach gets the one
+ *  NOT_AVAILABLE answer (that route is in NOT_AVAILABLE_ROUTES), anything unexpected a 500 for that Swarm alone, logged. */
+export function readingError(tabId: string, error: unknown): { code: string; message: string; status: number } {
+  if (error instanceof ZodError) return { code: 'VALIDATION_ERROR', message: error.issues[0]?.message ?? 'This reading is not valid.', status: 400 }
+  if (error instanceof SuperTabError) {
+    if (!unreachable(error)) return { code: error.code, message: error.message, status: error.status }
+    logger.warn('Swarm not available to the caller', { code: error.code, statusCode: error.status, reason: error.message, tabId, path: 'readings' })
+    return { ...NOT_AVAILABLE }
+  }
+  logger.error('[super-tab] a machine reading failed', error instanceof Error ? error : new Error(String(error)), { tabId })
+  return { code: 'INTERNAL_ERROR', message: 'This reading could not be stored. It is sent again with the next one.', status: 500 }
+}
+
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
@@ -199,6 +222,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
+      // What each machine's full report saw, so its heartbeats skip the Swarm load, and one sweep clock per Swarm (DB 2.5).
+      reports: redisReportMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries,
       // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
       hostsChanged: announceSwarmHostChanges,
@@ -324,6 +349,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     // Worded as the desktop's GitHub access dialog is (design 2026-10-30): allowed, not approved.
     return page(`${named.fullName} is allowed`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
+  // A machine's readings for all of its Swarms in one call, answered per Swarm (DB roadmap 2.5).
+  app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof readingsBody> }>('/api/super-tabs/hosts/:machineId/readings',
+    { bodyLimit: READINGS_BODY_LIMIT, preHandler: [validateParams(hostParams), validateBody(readingsBody)] },
+    (req, reply) => respond(reply, async () => ({ results: (await store.observeMachines(req.user!, req.params.machineId, req.body.readings))
+      .map(({ tabId, error }) => error === undefined ? { tabId, ok: true as const } : { tabId, error: readingError(tabId, error) }) })))
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
