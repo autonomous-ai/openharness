@@ -31,7 +31,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
+import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadLightGroups, loadObserved, reassemble, split, type GroupData, type HeadData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
@@ -1330,6 +1330,9 @@ export class SuperTabStore {
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
       const unreadable = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.agent' && !command.present
+        // A task cancelled with no assignment archives (commands.ts work.cancel).
+        || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
+          && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
       if (unreadable) {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
@@ -2835,24 +2838,34 @@ export class SuperTabStore {
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
    *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
-   *  waiting deliveries end, as a person's archive ends them. True when it archived. */
-  async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
+   *  waiting deliveries end, as a person's archive ends them. With `reviewOf`, the group the pass read as the one it
+   *  reviews, a review nobody is reviewing closes the same way once those of the work it reviews are too (tidy.ts
+   *  reviewClosable). True when it archived. */
+  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = structuredClone(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
-      if (!group || !archivable(state, group, now) || (group.pullRequestUrls ?? []).some(url => !checked.includes(url))) return false
+      if (!group) return false
+      const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      const finished = archivable(state, group, now) && read(group.pullRequestUrls ?? [])
+      // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
+      const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
+      if (!finished && !review) return false
       if (await waitingIn(tx, tabId, groupId)) return false
       group.archived = true
-      const line = archiveLine(state, group, now), rows = line ? [line] : []
+      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
       await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } },
         data: { status: 'cancelled', holdReason: null, holdSince: null } })
-      await this.save(tx, loaded, state, clock.next())
+      // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
+      // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
+      // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
+      await this.save(tx, loaded, state, clock.next(), review ? [{ kind: 'group', key: group.reviewOf! }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
     })

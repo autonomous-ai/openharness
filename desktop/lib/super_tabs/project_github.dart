@@ -30,7 +30,14 @@ class SuperTabProjectGitHub {
       approvedFor = [
         for (final name in row['approvedFor'] as List? ?? const [])
           if (name is String) name,
-      ];
+      ],
+      youCanPush = row['you'] is Map && (row['you'] as Map)['canPush'] is bool
+          ? (row['you'] as Map)['canPush'] as bool
+          : null,
+      githubLogin =
+          row['you'] is Map && (row['you'] as Map)['githubLogin'] is String
+          ? (row['you'] as Map)['githubLogin'] as String
+          : null;
 
   /// `covered`, `not-installed`, `not-approved` (installed, but nobody who can push to it approved it for this project:
   /// backend github/approvals.ts), `not-github`, `no-repository`, `unknown` (GitHub did not answer), `unread` (this
@@ -45,6 +52,13 @@ class SuperTabProjectGitHub {
   /// The reader's other projects the repository is approved for, when it is not approved for this one (backend
   /// github/projectAccess.ts): approving is per project, so a second one asks again.
   final List<String> approvedFor;
+
+  /// What GitHub last said about the reader on the repository (backend github/approvals.ts `reader`): true once they
+  /// allowed it in this Swarm, false once their sign-in was refused for this project, null before either.
+  final bool? youCanPush;
+
+  /// The reader's GitHub account, when [youCanPush] is known.
+  final String? githubLogin;
 
   /// The sidebar's one line under the project, null when it needs none. Setting up access is a step to take, not a
   /// fault, so it reads as one (design 2026-10-30: the orange "Teammates can't push here yet" read as an error on a
@@ -107,6 +121,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   /// The page last opened in the browser, for "Open GitHub again".
   String? _openedLink;
 
+  /// The state GitHub's page was opened for: the waiting screen stays until it changes or the person cancels.
+  String? _openedFor;
+
   @override
   void initState() {
     super.initState();
@@ -146,7 +163,12 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     if (mounted) {
       setState(() {
         _checking = false;
-        _inBrowser = false;
+        // Coming back to the app is not finishing on GitHub (2026-10-30: the waiting screen vanished the moment
+        // Harness came to the front, so nobody ever saw it). It ends when GitHub's answer changes, or on Cancel.
+        if (_answerOf(widget.controller.githubAccessOf(widget.projectId)) !=
+            _openedFor) {
+          _inBrowser = false;
+        }
       });
     }
   }
@@ -235,6 +257,10 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
       },
     );
   }
+
+  /// What GitHub has said, as the waiting screen compares it: a refused sign-in ends the wait as an approval does.
+  static String? _answerOf(SuperTabProjectGitHub? access) =>
+      access == null ? null : '${access.state}/${access.youCanPush}';
 
   bool _canApprove(SuperTabProjectGitHub access) =>
       access.state == 'not-approved' && access.canApprove;
@@ -337,7 +363,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
           height: 18,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            color: grid.AppPalette.swarmAccent,
+            color: grid.AppPalette.accentOnSurface,
           ),
         ),
         heading: 'Finish in GitHub',
@@ -400,44 +426,85 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
             ),
           ],
         );
+      case 'not-approved' when access.canApprove && access.youCanPush == false:
+        // GitHub said this reader can't push (design 2b): asking them to sign in again would end the same way.
+        final message =
+            'Could you open $name in Harness and click “Set up GitHub for teammates”? Our agents need it to push '
+            'to $repository.';
+        return _screen(
+          key: const Key('super-project-github-ask-screen'),
+          heading: 'Someone with write access needs to allow this',
+          body: [
+            _body(
+              "Your GitHub account${access.githubLogin == null ? '' : ' (${access.githubLogin})'} can't push to "
+              "$repository, so teammates' agents can't push there through you. Ask someone in this Swarm who can "
+              'push to open the project and allow it.',
+              key: ValueKey('super-project-github-text-${widget.projectId}'),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Message to send them',
+                  style: DesktopChrome.control(medium: true),
+                ),
+                const SizedBox(height: _gap),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: grid.AppDesktop.groupGap,
+                    vertical: grid.AppDesktop.controlGap,
+                  ),
+                  decoration: BoxDecoration(
+                    color: grid.AppSurface.wellFill,
+                    borderRadius: BorderRadius.circular(
+                      DesktopChrome.rowRadius,
+                    ),
+                    border: Border.all(color: DesktopChrome.rim),
+                  ),
+                  child: SelectableText(
+                    message,
+                    style: DesktopChrome.text(size: 13),
+                  ),
+                ),
+              ],
+            ),
+            _body(
+              "This project updates by itself once they've allowed it.",
+              muted: true,
+            ),
+          ],
+          actions: [
+            OutlinedButton(onPressed: close, child: const Text('Close')),
+            FilledButton(
+              key: const Key('super-project-github-ask'),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: message));
+                if (mounted) setState(() => _askCopied = true);
+              },
+              child: Text(_askCopied ? 'Message copied' : 'Copy message'),
+            ),
+          ],
+        );
       case 'not-approved' when access.canApprove:
+        final canPush = access.youCanPush == true;
         return _screen(
           heading: "Let teammates' agents push to $name",
           body: [
             _body(
-              "Agents on your teammates' machines push branches and open pull requests through the Harness "
-              'GitHub app. Anyone who can push to $repository can allow it for this project.'
+              "Agents on your teammates' machines push branches and open pull requests through the Harness GitHub app. "
+              '${canPush ? 'You have write access, so you can allow it.' : 'Anyone who can push to $repository can allow it.'}'
               '${access.approvedFor.isEmpty ? '' : " It's already allowed for ${_names(access.approvedFor)}."}',
               key: ValueKey('super-project-github-text-${widget.projectId}'),
             ),
-            _repository(repository),
+            _repository(repository, canPush: canPush),
             _allows('Push branches and open pull requests'),
             _allows('Only in this repository, only for this project'),
             _body(
-              "GitHub opens next to check that you can push to it. Come back here when it's done.",
+              "GitHub opens next so you can confirm it's you. Come back here when it's done.",
               muted: true,
             ),
             if (_error != null) _errorText(),
-          ],
-          aside: [
-            TextButton(
-              key: const Key('super-project-github-ask'),
-              onPressed: () async {
-                await Clipboard.setData(
-                  ClipboardData(
-                    text:
-                        'Could you open $name in Harness and click “Set up GitHub for teammates”? Our agents '
-                        'need it to push to $repository.',
-                  ),
-                );
-                if (mounted) setState(() => _askCopied = true);
-              },
-              child: Text(
-                _askCopied
-                    ? 'Message copied'
-                    : "Can't push to it? Copy a message",
-              ),
-            ),
           ],
           actions: [
             OutlinedButton(onPressed: close, child: const Text('Not now')),
@@ -516,17 +583,33 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               child: Text(
                 heading,
                 key: const Key('super-project-github-heading'),
-                style: DesktopChrome.heading(),
+                // The design's dialog heading: the title role, semibold.
+                style: grid.AppType.title(color: DesktopChrome.foreground),
               ),
             ),
           ],
         ),
-        for (final part in body) ...[const SizedBox(height: _gap + 2), part],
-        if (aside.isNotEmpty) ...[
-          const SizedBox(height: _gap),
-          Wrap(spacing: 4, children: aside),
+        for (final part in body) ...[
+          const SizedBox(height: DesktopChrome.groupGap),
+          part,
         ],
-        const SizedBox(height: _gap * 2),
+        if (aside.isNotEmpty) ...[
+          const SizedBox(height: _halfGap),
+          TextButtonTheme(
+            data: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: grid.AppPalette.accentOnSurface,
+                backgroundColor: Colors.transparent,
+                side: BorderSide.none,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+            child: Wrap(spacing: _gap * 2, children: aside),
+          ),
+        ],
+        const SizedBox(height: DesktopChrome.groupGap + _gap),
         // Wraps under large text rather than overflowing the dialog.
         SizedBox(
           width: double.infinity,
@@ -541,13 +624,22 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     ),
   );
 
-  Widget _body(String text, {Key? key, bool muted = false}) => Text(
+  /// A paragraph in the secondary text colour, as the design has it; [note] smaller, [primary] for what is allowed.
+  Widget _body(
+    String text, {
+    Key? key,
+    bool muted = false,
+    bool primary = false,
+  }) => Text(
     text,
     key: key,
-    style: DesktopChrome.text(color: muted ? DesktopChrome.muted : null),
+    style: DesktopChrome.text(
+      color: primary ? null : DesktopChrome.muted,
+      size: muted ? 13 : 14,
+    ),
   );
 
-  Widget _repository(String repository) => Container(
+  Widget _repository(String repository, {bool canPush = false}) => Container(
     padding: const EdgeInsets.symmetric(
       horizontal: grid.AppDesktop.groupGap,
       vertical: grid.AppDesktop.controlGap,
@@ -560,7 +652,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     child: Row(
       children: [
         Icon(
-          AppIcons.gitBranch,
+          AppIcons.book,
           size: grid.AppControl.iconSize,
           color: DesktopChrome.muted,
         ),
@@ -568,6 +660,23 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         Expanded(
           child: Text(repository, style: DesktopChrome.text(medium: true)),
         ),
+        // Known only once GitHub has said so: they allowed it for another project of the Swarm.
+        if (canPush)
+          Container(
+            key: const Key('super-project-github-can-push'),
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.badgeInset,
+              vertical: grid.AppDesktop.listRowGap,
+            ),
+            decoration: ShapeDecoration(
+              color: grid.AppPalette.online.withValues(alpha: .16),
+              shape: const StadiumBorder(),
+            ),
+            child: Text(
+              'You can push',
+              style: DesktopChrome.metadata(color: grid.AppPalette.online),
+            ),
+          ),
       ],
     ),
   );
@@ -584,7 +693,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         ),
       ),
       const SizedBox(width: 10),
-      Expanded(child: _body(text)),
+      Expanded(child: _body(text, primary: true)),
     ],
   );
 
@@ -643,6 +752,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         _busy = false;
         _inBrowser = true;
         _openedLink = link;
+        _openedFor = _answerOf(
+          widget.controller.githubAccessOf(widget.projectId),
+        );
       });
     }
   }
@@ -666,6 +778,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         setState(() {
           _inBrowser = true;
           _openedLink = links.authorizeUrl;
+          _openedFor = _answerOf(
+            widget.controller.githubAccessOf(widget.projectId),
+          );
         });
       }
     } on SuperTabFailure catch (failure) {
@@ -748,7 +863,7 @@ class _ProjectGitHubLineState extends State<ProjectGitHubLine>
                     width: 6,
                     height: 6,
                     decoration: BoxDecoration(
-                      color: grid.AppPalette.swarmAccent,
+                      color: grid.AppPalette.accentOnSurface,
                       shape: BoxShape.circle,
                     ),
                   ),
