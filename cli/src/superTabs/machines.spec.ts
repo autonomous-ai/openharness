@@ -1801,6 +1801,37 @@ describe('removed machine cleanup', () => {
     expect(startIds(m)).toEqual(['kept'])
   })
 
+  // Review of #2266: like the weekly sweep, a paused session of another agent in the folder can be resumed, so it stays.
+  // The removed agent's own paused session does not keep it.
+  it('keeps a worktree where another agent has a paused session, and not for the removed agent\'s own', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    vi.mocked(m.core.agents.all).mockReturnValue([session('h-recorded', m.recorded, 'agent'), session('h-paused', join(m.recorded, 'src'), 'agent')])
+    const host = m.open()
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(startIds(m)).toEqual(['recorded', 'kept'])
+    vi.mocked(m.core.agents.all).mockReturnValue([session('h-recorded', m.recorded, 'agent')])
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(startIds(m)).toEqual(['kept'])
+  })
+
+  // Review of #2266: a git failure (a locked worktree, a handle still open on Windows) keeps the folder and says so,
+  // with a fixed code: git's own text names the folder.
+  it('keeps the worktree when git fails to read it, and logs a fixed code without its path', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    const gitdir = /^gitdir: (.+)$/m.exec(readFileSync(join(m.recorded, '.git'), 'utf8'))![1].trim()
+    writeFileSync(join(gitdir, 'HEAD'), 'not a ref\n')
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(startIds(m)).toEqual(['recorded', 'kept'])
+    expect(m.log.mock.calls).toEqual([['Kept a Swarm worktree: WORKTREE_CHECK_FAILED']])
+  })
+
   it('deletes only the tab\'s Swarm folders and Swarm-made worktrees, then acknowledges once', async () => {
     const m = machine()
     const host = m.open()

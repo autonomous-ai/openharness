@@ -2542,7 +2542,7 @@ describe('closing the sessions the backend ends', () => {
       await t.poll(5_000)
       await vi.waitFor(() => expect(removeWorktree).toHaveBeenCalledWith('tab', 'harness'))
       expect(removalsAtAck).toEqual([0, 0])
-      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Kept the worktree of an ended session: git refused'))
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Kept the worktree of an ended session: WORKTREE_REMOVAL_FAILED'))
       for (let i = 0; i < 3; i++) await t.poll(60_000)
       expect(removeWorktree).toHaveBeenCalledTimes(1)
       expect(t.closeMember).toHaveBeenCalledTimes(1)

@@ -22,7 +22,8 @@ export function ignoreHarnessRuntime(workspace: string): void {
   if (!missing.length) return
   // Diego, 10-30: the file itself was left untracked, so every worktree read as uncommitted work and none was ever cleaned
   // up (superTabs/machines.ts removeStoppedWorktree, lib/worktreeSweep.ts). It ignores itself; each launch writes it again.
-  if (!rules.includes('.gitignore')) missing.push('.gitignore')
+  // Anchored, so a .gitignore someone adds deeper in .harness still counts (review of #2266); either form is accepted.
+  if (!rules.includes('/.gitignore') && !rules.includes('.gitignore')) missing.push('/.gitignore')
   publish(file, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, mode)
 }
 
@@ -44,7 +45,7 @@ export function upgradeOlderRuntimeIgnore(workspace: string): boolean {
     if (readFileSync(file, 'utf8') !== OLDER_RUNTIME_IGNORE) return false
     mode = stat.mode & 0o777
   } catch { return false }
-  publish(file, `${OLDER_RUNTIME_IGNORE}.gitignore\n`, mode)
+  publish(file, `${OLDER_RUNTIME_IGNORE}/.gitignore\n`, mode)
   return true
 }
 

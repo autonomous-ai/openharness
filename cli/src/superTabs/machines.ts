@@ -768,8 +768,12 @@ export class ContributedMachines {
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
     if (!await swarmWorktree(record.path, record.source, record.startId)) return
     if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
+    // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
+    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
+    if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
-    if (!await sweepOne(record.path, Date.now(), 0).catch(() => false)) return
+    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path.
+    if (!await sweepOne(record.path, Date.now(), 0).catch(() => { this.log('Kept a Swarm worktree: WORKTREE_CHECK_FAILED'); return false })) return
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 

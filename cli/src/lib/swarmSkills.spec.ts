@@ -557,7 +557,22 @@ describe('built-in Swarm skills', () => {
     execFileSync('git', ['add', '-A'], { cwd: workspace })
     expect(execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })).toBe('')
     writeFileSync(join(workspace, '.harness', 'notes.md'), 'mine')
-    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' })).toBe('?? .harness/notes.md\n')
+    // Review of #2266: the rule names only Harness's own file, so an ignore file someone adds deeper still shows.
+    mkdirSync(join(workspace, '.harness', 'mine'))
+    writeFileSync(join(workspace, '.harness', 'mine', '.gitignore'), 'scratch/\n')
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' }))
+      .toBe('?? .harness/mine/.gitignore\n?? .harness/notes.md\n')
+  })
+
+  it('accepts the self rule in either form and adds only the runtime rules missing beside it', () => {
+    for (const self of ['.gitignore', '/.gitignore']) {
+      const workspace = fixture()
+      mkdirSync(join(workspace, '.harness'))
+      const file = join(workspace, '.harness', '.gitignore')
+      writeFileSync(file, `legacy-AGENTS.md\n${self}\n`)
+      prepareSwarmSkill(workspace, { role: 'dev', key: 'either' })
+      expect(readFileSync(file, 'utf8')).toBe(`legacy-AGENTS.md\n${self}\nruntime/\n`)
+    }
   })
 
   it('preserves custom ignore rules and adds the Store runtime rules only once', () => {
@@ -566,9 +581,9 @@ describe('built-in Swarm skills', () => {
     const file = join(workspace, '.harness', '.gitignore')
     writeFileSync(file, '# Mine\nprivate-data')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n.gitignore\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n/.gitignore\n')
     prepareSwarmSkill(workspace, saved)
-    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n.gitignore\n')
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n/.gitignore\n')
   })
 
   // A project may have committed the ignore file (git add -A staged it before). Adding a line to a committed file would

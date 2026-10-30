@@ -102,6 +102,16 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     expect(await exists(path)).toBe(false)
   })
 
+  // Review of #2266: the upgraded rule names only Harness's own file; an ignore file someone added deeper is still work.
+  it('upgrades the older ignore file to a rule that still shows an ignore file someone added deeper', async () => {
+    const path = await add('nested-ignore', 'harness/nested-ignore')
+    await withHarnessFolder(path, OLDER)
+    await mkdir(join(path, '.harness', 'mine'))
+    await writeFile(join(path, '.harness', 'mine', '.gitignore'), 'scratch/\n')
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+    expect(await readFile(join(path, '.harness', '.gitignore'), 'utf8')).toBe(`${OLDER}/.gitignore\n`)
+  })
+
   it('keeps a worktree whose ignore file someone edited, and leaves that file as it was', async () => {
     const path = await add('edited-ignore', 'harness/edited-ignore')
     await withHarnessFolder(path, `${OLDER}mine/\n`)
