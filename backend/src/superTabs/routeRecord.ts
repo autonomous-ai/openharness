@@ -41,7 +41,10 @@ export const routeRecordSchema = z.object({
   assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300),
     size: z.enum(['small', 'medium', 'large']).optional(),
     /** The job's kind the Lead gave (`ui`, `docs`; `review` for a review), what attempts are compared by (costs/read.ts). */
-    kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional() }).strict(),
+    kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional(),
+    /** A person asked for a local model, or named one (cli superTabs/route.ts Assessment): what lets a grid model, or a model
+     *  rated below 3, build (rules.ts buildRefusal). */
+    local: z.literal(true).optional(), model: z.string().trim().min(1).max(200).optional() }).strict(),
   candidates: z.array(routeCandidateSchema).min(1).max(12),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),
