@@ -31,7 +31,16 @@ export function markCpuKind(kind: string): void {
   if (!enabled) return
   const resource = executionAsyncResource() as Tagged
   if (resource) resource[KIND] = kind
-  account(); current = kind
+  account(); switchTo(kind)
+}
+
+/** While a profile runs, when each kind of work began, so its samples can be split by route (`byRoute`). Bounded: past
+ *  MAX_MARKS a window stops marking and its later samples count under the last kind. */
+let marks: Array<[number, string]> | null = null
+const MAX_MARKS = 1_000_000
+function switchTo(kind: string | undefined): void {
+  current = kind
+  if (marks && marks.length < MAX_MARKS) marks.push([performance.now(), kind ?? '(idle)'])
 }
 
 function account(): void {
@@ -74,8 +83,8 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
       const kind = inherited ?? (type === 'Timeout' ? `job ${timer || 'anonymous'}` : undefined)
       if (kind) (resource as Tagged)[KIND] = kind
     },
-    before() { account(); current = (executionAsyncResource() as Tagged)?.[KIND] ?? 'untagged' },
-    after() { account(); current = undefined },
+    before() { account(); switchTo((executionAsyncResource() as Tagged)?.[KIND] ?? 'untagged') },
+    after() { account(); switchTo(undefined) },
   }).enable()
 
   let cpu = process.cpuUsage(), wall = performance.now()
@@ -88,18 +97,33 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
   }, reportMs)
   report.unref()
 
+  // One profile at a time: a second would replace the first one's marks (and V8 runs one coverage session per process).
+  let profiling = false
   const profile = async () => {
+    if (profiling) return
+    profiling = true
     const session = new Session()
     session.connect()
     try {
       await session.post('Profiler.enable')
+      // Call counts for the same window: ~2.6% CPU while on (messages + changes load on a copy of prod's busiest Swarm).
+      await session.post('Profiler.startPreciseCoverage', { callCount: true, detailed: false })
+      const start = performance.now()
+      const recorded: Array<[number, string]> = [[start, current ?? '(idle)']]
+      marks = recorded
       await session.post('Profiler.start')
       await new Promise(resolve => setTimeout(resolve, profileMs).unref())
       const { profile: p } = await session.post('Profiler.stop')
-      log('cpu profile', { profileMs, ...topSelfTime(p) })
+      marks = null
+      const kinds = { start, marks: recorded }
+      const { result: coverage } = await session.post('Profiler.takePreciseCoverage')
+      await session.post('Profiler.stopPreciseCoverage')
+      log('cpu profile', { profileMs, ...topSelfTime(p, kinds), calls: topCalls(coverage) })
     } catch (error) {
       logger.warn('cpu profile failed', { error: error instanceof Error ? error.message : String(error) })
     } finally {
+      marks = null
+      profiling = false
       session.disconnect()
     }
   }
@@ -109,7 +133,10 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
 }
 
 type Frame = { functionName: string; url: string; lineNumber: number }
-type Profile = { nodes: { id: number; callFrame: Frame; children?: number[] }[]; samples?: number[]; timeDeltas?: number[] }
+type Profile = { nodes: { id: number; callFrame: Frame; children?: number[] }[]; samples?: number[]; timeDeltas?: number[]; startTime?: number }
+/** When each kind of work began during the profile, in performance.now() ms, from `start` (the profile's own start). */
+type Kinds = { start: number; marks: ReadonlyArray<readonly [number, string]> }
+type RouteProfile = { sampledMs: number; inclusive: Record<string, number>; callers: Record<string, number> }
 
 /**
  * The profile by self time (`files`, `functions`), and what the self time alone cannot tell, the stacks being dropped:
@@ -117,11 +144,13 @@ type Profile = { nodes: { id: number; callFrame: Frame; children?: number[] }[];
  *   above it, as `<function> ← <our function>`;
  * - `inclusive`: each function of ours by the time spent in it and everything it called, counted once per sample however
  *   deep it recurses.
+ * - `byRoute` (with `kinds`): the same two for each kind of work that ran a sample (an HTTP route, a frame, a job), so a
+ *   built-in's cost is known per route, not only per caller.
  * Ours is what runs from `dist/` or `src/`; V8's own entries (idle, program, garbage collector) have no stack and count in
- * neither.
+ * none of them.
  */
-export function topSelfTime(profile: Profile): { sampledMs: number; files: Record<string, number>; functions: Record<string, number>
-  callers: Record<string, number>; inclusive: Record<string, number> } {
+export function topSelfTime(profile: Profile, kinds?: Kinds): { sampledMs: number; files: Record<string, number>; functions: Record<string, number>
+  callers: Record<string, number>; inclusive: Record<string, number>; byRoute?: Record<string, RouteProfile> } {
   const byId = new Map(profile.nodes.map(n => [n.id, n.callFrame]))
   const parent = new Map<number, number>()
   for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id)
@@ -129,10 +158,12 @@ export function topSelfTime(profile: Profile): { sampledMs: number; files: Recor
   const ourName = new Map(profile.nodes.filter(n => isOurs(n.callFrame.url)).map(n => [n.id, name(n.callFrame)]))
   const files = new Map<string, number>(), functions = new Map<string, number>(), callers = new Map<string, number>(), inclusive = new Map<string, number>()
   const add = (m: Map<string, number>, key: string, us: number) => m.set(key, (m.get(key) ?? 0) + us)
-  let total = 0
+  let total = 0, at = 0, mark = 0
+  const routes = new Map<string, { us: number; callers: Map<string, number>; inclusive: Map<string, number> }>()
   const samples = profile.samples ?? [], deltas = profile.timeDeltas ?? []
   for (let i = 0; i < samples.length; i++) {
     const frame = byId.get(samples[i]!), us = deltas[i + 1] ?? 0
+    at += deltas[i] ?? 0
     if (!frame) continue
     total += us
     const file = shortFile(frame.url) || `(${frame.functionName || 'native'})`
@@ -150,10 +181,43 @@ export function topSelfTime(profile: Profile): { sampledMs: number; files: Recor
     }
     if (nearest && !ourName.has(samples[i]!)) add(callers, `${fn} ← ${nearest}`, us)
     for (const key of ours) add(inclusive, key, us)
+    if (!kinds?.marks.length) continue
+    // Samples come in time order, so the kind that ran each one is found by walking the marks forward once.
+    const when = kinds.start + at / 1000
+    while (mark + 1 < kinds.marks.length && kinds.marks[mark + 1]![0] <= when) mark++
+    const kind = kinds.marks[mark]![1]
+    let route = routes.get(kind)
+    if (!route) routes.set(kind, route = { us: 0, callers: new Map(), inclusive: new Map() })
+    route.us += us
+    if (nearest && !ourName.has(samples[i]!)) add(route.callers, `${fn} ← ${nearest}`, us)
+    for (const key of ours) add(route.inclusive, key, us)
   }
   const top = (m: Map<string, number>, n: number) =>
     Object.fromEntries([...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, us]) => [k, Math.round(us / 1000)]))
-  return { sampledMs: Math.round(total / 1000), files: top(files, 20), functions: top(functions, 30), callers: top(callers, 30), inclusive: top(inclusive, 40) }
+  const byRoute = kinds ? Object.fromEntries([...routes].sort((a, b) => b[1].us - a[1].us).slice(0, 15).map(([kind, r]) =>
+    [kind, { sampledMs: Math.round(r.us / 1000), inclusive: top(r.inclusive, 10), callers: top(r.callers, 10) }])) : undefined
+  return { sampledMs: Math.round(total / 1000), files: top(files, 20), functions: top(functions, 30), callers: top(callers, 30), inclusive: top(inclusive, 40),
+    ...(byRoute ? { byRoute } : {}) }
+}
+
+type Coverage = Array<{ url: string; functions: Array<{ functionName: string; ranges: Array<{ startOffset: number; count: number }> }> }>
+
+/** How many times each function of ours ran in the window (V8 precise coverage), most first. A sampling profile tells time,
+ *  never counts; a function called millions of times for little each (a filter callback, a hash) shows here. An anonymous
+ *  function is named by its file and character offset. */
+export function topCalls(coverage: Coverage, n = 30): Record<string, number> {
+  const calls = new Map<string, number>()
+  for (const script of coverage) {
+    if (!isOurs(script.url)) continue
+    const file = shortFile(script.url)
+    for (const fn of script.functions) {
+      const range = fn.ranges[0]
+      if (!range?.count) continue
+      const key = fn.functionName ? `${fn.functionName} ${file}` : `(anonymous) ${file}@${range.startOffset}`
+      calls.set(key, (calls.get(key) ?? 0) + range.count)
+    }
+  }
+  return Object.fromEntries([...calls].sort((a, b) => b[1] - a[1]).slice(0, n))
 }
 
 const name = (frame: Frame) => {
