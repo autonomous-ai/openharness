@@ -530,8 +530,10 @@ describe('the launch\'s wide mode and sandbox', () => {
     expect(buddySandboxSettings(repo, launched)).toEqual({
       enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
       excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
-      network: { allowedDomains: ['api.github.com', 'github.com', '*.actions.githubusercontent.com', '*.blob.core.windows.net', 'deploy.autonomous.ai',
-        'k8s.example.net'], allowLocalBinding: true },
+      // GitHub's own log storage alone, not every Azure account (review of #2310), and no local ports: Harness's own commands,
+      // which reach its daemon, run outside the sandbox.
+      network: { allowedDomains: ['api.github.com', 'github.com', '*.actions.githubusercontent.com',
+        ...Array.from({ length: 20 }, (_, n) => `productionresultssa${n}.blob.core.windows.net`), 'deploy.autonomous.ai', 'k8s.example.net'] },
       filesystem: { allowWrite: [], denyWrite: [repo], denyRead: launched.denied.filter(path => ![join(launchHome, '.config', 'gh'),
         join(launchHome, '.config', 'argocd'), join(launchHome, '.argocd'), join(launchHome, '.kube'), ...launched.sessionTemp].includes(path)) },
     })

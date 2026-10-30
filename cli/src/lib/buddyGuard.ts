@@ -86,16 +86,18 @@ export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFa
 }
 
 
-/** Where GitHub sends a run's logs, which gh run view --log fetches. */
-const GITHUB_LOG_HOSTS = ['*.actions.githubusercontent.com', '*.blob.core.windows.net']
+/** Where GitHub sends a run's logs, which gh run view --log fetches: its Actions hosts and its own result storage accounts
+ *  (GitHub's list of the hosts its runners reach), never every Azure storage account (review of #2310). */
+const GITHUB_LOG_HOSTS = ['*.actions.githubusercontent.com', ...Array.from({ length: 20 }, (_, n) => `productionresultssa${n}.blob.core.windows.net`)]
 /** The tools' own sign-ins, which they read to sign in: closed to the Buddy's own reads, open to the tools in the sandbox. */
 const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
 
 /**
  * Claude Code's sandbox for a wide Buddy's shell (tried with Claude Code 2.1.314): every command in it but Harness's own,
  * which needs its daemon and terminal. Nothing may be written, its folder included (Claude Code otherwise lets a command
- * write where it runs), and nothing reached but GitHub and the person's ArgoCD and cluster hosts, and this machine's own
- * ports, where Harness's daemon listens. A command may never ask to leave it. The guard still judges every command first.
+ * write where it runs), and nothing reached but GitHub and the person's ArgoCD and cluster hosts: not even this machine's
+ * own ports, as Harness's own commands, which reach its daemon, run outside it. A command may never ask to leave it. The
+ * guard still judges every command first.
  *
  * gh, argocd and kubectl are Go tools: in the sandbox they verify TLS only through macOS's certificate service, which
  * enableWeakerNetworkIsolation opens (without it every TLS check fails; with it an expired, self-signed or untrusted
@@ -111,7 +113,7 @@ export function buddySandboxSettings(root: string, wide: BuddyWide): Record<stri
   return {
     enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
     excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
-    network: { allowedDomains: ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts], allowLocalBinding: true },
+    network: { allowedDomains: ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts] },
     filesystem: { allowWrite: [], denyWrite: [root], denyRead: wide.denied.filter(path => !signIns.has(path)) },
   }
 }
