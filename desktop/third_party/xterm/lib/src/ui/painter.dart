@@ -81,6 +81,8 @@ double symbolFontSizeForCell({
 /// icon, it covered about 60% of the row and stopped short of its neighbours.
 /// Each glyph sits in its em differently (U+E0B0 at the left, U+E0B2 at the
 /// right, U+E0B8 across it), so the painter needs its ink, not its advance.
+/// Ink outside 0–1 is the face's bleed past a flat side, which overlaps the
+/// neighbouring segment.
 (double, double)? powerlineSeparatorInk(int codePoint) {
   final ink = _powerlineSeparatorInk[codePoint];
   if (ink == null) return null;
@@ -646,16 +648,28 @@ class TerminalPainter {
         _cellSize.height,
       );
       canvas.save();
-      canvas.clipRect(cell);
       final ink = powerlineSeparatorInk(charCode);
       if (ink != null) {
-        // The em down the cell, the ink across it.
-        final (left, right) = ink;
+        // The em down the cell and the ink inside the em across it. Ink past
+        // the em is the face's bleed on a separator's flat side: it reaches
+        // into the segment it joins, so no seam shows where their edges meet
+        // inside a pixel. The round or pointed side stops at the cell's edge.
+        canvas.clipRect(
+          Rect.fromLTRB(
+            cell.left - (ink.$1 < 0 ? _separatorBleed : 0),
+            cell.top,
+            cell.right + (ink.$2 > 1 ? _separatorBleed : 0),
+            cell.bottom,
+          ),
+        );
+        final left = ink.$1.clamp(0.0, 1.0);
+        final right = ink.$2.clamp(0.0, 1.0);
         final em = paragraph.height;
         canvas.translate(cell.left, cell.top);
         canvas.scale(cell.width / ((right - left) * em), cell.height / em);
         canvas.drawParagraph(paragraph, Offset(-left * em, 0));
       } else {
+        canvas.clipRect(cell);
         final dx = (cell.width - paragraph.maxIntrinsicWidth) / 2;
         final dy = (cell.height - paragraph.height) / 2;
         canvas.drawParagraph(paragraph, offset.translate(dx, dy));
@@ -692,6 +706,10 @@ class TerminalPainter {
       );
     }
   }
+
+  /// The most of a separator's bleed drawn past its cell: the pixel a
+  /// background reaches into the next one.
+  static const _separatorBleed = 1.0;
 
   /// The font size whose em, scaled, is the cell's height.
   double get _separatorFontSize =>

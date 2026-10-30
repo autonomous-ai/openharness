@@ -130,21 +130,20 @@ void main() {
     );
     final cell = painter.cellSize;
     final rows = cell.height.ceil();
-    final outside = cell.width.ceil();
+    final last = cell.width.ceil() - 1;
+    // A flat side's bleed reaches at most a pixel into the neighbour.
+    final outside = (cell.width + 1).ceil();
 
     // U+E0B0 points right: its flat edge is the cell's left edge and its
-    // point reaches the right one.
+    // point reaches the right one, and no further.
     final arrow = await _raster(painter, _iconCell(0xE0B0), columns: 2);
     final leftEdge = arrow.where((pixel) => pixel.x == 0).toList();
     expect(leftEdge, hasLength(rows));
     expect(leftEdge.map((pixel) => pixel.argb >>> 24), everyElement(isNonZero));
     expect(leftEdge[rows ~/ 2].argb >>> 24, 0xFF);
+    expect(arrow.any((pixel) => pixel.x == last && pixel.argb != 0), isTrue);
     expect(
-      arrow.any((pixel) => pixel.x == outside - 1 && pixel.argb != 0),
-      isTrue,
-    );
-    expect(
-      arrow.where((pixel) => pixel.x >= outside).map((pixel) => pixel.argb),
+      arrow.where((pixel) => pixel.x > last).map((pixel) => pixel.argb),
       everyElement(0),
     );
 
@@ -159,6 +158,59 @@ void main() {
       mirrored.where((pixel) => pixel.x >= outside).map((pixel) => pixel.argb),
       everyElement(0),
     );
+
+    // U+E0B6 is a cap rounded on the left: its curve stops at its own cell,
+    // or a cap in the first column is cut off by the terminal's edge.
+    final recorder = PictureRecorder();
+    painter.paintCellForeground(
+      Canvas(recorder),
+      const Offset(2, 0),
+      _iconCell(0xE0B6),
+    );
+    final cap = await _pixels(recorder, cell, 2);
+    expect(
+      cap.where((pixel) => pixel.x < 2).map((pixel) => pixel.argb),
+      everyElement(0),
+    );
+    expect(cap.any((pixel) => pixel.x == 2 && pixel.argb != 0), isTrue);
+  });
+
+  test('a Powerline separator joins its segment without a seam', () async {
+    await _loadIconFace();
+    final painter = _painter();
+    final cell = painter.cellSize;
+    const magenta = 0xFFC040C0;
+    // A magenta segment, then U+E0B4 closing it over a cyan one. Starting
+    // half a pixel in puts the cells' shared edge inside a pixel.
+    final segment = CellData(
+      foreground: 0,
+      background: CellColor.rgb | (magenta & 0xFFFFFF),
+      flags: 0,
+      content: 0x20 | (1 << CellContent.widthShift),
+    );
+    final separator = CellData(
+      foreground: CellColor.rgb | (magenta & 0xFFFFFF),
+      background: CellColor.rgb | 0x40A0C0,
+      flags: 0,
+      content: 0xE0B4 | (1 << CellContent.widthShift),
+    );
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+    const start = Offset(0.5, 0);
+    painter.paintCell(canvas, start, segment);
+    painter.paintCell(canvas, start.translate(cell.width, 0), separator);
+    final pixels = await _pixels(recorder, cell, 3);
+
+    final width = (cell.width * 3).ceil();
+    final edge = (start.dx + cell.width).floor();
+    final middle = pixels[(cell.height ~/ 2) * width + edge].argb;
+    for (final shift in [16, 8, 0]) {
+      expect(
+        (middle >> shift) & 0xFF,
+        closeTo((magenta >> shift) & 0xFF, 2),
+        reason: middle.toRadixString(16),
+      );
+    }
   });
 
   test(
