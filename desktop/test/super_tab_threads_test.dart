@@ -585,6 +585,25 @@ void main() {
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
   });
 
+  testWidgets('a thread opened only on another device draws its reply line '
+      'unbolded here, and bold again for a newer reply', (tester) async {
+    final server = threaded();
+    server.markThreadReadElsewhere('lead', 'message-1', 3);
+    final c = await show(tester, server);
+    expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
+    server.append('Another thought.');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['replyTo'] = 'message-1'
+      ..['author'] = peer;
+    await c.refresh();
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(countWeight(tester, 'message-1'), FontWeight.w700);
+    // The device's save waits on a timer.
+    await tester.pump(const Duration(minutes: 1));
+  });
+
   testWidgets('a thread the reader neither wrote in nor was tagged in is '
       'never bold', (tester) async {
     final server = threaded();
