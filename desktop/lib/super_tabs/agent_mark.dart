@@ -1,9 +1,28 @@
+import 'dart:math' as math;
+
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import 'agent_details.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
+
+/// How long progress holds a task, and how long a session its machine lists
+/// as running may go without a screen change and still renew it: the
+/// backend's LEASE_MS and QUIET_RUNNING_MS - LEASE_MS (superTabs/liveness.ts).
+/// The Swarm stores only the lease an agent's own posts set; the renewal its
+/// machine's reports give is never written into the task, so it is worked out
+/// here from the reports every Desktop receives.
+const _lease = Duration(minutes: 5);
+const _quietRunning = Duration(minutes: 25);
+
+/// A hand-off, as the backend reads one (liveness.ts waitingForReview): a
+/// result saying it is ready for review and naming a revision.
+final _readyForReview = RegExp(r'\bready for review\b', caseSensitive: false);
+final _revision = RegExp(
+  r'(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b',
+  caseSensitive: false,
+);
 
 /// The work an agent's row talks about: a question it waits on, its current
 /// task, or a finished one whose pull request has not merged yet. Only a group
@@ -15,14 +34,25 @@ class SuperTabAgentWork {
   /// Done, with its pull request still open: the agent waits on its merge.
   final bool awaitingMerge;
 
-  String? get status => group.assignment?['status'] as String?;
+  Map<String, dynamic>? get _assignment => group.assignment;
+  String? get status => _assignment?['status'] as String?;
+
+  /// Working, but handed over for review: the Swarm holds it without progress
+  /// until a review finds problems in it (liveness.ts waitingForReview).
+  bool get handedOver {
+    final result = _assignment?['result'];
+    return status == 'working' &&
+        _assignment?['reviewFoundAt'] == null &&
+        result is String &&
+        _readyForReview.hasMatch(result) &&
+        _revision.hasMatch(result);
+  }
 
   /// When the agent last reported progress on it (backend assignment.progressAt).
-  DateTime? get progressAt => _time(group.assignment?['progressAt']);
+  DateTime? get progressAt => _time(_assignment?['progressAt']);
 
-  /// Until when that progress vouches for it (backend assignment.leaseUntil):
-  /// the Swarm moves a task whose agent stays quiet past it.
-  DateTime? get leaseUntil => _time(group.assignment?['leaseUntil']);
+  /// Until when its own last post holds it (backend assignment.leaseUntil).
+  DateTime? get leaseUntil => _time(_assignment?['leaseUntil']);
 
   static DateTime? _time(Object? ms) =>
       ms is num ? DateTime.fromMillisecondsSinceEpoch(ms.toInt()) : null;
@@ -30,45 +60,47 @@ class SuperTabAgentWork {
 
 /// Whether the viewer reads [group]: never a Buddy chat, and a private group
 /// only when its people include them. The server sends no other; this keeps a
-/// title from showing if one ever arrived.
-bool _readable(SuperTabController c, SuperTabConversation group) =>
+/// task, its title and a click to it away if one ever arrived.
+bool superTabGroupReadable(SuperTabController c, SuperTabConversation group) =>
     !group.isBuddyChat &&
     (group.audience == null || group.audience!.contains(c.accountId));
 
-SuperTabAgentWork? superTabAgentWork(
+/// [agent]'s work, and its current task (for the Swarm's word on its start).
+({SuperTabAgentWork? work, SuperTabConversation? task}) _workOf(
   SuperTabController c,
   SuperTabAgent agent,
 ) {
+  final groups = [
+    for (final g in c.snapshot?.conversations ?? const <SuperTabConversation>[])
+      if (!g.closed &&
+          g.assignment?['agentId'] == agent.id &&
+          superTabGroupReadable(c, g))
+        g,
+  ];
+  final task = SuperTabAgentInfo(c, null, agent).taskGroup;
   // A question waiting on a person comes first, from whichever of its open
   // groups asks it: that is where its row's click goes.
-  final asking = c.snapshot?.conversations
-      .where(
-        (g) =>
-            !g.closed &&
-            _readable(c, g) &&
-            g.assignment?['agentId'] == agent.id &&
-            superTabWorkWaits(g.assignment?['status']),
-      )
-      .firstOrNull;
-  if (asking != null) return SuperTabAgentWork(asking);
-  final current = SuperTabAgentInfo(c, null, agent).taskGroup;
-  if (current != null) {
-    return _readable(c, current) ? SuperTabAgentWork(current) : null;
+  if (groups
+          .where((g) => superTabWorkWaits(g.assignment?['status']))
+          .firstOrNull
+      case final asking?) {
+    return (work: SuperTabAgentWork(asking), task: task);
   }
-  final waiting = c.snapshot?.conversations
+  if (task != null) return (work: SuperTabAgentWork(task), task: task);
+  final merging = groups
       .where(
         (g) =>
-            !g.closed &&
-            _readable(c, g) &&
-            g.assignment?['agentId'] == agent.id &&
             g.assignment?['status'] == 'done' &&
             g.cards.pullRequests.isNotEmpty &&
             !g.cards.pullRequests.any((pr) => pr.merged),
       )
       .firstOrNull;
-  return waiting == null
-      ? null
-      : SuperTabAgentWork(waiting, awaitingMerge: true);
+  return (
+    work: merging == null
+        ? null
+        : SuperTabAgentWork(merging, awaitingMerge: true),
+    task: null,
+  );
 }
 
 /// This Mac's own reading of the agent; null when it has none, or reads its
@@ -80,6 +112,47 @@ HarnessActivity? superTabLocalActivity(AppNotifier? app, SuperTabAgent agent) {
   return local == HarnessActivity.unknown ? null : local;
 }
 
+Map<String, dynamic>? _report(SuperTabController c, SuperTabAgent agent) =>
+    switch (c.snapshot?.pool(agent.machineId)?['observation']) {
+      final Map report => report.cast<String, dynamic>(),
+      _ => null,
+    };
+
+/// When the agent's task stops being held (liveness.ts leaseEnd): its own
+/// last post's lease, or 5 minutes after its machine last renewed it, by
+/// listing it running with a screen change in the last 25 minutes,
+/// whichever is later. Null when nothing ever renewed it.
+DateTime? superTabLeaseEnd(
+  SuperTabController c,
+  SuperTabAgent agent,
+  SuperTabAgentWork work,
+) {
+  final own = work.leaseUntil;
+  final report = _report(c, agent);
+  final received = report?['receivedAt'];
+  DateTime? renewed;
+  if (report != null && received is num) {
+    final running = report['runningHarnessIds'];
+    final progress = report['harnessProgress'];
+    if (running is! List) {
+      // A report that lists no sessions says nothing about this one.
+    } else if (!running.contains(agent.harnessId)) {
+      // Not listed running: it last renewed when it went down.
+      renewed = agent.downSince;
+    } else if (progress is! Map) {
+      renewed = DateTime.fromMillisecondsSinceEpoch(received.toInt());
+    } else if (progress[agent.harnessId] case final num at) {
+      renewed = DateTime.fromMillisecondsSinceEpoch(
+        math.min(received.toInt(), at.toInt() + _quietRunning.inMilliseconds),
+      );
+    }
+  }
+  final reported = renewed?.add(_lease);
+  if (own == null) return reported;
+  if (reported == null) return own;
+  return own.isAfter(reported) ? own : reported;
+}
+
 /// What the Swarm knows of an agent this Mac cannot see that stops it
 /// running (Dee, 2026-10-29): its computer silent, offline; its session
 /// stopped; its start failed. Null when none is known. While the Swarm
@@ -87,6 +160,7 @@ HarnessActivity? superTabLocalActivity(AppNotifier? app, SuperTabAgent agent) {
 HarnessActivity? superTabSwarmDown(
   SuperTabController c,
   SuperTabAgent agent,
+  SuperTabConversation? task,
   DateTime now,
 ) {
   // The computer it runs on reports for itself: a Harness Team account
@@ -107,108 +181,153 @@ HarnessActivity? superTabSwarmDown(
     return HarnessActivity.offline;
   }
   if (agent.downSince != null) return HarnessActivity.paused;
-  final task = SuperTabAgentInfo(c, null, agent).taskGroup;
   return task?.liveness?['state'] == 'orphaned' &&
           task?.liveness?['why'] == 'start-failed'
       ? HarnessActivity.failed
       : null;
 }
 
-/// The mark an agent's row shows, and the order it takes (Dee, 2026-10-30):
-/// the Swarm's state first, which every Desktop receives, so an agent on
-/// another computer reads the same here as on its own.
+/// An agent as its row shows it: its [work], its [mark], and the activity
+/// its [words] go by.
+class SuperTabAgentState {
+  const SuperTabAgentState({
+    required this.work,
+    required this.mark,
+    required this.words,
+  });
+  final SuperTabAgentWork? work;
+
+  /// The mark its row shows, and the order it takes (Dee, 2026-10-30).
+  final HarnessActivity mark;
+
+  /// The activity its hover, its details, and its state word when it holds
+  /// no task go by. They read the task itself, so they say Lost, In review
+  /// or Assigned where the mark only shows a glyph, and claim Working only
+  /// for a turn running here or a task the Swarm still holds.
+  final HarnessActivity? words;
+}
+
+/// [agent]'s state, worked out once per build, at [now] by the Swarm's clock
+/// ([superTabServerNow]).
 ///
-/// This Mac's reading wins only when it is live: a turn running, a question
-/// on screen, starting, failed. Unseen here, the Swarm's word that it stopped
-/// comes next. This Mac's idle, stopped or offline never beats progress the
-/// Swarm still vouches for: a Mac that sees a shared machine
-/// reads every agent there idle, since no turn is reported to it.
+/// The Swarm's state comes first, since every Desktop receives it, so an
+/// agent on another computer reads the same here as on its own. This Mac's
+/// reading wins only when it is live: a turn running, a question on screen,
+/// starting, failed. Unseen here, the Swarm's word that it stopped comes
+/// next. This Mac's idle, stopped or offline never beats a task the Swarm
+/// still holds: a Mac that sees a shared machine reads every agent there
+/// idle, since no turn is reported to it.
 ///
-/// Lost work is down; needs_human or blocked needs you; in review, or done
-/// with its pull request still open, waits (✓); working with its lease
-/// unexpired is working, and past it nobody can say (◌); nothing held, idle.
-HarnessActivity superTabAgentMark(
+/// Lost work is down; needs_human or blocked needs you; in review, handed
+/// over, or done with its pull request still open, waits (✓); held is
+/// working, and past its lease nobody can say (◌); nothing held, idle.
+SuperTabAgentState superTabAgentState(
   SuperTabController c,
   AppNotifier? app,
   SuperTabAgent agent, {
   required DateTime now,
 }) {
-  final work = superTabAgentWork(c, agent);
+  final (:work, :task) = _workOf(c, agent);
   final status = work?.status;
-  if (status == 'lost') return HarnessActivity.offline;
   final local = superTabLocalActivity(app, agent);
-  if (local
-      case HarnessActivity.needsInput ||
-          HarnessActivity.failed ||
-          HarnessActivity.starting ||
-          HarnessActivity.working) {
-    return local!;
-  }
-  // The Swarm's word that it stopped (its computer silent, its session
-  // stopped, its start failed) comes after any progress it vouched for.
-  if (local == null) {
-    if (superTabSwarmDown(c, agent, now) case final down?) return down;
-  }
+  final down = local == null ? superTabSwarmDown(c, agent, task, now) : null;
   final held = status == 'working' || status == 'planned';
-  final lease = work?.leaseUntil;
-  if (held && lease != null && lease.isAfter(now)) {
-    return HarnessActivity.working;
+  final handedOver = work?.handedOver == true;
+  final end = work == null ? null : superTabLeaseEnd(c, agent, work);
+  final holding = held && !handedOver && end != null && end.isAfter(now);
+
+  HarnessActivity? words() {
+    if (local
+        case HarnessActivity.needsInput ||
+            HarnessActivity.failed ||
+            HarnessActivity.starting) {
+      return local;
+    }
+    if (down != null) return down;
+    if (holding) return HarnessActivity.working;
+    if (local case HarnessActivity.paused || HarnessActivity.offline) {
+      return local;
+    }
+    if (superTabWorkWaits(status)) return HarnessActivity.needsInput;
+    return local;
   }
-  if (local case HarnessActivity.paused || HarnessActivity.offline) {
-    return local!;
+
+  HarnessActivity mark() {
+    if (status == 'lost') return HarnessActivity.offline;
+    if (local
+        case HarnessActivity.needsInput ||
+            HarnessActivity.failed ||
+            HarnessActivity.starting ||
+            HarnessActivity.working) {
+      return local!;
+    }
+    if (down != null) return down;
+    if (holding) return HarnessActivity.working;
+    if (local case HarnessActivity.paused || HarnessActivity.offline) {
+      return local!;
+    }
+    if (superTabWorkWaits(status) ||
+        (local == null && agent.alerting.contains('prompt'))) {
+      return HarnessActivity.needsInput;
+    }
+    if (status == 'review' || handedOver || work?.awaitingMerge == true) {
+      return HarnessActivity.done;
+    }
+    // Held past its lease: nobody vouches for it, whatever this Mac reads.
+    // A server without leases says only that the task is held.
+    if (held) {
+      return end == null
+          ? local ?? HarnessActivity.working
+          : HarnessActivity.unknown;
+    }
+    if (status == 'reconciling') return local ?? HarnessActivity.unknown;
+    return local ?? HarnessActivity.idle;
   }
-  if (superTabWorkWaits(status) ||
-      (local == null && agent.alerting.contains('prompt'))) {
-    return HarnessActivity.needsInput;
-  }
-  if (status == 'review' || work?.awaitingMerge == true) {
-    return HarnessActivity.done;
-  }
-  if (local != null) return local;
-  // A server without leases says only that the task is held.
-  if (held) {
-    return lease == null ? HarnessActivity.working : HarnessActivity.unknown;
-  }
-  if (status == 'reconciling') return HarnessActivity.unknown;
-  return HarnessActivity.idle;
+
+  return SuperTabAgentState(work: work, mark: mark(), words: words());
 }
 
 /// How long since an agent's last progress, shortest: "now", "4m", "2h", "3d".
 String superTabAgentAge(Duration age) =>
     age.inMinutes < 1 ? 'now' : superTabAgoShort(age);
 
-/// The activity an agent's words go by (its hover, its details, and the
-/// state word when it holds no task), beside its mark. The words read the
-/// task itself, so they say Lost, In review or Assigned where the mark only
-/// shows a glyph; they claim Working only for a turn running here or
-/// progress the Swarm still vouches for, never for a task merely held.
-HarnessActivity? superTabAgentWordsActivity(
-  SuperTabController c,
-  AppNotifier? app,
-  SuperTabAgent agent, {
-  required DateTime now,
-}) {
-  final local = superTabLocalActivity(app, agent);
-  if (local
-      case HarnessActivity.needsInput ||
-          HarnessActivity.failed ||
-          HarnessActivity.starting) {
-    return local;
+/// The Swarm's clock, as far as its machines' reports tell it.
+class _ServerClock {
+  int? _evidence;
+  final _samples = <({DateTime at, Duration offset})>[];
+}
+
+final _clocks = Expando<_ServerClock>();
+
+/// How long a reading of the Swarm's clock counts: past it, with no new
+/// report from any machine, this Mac's own clock is used again.
+const _clockWindow = Duration(minutes: 10);
+
+/// [local] by the Swarm's clock, so a Mac whose clock runs fast or slow
+/// reads leases and ages as the Swarm does (review of #2281). Each machine
+/// report is stamped by the server on arrival, every few seconds, so the
+/// newest one is no later than the server's now: each reading is a lower
+/// bound of the offset, and the largest of the last 10 minutes is the best.
+DateTime superTabServerNow(SuperTabController c, DateTime local) {
+  final clock = _clocks[c] ??= _ServerClock();
+  int? newest;
+  for (final machine in c.snapshot?.machines ?? const <Map>[]) {
+    if (machine['observation'] case {'receivedAt': final num at}) {
+      newest = math.max(newest ?? 0, at.toInt());
+    }
   }
-  if (local == null) {
-    if (superTabSwarmDown(c, agent, now) case final down?) return down;
+  if (newest != null && newest != clock._evidence) {
+    clock._evidence = newest;
+    clock._samples.add((
+      at: local,
+      offset: DateTime.fromMillisecondsSinceEpoch(newest).difference(local),
+    ));
   }
-  final work = superTabAgentWork(c, agent);
-  final status = work?.status;
-  final lease = work?.leaseUntil;
-  if ((status == 'working' || status == 'planned') &&
-      lease != null &&
-      lease.isAfter(now)) {
-    return HarnessActivity.working;
-  }
-  if (local case HarnessActivity.paused || HarnessActivity.offline) {
-    return local;
-  }
-  if (superTabWorkWaits(status)) return HarnessActivity.needsInput;
-  return local;
+  clock._samples.removeWhere(
+    (s) => local.difference(s.at) > _clockWindow || s.at.isAfter(local),
+  );
+  if (clock._samples.isEmpty) return local;
+  return local.add(
+    clock._samples.map((s) => s.offset).reduce((a, b) => a > b ? a : b),
+  );
 }

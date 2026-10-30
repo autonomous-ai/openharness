@@ -45,6 +45,8 @@ class SuperTabAgentInfo {
                (g) =>
                    !g.closed &&
                    g.assignment?['agentId'] == agent.id &&
+                   // Never a task the viewer may not read (review of #2281).
+                   superTabGroupReadable(controller, g) &&
                    !const {
                      'done',
                      'stopped',
@@ -257,12 +259,12 @@ Future<void> showSuperTabAgentDetails(
           controller,
           app,
           current,
-          activity: superTabAgentWordsActivity(
+          activity: superTabAgentState(
             controller,
             app,
             current,
-            now: DateTime.now(),
-          ),
+            now: superTabServerNow(controller, DateTime.now()),
+          ).words,
         );
         final group = info.taskGroup;
         final pr = info.latestGroupPr;

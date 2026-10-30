@@ -73,6 +73,7 @@ class RosterFixture {
     bool nativeState = true,
     Brightness brightness = Brightness.dark,
     double scale = 1,
+    DateTime Function()? now,
   }) async {
     await tester.pumpWidget(
       RepaintBoundary(
@@ -96,6 +97,7 @@ class RosterFixture {
               onAddAgent: (group) => added = group,
               onAnswer: (id) => answered = id,
               onOpenAgent: (agent) => opened = agent,
+              now: now ?? DateTime.now,
             ),
           ),
         ),
@@ -2184,7 +2186,7 @@ void main() {
     );
 
     testWidgets(
-      'this Mac\'s reading wins only when it is live, or the Swarm\'s is stale',
+      'this Mac\'s reading wins only when it is live; past its lease a held task is status unavailable',
       (tester) async {
         final f = await fixture(tester);
         (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
@@ -2209,8 +2211,9 @@ void main() {
         f.app.stateOf('m')!.processingAgentIds.add('a3');
         await f.show(tester);
         expect(f.activity(tester, 3), HarnessActivity.working);
-        // Past its lease, the Swarm says nothing fresh: this Mac's idle stands.
-        expect(f.activity(tester, 1), HarnessActivity.idle);
+        // Past its lease, nobody vouches for it: a held task is never idle
+        // while the Swarm holds it, and this Mac's idle is no live reading.
+        expect(f.activity(tester, 1), HarnessActivity.unknown);
         await f.close(tester);
       },
     );
@@ -2452,6 +2455,225 @@ void main() {
             'agents-every-mark-from-another-mac-${brightness.name}',
           );
         }
+        await f.close(tester);
+      },
+    );
+
+    /// The agents' machine as the Swarm last heard it, [ago] before [at]:
+    /// which sessions run and each one's last screen change (backend
+    /// observation, liveness.ts reportRenewedAt).
+    void reports(
+      RosterFixture f, {
+      required DateTime at,
+      Map<String, Duration> progress = const {},
+      Duration ago = Duration.zero,
+    }) => f.server.state['machines'] = [
+      {
+        'machineId': 'm',
+        'name': 'Mac Studio',
+        'contributorId': 'owner',
+        'observation': {
+          'receivedAt': at.subtract(ago).millisecondsSinceEpoch,
+          'runningHarnessIds': [for (final id in progress.keys) id],
+          'stoppedHarnessIds': <String>[],
+          'harnessProgress': {
+            for (final MapEntry(:key, :value) in progress.entries)
+              key: at.subtract(value).millisecondsSinceEpoch,
+          },
+        },
+      },
+    ];
+
+    testWidgets(
+      'a quiet agent its machine still reports running is working, past the lease its last post set (review of #2281)',
+      (tester) async {
+        final f = await fixture(tester);
+        // Its last status 9 minutes ago; its machine showed its screen change
+        // a minute ago: the Swarm holds its task (liveness.ts leaseEnd).
+        reports(
+          f,
+          at: DateTime.now(),
+          progress: {'a1': const Duration(minutes: 1)},
+        );
+        (f.server.state['conversations'] as List).add(
+          task(
+            't1',
+            'Long test suite',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 9),
+          ),
+        );
+        await f.controller.refresh();
+        seenIdleHere(f);
+        await f.show(tester);
+        expect(f.activity(tester, 1), HarnessActivity.working);
+        await f.show(tester, nativeState: false);
+        expect(f.activity(tester, 1), HarnessActivity.working);
+        // A screen still for 26 minutes no longer renews it: 5 minutes after
+        // its last renewal at 25, nobody vouches for it.
+        reports(
+          f,
+          at: DateTime.now(),
+          progress: {'a1': const Duration(minutes: 31)},
+        );
+        await f.controller.refresh();
+        await f.show(tester);
+        expect(f.activity(tester, 1), HarnessActivity.unknown);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'work handed over for review waits (✓) while its status still says working',
+      (tester) async {
+        final f = await fixture(tester);
+        final handed = task(
+          't1',
+          'Agents list marks',
+          'agent-1',
+          'working',
+          ago: const Duration(minutes: 40),
+        );
+        (handed['assignment'] as Map)['result'] =
+            'Ready for review: PR #2281 at b4c4fa903';
+        (f.server.state['conversations'] as List).add(handed);
+        await f.controller.refresh();
+        seenIdleHere(f);
+        await f.show(tester);
+        expect(f.activity(tester, 1), HarnessActivity.done);
+        // Once a review finds problems, it is the Engineer's to fix again.
+        (handed['assignment'] as Map)['reviewFoundAt'] =
+            DateTime.now().millisecondsSinceEpoch;
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        expect(f.activity(tester, 1), HarnessActivity.unknown);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'a Mac whose clock runs 5 minutes fast still reads a live lease by the Swarm\'s clock',
+      (tester) async {
+        final f = await fixture(tester);
+        final server = DateTime.now();
+        reports(f, at: server);
+        // A minute and a half of its five left by the server's clock.
+        (f.server.state['conversations'] as List).add(
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 3, seconds: 30),
+          ),
+        );
+        await f.controller.refresh();
+        await f.show(
+          tester,
+          nativeState: false,
+          now: () => DateTime.now().add(const Duration(minutes: 5)),
+        );
+        expect(f.activity(tester, 1), HarnessActivity.working);
+        expect(f.lineText(tester, 1), 'Sidebar rescan fix · 3m');
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'on a quiet Swarm the list ticks: the age moves and an expired lease stops showing working',
+      (tester) async {
+        final f = await fixture(tester);
+        var clock = DateTime.now();
+        reports(f, at: clock);
+        (f.server.state['conversations'] as List).add(
+          task(
+            't1',
+            'Sidebar rescan fix',
+            'agent-1',
+            'working',
+            ago: const Duration(minutes: 4, seconds: 50),
+          ),
+        );
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false, now: () => clock);
+        expect(f.activity(tester, 1), HarnessActivity.working);
+        expect(f.lineText(tester, 1), 'Sidebar rescan fix · 4m');
+        // Nothing changes in the Swarm; only time passes.
+        clock = clock.add(const Duration(seconds: 30));
+        await tester.pump(const Duration(seconds: 30));
+        expect(f.activity(tester, 1), HarnessActivity.unknown);
+        expect(f.lineText(tester, 1), 'Sidebar rescan fix · 5m');
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'a group a broken server sends that the viewer may not read gives no mark, title, click or details',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['people'] as List).add({
+          'id': 'mira',
+          'email': 'mira@example.com',
+          'role': 'collaborator',
+        });
+        f.server.parts.leaksHiddenGroups = true;
+        (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+          {
+            ...task(
+              'private',
+              'Private plans',
+              'agent-3',
+              'working',
+              ago: const Duration(minutes: 1),
+            ),
+            'audience': {
+              'people': [
+                {'id': 'mira'},
+              ],
+            },
+          },
+          {
+            ...task(
+              'buddy',
+              'Mira and Sparky',
+              'agent-1',
+              'needs_human',
+              ago: const Duration(minutes: 1),
+            ),
+            'kind': 'buddy',
+            'buddyOwnerId': 'mira',
+          },
+        ]);
+        await f.controller.refresh();
+        // The broken server did send them.
+        expect(
+          f.controller.snapshot!.conversations.map((g) => g.id),
+          containsAll(['private', 'buddy']),
+        );
+        await f.show(tester, nativeState: false);
+        expect(f.activity(tester, 3), HarnessActivity.idle);
+        expect(f.activity(tester, 1), HarnessActivity.idle);
+        for (final title in ['Private plans', 'Mira and Sparky']) {
+          expect(find.textContaining(title), findsNothing);
+          expect(rowTooltip(tester, f, 3), isNot(contains(title)));
+          expect(rowTooltip(tester, f, 1), isNot(contains(title)));
+        }
+        expect(
+          SuperTabAgentInfo(
+            f.controller,
+            null,
+            f.controller.snapshot!.agent('agent-3')!,
+          ).taskGroup,
+          isNull,
+        );
+        // No task it may read: a click opens the details, which name none.
+        await tester.tap(f.row(3));
+        await tester.pumpAndSettle();
+        expect(f.answered, isNull);
+        expect(find.widgetWithText(AlertDialog, 'Role'), findsOneWidget);
+        expect(find.text('Task'), findsNothing);
+        expect(find.textContaining('Private plans'), findsNothing);
         await f.close(tester);
       },
     );

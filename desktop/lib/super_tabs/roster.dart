@@ -72,8 +72,22 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   late final SuperTabLeaderboardReader _board =
       widget.board ?? (_ownBoard = SuperTabProjectBoard(c));
 
+  /// One tick for the whole list, so ages and leases stay true on a quiet
+  /// Swarm (review of #2281); a change in the Swarm rebuilds it anyway.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => mounted ? setState(() {}) : null,
+    );
+  }
+
   @override
   void dispose() {
+    _tick?.cancel();
     _ownBoard?.dispose();
     super.dispose();
   }
@@ -312,16 +326,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
   /// tabs' status mark at the right. No rank and no points.
-  Widget _agent(SuperTabAgent agent) {
-    final name = c.snapshot!.agentName(agent.id), now = widget.now();
-    final shown = superTabAgentMark(c, widget.app, agent, now: now);
-    final info = SuperTabAgentInfo(
-      c,
-      widget.app,
-      agent,
-      activity: superTabAgentWordsActivity(c, widget.app, agent, now: now),
-    );
-    final work = superTabAgentWork(c, agent);
+  Widget _agent(SuperTabAgent agent, SuperTabAgentState state, DateTime now) {
+    final name = c.snapshot!.agentName(agent.id), shown = state.mark;
+    final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
+    final work = state.work;
     // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
     final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
@@ -495,21 +503,22 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       });
     // Most urgent first, as the tabs order their marks: needs input, working,
     // idle, offline; within a mark, the most recent progress first (Dee,
-    // 2026-10-30). Equals keep today's order, the Lead first.
-    final now = widget.now();
-    final shown = {
+    // 2026-10-30). Equals keep today's order, the Lead first. Each agent's
+    // state is worked out once, by the Swarm's clock.
+    final now = superTabServerNow(c, widget.now());
+    final states = {
       for (final agent in [...leads, ...agents])
-        agent.id: superTabAgentMark(c, widget.app, agent, now: now),
+        agent.id: superTabAgentState(c, widget.app, agent, now: now),
     };
     final progress = {
-      for (final agent in [...leads, ...agents])
-        agent.id: superTabAgentWork(c, agent)?.progressAt,
+      for (final MapEntry(:key, :value) in states.entries)
+        key: value.work?.progressAt,
     };
     final listed = [...leads, ...agents];
     mergeSort(
       listed,
       compare: (a, b) {
-        final byMark = shown[a.id]!.index - shown[b.id]!.index;
+        final byMark = states[a.id]!.mark.index - states[b.id]!.mark.index;
         if (byMark != 0) return byMark;
         final pa = progress[a.id], pb = progress[b.id];
         if (pa == null || pb == null) {
@@ -600,7 +609,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             : null,
         addTooltip: 'Add agent',
       ),
-      for (final agent in listed) _agent(agent),
+      for (final agent in listed) _agent(agent, states[agent.id]!, now),
     ];
   }
 
