@@ -82,10 +82,10 @@ void main() {
     expect(glance.line, '1 waiting');
 
     final row = tester
-        .widget<SwarmTeamDots>(
+        .widget<SwarmTeamFaces>(
           find.descendant(
             of: key('swarm-project-$tab-$project'),
-            matching: find.byType(SwarmTeamDots),
+            matching: find.byType(SwarmTeamFaces),
           ),
         )
         .glance;
