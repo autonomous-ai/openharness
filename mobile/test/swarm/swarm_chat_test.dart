@@ -818,7 +818,7 @@ void main() {
               'leadConversationId': leadChat,
               'visibility': 'private',
               'members': [
-                {'id': 'dee'},
+                {'id': 'dee', 'generation': 'gen-dee'},
               ],
               'updateMinutes': 5,
             },
@@ -829,6 +829,51 @@ void main() {
       await type(tester, '@');
       expect(key('swarm-pick-person-dee'), findsOneWidget);
       expect(key('swarm-pick-person-ken'), findsNothing);
+    });
+
+    testWidgets('a private project offers its members at the membership '
+        'they were added in: someone who left and rejoined is not offered', (
+      tester,
+    ) async {
+      final fake = backend(
+        [message('m1', 1)],
+        members: everyone,
+        projects: [
+          {
+            'id': project,
+            'name': 'Mobile',
+            'ownerId': me,
+            'leadConversationId': leadChat,
+            'visibility': 'private',
+            'members': [
+              {'id': 'dee', 'generation': 'gen-dee'},
+            ],
+          },
+        ],
+      );
+      final host = await pump(tester, fake);
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3', lastChangedAt: 200),
+        'members': [
+          part('dee', 2, {
+            ...dee,
+            'generation': 'rejoined-dee',
+            'username': 'new-dee',
+          }),
+        ],
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+
+      expect(
+        key('swarm-pick-person-dee'),
+        findsNothing,
+        reason: 'the project holds their old membership, not this one',
+      );
+      expect(find.text('new-dee'), findsNothing);
     });
 
     testWidgets('a Buddy chat and the Leads conversation offer no people', (

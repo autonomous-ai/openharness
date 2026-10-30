@@ -363,7 +363,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         project == null ||
             !project.isPrivate ||
             project.ownerId == person.id ||
-            project.memberIds.contains(person.id),
+            project.hasMember(person),
     };
     return [
       for (final person in snapshot.people)

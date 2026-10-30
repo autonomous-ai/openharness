@@ -367,6 +367,11 @@ class SuperTabProject {
         for (final member in row['members'] as List? ?? const [])
           superTabMap(member)['id'] as String,
       ],
+      _memberGenerations = {
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String:
+              superTabMap(member)['generation'] as String?,
+      },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -377,6 +382,16 @@ class SuperTabProject {
   final List<SuperTabRole>? roles;
   final bool isPrivate;
   final List<String> memberIds;
+
+  /// Each member's Swarm membership when they were added: who left the Swarm
+  /// and joined again is not a member until added again.
+  final Map<String, String?> _memberGenerations;
+
+  /// Whether [person] is a member at their membership now, as the server
+  /// checks (`canReadProject`).
+  bool hasMember(SuperTabPerson person) =>
+      _memberGenerations.containsKey(person.id) &&
+      _memberGenerations[person.id] == person.generation;
   final int updateMinutes;
   final Map<String, dynamic>? repository;
 }
