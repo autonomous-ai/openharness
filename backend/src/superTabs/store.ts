@@ -55,7 +55,7 @@ import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/hold
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
-import { APPROVE, APPROVED_DAYS, approvedReminder, localDate, MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type Approved, type Proposal, type ReflectionInput } from './costs/reflection.js'
+import { APPROVE, APPROVED_DAYS, approvedReminder, LAPSED_DAYS, localDate, MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type Approved, type Proposal, type ReflectionInput } from './costs/reflection.js'
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
@@ -2753,8 +2753,16 @@ export class SuperTabStore {
         && !approved.has(proposalTitle(d.question))) {
         approved.set(proposalTitle(d.question), { title: proposalTitle(d.question), on: localDate(d.answeredAt.getTime(), zone), by: d.delegated ? 'pm' : 'owner' })
       }
+      // Approvals whose 30 days ended in the last LAPSED_DAYS days, the newest per proposal: a proposal of one says so.
+      const lapsed = new Map<string, Approved>()
+      for (const d of asked) {
+        const age = d.answeredAt ? now - d.answeredAt.getTime() : -1
+        if (d.choice === APPROVE && age >= APPROVED_DAYS * DAY_MS && age < (APPROVED_DAYS + LAPSED_DAYS) * DAY_MS && !lapsed.has(proposalTitle(d.question))) {
+          lapsed.set(proposalTitle(d.question), { title: proposalTitle(d.question), on: localDate(d.answeredAt!.getTime(), zone), by: d.delegated ? 'pm' : 'owner' })
+        }
+      }
       const decided = asked.filter(d => d.answeredAt && d.answeredAt.getTime() >= now - REASK_DAYS * DAY_MS).map(d => proposalTitle(d.question))
-      const report = routingReflection({ ...input, decided, approved: [...approved.values()] })!
+      const report = routingReflection({ ...input, decided, approved: [...approved.values()], lapsed: [...lapsed.values()] })!
       const owner = state.people.find(p => p.id === project.ownerId)
       const reads = !!owner && canReadGroup(state, { kind: 'person', userId: owner.id, email: owner.email }, chat)
       const waitingSince = new Map(open.map(d => [proposalTitle(d.question), localDate(d.createdAt.getTime(), zone)]))

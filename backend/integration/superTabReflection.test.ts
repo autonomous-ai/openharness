@@ -197,6 +197,10 @@ describe('the nightly routing reflection', () => {
     const later = await night('2026-11-03', 4)
     expect(later).not.toContain('Approved changes')
     expect(later).toContain(`${GRID_TITLE}: about 3 hours`)
+    // Its 30 days just ended and the last 7 days still route the old way: the proposal says so, and so does the question.
+    expect(later).toContain('Approved on 2026-10-02; the last 7 days still route the old way.')
+    const reasked = await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } })
+    expect(reasked.map(d => d.question)).toEqual([expect.stringContaining('Approved on 2026-10-02; the last 7 days still route the old way.')])
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', recipientIds: { has: f.lead }, text: { startsWith: 'Approved routing' } } })).toBe(1)
     // Left to the PM, an approval says the PM decided, never the owner.
     const [third] = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
