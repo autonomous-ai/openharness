@@ -707,6 +707,11 @@ enum AttachIntent { person, automatic }
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
 
+/// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
+/// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
+const buddyKeepsItsAgent =
+    'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
+
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
 
@@ -2379,6 +2384,30 @@ class AppNotifier extends ChangeNotifier {
     }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
+  /// shows, from the Swarm dropdown: the tab keeps its place and its name
+  /// follows. A Swarm already open in another tab is selected there instead,
+  /// so no tab is added or closed. The Swarm the tab showed is hidden here as
+  /// a closed one is, and let go, which keeps its draft for its return.
+  void showSuperTabIn(String swarmId, String tabId, String name) {
+    final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
+    final previous = tab?.superTabId;
+    if (tab == null || previous == null || previous == tabId) return;
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    if (open != null) {
+      selectSwarm(open.id);
+      return;
+    }
+    // As openSuperTab: Reopen later must not add a second view of it.
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
+    );
+    _rememberSuperTabVisibility(previous, false);
+    superTabs.release(previous);
+    bindSuperTab(swarmId, tabId, name);
+    selectSwarm(swarmId);
   }
 
   /// Opens a tab from [closedSuperTabs]. False when it is no longer listed
@@ -17066,6 +17095,9 @@ class AppNotifier extends ChangeNotifier {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;
+        // A Swarm Buddy keeps running, so it keeps its agent. The daemon's
+        // refusal speaks of Stop Harness, which is no help here.
+        if (saved['keptRunning'] == true) return buddyKeepsItsAgent;
         return saved['detail'] as String? ??
             'Could not save and stop this conversation. Its agent has not been changed.';
       }

@@ -97,7 +97,8 @@ export interface OpenedReview { review: Conversation; reviewer: Agent | null; me
  * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
-  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number }): OpenedReview | null {
+  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number;
+    sameEngine?: (agent: Agent) => string | null }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
@@ -130,7 +131,9 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
       execution: { machineId: reviewer.machineId, harnessId: reviewer.harnessId, machineOwnerId: reviewer.machineOwnerId }, result: null }
     renewLease(review.assignment, context.now)
     recordRun(state, review, review.assignment, reviewer, context.now)
-    messages.push(row('assign', `${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
+    // A review on its Builder's own engine says so first, as work.assign does (rules.ts sameEngineReview).
+    const sameEngine = context.sameEngine?.(reviewer)
+    messages.push(row('assign', `${sameEngine ? `${sameEngine}\n\n` : ''}${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
   }
   const name = reviewer && (reviewer.displayName ?? reviewer.name)
   if (leadId) messages.push(row('lead', reviewer

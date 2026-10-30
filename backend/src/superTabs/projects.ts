@@ -56,6 +56,9 @@ export interface SwarmProject {
   roles?: ProjectRole[]
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
+  /** What its chat was last told of new Reviewers per engine (reviewCapacity.ts): none can start, or they soon will not.
+   *  Absent once a machine is usable again, so the next shortage is told. */
+  reviewCapacity?: Partial<Record<'claude' | 'codex', 'out' | 'low'>>
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
