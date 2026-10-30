@@ -63,8 +63,7 @@ class SwarmTabEntry {
 /// here, one entry each: Home; Buddies ([SwarmBuddiesView]) with the Buddy
 /// chats that have something unread counted; Activity ([SwarmActivityView])
 /// with what waits on the person counted; and You ([SwarmYouPage]).
-/// [onSettings] opens the phone's Settings over the tabs, from Home's drawer
-/// and from You.
+/// [onSettings] opens the phone's Settings over the tabs, from You.
 List<SwarmTabEntry> swarmTabs({
   void Function(BuildContext context)? onSettings,
 }) => [
@@ -72,7 +71,7 @@ List<SwarmTabEntry> swarmTabs({
     tab: SwarmTab.home,
     label: 'Home',
     icon: LucideIcons.house300,
-    screen: (_) => SwarmPage(onSettings: onSettings),
+    screen: (_) => const SwarmPage(),
   ),
   SwarmTabEntry(
     tab: SwarmTab.buddies,
@@ -116,7 +115,7 @@ bool showSwarmTab(BuildContext context, SwarmTab tab) {
 class SwarmTabsPage extends StatefulWidget {
   const SwarmTabsPage({super.key, this.onSettings, this.tabs});
 
-  /// The phone's Settings over the tabs, from Home's drawer and from You.
+  /// The phone's Settings over the tabs, from You.
   final void Function(BuildContext context)? onSettings;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
