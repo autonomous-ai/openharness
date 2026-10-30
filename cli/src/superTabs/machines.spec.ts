@@ -1743,6 +1743,19 @@ describe('removed machine cleanup', () => {
     expect(readFileSync(join(m.ownWorktree, 'unpushed.txt'), 'utf8')).toBe('work')
   })
 
+  // #2284: a folder whose .git proof disappeared is kept with its record and logged without its path.
+  it('keeps and logs a recorded worktree whose .git proof file is missing without exposing its path', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    rmSync(join(m.recorded, '.git'))
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(startIds(m)).toEqual(['recorded', 'kept'])
+    expect(m.log.mock.calls).toEqual([['Kept a Swarm worktree: WORKTREE_UNPROVEN']])
+    expect(m.log.mock.calls.flat().join('\n')).not.toContain(m.recorded)
+  })
+
   it('keeps the record when its folder cannot be read for any reason but being gone', async () => {
     const m = machine()
     m.setLive([])
