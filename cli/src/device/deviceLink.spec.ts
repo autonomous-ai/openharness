@@ -112,7 +112,7 @@ async function lane(over: { refuseToken?: string; auth?: { accessToken(options?:
   return { server, seal, link, lines, auth, heard }
 }
 
-const until = async (what: string, check: () => boolean, ms = 5_000): Promise<void> => {
+const until = async (what: string, check: () => boolean, ms = 4_000): Promise<void> => {
   const deadline = Date.now() + ms
   while (!check()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
@@ -478,6 +478,23 @@ describe('a linked machine\'s daemon restarts', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(server.forMachines()).toEqual([])
     expect(seal.seal).not.toHaveBeenCalled()
+  })
+
+  it('access revoked mid-renewal: nothing held is read afterwards, and every waiting request fails at once', async () => {
+    const { server, seal, link, heard } = await lane({ welcome: false })
+    await link.online()
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the renewal', () => seal.hello.mock.calls.length === 1)
+    const pending = link.rpc('agents_list', {}, LINKED_2)
+    pending.catch(() => {})
+    await until('the other machine\'s hello', () => seal.hello.mock.calls.length === 2)
+    server.send({ type: 'device_revoked', payload: {} })
+    await expect(pending).rejects.toThrow()
+    // A welcome that lands after the revocation opens nothing that was held before it.
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(heard).toEqual([])
+    expect(seal.open).not.toHaveBeenCalled()
   })
 
   it('holds a bounded number of frames, and none survive the lane stopping', async () => {
