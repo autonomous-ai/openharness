@@ -15,6 +15,7 @@ import {
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
+import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
@@ -38,6 +39,8 @@ async function start(): Promise<void> {
   // Every minute, this process's queries by model.action and filter shape (lib/queryStats.ts, DB roadmap Phase 1); its
   // jobs and startup migrations count as background.
   const stopQueryStats = startQueryStats()
+  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
+  const stopRetryStats = startRetryStats()
   // Existing production data was created against staging upstreams. Stamp it before Prisma swaps
   // the old global unique indexes for their per-environment replacements.
   await migrateAutonomousEnvironment()
@@ -79,6 +82,7 @@ async function start(): Promise<void> {
     stopReflection()
     // The last partial minute, before the database closes.
     stopQueryStats()
+    stopRetryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
