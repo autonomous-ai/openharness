@@ -51,7 +51,7 @@ export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readon
  *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
  *  the Buddy may not read (the Leads conversation, private chats, other projects). */
 const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/anthropic', '.config/argocd',
-  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.bash_sessions', '.local/share/fish',
+  '.argocd', '.secrets', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.bash_sessions', '.local/share/fish',
   'Library/Caches/claude-cli-nodejs', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
   '.mozilla', '.config/google-chrome', '.config/chromium', '.config/BraveSoftware', '.config/microsoft-edge', '.zsh_history',
   '.bash_history', '.zhistory', '.python_history', '.node_repl_history', '.mongodb', '.dbshell', '.psql_history', '.mysql_history',
@@ -378,7 +378,7 @@ const under = (path, folder) => fold(path) === fold(folder) || fold(path).starts
 // Names that hold secrets wherever they are: .env files, keys and certificates, ssh keys, credential files, Harness's own
 // folders and the person's prod database login (~/.harness-ro-prod-db, 10-28).
 const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^credentials/i,
-  // A secrets folder, as Ken's clone keeps the read-only prod database login in .secrets/ (Lead, 10-30).
+  // A secrets folder, as the read-only prod database login is kept in ~/.secrets/ (harness buddy-read db-size, 10-30).
   /^\.?secrets?(\.|$)/i, /^\.harness/i,
   // Every Claude Code and Codex home or file by its name, wherever it is: a settings backup (~/.claude.json.bak-…), a home
   // beside the default one (~/.codex-work, final review of #2310).

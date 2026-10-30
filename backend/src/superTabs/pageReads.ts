@@ -19,17 +19,18 @@ export async function pageReactions(tx: Transaction, tabId: string, messageIds: 
 }
 
 export type PageDelivery = Pick<SuperTabDelivery, 'id' | 'messageId' | 'agentId' | 'status' | 'receipt' | 'holdReason' | 'holdSince'
-  | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
+  | 'claimFailingSince' | 'claimFailures' | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
 
 /** The deliveries of one page of messages: who each message went to and how far it got. As Prisma read them: dates as
  *  Dates, and an optional field an older record lacks as null. */
 export async function pageDeliveries(tx: Transaction, tabId: string, messageIds: string[]): Promise<PageDelivery[]> {
   const rows = await tx.superTabDelivery.aggregateRaw({ pipeline: [{ $match: { tabId, messageId: { $in: messageIds } } },
-    { $project: { messageId: 1, agentId: 1, status: 1, receipt: 1, holdReason: 1, holdSince: 1, deliveredAt: 1, answeredAt: 1, createdAt: 1, updatedAt: 1 } }] }) as
+    { $project: { messageId: 1, agentId: 1, status: 1, receipt: 1, holdReason: 1, holdSince: 1, claimFailingSince: 1, claimFailures: 1, deliveredAt: 1, answeredAt: 1, createdAt: 1, updatedAt: 1 } }] }) as
     unknown as Array<Record<string, unknown>>
   const date = (value: unknown) => value == null ? null : new Date(ms(value))
   return rows.map(row => ({ id: row._id as string, messageId: row.messageId as string, agentId: row.agentId as string, status: row.status as string,
     receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
+    claimFailingSince: date(row.claimFailingSince), claimFailures: (row.claimFailures ?? null) as number | null,
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
 }
 
