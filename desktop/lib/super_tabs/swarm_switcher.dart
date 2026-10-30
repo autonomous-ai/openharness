@@ -49,7 +49,10 @@ class PersonalSwarm extends ChangeNotifier {
   /// Swarms taken away from each account while shown here: listed no more,
   /// even once their tab has let them go.
   final _lost = <String, Set<String>>{};
-  String? _error, _errorAccount;
+
+  /// Why picking Personal failed last: for the account and the Swarm tab it
+  /// was picked in, so it never shows under another tab's Swarm.
+  ({String account, String tab, String message})? _error;
 
   String? get _account => app.currentUser?.id;
   static String _key(String account) => 'super_tab.personal.$account';
@@ -79,11 +82,16 @@ class PersonalSwarm extends ChangeNotifier {
   bool get busy =>
       _creating.containsKey(_account) || _adding.contains(_account);
 
-  /// Why creating Personal or adding this computer to it failed last.
-  String? get error => _errorAccount == _account ? _error : null;
+  /// Why picking Personal in Swarm tab [tab] failed last, if it did.
+  String? errorIn(String tab) => switch (_error) {
+    (:final account, tab: final failed, :final message)
+        when account == _account && failed == tab =>
+      message,
+    _ => null,
+  };
 
-  void clearError() {
-    if (_error == null) return;
+  void clearError(String tab) {
+    if (errorIn(tab) == null) return;
     _error = null;
     notifyListeners();
   }
@@ -147,36 +155,30 @@ class PersonalSwarm extends ChangeNotifier {
   /// asked of the server, which creates it the first time. A Swarm merely
   /// named Personal is never taken for it.
   Future<String> _create(String account) async {
-    _error = null;
-    try {
-      await _read(account);
-      if (_picked(account) case final known?) return known;
-      final created = await app.superTabs.map(
-        'POST',
-        '/api/super-tabs',
-        body: {
-          'operationId': kPersonalSwarmOperation,
-          'name': kPersonalSwarmName,
-        },
-      );
-      if (_account != account) {
-        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
-      }
-      final id = created['id'];
-      if (id is! String || id.isEmpty) {
-        throw const SuperTabFailure(
-          'INVALID_RESPONSE',
-          'Could not create your Personal Swarm. Try again.',
-        );
-      }
-      // Discovery may list it before this tab shows it: no second tab.
-      app.superTabs.deferTabDiscovery(id);
-      _remember(account, id);
-      return id;
-    } catch (failure) {
-      _fail(account, failure, 'Could not create your Personal Swarm.');
-      rethrow;
+    await _read(account);
+    if (_picked(account) case final known?) return known;
+    final created = await app.superTabs.map(
+      'POST',
+      '/api/super-tabs',
+      body: {
+        'operationId': kPersonalSwarmOperation,
+        'name': kPersonalSwarmName,
+      },
+    );
+    if (_account != account) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
+    final id = created['id'];
+    if (id is! String || id.isEmpty) {
+      throw const SuperTabFailure(
+        'INVALID_RESPONSE',
+        'Could not create your Personal Swarm. Try again.',
+      );
+    }
+    // Discovery may list it before this tab shows it: no second tab.
+    app.superTabs.deferTabDiscovery(id);
+    _remember(account, id);
+    return id;
   }
 
   void _remember(String account, String id) {
@@ -187,12 +189,9 @@ class PersonalSwarm extends ChangeNotifier {
     );
   }
 
-  void _fail(String account, Object failure, String fallback) {
+  void _fail(String account, String tab, String message) {
     if (_account != account) return;
-    final message = failure is SuperTabFailure ? failure.message : fallback;
-    if (failure is SuperTabFailure && failure.code == 'ACCOUNT_CHANGED') return;
-    _error = message;
-    _errorAccount = account;
+    _error = (account: account, tab: tab, message: message);
     notifyListeners();
   }
 
@@ -203,15 +202,26 @@ class PersonalSwarm extends ChangeNotifier {
     final account = _account;
     final shown = _tabShowing(swarmId);
     if (account == null || shown == null) return;
+    clearError(swarmId);
     final String personal;
     try {
       personal = await ensure();
-    } catch (_) {
+    } catch (failure) {
+      if (_tabShowing(swarmId) == shown &&
+          !(failure is SuperTabFailure && failure.code == 'ACCOUNT_CHANGED')) {
+        _fail(
+          account,
+          swarmId,
+          failure is SuperTabFailure
+              ? failure.message
+              : 'Could not create your Personal Swarm.',
+        );
+      }
       return;
     }
     if (_account != account || _tabShowing(swarmId) != shown) return;
     app.showSuperTabIn(swarmId, personal, kPersonalSwarmName);
-    await _addThisComputer(account, personal);
+    await _addThisComputer(account, swarmId, personal);
   }
 
   String? _tabShowing(String swarmId) =>
@@ -219,7 +229,11 @@ class PersonalSwarm extends ChangeNotifier {
 
   /// This computer, added as Add machine adds it: only the person's own,
   /// linked and online, and never a Harness Team account's machine.
-  Future<void> _addThisComputer(String account, String personal) async {
+  Future<void> _addThisComputer(
+    String account,
+    String tab,
+    String personal,
+  ) async {
     final here = app.machineStates.values
         .where(
           (m) =>
@@ -264,9 +278,19 @@ class PersonalSwarm extends ChangeNotifier {
         offerTeamAccount: false,
       );
     } catch (failure) {
-      // A request still out when Personal was let go answers no one.
-      if (opened == null || alive()) {
-        _fail(account, failure, 'Could not add this computer to Personal.');
+      // Only while the tab still shows Personal: once it moved on, Personal
+      // was let go, and what was still out (its saved state being read, an
+      // add on its way) answers no one.
+      if (_tabShowing(tab) == personal && (opened == null || alive())) {
+        const headline = 'Could not add this computer to Personal.';
+        final reason = failure is SuperTabFailure ? failure.message : null;
+        _fail(
+          account,
+          tab,
+          reason == null || reason == 'Could not add this machine.'
+              ? headline
+              : '$headline $reason',
+        );
       }
     } finally {
       _adding.remove(account);
@@ -415,7 +439,9 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                 consumeOutsideTap: true,
                 alignmentOffset: const Offset(0, grid.AppControl.menuGap),
                 style: grid.AppMenu.style(minWidth: width, maxWidth: width),
-                onOpen: personal.clearError,
+                onOpen: () {
+                  if (_tab case final tab?) personal.clearError(tab);
+                },
                 // As wide as the row it opens from.
                 menuChildren: [
                   for (final item in <Widget>[
@@ -475,7 +501,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                   ),
                 ),
               ),
-              if (personal.error case final error?) ...[
+              if (personal.errorIn(_tab ?? '') case final error?) ...[
                 // Under the row's label, as the row's own text column.
                 Row(
                   key: const ValueKey('super-swarm-switcher-error'),

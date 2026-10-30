@@ -105,6 +105,7 @@ class SwarmThreadLine extends StatelessWidget {
                   id: who.id,
                   agent: who.agent,
                   picture: who.look.picture,
+                  status: who.look.status,
                   diameter: face,
                 ),
                 const SizedBox(width: AppSpace.xs),

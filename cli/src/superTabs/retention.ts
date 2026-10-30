@@ -58,7 +58,10 @@ export function mayBeLead(dataDir: string, agentId: string): boolean {
 
 /** Whether a close may reach a Buddy, for the core's close guard. Like `mayBeLead`, a file that cannot be read may name
  *  anyone until the host's next roster rewrites it; with no file, or one from before Buddies were kept, none is. Unlike a
- *  Lead, a Buddy lapses with a roster nobody confirms for a week, as every other member does. */
+ *  Lead, a Buddy lapses with a roster nobody confirms for a week, as every other member does.
+ *  So protection lasts up to 7 days (`RETENTION_LAPSE_MS`) after the last roster this host read: while the roster cannot
+ *  be read (offline, signed out, or this file unreadable), a Buddy, or anyone when the file is unreadable, stays
+ *  protected until then, and a close stops it again after that. Stop Harness stops it throughout. */
 export function mayBeBuddy(dataDir: string, agentId: string, now = Date.now()): boolean {
   const file = retentionFile(dataDir)
   if (!existsSync(file) || now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return false

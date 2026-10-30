@@ -13,11 +13,19 @@ const defaults = /^(?:lead|builder|agent|new agent|product manager|engineer|pm|d
 /** A role's name, never a member's: an agent named so is given a member name instead (assignAgentDisplayNames). */
 export const isRoleName = (name: string): boolean => defaults.test(name.trim())
 const automatic = /^(?:claude|codex|pi|agent)-\d{4}-\d{2}-\d{2}(?:[-T].*)?$/i
+/** The Reviewer role's name is no member's either (Dee, 2026-10-30: three "Reviewer" rows). Kept out of isRoleName, whose
+ *  Buddy check reserves it on its own (buddies.ts BUDDY_RESERVED). */
+const reviewer = /^reviewer(?:[\s#-]+\d+)?$/i
+/** Whether [name] names a role or an automatic session rather than a member. */
+const unnamed = (name: string): boolean => defaults.test(name) || reviewer.test(name) || automatic.test(name)
 
 function chosen(agent: NamedAgent): string | undefined {
-  if (agent.displayName?.trim()) return agent.displayName
+  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30: that one stored name is given a real one.
+  // Any other stored name stays, even one that reads like a role (a Buddy may be named so).
+  const shown = agent.displayName?.trim()
+  if (shown && !reviewer.test(shown)) return agent.displayName
   const name = agent.name.trim()
-  return name && !defaults.test(name) && !automatic.test(name) ? name : undefined
+  return name && !unnamed(name) ? name : undefined
 }
 
 export function assignAgentDisplayNames(agents: NamedAgent[]): void {
@@ -46,7 +54,7 @@ export function assignAgentDisplayNames(agents: NamedAgent[]): void {
 export function agentDisplayName(agents: NamedAgent[], id: string): string | undefined {
   const member = agents.find(agent => agent.id === id)
   if (!member) return undefined
-  if (member.displayName) return member.displayName
+  if (member.displayName && !reviewer.test(member.displayName.trim())) return member.displayName
   const named = agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
   return named.find(agent => agent.id === id)!.displayName

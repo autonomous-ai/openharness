@@ -1587,6 +1587,18 @@ void main() {
       expect(find.text('diego'), findsNothing);
     });
 
+    testWidgets("access taken away between the tap on a person and the week's "
+        'first frame: it does not stay', (tester) async {
+      await team(tester, backend());
+      await tester.tap(key('swarm-member-person-diego'));
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-sheet'), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
     testWidgets("the project taken off the Swarm with a person's week open, "
         'the Swarm still read: the week closes', (tester) async {
       final fake = await diegoWeek(tester);
