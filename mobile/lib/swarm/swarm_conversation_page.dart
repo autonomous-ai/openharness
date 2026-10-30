@@ -209,6 +209,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// opens. Not a work chat.
   bool _unreadLine = false;
 
+  /// Whether this chat's Swarm has not been read yet, so whose Buddy chat it
+  /// is is not known: [_unreadLine] waits for the first read that works, and
+  /// nothing is read until then, as until the line is placed.
+  bool _ownerUnknown = false;
+
+  /// The chat's first read is done, so its line can be placed.
+  bool _firstRead = false;
+
   /// The person reads more than a screen back, where Jump to latest is
   /// offered.
   final _farBack = ValueNotifier<bool>(false);
@@ -289,6 +297,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       return;
     }
     session.inbox.removeListener(_attach);
+    _ownerUnknown =
+        !widget.homeC && widget.buddy == null && reader.snapshot == null;
     _unreadLine =
         widget.homeC ||
         widget.buddy != null ||
@@ -304,7 +314,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       heldAt:
           widget.messageId ??
           _held.value ??
-          (_unreadLine && !_lineDecided ? _undecided : null),
+          ((_unreadLine || _ownerUnknown) && !_lineDecided ? _undecided : null),
     );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
@@ -314,6 +324,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _watch();
     unawaited(
       c.load().then((_) {
+        _firstRead = true;
         _placeLine(c);
         if (!mounted || _conversation != c || _noticeHandled) return;
         if (widget.messageId case final messageId?) {
@@ -333,7 +344,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// line above the screen opens the chat at it ([_openAtLine]), unless a
   /// notice opened it at a message.
   void _placeLine(SwarmConversation c) {
-    if (!mounted || _conversation != c || _lineDecided || !_unreadLine) {
+    if (!mounted || _conversation != c || _lineDecided || _ownerUnknown) {
+      return;
+    }
+    if (!_unreadLine) {
+      if (c.heldAt == _undecided) c.heldAt = null;
       return;
     }
     _lineDecided = true;
@@ -417,6 +432,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
+    if (_ownerUnknown && c.reader.snapshot != null) {
+      _ownerUnknown = false;
+      _unreadLine = swarmIsOwnBuddyChat(c.reader, widget.conversationId);
+      if (_firstRead) _placeLine(c);
+    }
     final view = _view.value = _ChatView.of(session, c, _view.value);
     _seeBuddy(c, view.buddyProject);
     final decisionId = widget.decisionId;
@@ -464,6 +484,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _madeFrom = null;
     _lineAt = null;
     _lineDecided = false;
+    _ownerUnknown = false;
+    _firstRead = false;
     _farBack.value = false;
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;

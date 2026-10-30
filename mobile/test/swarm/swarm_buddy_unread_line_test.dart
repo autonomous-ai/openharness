@@ -107,6 +107,7 @@ void main() {
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
+    bool settle = true,
     Widget home = const SwarmConversationPage(
       swarmId: tab,
       conversationId: chat,
@@ -132,8 +133,40 @@ void main() {
         home: home,
       ),
     );
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
     return host;
+  }
+
+  /// [fake]'s Swarm read failing until the returned function is called, which
+  /// reads it again.
+  Future<void> Function() swarmDownAt(
+    WidgetTester tester,
+    FakeSwarm fake,
+    SwarmHost Function() host,
+  ) {
+    final parts = '/api/super-tabs/$tab/parts';
+    final answer = fake.routes[parts]!;
+    var down = true;
+    fake.routes[parts] = (body) {
+      if (down) {
+        throw const SuperTabFailure(
+          'INTERNAL',
+          'Swarm temporarily unavailable.',
+        );
+      }
+      return answer(body);
+    };
+    return () async {
+      down = false;
+      await host().session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+    };
   }
 
   /// The read marks sent for [conversation], in order.
@@ -354,6 +387,68 @@ void main() {
       expect(reads(), opened + 1);
       expect(find.text('Update 4.'), findsOneWidget);
       expect(find.text('Messages are down.'), findsNothing);
+    });
+  });
+
+  group('the Swarm read fails first, then recovers', () {
+    testWidgets('a Buddy chat then gets Jump to latest', (tester) async {
+      final fake = backend(forty(), mark: 40);
+      late SwarmHost host;
+      final recover = swarmDownAt(tester, fake, () => host);
+      host = await pump(tester, fake, settle: false);
+      expect(host.session!.inbox.reader(tab)!.snapshot, isNull);
+
+      await recover();
+      expect(find.text('Update 40.'), findsOneWidget);
+      await tester.drag(
+        find.byKey(const ValueKey('swarm-messages')),
+        const Offset(0, 1500),
+      );
+      await tester.pumpAndSettle();
+
+      expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(jump, findsOneWidget);
+    });
+
+    testWidgets('and the New messages line, with nothing read before it', (
+      tester,
+    ) async {
+      final fake = backend([for (var i = 1; i <= 4; i++) said(i)], mark: 2);
+      late SwarmHost host;
+      final recover = swarmDownAt(tester, fake, () => host);
+      host = await pump(tester, fake, settle: false);
+      expect(marksSent(fake), isEmpty);
+
+      await recover();
+
+      expect(line, findsOneWidget);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
+    });
+
+    testWidgets('a work chat still has neither', (tester) async {
+      final fake = backend([said(1)], mark: 1);
+      late SwarmHost host;
+      final recover = swarmDownAt(tester, fake, () => host);
+      host = await pump(
+        tester,
+        fake,
+        settle: false,
+        home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+      );
+
+      await recover();
+      await tester.drag(
+        find.byKey(const ValueKey('swarm-messages')),
+        const Offset(0, 1500),
+      );
+      await tester.pumpAndSettle();
+
+      expect(line, findsNothing);
+      expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(jump, findsNothing);
+      expect(marksSent(fake, 'g1'), isNotEmpty, reason: 'read, once known');
     });
   });
 }
