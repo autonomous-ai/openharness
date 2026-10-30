@@ -561,11 +561,12 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and Jump to latest while the list is away from its newest message.
   void _checkUnreadLine() {
     final scroll = _scroll[c.selectedId];
-    var away = false, below = false;
-    // A jump still landing passes lines it does not stop at: measured once
-    // it has landed.
+    // A jump still landing passes lines it does not stop at: the pill stays
+    // as it was until the line is measured where the jump landed.
+    final landing = _landing != null;
+    var away = landing && _unread.away, below = landing && _unread.below;
     if (_unread.lineAt(c.selectedId) case final lineAt?
-        when scroll != null && scroll.hasClients && _landing == null) {
+        when scroll != null && scroll.hasClients && !landing) {
       final line = _unread.key.currentContext;
       final top = line == null ? null : _topInList(line);
       final view = scroll.position.viewportDimension;
