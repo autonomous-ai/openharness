@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
@@ -10,7 +11,6 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
@@ -187,6 +187,20 @@ class _SwarmPageState extends State<SwarmPage> {
     openSwarmConversation(context, sent.swarmId, sent.chatId);
   }
 
+  /// A pull on Home reads the Swarms; with no computer answering, after looking
+  /// for the computers, whatever that finds.
+  Future<void> _pulled(BuildContext context, SwarmSession session) async {
+    final inbox = session.inbox;
+    if (inbox.noComputer) {
+      try {
+        await SwarmScope.computersOf(context)?.recheck();
+      } catch (failure) {
+        appLog.warn('swarm', 'Computers not looked for', error: failure);
+      }
+    }
+    await inbox.refresh();
+  }
+
   /// Whether Home offers New message: a Swarm to post in may be there, or
   /// is still being read.
   bool _offersNewMessage(BuildContext context, SwarmSession session) =>
@@ -243,7 +257,7 @@ class _SwarmPageState extends State<SwarmPage> {
                       builder: (context) =>
                           swarmStartView(context, session) ??
                           RefreshIndicator(
-                            onRefresh: session.inbox.refresh,
+                            onRefresh: () => _pulled(context, session),
                             child: ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
                               // The last row clears the floating +.
@@ -306,21 +320,13 @@ class _SwarmPageState extends State<SwarmPage> {
 
   List<Widget> _body(BuildContext context, SwarmSession session) {
     final inbox = session.inbox;
-    // No computer answering: a card that says so over what Home has, never a
-    // screen in its place.
-    final notice = inbox.noComputer
-        ? SwarmConnectionNotice(
-            inbox: inbox,
-            computers: SwarmScope.computersOf(context),
-          )
-        : null;
-    // A list that could not be read says nothing here: it is in the app's log
-    // and read again by the next poll, Home as it was until then. Only a
-    // server without the list says so, as no poll will ever bring its rows.
+    // A list that could not be read, no computer answering included, says
+    // nothing here: it is in the app's log and read again soon, Home as it
+    // was until then. Only a server without the list says so, as no read will
+    // ever bring its rows.
     if (!inbox.loaded && inbox.swarms.isEmpty) {
       return [
-        ?notice,
-        if (notice == null && inbox.error == swarmServerTooOld)
+        if (inbox.error == swarmServerTooOld)
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpace.xs,
@@ -335,7 +341,7 @@ class _SwarmPageState extends State<SwarmPage> {
             ),
           )
         else
-          ..._reading(first: notice == null),
+          ..._reading(),
       ];
     }
     final shown = _shown(session);
@@ -345,15 +351,8 @@ class _SwarmPageState extends State<SwarmPage> {
     final now = widget.now();
     final away = _awayCard(context, session, shown, picked, now);
     return [
-      ?notice,
       ?away,
-      ..._projects(
-        context,
-        session,
-        shown,
-        now,
-        first: notice == null && away == null,
-      ),
+      ..._projects(context, session, shown, now, first: away == null),
     ];
   }
 
@@ -571,10 +570,9 @@ class _SwarmPageState extends State<SwarmPage> {
     session.home.pin(swarmId, projectId, !pinned);
   }
 
-  /// Home before the list answers: the projects as rows on their way; under
-  /// a card, its caption not [first].
-  List<Widget> _reading({bool first = true}) => [
-    SwarmCaption('Projects', first: first),
+  /// Home before the list answers: the projects as rows on their way.
+  List<Widget> _reading() => [
+    const SwarmCaption('Projects', first: true),
     SwarmSkeletonRows(id: 'swarm-projects-loading'),
   ];
 
