@@ -708,6 +708,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   devicesOff = teamDaemon
   const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
+  // A Harness Team daemon is there for its Swarms: its Swarm service starts with it. Left on demand it never started: its
+  // owner's requests to it are refused until a Swarm roster has marked its sessions (superTabs/inCore/teamApps.ts), and only
+  // that service reads the roster (2026-10-30, the Mac Studio: a new Team account answered every "add it to the Swarm"
+  // TEAM_READ_ONLY and never joined; its log never showed the Swarm service connecting).
+  if (teamDaemon && outOfProcess.has('superTabs')) coreLink.want('superTabs')
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
   const viewersWake = createViewersWake({ want: (service) => coreLink.want(service), outOfProcess })
   const liveHosted = masterRunsLiveEngines(harnessd, process.ppid)
