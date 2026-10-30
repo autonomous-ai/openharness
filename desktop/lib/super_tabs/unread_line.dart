@@ -51,8 +51,18 @@ class SuperTabUnreadLines {
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
 
-  /// Whether the reader is scrolled away from the line, so the jump pill shows.
+  /// Whether the reader is scrolled away from the line.
   bool away = false;
+
+  /// Conversations whose line has been in view this visit.
+  final _seen = <String>{};
+
+  /// [id]'s line came into view: reading on needs no way back to it.
+  void saw(String id) => _seen.add(id);
+
+  /// Whether [id] offers the jump back to its line: placed, out of view, and
+  /// not yet seen this visit (a link opened the chat elsewhere).
+  bool offersJump(String id) => away && _at[id] != null && !_seen.contains(id);
 
   /// The message [id]'s line sits above, or null.
   String? lineAt(String id) => _at[id];
@@ -118,6 +128,7 @@ class SuperTabUnreadLines {
     _loading.remove(id);
     _loaded.remove(id);
     _failed.remove(id);
+    _seen.remove(id);
     catchUps.forget(id);
     away = false;
   }
@@ -134,6 +145,7 @@ class SuperTabUnreadLines {
     _loading.clear();
     _loaded.clear();
     _failed.clear();
+    _seen.clear();
     catchUps.reset();
     away = false;
   }
@@ -175,7 +187,7 @@ class SuperTabNewMessagesLine extends StatelessWidget {
   }
 }
 
-/// Shown while the New messages line is scrolled out of view: takes the reader back to it.
+/// Shown while the New messages line, not yet seen this visit, is out of view: takes the reader back to it.
 class SuperTabJumpToUnread extends StatelessWidget {
   const SuperTabJumpToUnread({super.key, required this.onPressed});
 
