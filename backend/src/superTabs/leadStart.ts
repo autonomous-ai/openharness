@@ -164,7 +164,25 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
   const placement = placementOf(state, start)
   if (placement) placement.status = 'started'
-  return `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
+  const started = `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
+  const ran = state.agents.find(a => a.id === agentId)?.configuration
+  const other = ran && otherThanAsked(start.request, ran)
+  return other ? `${started} ${other}` : started
+}
+
+/** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as routing rates it (rules.ts policyQuality). */
+const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()
+/** What a started agent runs when it is known to differ from the model or effort its start asked for, said for its chat; null
+ *  when it runs them or cannot tell (no model reported, an effort read as auto). Its start never fails over this. */
+function otherThanAsked(asked: { model?: string; effort?: string }, ran: { model: string | null; effort: string | null }): string | null {
+  if (!asked.model) return null
+  const effortKnown = !!ran.effort && ran.effort !== 'auto' && ran.effort !== 'default'
+  const modelDiffers = !!ran.model && family(ran.model) !== family(asked.model)
+  const effortDiffers = effortKnown && !!asked.effort && ran.effort !== asked.effort
+  if (!modelDiffers && !effortDiffers) return null
+  const wanted = asked.effort ? `${asked.model} at ${asked.effort}` : asked.model
+  const runs = [ran.model ?? 'its engine\u2019s own model', ...(effortKnown ? [`at ${ran.effort}`] : [])].join(' ')
+  return `It asked for ${wanted} and runs ${runs} there.`
 }
 
 /** Its start failed with [reason]: the project says why and waits for its person to name a machine again. The line its
