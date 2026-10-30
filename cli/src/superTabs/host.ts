@@ -120,7 +120,9 @@ interface Entry {
   stage: 'prepared' | 'submitting' | 'delivered' | 'uncertain'
   receipt?: string
 }
-interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
+/** `scrubs`: the Claude Code traces of ended Buddy sessions still to remove, by agent id, written before their close, so a host
+ *  restarted between the close and the scrub still removes them (security re-check 2 of #2345). Older hosts drop it. */
+interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
 interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown
   leadsConversationId?: unknown }
@@ -380,6 +382,15 @@ export class SuperTabHost {
           entry.receipt = 'The host restarted before native delivery was confirmed. Inspect the session before retrying.'
         }
         this.journal.entries[id] = entry
+      }
+      // Only a target this host could have written: its own agent id, a Claude Code session in a folder. Another is dropped,
+      // never trusted, so a hand-edited journal cannot point the scrub elsewhere than a session folder's own traces.
+      for (const [agentId, value] of Object.entries(object(saved.scrubs))) {
+        const t = object(value)
+        if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && t.cwd.startsWith('/')
+          && (t.sessionId === null || typeof t.sessionId === 'string') && t.codexHome === null) {
+          (this.journal.scrubs ??= {})[agentId] = { agentId, sessionId: t.sessionId as string | null, cwd: t.cwd, engine: 'claude', codexHome: null }
+        }
       }
     }
     this.persist()
@@ -993,10 +1004,14 @@ export class SuperTabHost {
     // person sent it, kept in its transcript and Claude Code's paste cache, goes with its session. Its folder is its own
     // worktree, so its transcripts and history lines are its alone; a paste goes only when one of its own history lines names it
     // (teamPurge.ts scrubClaudeSession, never a sweep by pattern).
+    // Recorded before the close (security re-check 2 of #2345): after a restart its session is no longer registered here, and
+    // only the journal still knows what to remove.
     if (state.scrub === undefined) {
-      const session = this.core.agents.byAgent(agent.harnessId)
-      state.scrub = session?.swarmSkill?.role === 'buddy' && session.engine === 'claude' && typeof session.cwd === 'string'
-        ? { agentId: agent.id, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: 'claude', codexHome: null } : null
+      const recorded = this.journal.scrubs?.[agent.id]
+      const session = recorded ? undefined : this.core.agents.byAgent(agent.harnessId)
+      state.scrub = recorded ?? (session?.swarmSkill?.role === 'buddy' && session.engine === 'claude' && typeof session.cwd === 'string'
+        ? { agentId: agent.id, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: 'claude', codexHome: null } : null)
+      if (state.scrub && !recorded) { (this.journal.scrubs ??= {})[agent.id] = state.scrub; this.persist() }
     }
     if (state.running || state.acked || this.now() < state.retryAt) return
     state.running = true
@@ -1011,7 +1026,15 @@ export class SuperTabHost {
         if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
         state.closed = true
       }
-      if (state.scrub && !state.scrubbed) { await scrubClaudeSession(this.claudeHome, state.scrub); state.scrubbed = true }
+      if (state.scrub && !state.scrubbed) {
+        await scrubClaudeSession(this.claudeHome, state.scrub)
+        state.scrubbed = true
+        if (this.journal.scrubs?.[agent.id]) {
+          delete this.journal.scrubs[agent.id]
+          if (!Object.keys(this.journal.scrubs).length) delete this.journal.scrubs
+          this.persist()
+        }
+      }
       if (this.stopped || !state.forgotten) return
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `session-closed-${agent.id}-${agent.harnessId}`,
         command: { type: 'agent.sessionClosed', agentId: agent.id, harnessId: agent.harnessId } })
@@ -1375,8 +1398,10 @@ export class SuperTabHost {
       && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId) && chat.projectId === agent.projectId
     // A thread session's person speaks to it only in its own thread: a message anywhere else grants it nothing, however it
     // came (security review 1 of #2345).
+    // A session whose thread cannot be read fails closed: it is still a session, so nothing from anywhere grants it (re-check 2).
+    const isSession = agent?.buddySession !== undefined && agent?.buddySession !== null
     const session = object(agent?.buddySession)
-    const inThread = !identifier(session.thread) || message.id === session.thread || message.thread === session.thread
+    const inThread = !isSession || (identifier(session.thread) && (message.id === session.thread || message.thread === session.thread))
     return own && inThread ? { onTheirMachine: agent!.machineOwnerId === author.id } : null
   }
 

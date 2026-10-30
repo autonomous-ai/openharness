@@ -1368,6 +1368,9 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       ['its chat once archived', {}, { conversations: [{ ...buddyChat, archived: true }] }, {}],
       // Security review 1 of #2345: a thread session hears its person only in its own thread.
       ['a thread session, from a message outside its thread', { thread: 'main-root' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] }, {}],
+      // Security re-check 2 of #2345: a session whose thread cannot be read fails closed, even for a message naming the same.
+      ['a thread session whose thread id is malformed', { thread: 'not an id/..' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'not an id/..', from: 1 } }] }, {}],
+      ['a thread session with no thread at all', {}, { agents: [{ ...buddyAgent, buddySession: 'garbage' }] }, {}],
     ])('records nothing for %s, and still delivers the message', async (_, message, read, claim) => {
       const { host, delivered, guard } = approving({ text: 'run: argocd app list', ...message }, read, claim)
       await host.tick()
@@ -2882,6 +2885,31 @@ describe('closing the sessions the backend ends', () => {
       expect(existsSync(join(claude, 'paste-cache', 'theirpaste.txt'))).toBe(true)
       expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).not.toContain('buddy-sid')
       expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toContain('other-sid')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security re-check 2 of #2345: what to scrub was known only in memory, so a host restarted between the close and the scrub
+  // left the transcript for good. It is written to the journal before the close, and the restarted host scrubs from there.
+  it('still scrubs an ended Buddy session\'s traces when its host restarts between the close and the scrub', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude')
+    const folder = '/work/worktrees/openharness/buddy-session', slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    try {
+      mkdirSync(join(claude, 'projects', slug(folder)), { recursive: true })
+      writeFileSync(join(claude, 'projects', slug(folder), 'x.jsonl'), 'transcript')
+      const t = lifeFixture([ended()], { claudeHome: home })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      // The first host's close never returns: it stops before the scrub.
+      t.closeMember.mockImplementation(() => new Promise(() => {}))
+      await t.poll()
+      expect(t.saved().scrubs).toEqual({ agent: { agentId: 'agent', sessionId: 'buddy-sid', cwd: folder, engine: 'claude', codexHome: null } })
+      t.host.stop()
+      // Restarted: the session is no longer registered here, and the close goes through.
+      t.core.agents.byAgent = vi.fn(() => undefined as never)
+      t.closeMember.mockImplementation(async () => ({ closed: true as const }))
+      const again = t.open({ claudeHome: home })
+      await again.tick()
+      await vi.waitFor(() => expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false))
+      await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
