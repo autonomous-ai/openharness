@@ -32,6 +32,16 @@ build() {
     add_file "$unlock/harness-unlock.service" '/usr/lib/systemd/system/harness-unlock.service' 644
     add_symlink '/usr/lib/systemd/system/initrd.target.wants/harness-unlock.service' \
         '../harness-unlock.service'
+
+    # The power button's factory reset while the disk is locked: the boot partition (FAT) opened for
+    # GRUB's environment block, which starts the recovery next.
+    # The startup's busybox has neither od, tr nor mount: the button reads and writes with these.
+    map add_module 'vfat' 'nls_cp437?' 'nls_iso8859-1?' 'nls_ascii?'
+    map add_binary '/usr/bin/od' '/usr/bin/tr' '/usr/bin/mount'
+    add_file "$unlock/button" "$unlock/button" 755
+    add_file "$unlock/harness-unlock-button.service" '/usr/lib/systemd/system/harness-unlock-button.service' 644
+    add_symlink '/usr/lib/systemd/system/initrd.target.wants/harness-unlock-button.service' \
+        '../harness-unlock-button.service'
 }
 
 help() {
