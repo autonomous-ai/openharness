@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -93,22 +93,20 @@ void main() {
   Finder inside(String value, Finder finder) =>
       find.descendant(of: key(value), matching: finder);
 
-  testWidgets('the menu starts with you, and opens your profile', (
+  testWidgets('You starts with you, and its status opens your profile', (
     tester,
   ) async {
-    await pump(tester, const SwarmPage());
-    await tester.tap(key('swarm-menu'));
-    await frames(tester);
-    expect(inside('swarm-drawer-you-$tab', find.text('🦊')), findsOneWidget);
+    await pump(tester, const SwarmYouPage());
+    expect(inside('swarm-you-me', find.text('🦊')), findsOneWidget);
     expect(
-      inside('swarm-drawer-you-$tab', find.text('🎯 Focusing')),
+      inside('swarm-you-status', find.text('🎯 Focusing')),
       findsOneWidget,
     );
     expect(
-      tester.getSize(key('swarm-drawer-you-$tab')).height,
+      tester.getSize(key('swarm-you-status')).height,
       greaterThanOrEqualTo(44),
     );
-    await tester.tap(key('swarm-drawer-you-$tab'));
+    await tester.tap(key('swarm-you-status'));
     await frames(tester);
     expect(find.text('Your profile'), findsOneWidget);
   });
