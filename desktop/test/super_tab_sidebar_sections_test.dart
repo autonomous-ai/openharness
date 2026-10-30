@@ -95,12 +95,29 @@ void main() {
           isNotNull,
           reason: '$title chevron',
         );
+        // Every chevron says what it does, alike.
+        expect(
+          find.descendant(
+            of: heading,
+            matching: find.byTooltip('Collapse $title'),
+          ),
+          findsOneWidget,
+          reason: '$title says Collapse',
+        );
         final shown = body(title);
         expect(shown, isNotEmpty, reason: '$title has rows');
         final label = find.descendant(of: heading, matching: find.text(title));
         await tester.tap(label);
         await tester.pumpAndSettle();
         expect(body(title), isEmpty, reason: '$title collapsed');
+        expect(
+          find.descendant(
+            of: heading,
+            matching: find.byTooltip('Expand $title'),
+          ),
+          findsOneWidget,
+          reason: '$title says Expand',
+        );
         await tester.tap(label);
         await tester.pumpAndSettle();
         expect(body(title), shown, reason: '$title expanded');

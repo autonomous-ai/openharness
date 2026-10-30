@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -92,6 +93,9 @@ void main() {
       final controller = await show(tester, modelsSwarm());
       expect(headingText, findsOneWidget);
       expect(find.textContaining('this week'), findsNothing);
+      // The chevron says what it does, as every section's does; the title
+      // says what the shares are.
+      expect(find.byTooltip('Collapse Models'), findsOneWidget);
       expect(
         find.byTooltip('Share of agent work, last 7 days'),
         findsOneWidget,
@@ -120,6 +124,44 @@ void main() {
         tester.getTopRight(find.text('84%')).dx,
         tester.getTopRight(find.text('2%')).dx,
       );
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'says the last 7 days over the title and Collapse over the chevron, and a screen reader hears the action',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final controller = await show(tester, modelsSwarm());
+      const explained = 'Share of agent work, last 7 days';
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(headingText));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      expect(find.text(explained), findsOneWidget);
+      expect(find.text('Collapse Models'), findsNothing);
+      await mouse.moveTo(Offset.zero);
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await mouse.moveTo(
+        tester.getCenter(
+          find.descendant(of: heading, matching: find.byType(Icon)).first,
+        ),
+      );
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      expect(find.text('Collapse Models'), findsOneWidget);
+      expect(find.text(explained), findsNothing);
+      // The button is named by its title and its action, as Projects' is;
+      // the explanation is a hint, never its name.
+      final node = tester.getSemantics(headingText);
+      expect(node.label, 'Models');
+      expect(node.tooltip, 'Collapse Models');
+      expect(node.hint, explained);
+      expect(
+        find.bySemanticsLabel(RegExp('Share of agent work')),
+        findsNothing,
+      );
+      semantics.dispose();
       await close(tester, controller);
     },
   );
@@ -226,6 +268,24 @@ void main() {
     expect(inRow('Opus 5.5', find.text('100%')), findsOneWidget);
     expect(inRow('GPT-6.1 Sol', find.text('<1%')), findsOneWidget);
     expect(find.text('0%'), findsNothing);
+    await close(tester, controller);
+  });
+
+  testWidgets('says the same for models with as many tasks', (tester) async {
+    final server = modelsSwarm();
+    // 163, 1, 1 and 1 of 166: largest remainders give two of the three 1s a
+    // point to reach 100; under 1% each, they all read alike.
+    server.leaderboard!['recentModels'] = [
+      recentModel('claude', 'claude-opus-5-5', attempts: 163),
+      recentModel('claude', 'claude-sonnet-5-5', attempts: 1),
+      recentModel('codex', 'gpt-6.1-sol', attempts: 1),
+      recentModel('codex', 'gpt-6.1-luna', attempts: 1),
+    ];
+    final controller = await show(tester, server);
+    expect(inRow('Opus 5.5', find.text('98%')), findsOneWidget);
+    for (final name in ['Sonnet 5.5', 'GPT-6.1 Sol', 'GPT-6.1 Luna']) {
+      expect(inRow(name, find.text('<1%')), findsOneWidget, reason: name);
+    }
     await close(tester, controller);
   });
 

@@ -43,8 +43,9 @@ class LeaderboardModelShare {
   final int percent;
   final int reviewed, passed;
 
-  /// The share as the row says it: under 1% is never 0%, as it ran tasks.
-  String get percentLabel => percent == 0 ? '<1%' : '$percent%';
+  /// The share as the row says it: under 1% says so, never 0% (it ran
+  /// tasks) nor the 1% rounding gave some of several alike to reach 100.
+  String get percentLabel => attempts * 100 < total ? '<1%' : '$percent%';
 }
 
 /// The models that ran tasks in the last 7 days, or the board's week from a
@@ -160,7 +161,7 @@ class LeaderboardModelsSection extends StatelessWidget {
             endInset: 0,
             collapsed: collapsed,
             onToggleCollapsed: onToggleCollapsed,
-            tooltip: read.recentModels != null
+            titleTooltip: read.recentModels != null
                 ? 'Share of agent work, last 7 days'
                 : 'Share of agent work, $span',
           ),
