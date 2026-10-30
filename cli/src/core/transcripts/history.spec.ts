@@ -64,6 +64,7 @@ vi.mock('../../engines/grok/normalizer.js', async (real) => ({ ...await real<obj
 vi.mock('../../engines/agy/normalizer.js', async (real) => ({ ...await real<object>(), agyMessagesToEvents: vi.fn(fake.replay('agy')) }))
 vi.mock('../../engines/copilot/normalizer.js', async (real) => ({ ...await real<object>(), copilotMessagesToEvents: vi.fn(fake.replay('copilot')) }))
 vi.mock('../../engines/pi/normalizer.js', async (real) => ({ ...await real<object>(), piMessagesToEvents: vi.fn(fake.replay('pi')), windowPiLines: vi.fn(fake.windowOf('pi')) }))
+vi.mock('../../engines/omp/normalizer.js', async (real) => ({ ...await real<object>(), ompMessagesToEvents: vi.fn(fake.replay('omp')), windowOmpLines: vi.fn(fake.windowOf('omp')) }))
 vi.mock('../../engines/commandcode/normalizer.js', async (real) => ({ ...await real<object>(), commandcodeMessagesToEvents: vi.fn(fake.replay('commandcode')), windowCommandCodeLines: vi.fn(fake.windowOf('commandcode')) }))
 vi.mock('../../engines/cursor/normalizer.js', async (real) => ({
   ...await real<object>(),
@@ -413,7 +414,7 @@ describe('the other file engines: read from the end, bounded', () => {
 
   it.each([
     ['cursor', 'cursor'], ['muse', 'muse'], ['amp', 'amp'], ['grok', 'grok'], ['agy', 'agy'], ['copilot', 'copilot'],
-    ['pi', 'pi'], ['commandcode', 'commandcode'],
+    ['pi', 'pi'], ['omp', 'omp'], ['commandcode', 'commandcode'],
   ])('%s: the whole transcript, through its own replay', async (engine, from) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const file = transcript(lines)
@@ -457,7 +458,8 @@ describe('the other file engines: read from the end, bounded', () => {
   })
 
   it.each([
-    ['cursor', 'cursor', 'cursor'], ['pi', 'pi', 'pi'], ['commandcode', 'commandcode', 'commandcode'],
+    ['cursor', 'cursor', 'cursor'], ['pi', 'pi', 'pi'], ['omp', 'omp', 'omp'],
+    ['commandcode', 'commandcode', 'commandcode'],
   ])('%s: the newest page, the page before it, and a cursor it cannot find, through its own window', async (engine, window, from) => {
     const s = session(engine, { transcriptPath: transcript(lines) })
     const { sessionGet } = setup(s)

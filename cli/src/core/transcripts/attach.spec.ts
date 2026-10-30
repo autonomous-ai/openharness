@@ -57,6 +57,7 @@ vi.mock('../../engines/amp/normalizer.js', async (real) => ({ ...await real<obje
 vi.mock('../../engines/grok/normalizer.js', async (real) => ({ ...await real<object>(), GrokNormalizer: fakes.normalizer('grok') }))
 vi.mock('../../engines/agy/normalizer.js', async (real) => ({ ...await real<object>(), AgyNormalizer: fakes.normalizer('agy') }))
 vi.mock('../../engines/pi/normalizer.js', async (real) => ({ ...await real<object>(), PiNormalizer: fakes.normalizer('pi') }))
+vi.mock('../../engines/omp/normalizer.js', async (real) => ({ ...await real<object>(), OmpNormalizer: fakes.normalizer('omp') }))
 vi.mock('../../engines/commandcode/normalizer.js', async (real) => ({ ...await real<object>(), CommandCodeNormalizer: fakes.normalizer('commandcode') }))
 vi.mock('../../engines/copilot/normalizer.js', async (real) => ({
   ...await real<object>(),
@@ -921,7 +922,7 @@ describe('attaching a session', () => {
       const maps: Record<string, Map<string, unknown>> = {
         cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers, amp: run.normalizers.ampNormalizers,
         grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers, copilot: run.normalizers.copilotNormalizers,
-        pi: run.normalizers.piNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
+        pi: run.normalizers.piNormalizers, omp: run.normalizers.ompNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
       }
       for (const engine of Object.keys(maps)) {
         await run.attach.attachSession(session(engine, transcript([{}])))

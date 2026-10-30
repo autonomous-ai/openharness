@@ -5,13 +5,17 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 
-const host = vi.hoisted(() => ({ platform: 'darwin', execFile: vi.fn(), beforeStat: undefined as Promise<void> | undefined }))
+const host = vi.hoisted(() => ({
+  platform: 'darwin', execFile: vi.fn(), beforeStat: undefined as Promise<void> | undefined,
+  onStat: undefined as ((path: string) => Promise<void>) | undefined,
+}))
 vi.mock('node:os', async original => ({ ...await original<typeof import('node:os')>(), platform: () => host.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<typeof import('node:child_process')>(), execFile: host.execFile }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, lstat: async (...args: Parameters<typeof fs.lstat>) => {
     await host.beforeStat
+    await host.onStat?.(String(args[0]))
     return fs.lstat(...args)
   } }
 })
@@ -36,6 +40,7 @@ beforeEach(async () => {
   host.platform = 'darwin'
   host.execFile.mockReset()
   host.beforeStat = undefined
+  host.onStat = undefined
 })
 afterEach(async () => {
   env.ADAPTER_RUNTIME_DIR = originalRuntime
@@ -97,6 +102,22 @@ describe('bundled native helper preparation', () => {
     expect((await lstat(path)).mode & 0o777).toBe(0o500)
     expect(await readdir(join(root, 'process-images'))).toEqual([artifact.sha256])
     expect(await prepareProcessImageHelper(artifact, root)).toBe(path)
+  })
+
+  // Linux CI, #2358 at d618a08: the concurrent test above returned one path and one null.
+  // A preparer found no target, then another linked it before this one's existence
+  // check, which took the new, complete helper for a foreign file. Force that order.
+  it('accepts a helper another preparer completes between its check and its lstat', async () => {
+    const target = join(root, 'process-images', artifact.sha256)
+    let raced = false
+    host.onStat = async path => {
+      if (path !== target || raced) return
+      raced = true
+      expect(await prepareProcessImageHelper(artifact, root)).toBe(target)
+    }
+    expect(await prepareProcessImageHelper(artifact, root)).toBe(target)
+    expect(raced).toBe(true)
+    expect(await readdir(join(root, 'process-images'))).toEqual([artifact.sha256])
   })
 
   it('rejects an invalid embedded hash without writing a file', async () => {

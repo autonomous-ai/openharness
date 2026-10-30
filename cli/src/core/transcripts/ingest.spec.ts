@@ -8,6 +8,7 @@ import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import { GrokNormalizer } from '../../engines/grok/normalizer.js'
 import { MuseNormalizer } from '../../engines/muse/normalizer.js'
+import { OmpNormalizer } from '../../engines/omp/normalizer.js'
 import { PiNormalizer } from '../../engines/pi/normalizer.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
@@ -147,13 +148,15 @@ describe('ingesting a transcript line', () => {
   it('creates each file engine\'s normalizer on the session\'s first line, and keeps it', () => {
     const engines = {
       cursor: CursorNormalizer, muse: MuseNormalizer, amp: AmpNormalizer, grok: GrokNormalizer,
-      agy: AgyNormalizer, copilot: CopilotNormalizer, pi: PiNormalizer, commandcode: CommandCodeNormalizer,
+      agy: AgyNormalizer, copilot: CopilotNormalizer, pi: PiNormalizer, omp: OmpNormalizer,
+      commandcode: CommandCodeNormalizer,
     } as const
     const run = setup(Object.fromEntries(Object.keys(engines).map((engine) => [engine, engine])))
     const maps = {
       cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers,
       amp: run.normalizers.ampNormalizers, grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers,
-      copilot: run.normalizers.copilotNormalizers, pi: run.normalizers.piNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
+      copilot: run.normalizers.copilotNormalizers, pi: run.normalizers.piNormalizers, omp: run.normalizers.ompNormalizers,
+      commandcode: run.normalizers.commandcodeNormalizers,
     } as Record<keyof typeof engines, Map<string, unknown>>
     for (const [engine, Normalizer] of Object.entries(engines) as Array<[keyof typeof engines, new (...args: never[]) => unknown]>) {
       expect(run.ingest.ingestLine(line(engine, engine)), engine).toEqual(expect.any(Array))
@@ -165,7 +168,7 @@ describe('ingesting a transcript line', () => {
   })
 
   it('reads no events from a file engine\'s lines while its code is unavailable, and makes no normalizer', () => {
-    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode']
+    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'omp', 'commandcode']
     const run = setup(Object.fromEntries(engines.map((engine) => [engine, engine])))
     vi.mocked(engineNow).mockReturnValue(null)
     for (const engine of engines) {
