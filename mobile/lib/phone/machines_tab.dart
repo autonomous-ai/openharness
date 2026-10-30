@@ -545,7 +545,10 @@ class _ConnectBarState extends State<_ConnectBar> {
                       label: 'Set up Intern 3',
                       onPressed: () => Navigator.of(context).push(
                         phoneRoute(
-                          (_) => AddDevicePage(notifier: widget.notifier),
+                          (_) => AddDevicePage(
+                            notifier: widget.notifier,
+                            overComputers: true,
+                          ),
                         ),
                       ),
                     ),
