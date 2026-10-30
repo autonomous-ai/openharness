@@ -97,6 +97,7 @@ import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
+import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
@@ -1904,6 +1905,10 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
     },
     transport: (method, path, {body}) async {
+      // The web asks the backend itself, signed as the person in this
+      // browser (docs/specs/2026-10-30-web-swarm-direct.md): no machine of
+      // theirs needs to be online, a Team machine or a slow link in between.
+      if (viewer != null) return _webSuperTabRequest(method, path, body: body);
       final target = sharedTabsTarget;
       if (target == null) {
         if (_teamComputer) {
@@ -1926,6 +1931,31 @@ class AppNotifier extends ChangeNotifier {
       return result['value'];
     },
   );
+
+  late final SuperTabTransport _webSuperTabs = superTabBackendTransport(
+    () => api,
+  );
+
+  /// One Swarm call from the web, straight to the backend. An answer, or a
+  /// refusal, that lands after the account changed is dropped, as a relayed
+  /// one is ([superTabMachineRequest]).
+  Future<Object?> _webSuperTabRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final revision = _authRevision;
+    const changed = SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    final Object? value;
+    try {
+      value = await _webSuperTabs(method, path, body: body);
+    } on SuperTabFailure {
+      if (!_authWorkCurrent(revision)) throw changed;
+      rethrow;
+    }
+    if (!_authWorkCurrent(revision)) throw changed;
+    return value;
+  }
 
   Map<String, String> _superTabNames = {};
   bool _superTabsEntered = false;
@@ -9359,11 +9389,15 @@ class AppNotifier extends ChangeNotifier {
         );
       }
     }
-    // Swarm reads go through a connected machine: the moment one can serve
-    // them again, the Swarm on screen reads (`SuperTabReading.readsOnConnect`).
-    final served = sharedTabsTarget != null;
-    if (served && !_superTabsServed) superTabs.serverAvailable();
-    _superTabsServed = served;
+    // Natively, Swarm reads go through this computer's daemon: the moment it
+    // can serve them again, the Swarm on screen reads
+    // (`SuperTabReading.readsOnConnect`). The web reads the backend itself,
+    // so a machine connecting there is no reason to read.
+    if (viewer == null) {
+      final served = sharedTabsTarget != null;
+      if (served && !_superTabsServed) superTabs.serverAvailable();
+      _superTabsServed = served;
+    }
     notifyListeners();
   }
 
