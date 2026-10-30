@@ -336,7 +336,7 @@ describe('a queued start\'s preparation token', () => {
     push = true
     const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(done.statusCode).toBe(200)
-    expect(done.body).toContain('example/app approved')
+    expect(done.body).toContain('example/app is allowed')
     // The page names the project it was approved for (local Team account run, 2026-10-28: 'This project can now use it').
     expect(done.body).toContain('Teammates&#39; agents in Pool can now push to it.')
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
@@ -362,7 +362,7 @@ describe('a queued start\'s preparation token', () => {
       url: `/api/github/callback?error=access_denied&error_description=The+user+has+denied+your+application+access.&state=${encodeURIComponent(state)}` })
     expect(cancelled.statusCode).toBe(200)
     expect(cancelled.body).toContain('Sign-in was cancelled')
-    expect(cancelled.body).toContain('Nothing was approved. Go back to Harness and choose Approve to try again.')
+    expect(cancelled.body).toContain('Nothing was allowed. Go back to Harness and choose Continue in GitHub to try again.')
     expect(cancelled.body).not.toContain('Harness is installed')
     expect(env.approved).toEqual([])
   })

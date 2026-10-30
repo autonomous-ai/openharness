@@ -150,6 +150,55 @@ describe('old Swarm role adoption', () => {
       }
     })
   })
+  // The relaunch paths that cannot wait (boot restore, model switch, host move): one read, then the caller holds or refuses.
+  describe('one role read for a relaunch that cannot wait', () => {
+    it('gives the row with its role, and writes it only when the caller commits', async () => {
+      const t = setup(row({ startedBy: 'agent' })); t.role.mockResolvedValue({ role: 'buddy' })
+      const looked = await t.adopt.lookup!(t.saved, t.current)
+      if (!looked || looked === 'unavailable') throw new Error('expected a row')
+      expect(looked.row).toMatchObject({ swarmSkill: { role: 'buddy', key: 'old-session' } })
+      expect(t.saved.swarmSkill).toBeUndefined()
+      looked.commit()
+      expect(t.saved.swarmSkill).toEqual({ role: 'buddy', key: 'old-session' })
+    })
+    it.each(['offline', 'unregistered'] as const)('answers unavailable at once when the role is %s, without waiting', async unavailable => {
+      const t = setup(row({ startedBy: 'agent' }))
+      if (unavailable === 'offline') t.role.mockRejectedValue(new Error('Offline')); else t.role.mockResolvedValue(undefined)
+      expect(await t.adopt.lookup!(t.saved, t.current)).toBe('unavailable')
+      expect(t.role).toHaveBeenCalledOnce()
+      expect(t.wait).not.toHaveBeenCalled()
+    })
+    it('answers null when the relaunch is cancelled or the session rebound while it reads', async () => {
+      const cancelled = setup(); cancelled.role.mockImplementation(async () => { cancelled.cancel(); return { role: 'buddy' as const } })
+      expect(await cancelled.adopt.lookup!(cancelled.saved, cancelled.current)).toBeNull()
+      const rebound = setup(); rebound.role.mockImplementation(async () => { rebound.change(); return { role: 'buddy' as const } })
+      expect(await rebound.adopt.lookup!(rebound.saved, rebound.current)).toBeNull()
+      expect(rebound.saved.swarmSkill).toBeUndefined()
+    })
+    it('gives the row as it is for a session in no Swarm, one already tagged, or the person\'s own outside the roster', async () => {
+      const none = setup(); none.role.mockResolvedValue(null)
+      expect(await none.adopt.lookup!(none.saved, none.current)).toMatchObject({ row: none.saved })
+      const tagged = setup(row({ swarmSkill: { role: 'buddy', key: 'old-session' } }))
+      expect(await tagged.adopt.lookup!(tagged.saved, tagged.current)).toMatchObject({ row: tagged.saved })
+      const own = setup()
+      const adopt = createSwarmSkillAdoption({ role: own.role, authority: () => () => true, save: vi.fn(), candidate: () => false })
+      expect(await adopt.lookup!(own.saved, own.current)).toMatchObject({ row: own.saved })
+      expect([tagged.role, own.role].map(role => role.mock.calls.length)).toEqual([0, 0])
+    })
+    it('says which rows a relaunch must ask the Swarm about first', async () => {
+      const t = setup()
+      const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: id => id === 'member' })
+      expect(adopt.needed!(row({ agentId: 'member' }))).toBe(true)
+      expect(adopt.needed!(row({ startedBy: 'agent' }))).toBe(true)
+      expect(adopt.needed!(row())).toBe(false)
+      expect(adopt.needed!(row({ agentId: 'member', swarmSkill: { role: 'dev', key: 'member' } }))).toBe(false)
+      expect(adopt.needed!(row({ agentId: 'member', engine: 'opencode' }))).toBe(false)
+      // A confirmed "in no Swarm" is not asked again.
+      t.role.mockResolvedValue(null)
+      await adopt(row({ agentId: 'member' }), t.current)
+      expect(adopt.needed!(row({ agentId: 'member' }))).toBe(false)
+    })
+  })
   it('can adopt after a local roster snapshot first excludes the session', async () => {
     const t = setup()
     let present = false

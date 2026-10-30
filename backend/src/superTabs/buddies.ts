@@ -20,7 +20,8 @@ export function buddyReads(buddy: Agent, group: Conversation, leadConversationId
 
 /** The rows that tell how work is routed: a route and its override name the machines that could run a task and why others
  *  could not, and a rule row the routing rules. A Buddy reads none of them, as its Swarm read has no machines or rules. */
-const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule'])
+/** The nightly routing reflection (lib/routingReflection.ts) says what each engine and model cost and how it went: routing too. */
+const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule', 'routing-reflection'])
 export const routingRow = (source: unknown): boolean => ROUTING_ROWS.has(String((source as { kind?: unknown } | null | undefined)?.kind))
 
 /** Whether [actor] is a Buddy, which reads no routing (no route rows, routing decisions, policy or costs) and no machines. */
