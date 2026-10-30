@@ -7,9 +7,13 @@ import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchma
 
 /** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). Codex's own default
  *  model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and costs Sonnet's API rate
- *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30). */
+ *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30).
+ *  GPT-6-Astra at xhigh: the owners' standing decision is that Builders run on Opus high or Astra xhigh, which without a row
+ *  rated it 1, so routing never picked it (Lead's ruling, 10-30). Its API rate is five times Sol's and 2.5 times Opus's
+ *  (costs/prices.ts), so it costs 5, after Opus at xhigh (4): at equal strength routing keeps choosing Opus high first. */
 const ADDED_ROWS = [
   { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
+  { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 5, enabled: true },
 ] as const satisfies ReadonlyArray<Record<string, unknown>>
 /** An owner keeps exactly up to 40 rows of their own. A built-in row added on read, or the owner's own version of one (the same
  *  engine and model), never counts against that, or a full policy could no longer be saved once read (reviews of #2271). */
@@ -45,12 +49,12 @@ const fields = {
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
-/** What a save accepts: also one row at most per built-in model, so a second copy never rides free of the 40 (review of #2271).
- *  Only saves check it: a policy saved before it still reads as saved, never as unreadable. */
-const saved = { ...fields, models: models.superRefine((rows, ctx) => {
-  for (const added of ADDED_ROWS) if (rows.filter(row => same(row, added)).length > 1)
-    ctx.addIssue({ code: 'custom', message: `Only one row for ${added.engine} ${added.model}.` })
-}) }
+/** What a save accepts: the first row for each built-in model rides free, and every further copy counts against the 40, so a
+ *  second copy never rides free (review of #2271), yet an owner with two rows of a model that became built-in, such as
+ *  Astra at two efforts, still saves (review of #2314). Only saves count them: a policy saved before still reads as saved. */
+const extraCopies = (rows: ReadonlyArray<Named>) => ADDED_ROWS.reduce((n, added) => n + Math.max(0, rows.filter(row => same(row, added)).length - 1), 0)
+const saved = { ...fields, models: models.refine(rows => rows.filter(row => !builtIn(row)).length + extraCopies(rows) <= OWN_MODEL_ROWS,
+  `At most ${OWN_MODEL_ROWS} rows of your own.`) }
 export const routingPolicySaveSchema = z.object({ version: z.literal(1), ...saved }).strict()
 export const routingOverrideSaveSchema = z.object(saved).partial().strict()
 export type RoutingPolicy = z.infer<typeof routingPolicySchema>
@@ -67,8 +71,12 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
     // Next to `default` so the form lists Codex's rows together. List order ranks nothing: the CLI route breaks ties by title.
     ...ADDED_ROWS,
-    { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
-    { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
+    // Off since 2026-10-30 (Ken: no Sonnet Builders). Kept as a row so an owner can turn it back on; an owner's saved table keeps
+    // its own Sonnet row as it is, and a forbidModel rule rules Sonnet out there.
+    { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false },
+    // Off since 2026-10-30 too (review of #2314): a build needs 3, and an older CLI on the new server picked Haiku for easy work
+    // that the server then refused, again on every route. With it off, an older CLI picks a model rated 3.
+    { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: false },
   ],
   floor: { low: 1, medium: 2, high: 3 },
   quotaReserve: 10,

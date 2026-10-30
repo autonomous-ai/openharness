@@ -143,7 +143,7 @@ describe('what a Buddy reads', () => {
     const strict = visibleState(f.state, agentActor('buddy'))
     expect(strict.agents.map(a => [a.machineId, a.harnessId])).toEqual(strict.agents.map(() => ['', '']))
     const task = strict.conversations.find(c => c.id === f.group)!
-    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: 'host' })
+    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
     expect(task.lostAttempt).toEqual({ id: 'a0', agentId: f.pm })
     expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.machineId).toBe('machine')
     // A lost task's reason without its machine, on the task and on the agent; a reason naming none stays (re-check 2).
@@ -162,6 +162,55 @@ describe('what a Buddy reads', () => {
     expect(seen.rules ?? []).toEqual([])
     expect(seen.agents.map(a => a.id)).toContain(f.pm)
     expect(visibleState(f.state, agentActor(f.pm)).machines).toHaveLength(1)
+  })
+
+  it('shows where the project\'s Product Manager stands, never the machine it runs on or its start (Diego, 10-30)', () => {
+    const f = setup()
+    const project = f.state.projects!.find(p => p.id === f.app.projectId)!
+    const leadOf = (reader: Actor) => visibleState(f.state, reader).projects!.find(p => p.id === f.app.projectId)!.lead
+    project.lead = { status: 'starting', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', startId: 'pm-start' }
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'starting' })
+    expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|Kens-Mac-Studio|pm-start/)
+    // A failed start keeps the reason every project reader reads, which names no machine (leadStart.ts leadStartFailed).
+    project.lead = { status: 'failed', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' }
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'failed', reason: 'Its machine did not start it within 3 minutes.' })
+    // People and the PM read it as before.
+    for (const reader of [owner, peer, agentActor(f.pm)]) expect(leadOf(reader)).toEqual({ status: 'failed', machineId: 'owner-studio',
+      machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
+    // The Buddy's own read leaves the stored placement as it was.
+    expect(project.lead).toEqual({ status: 'failed', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
+    // A placement an older server stored (#2089's queue) names its machines in more fields: the Buddy reads its status alone.
+    project.lead = { status: 'waiting', requestedAt: 1000, requestedBy: { personId: 'owner', generation: 'g' }, chosen: 'owner-studio',
+      skipped: ['owner-laptop'], failures: 1, request: { engine: 'claude', repositoryUrl: 'https://github.com/acme/app' } } as never
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'waiting' })
+    expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|owner-laptop/)
+  })
+
+  it('shows no other agent\'s machine owner, contributor or Team account, nor a task\'s, only its own (security reviews of #2258)', () => {
+    const f = setup()
+    const pm = f.state.agents.find(a => a.id === f.pm)!
+    // A grant under an older share policy names the contributor's email (lib/machineSharePolicy.ts machineShareGrant).
+    Object.assign(pm, { machineOwnerId: 'ken-user', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
+    expect(pm.contributorId).toBe('owner')
+    f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
+      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'ken-user' } } as never
+    const seen = visibleState(f.state, agentActor('buddy'))
+    const agent = (id: string) => seen.agents.find(a => a.id === id)!
+    expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId, agent(f.pm).teamAccount]).toEqual(['', '', undefined])
+    expect(seen.conversations.find(c => c.id === f.group)!.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
+    expect(JSON.stringify(seen)).not.toMatch(/ken-user|"teamAccount"/)
+    // Nor at which membership another agent was added, which matches a person's and so names them (delta review 1 of #2258).
+    const generations = new Set(seen.people.map(p => p.generation))
+    expect(seen.agents.filter(a => a.id !== 'buddy' && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
+    expect([agent(f.pm).membershipGeneration, agent(f.pm).hostGrant]).toEqual(['', null])
+    expect(JSON.stringify(seen)).not.toContain('ken@example.com')
+    // Its own record keeps who added it, at which membership and on whose machine, as before.
+    expect([agent('buddy').machineOwnerId, agent('buddy').contributorId, agent('buddy').membershipGeneration]).toEqual(['host', 'peer', 'first'])
+    // People and the PM read them as before; the stored agent is unchanged.
+    for (const reader of [owner, { kind: 'agent', agentId: f.pm, machineOwnerId: 'ken-user' } as Actor]) expect(visibleState(f.state, reader).agents
+      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration,
+        hostGrant: 'share-1:email:ken@example.com' })
+    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
   })
 
   it('is no other person\'s Buddy chat in the same project', () => {

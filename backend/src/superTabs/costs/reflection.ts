@@ -58,6 +58,9 @@ export interface ReflectionInput {
   /** Proposals approved in the last APPROVED_DAYS days, with the local date and who decided: the owner, or the PM when the
    *  owner left it to the PM. Listed every night, and not proposed again while listed. */
   approved?: readonly Approved[]
+  /** Approvals whose APPROVED_DAYS ended in the last LAPSED_DAYS days: a proposal of the same change says it was approved
+   *  and the last 7 days still route the old way, instead of asking cold (Lead, 10-30). */
+  lapsed?: readonly Approved[]
   /** The project's routing rules: a change one already makes is not proposed. */
   rules?: ReadonlyArray<SwarmRule['rule']>
 }
@@ -81,6 +84,8 @@ export const REASK_DAYS = 14
 /** Days an approved proposal is listed and reminded each night; after that it may be proposed again (Lead's ruling). */
 export const APPROVED_DAYS = 30
 export interface Approved { title: string; on: string; by: 'owner' | 'pm' }
+/** Days after an approval's APPROVED_DAYS during which a proposal of the same change recalls it: the report's own week. */
+export const LAPSED_DAYS = 7
 /** The zone of a project that set no digest: the owner's time zone is stored nowhere; the digest's is the one a project sets. */
 export const DEFAULT_TIME_ZONE = 'Asia/Ho_Chi_Minh'
 /** The local date of [at] in [timeZone], or in the default zone for none or one this runtime does not know. */
@@ -229,7 +234,13 @@ export function routingReflection(input: ReflectionInput): Reflection | null {
   const grid = gridStepUps(input.rows, input.now)
   const approved = input.approved ?? []
   const settled = new Set([...input.decided ?? [], ...approved.map(a => a.title)])
-  const proposed = proposals(week.rows, grid).filter(p => !settled.has(p.title) && !ruled(p.change, input.rules ?? [])).slice(0, MAX_PROPOSALS)
+  const lapsed = new Map((input.lapsed ?? []).map(a => [a.title, a]))
+  // A proposal comes from the last 7 days: one of a lapsed approval means those days still routed the old way.
+  const recalled = (p: Proposal): Proposal => {
+    const a = lapsed.get(p.title)
+    return a ? { ...p, why: `${a.by === 'pm' ? 'PM decided' : 'Approved'} on ${a.on}; the last 7 days still route the old way. ${p.why}` } : p
+  }
+  const proposed = proposals(week.rows, grid).filter(p => !settled.has(p.title) && !ruled(p.change, input.rules ?? [])).slice(0, MAX_PROPOSALS).map(recalled)
   const table = [...week.rows].sort((a, b) => b.attempts - a.attempts)
   const render = (note: (p: Proposal) => string | null) => [
     'Routing reflection: what routed work cost and how it went. Counts only; routing changes only as the project owner approves.',

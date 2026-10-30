@@ -11,7 +11,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
-import { agentQuality, agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { agentQuality, agentTarget, askedInSchema, broken, buildRefusal, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -707,6 +707,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const mayRun = (conversationId: string, requirement: boolean) => (target: RunTarget, contributorId: string) =>
     !broken(groupRules(conversationId), target, machineName, macOf) && (!requirement || !unmet(conversation(state, conversationId).task?.requires, target, macOf))
     && !teamWorkCheck(state, target.machineId, contributorId, groupProject(state, conversation(state, conversationId)), context.now, context.teamMachines, context.otherWorkspaceMachines)
+  /** What the route decision this command carries or names says of [conversationId]'s work (rules.ts RoutedWork). */
+  const routedWork = (conversationId: string) => command.type === 'route.record' && command.conversationId === conversationId ? command.decision.assessment
+    : context.routeDecision?.conversationId === conversationId ? context.routeDecision.record.assessment : undefined
   /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). [reviews]: it would review
    *  the group's work, so the review rule holds (rules.ts reviewRefusal); merely joining a review group is not reviewing. */
   const refusal = (target: RunTarget, conversationId: string, builds = true, reviews = true): { code: string; why: string } | null => {
@@ -717,7 +720,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const review = reviews ? reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy) : null
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
-    return stepped ? { code: 'STEPPED_UP', why: stepped } : null
+    if (stepped) return { code: 'STEPPED_UP', why: stepped }
+    // A build at the top tier, or on the grid only for the work it may take (rules.ts buildRefusal).
+    const build = builds && !conversation(state, conversationId).reviewOf ? buildRefusal(policy, target, routedWork(conversationId)) : null
+    return build ? { code: 'BUILD_REFUSED', why: build } : null
   }
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false, builds = true, reviews = true) => {
     const refused = refusal(target, conversationId, builds, reviews)
@@ -1551,7 +1557,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
         personChose = !override && decision.override?.by === 'person'
       }
-      ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
+      // A Reviewer started is held to the review rule where it reviews, not to a Builder's (rules.ts buildRefusal).
+      ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose, request.role !== 'reviewer')
       break
     }
     case 'buddy.propose': {
@@ -1677,7 +1684,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId)
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId, start.request.role !== 'reviewer')
         if (why) fail(why.code, `${why.why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
@@ -1752,7 +1759,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Taking over from a Lead that left, as agent.add does.
         if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
         // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
-        message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
+        const joined = leadJoined(state, start, group, agentId)
+        message(group.id, joined.text, [], null, joined.source)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       else if (!start.request.buddyOf) message(group.id, start.poolGeneration
@@ -2371,6 +2379,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The Builder of the reviewed work may sit in its review group, but never gives that review's verdict (review of #2313).
       if (group.reviewOf && actor.kind === 'agent' && actor.agentId === state.conversations.find(c => c.id === group.reviewOf)?.assignment?.agentId) {
         fail('INDEPENDENT_REVIEW', 'The Builder of the reviewed work does not give its review\'s verdict.')
+      }
+      // A review's checks are its Reviewer's or a person's: the server keeps no list of the reviewed work's past Builders, so any
+      // other agent in the review group, an earlier Builder of reassigned work among them, is refused (re-review of #2313).
+      if (group.reviewOf && actor.kind === 'agent' && agentRole(agent(state, actor.agentId)) !== 'reviewer') {
+        fail('INDEPENDENT_REVIEW', 'Only a Reviewer or a person passes a review\'s checks.')
       }
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
