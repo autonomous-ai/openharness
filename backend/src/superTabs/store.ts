@@ -30,6 +30,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
+import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
@@ -884,7 +885,7 @@ export class SuperTabStore {
   async setWorkspaceVisibility(user: AuthUser, tabId: string, visibility: 'invite-only' | 'workspace') {
     this.personOnly(user)
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       await outsiderRefusal(state, user.sub, async () => {
         if (!state.workspaceId) fail('WORKSPACE_REQUIRED', `This Swarm has no ${WORKSPACE_LABEL} yet.`, 409)
         const own = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
@@ -900,7 +901,7 @@ export class SuperTabStore {
   async workspaceJoin(user: AuthUser, tabId: string, operationId: string) {
     this.personOnly(user)
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       await outsiderRefusal(state, user.sub, async () => {
         if (!state.workspaceId || state.workspaceVisibility !== 'workspace') fail('FORBIDDEN', 'This Swarm is not open to its Workspace.', 403)
         await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.joinOpen')
@@ -947,7 +948,7 @@ export class SuperTabStore {
     this.personOnly(user)
     const request = saveSharingSchema.parse(input)
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       requireSharingOwner(state, user.sub)
       const receiptId = stableId('swarm-sharing', tabId, user.sub, request.operationId), requestHash = hash(request)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
@@ -981,7 +982,7 @@ export class SuperTabStore {
     this.personOnly(user)
     const request = joinSwarmSchema.parse(input)
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       // Recheck the current grant before an old receipt. Disabling, replacing, or
       // changing access can never revive a removed membership through a retry.
       const sharing = authorizeSwarmJoin(state, user.email, request.token)
@@ -2418,7 +2419,7 @@ export class SuperTabStore {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       await this.hostFor(tx, user, machineId, owned)
       // Only the conversations its checks read (parts/load.ts loadObserved): the whole Swarm was ~1.1 MB a report (#876).
-      const loaded = loadedFrom(await this.row(tx, user, tabId), await loadObserved(tx, tabId, machineId)), state = structuredClone(loaded.state)
+      const loaded = loadedFrom(await this.row(tx, user, tabId), await loadObserved(tx, tabId, machineId)), state = cloneData(loaded.state)
       await this.hostFor(tx, user, machineId, owned, state)
       const pool = await strangerRefusal(state, user.sub, () => {
         const found = machineContribution(state, machineId)
@@ -2672,7 +2673,7 @@ export class SuperTabStore {
         const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
         if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
-      const state = structuredClone(loaded.state)
+      const state = cloneData(loaded.state)
       if (sentAlready) {
         const project = projectOf(state, led!.id)
         project.digest = { ...project.digest!, lastOn: due! }
@@ -2898,7 +2899,7 @@ export class SuperTabStore {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row) return 'skipped'
       const loaded = await loadRow(tx, requireParts(row), { groupIds: [at.chat.id] })
-      const state = structuredClone(loaded.state)
+      const state = cloneData(loaded.state)
       const place = reflectionPlace(state, projectId)
       if (!place) return 'skipped'
       const { project, chat, lead } = place
@@ -2959,7 +2960,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = structuredClone(loaded.state)
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = cloneData(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
       if (!group) return false
@@ -3013,8 +3014,8 @@ export class SuperTabStore {
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       ended = []
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
-      const before = { agents: state.agents, conversations: structuredClone(state.conversations) }
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      const before = { agents: state.agents, conversations: cloneData(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
       const assignment = await strangerRefusal(state, user.sub, () => {
         const found = group?.assignment

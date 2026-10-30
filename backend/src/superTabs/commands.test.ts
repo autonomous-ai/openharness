@@ -8,6 +8,7 @@ import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { agentTarget, broken } from './rules.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { NOW, owner as richOwner, richSwarm } from './read/fixture.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -4132,5 +4133,13 @@ describe('a settling start names the model its agent runs', () => {
     const t = setup(), { startId } = t.start('codex-7')
     expect(t.settle(startId).messages).toHaveLength(1)
     expect(() => commandSchema.parse({ type: 'agent.startSettled', startId, warning: null, model: 'gpt-6.1-sol' })).toThrow()
+  })
+})
+
+describe('the state a command works on', () => {
+  it('fails loudly on a state value it cannot copy', () => {
+    expect(() => applyCommand({ ...richSwarm().state, stray: new Map() } as never, richOwner,
+      { type: 'message.send', conversationId: 'lead', text: 'hi', replyTo: null, recipientIds: [] }, { now: NOW, operationId: 'op' }))
+      .toThrow(/cannot copy a Map at stray/)
   })
 })

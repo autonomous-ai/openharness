@@ -122,6 +122,53 @@ describe('SwarmCache', () => {
     expect(cache.size).toEqual({ entries: 0, bytes: 0 })
   })
 
+  it('drops only the bumped Swarm\'s entries, keeping counts right through drops, evictions and expiry', async () => {
+    let now = 1_000
+    const stamps = new MemoryStamps(), cache = new SwarmCache(stamps, { maxBytes: 10_000, maxAgeMs: 60_000, now: () => now })
+    const loads = new Map<string, number>()
+    // Loads of each entry so far. A 1 KB value is 1,012 bytes as the cache counts it, 'big' 8,012.
+    const get = async (tab: string, name: string, scope: 'main' | 'all' = 'main') => {
+      await (await cache.at([tab])).get(tab, name, scope, async () => {
+        loads.set(`${tab}/${name}`, (loads.get(`${tab}/${name}`) ?? 0) + 1)
+        return { text: 'x'.repeat(name === 'big' ? 8_000 : 1_000) }
+      })
+      return loads.get(`${tab}/${name}`)
+    }
+    for (const tab of ['a', 'b']) { await get(tab, 'one'); await get(tab, 'two'); await get(tab, 'machines', 'all') }
+    expect(cache.size).toEqual({ entries: 6, bytes: 6 * 1_012 })
+
+    await stamps.bump('a', ['main'])
+    expect(cache.size).toEqual({ entries: 3, bytes: 3 * 1_012 })
+    expect([await get('b', 'one'), await get('b', 'two'), await get('b', 'machines', 'all')]).toEqual([1, 1, 1])
+
+    // A machine's reading keeps b's main-scoped entries.
+    await stamps.bump('b', ['machine'])
+    expect(cache.size).toEqual({ entries: 2, bytes: 2 * 1_012 })
+
+    // Over the budget: b's least recently used entry goes, the other stays held.
+    await get('c', 'big')
+    expect(cache.size).toEqual({ entries: 2, bytes: 1_012 + 8_012 })
+    expect(await get('b', 'two')).toBe(1)
+    // So does a machine's reading after the eviction.
+    await stamps.bump('b', ['machine'])
+    expect(cache.size).toEqual({ entries: 2, bytes: 1_012 + 8_012 })
+
+    // Past the maximum age: a read forgets the entry and loads it again.
+    now += 60_000
+    expect(await get('b', 'two')).toBe(2)
+    expect(cache.size).toEqual({ entries: 2, bytes: 1_012 + 8_012 })
+
+    // Whatever was evicted or expired before, a bump drops exactly the Swarm's entries still held.
+    await stamps.bump('b', ['main'])
+    expect(cache.size).toEqual({ entries: 1, bytes: 8_012 })
+    await stamps.bump('a', ['main'])
+    expect(cache.size).toEqual({ entries: 1, bytes: 8_012 })
+    await stamps.bump('c', ['main'])
+    expect(cache.size).toEqual({ entries: 0, bytes: 0 })
+    expect(await get('b', 'one')).toBe(2)
+    expect(cache.size).toEqual({ entries: 1, bytes: 1_012 })
+  })
+
   it('reads the stamps of several Swarms at once', async () => {
     const stamps = new MemoryStamps(), cache = new SwarmCache(stamps)
     const one = counted(n => ({ n })), two = counted(n => ({ n }))

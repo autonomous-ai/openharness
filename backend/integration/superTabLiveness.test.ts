@@ -15,6 +15,7 @@ import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
+import { profiledReads } from './profiledReads.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 
 // Work never sits with a dead owner: an active assignment whose agent died, stalled or hit a limit becomes lost within
@@ -776,6 +777,29 @@ describe('a machine\'s report', () => {
     f.clock.now += 15_000
     await f.observe('test-host', [f.harness.worker])
     expect((await lent()).contribution?.lent?.[0]?.busyMs).toBe(15_000)
+  })
+})
+
+// A report never reads its projects' report progress (projectUpdates.ts): only commands and native events note reports.
+describe('machine reports and report progress', () => {
+  it('reads no report progress and leaves its part as it was, also when the report loses a task', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] })
+    const before = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
+    expect(before).not.toBeNull()
+    const { reads } = await profiledReads(db, /\.SwarmProgress$/, async () => {
+      // The tab's first report, so it runs the liveness sweep too.
+      await f.observe('test-host', [f.harness.worker])
+      // The worker's machine is silent past its grace: this report loses its task and writes the group and the agent.
+      f.clock.now += 2 * MINUTE + 5_000
+      await f.observe('lead-host', [f.harness.lead])
+    })
+    expect(reads).toBe(0)
+    expect((await f.assignment()).status).toBe('lost')
+    const after = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
+    expect(after!.version).toBe(before!.version)
+    expect(after!.data).toEqual(before!.data)
+    expect(after!.changedAt).toEqual(before!.changedAt)
   })
 })
 

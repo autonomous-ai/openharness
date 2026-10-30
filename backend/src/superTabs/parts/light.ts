@@ -6,7 +6,7 @@
  * and host rows; it is never sent to a client as a conversation.
  */
 import type { Prisma } from '@prisma/client'
-import { activeWork, type Agent, type AgentStart } from '../model.js'
+import { activeWork, agentRole, type Agent, type AgentStart } from '../model.js'
 import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
 import { delegate, partId, type PartRow } from './write.js'
 import { groupsBy, type GroupIndex } from './indexed.js'
@@ -57,13 +57,14 @@ function lightGroup(row: Record<string, unknown>): Part<GroupData> {
 }
 
 /**
- * A worker with no stored decision and no running work is judged from its finished conversations (model.ts
- * awaitingWorkers): a lost task leaves none stored (liveness.ts). The 'working' selection then also needs every active
- * conversation such a worker is in, works in or leads, as a whole first load sees them (review of #1745).
+ * A worker with no stored decision is judged from its finished conversations (model.ts awaitingWorkers): a lost task leaves
+ * none stored (liveness.ts). The 'working' selection then also needs every active conversation such a worker is in, works
+ * in or leads, as a whole first load sees them (review of #1745). Busy as awaitingWorkers tells it: a Reviewer, the Lead of
+ * a conversation, or the worker of active work; a member of someone else's running work is not.
  */
 async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], lightGroups: (index: GroupIndex, match: Record<string, unknown>) => Promise<Part<GroupData>[]>) {
-  const busy = new Set(groups.flatMap(g => [...g.data!.leadId ? [g.data!.leadId] : [], ...activeWork(g.data!) ? [g.data!.assignment!.agentId, ...g.data!.agentIds] : []]))
-  const undecided = agents.filter(a => !a.data!.workDecision && !busy.has(a.key)).map(a => a.key)
+  const busy = new Set(groups.flatMap(g => [...g.data!.leadId ? [g.data!.leadId] : [], ...activeWork(g.data!) ? [g.data!.assignment!.agentId] : []]))
+  const undecided = agents.filter(a => !a.data!.workDecision && agentRole(a.data!) !== 'reviewer' && !busy.has(a.key)).map(a => a.key)
   if (!undecided.length) return []
   return lightGroups('dormancy', { dormant: false, key: { $nin: groups.map(g => g.key) },
     $or: [{ 'data.assignment.agentId': { $in: undecided } }, { 'data.leadId': { $in: undecided } }, { agentIds: { $in: undecided } }] })
@@ -109,32 +110,27 @@ export async function loadLightGroups(tx: Transaction, tabId: string, index: Gro
 }
 
 /**
- * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
+ * The live parts of one Swarm with conversations light, and no progress parts: a change poll sends those from the change
+ * feed (read/changes.ts), and nothing derived reads them. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
- * values read once every finished worker's decision is stored); plus those named by id and those the named agents are in,
- * dormant ones too, and the active ones of the named projects. Starts: unfinished, or every live start with `includeRecentStarts`.
- * With `recentStartGroups`, only unfinished starts are read whole, but the conversations of every live start are loaded as with
- * `includeRecentStarts`: a change poll sends only the starts that changed (read/service.ts), and the conversations it holds
- * decide what each reader may see (an agent stored with no project takes its project from them: projects.ts agentProjectId).
+ * values read once every finished worker's decision is stored), with the active ones of agents stored with no project (they
+ * take theirs from the first one they are in: projects.ts agentProjectId); plus those named by id and those the named agents
+ * are in, dormant ones too, and the active ones of the named projects. Starts: unfinished, or every live start with
+ * `includeRecentStarts`.
  */
 export async function loadLight(tx: Transaction, tabId: string,
-  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; recentStartGroups?: boolean; groups?: 'active' | 'working'
+  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working'
     /** False leaves machines out: the read cache keeps them at their own stamp (cache.ts). */
     machines?: boolean } = {}): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const live = { tabId, deleted: false }
   const starts = (await delegate(tx, 'start').findMany({ where: opts.includeRecentStarts ? live : { ...live, finishedAt: null } })).map(row => toPart<AgentStart>('start', row))
-  // Each live start's conversation id alone (a busy Swarm's week of finished starts was ~1 MB whole each poll, prod 10-29).
-  const startGroups = opts.recentStartGroups && !opts.includeRecentStarts
-    ? ((await tx.$runCommandRaw({ distinct: 'SwarmStart', key: 'conversationId', query: live })) as unknown as { values: Array<string | null> }).values
-      .filter((id): id is string => typeof id === 'string')
-    : starts.map(s => s.data!.request.conversationId)
   const { projects, leadsConversationId, invitations } = head.data as unknown as HeadData
   // Besides the Lead conversations and running work, the conversations a start or an invitation names: a reader sees
   // those only alongside their conversation (model.ts visibleState).
   const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '',
-    ...startGroups, ...invitations.map(i => i.conversationId)]
+    ...starts.map(s => s.data!.request.conversationId), ...invitations.map(i => i.conversationId)]
   // One read per index, never one $or over several: Mongo plans an $or again whenever its plan cache misses (parts/indexed.ts).
   const keys = [...opts.groups === 'working' ? working : [], ...opts.groupIds ?? []]
   // The Swarm's first project also holds conversations stored with no project (model.ts groupProject).
@@ -146,13 +142,19 @@ export async function loadLight(tx: Transaction, tabId: string,
   const lightGroups = async (index: GroupIndex, match: Record<string, unknown>) => (await groupsBy(tx, index, [{ $match: { tabId, deleted: false, ...match } },
     { $project: LIGHT_GROUP }])).map(lightGroup)
   const unique = (lists: Part<GroupData>[][]) => [...new Map(lists.flat().map(group => [group.key, group])).values()]
-  const [members, agents, machines, progress, groups] = await Promise.all([
+  const [members, agents, machines, groups] = await Promise.all([
     ...(['member', 'agent', 'machine'] as const).map(kind => kind === 'machine' && opts.machines === false ? Promise.resolve([])
       : delegate(tx, kind).findMany({ where: live }).then(rows => rows.map(row => toPart(kind, row)))),
-    delegate(tx, 'progress').findMany({ where: live }).then(rows => rows.map(row => toPart('progress', row))),
     Promise.all(named.map(([index, match]) => lightGroups(index, match))).then(unique),
   ])
-  if (opts.groups === 'working') groups.push(...await undecidedWork(agents as Part<unknown>[] as Part<Agent>[], groups as Part<GroupData>[], lightGroups))
-  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,
+  if (opts.groups === 'working') {
+    const workers = agents as Part<unknown>[] as Part<Agent>[]
+    const legacy = workers.filter(a => !a.data!.projectId).map(a => a.key)
+    const [undecided, ofLegacy] = await Promise.all([undecidedWork(workers, groups as Part<GroupData>[], lightGroups),
+      legacy.length ? lightGroups('agents', { agentIds: { $in: legacy }, dormant: false }) : Promise.resolve([])])
+    const held = new Set(groups.map(g => g.key))
+    groups.push(...unique([undecided, ofLegacy]).filter(g => !held.has(g.key)))
+  }
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress: [],
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }

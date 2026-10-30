@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { cloneData } from './cloneData.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -658,14 +659,18 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 /** Pending invitations are management data, not part of the shared conversation. */
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
-  const visible = structuredClone(state)
+  // The copy leaves out what no reader gets and no step below reads: the owner-only sharing, the hosts' slot claims, released
+  // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
+  // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
+  // (spec, Archive); a command may still load one.
+  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+    ...kept } = state
+  const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
-  // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
-  visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
   // People and Leads read the Leads conversation; it is not there for any other agent.
   if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
@@ -682,12 +687,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
   visible.buddies = true
-  delete visible.sharing
-  delete visible.harnessReservations
-  delete visible.releasedHarnesses
-  delete visible.overlapAlerts
-  // Only that machine's host roster lists them (read/hostRows.ts); a removed private agent's session is not every member's.
-  delete visible.closingSessions
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
