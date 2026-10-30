@@ -124,8 +124,9 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
   // than installing over what may be there.
   let unreachable = false
-  // A dangling link on the way to a candidate: a person's choice, so it never proves the engine absent. Looked past
-  // as a shell looks past it, for a later candidate it can run; with none, held rather than installing. Held at the
+  // A dangling link on the way to a candidate (POSIX): a person's choice, so it never proves the engine absent. Looked
+  // past as bash and zsh look past it (ENOENT), for a later candidate it can run; with none, held rather than
+  // installing. Held at the
   // link, every start on a Mac with Nix and no profile yet (~/.nix-profile) waited for good, its own Claude Code in
   // ~/.local/bin never reached (2026-10-30).
   let aliased = false
@@ -141,12 +142,13 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
         // A leaf that exists though statSync cannot follow it is a dangling link: a user's choice, held as on POSIX.
         // Only the leaf is checked: a dangling folder on the way (nvm-windows' nodejs link after its version was
         // removed) still reads as absent here, where POSIX holds on a dangling ancestor.
+        // Unlike a POSIX shell, Windows' search stops at the dangling leaf rather than looking past it, so it is
+        // still held here, not looked past.
         if (process.platform === 'win32') {
           try { lstatSync(path) } catch (leaf) {
             if ((leaf as NodeJS.ErrnoException).code === 'ENOENT') continue
           }
-          aliased = true
-          continue
+          return held('Waiting to confirm the engine search path and its aliases.')
         }
         try {
           const paths = new NativePaths(new NativeEvidenceBudget())

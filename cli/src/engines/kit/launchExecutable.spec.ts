@@ -99,6 +99,15 @@ it('looks past a dangling command link to the engine after it, as a shell does',
   const file = join(bin, 'opencode'); writeFileSync(file, 'its own', { mode: 0o700 })
   expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
 })
+it('never looks past a configured engine path that is a dangling link', async () => {
+  // The person named this file: there is nothing after it to look for.
+  await fixture()
+  const link = join(root, 'configured-opencode'); symlinkSync(join(root, 'removed-engine'), link)
+  vi.stubEnv('OPENCODE_PATH', link)
+  vi.resetModules()
+  const { captureLaunchExecutable } = await import('./launchExecutable.js')
+  expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held', detail: expect.stringContaining('aliases') })
+})
 it('permits complete absence through a valid search-directory alias', async () => {
   const { bin, captureLaunchExecutable } = await fixture()
   const alias = join(root, 'path-alias'); symlinkSync(bin, alias); vi.stubEnv('PATH', alias)
