@@ -4,7 +4,7 @@
  * half the time on 2026-10-22 (Haiku, a stopping agent, low effort) because it did not know the owner's rules. */
 import { z } from 'zod'
 import type { Agent, SuperTabState, TaskRequirement } from './model.js'
-import type { RoutingPolicy } from './routingPolicy.js'
+import { gridQuality, type RoutingPolicy } from './routingPolicy.js'
 import { downSince } from './machines.js'
 import { canStart, REVIEW_START_MS, standing } from './reviewSeats.js'
 
@@ -126,6 +126,10 @@ export function policyQuality(policy: RoutingPolicy, engine: string, model: stri
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 /** A target's strength: an agent launched on the engine's own model falls back to the `default` row (Codex reports its slug). */
 export const targetQuality = (policy: RoutingPolicy, t: RunTarget) => policyQuality(policy, t.engine, t.model, t.effort, !!t.launchedDefault)
+/** How strong an agent counts: a grid model by the policy's grid rating, else as [targetQuality] (cli route.ts reviewedBuilder). */
+export const agentQuality = (state: SuperTabState, policy: RoutingPolicy, worker: Agent): number =>
+  worker.gridModel ? gridQuality(policy, worker.gridModel, state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridName ?? '')
+    : targetQuality(policy, agentTarget(state, worker))
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 
