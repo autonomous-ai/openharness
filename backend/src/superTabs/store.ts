@@ -21,6 +21,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
+import { recordReload } from './retryStats.js'
 import { buddyChatId, type ChosenBuddyName } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -700,11 +701,11 @@ export class SuperTabStore {
 
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
   private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
-    if (named.allGroups) return loadRow(tx, loaded.row, named)
     const has = (ids: string[] | undefined, present: (id: string) => boolean) => (ids ?? []).every(present)
     const { state } = loaded
-    if (has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
+    if (!named.allGroups && has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
       && !named.agentIds?.length && !named.projectIds?.length && !named.startAgentIds?.length) return loaded
+    recordReload()
     return loadRow(tx, loaded.row, named)
   }
 

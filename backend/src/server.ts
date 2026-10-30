@@ -32,6 +32,7 @@ import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { startRetryStats } from './superTabs/retryStats.js'
 import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
@@ -143,6 +144,8 @@ async function start(): Promise<void> {
   selfProfileFromEnv(app)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
   const stopQueryStats = startQueryStats()
+  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
+  const stopRetryStats = startRetryStats()
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
 
   app.setErrorHandler(errorHandler)
@@ -221,6 +224,7 @@ async function start(): Promise<void> {
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
       // The last partial minute of both logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
+      stopRetryStats()
       stopRouteLatency()
       stopMachineReportLog()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
