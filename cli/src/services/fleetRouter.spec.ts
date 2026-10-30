@@ -58,7 +58,7 @@ function laneOf() {
   let heard: (machineId: string) => void = () => {}
   const link = {
     selectedMachine: '', onFrame: () => () => {}, onUndelivered: () => () => {},
-    onAlive: (cb: (machineId: string) => void) => { heard = cb; return () => {} },
+    onAlive: (cb: (machineId: string) => void) => { heard = cb; return () => {} }, onGone: () => () => {},
     rpc: vi.fn(async (): Promise<Record<string, unknown>> => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] })),
     resetSession: vi.fn(() => true), sendSealed: vi.fn(async () => {}),
   }
