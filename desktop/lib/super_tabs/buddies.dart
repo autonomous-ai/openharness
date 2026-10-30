@@ -520,6 +520,10 @@ class SuperTabBuddyBar extends StatelessWidget {
     final error = start?['error'];
     if (start == null || (error is! String && start['harnessId'] != null)) {
       return _BuddyStart(
+        // One bar per chat: another project's Buddy chat gets a bar of its
+        // own, and leaving this one stops its start (Diego, 10-30: a Buddy
+        // was created in whichever chat was open when setup ended).
+        key: ValueKey(('super-buddy-start', chat.id)),
         controller: c,
         projectId: chat.projectId,
         padding: _padding,
@@ -623,6 +627,7 @@ class SuperTabBuddyBar extends StatelessWidget {
 /// A viewer, who adds nothing, sees no bar.
 class _BuddyStart extends StatefulWidget {
   const _BuddyStart({
+    super.key,
     required this.controller,
     required this.projectId,
     required this.padding,
@@ -646,28 +651,30 @@ class _BuddyStartState extends State<_BuddyStart> {
 
   /// Starts the Buddy on [machine], first preparing it when it is one of the
   /// reader's machines outside the Swarm. A failed setup says why and starts
-  /// nothing.
+  /// nothing. The Buddy is for the project whose chat was clicked: once the
+  /// bar shows another chat, the start stops and sends nothing.
   Future<void> _start(BuddyMachine machine) async {
     if (_adding) return;
+    final projectId = widget.projectId;
+    bool here() => mounted && widget.projectId == projectId;
     setState(() {
       _adding = true;
       _error = null;
     });
-    final (:id, :setup, :error) = await _adder.resolve(
-      machine,
-      alive: () => mounted,
-    );
+    final (:id, :setup, :error) = await _adder.resolve(machine, alive: here);
     if (!mounted) return;
+    final stillHere = here();
     setState(() {
       _adding = false;
-      _error = error;
+      // Another chat's bar never shows this start's error.
+      _error = stillHere ? error : null;
     });
-    if (id == null) return;
+    if (id == null || !stillHere) return;
     final app = widget.app;
     unawaited(
       c
           .addBuddy(
-            projectId: widget.projectId,
+            projectId: projectId,
             machineId: id,
             engine: _engine,
             setup: setup,

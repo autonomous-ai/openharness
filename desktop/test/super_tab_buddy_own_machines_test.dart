@@ -15,6 +15,8 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart'
+    show conversationFixture, projectFixture;
 
 /// The Buddy pickers list every machine of the reader's own (Dee, 10-29: "I
 /// just wanted to create my buddy. I don't want to add my machine to the
@@ -455,6 +457,143 @@ void main() {
       );
       expect(field, lessThan(bar.width / 2));
       expect(tester.getSize(find.text(mac).last).width, lessThan(field));
+      await close(tester, f, c);
+    });
+  });
+
+  // Diego, 10-30: a Buddy started in one project's chat was created in
+  // whichever Buddy chat was open when this Mac's setup ended.
+  group('the Start bar when the chat changes mid-setup', () {
+    /// A second project, Beta, beside the Swarm's own.
+    void twoProjects(SuperTabLaunchFixture f) {
+      final state = f.connection.server.state;
+      state['projects'] = [
+        projectFixture('lead', 'Pilot', 'lead'),
+        projectFixture('beta', 'Beta', 'beta-lead'),
+      ];
+      (state['conversations'] as List).add({
+        ...conversationFixture('beta-lead', 'Lead'),
+        'projectId': 'beta',
+      });
+    }
+
+    /// The projects each Buddy start was sent for.
+    List<Object?> createdIn(SuperTabLaunchFixture f) => [
+      for (final post in f.connection.server.posts)
+        if ((post['command'] as Map)['type'] == 'buddy.create')
+          (post['command'] as Map)['projectId'],
+    ];
+    final error = find.byKey(const ValueKey('super-buddy-start-error'));
+
+    testWidgets(
+      'a setup that ends after Beta\'s chat opened starts nothing in Beta, '
+      'and Beta\'s bar is neither busy nor showing the first chat\'s error',
+      (tester) async {
+        final (:f, :c, :mac) = await open(
+          tester,
+          machines: [rig()],
+          prepare: twoProjects,
+        );
+        expect(c.buddyChat('lead')?.id, c.selectedId);
+        f.connection.keepPreparing = true;
+        await tester.tap(start);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 2));
+        expect(prepares(f), isNotEmpty);
+        expect(tester.widget<FilledButton>(start).onPressed, isNull);
+
+        expect(await c.openBuddyChat('beta'), isTrue);
+        await tester.pump();
+        expect(c.selectedId, c.buddyChat('beta')?.id);
+        // Beta's own Start bar, free to use.
+        expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+
+        f.connection.keepPreparing = false;
+        await settle(tester);
+
+        expect(createdIn(f), isNot(contains('beta')));
+        expect(c.buddy('beta'), isNull);
+        // Nothing pulled the person back to the first chat either.
+        expect(c.selectedId, c.buddyChat('beta')?.id);
+        expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+        expect(error, findsNothing);
+        await close(tester, f, c);
+      },
+    );
+
+    testWidgets('a setup that fails after Beta\'s chat opened shows nothing '
+        'in Beta', (tester) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [rig()],
+        prepare: twoProjects,
+      );
+      f.connection.keepPreparing = true;
+      await tester.tap(start);
+      await tester.pump();
+      expect(await c.openBuddyChat('beta'), isTrue);
+      await tester.pump();
+      // Alpha's setup would now run out of time and say so.
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(seconds: 60));
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('still running'), findsNothing);
+      expect(error, findsNothing);
+      expect(createdIn(f), isEmpty);
+      await close(tester, f, c);
+    });
+
+    testWidgets('back in the first chat, Start starts its Buddy there', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [rig()],
+        prepare: twoProjects,
+      );
+      f.connection.keepPreparing = true;
+      await tester.tap(start);
+      await tester.pump();
+      expect(await c.openBuddyChat('beta'), isTrue);
+      await tester.pump();
+      f.connection.keepPreparing = false;
+      await settle(tester);
+
+      expect(await c.openBuddyChat('lead'), isTrue);
+      await tester.pump();
+      await tester.tap(start);
+      await settle(tester);
+
+      expect(createdIn(f), ['lead']);
+      expect(c.buddy('lead'), isNotNull);
+      expect(c.buddy('beta'), isNull);
+      await close(tester, f, c);
+    });
+
+    testWidgets('the same chat keeps the picked machine when it redraws', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        prepare: (f) {
+          twoProjects(f);
+          accountMachines(f);
+        },
+      );
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Studio').last);
+      await tester.pumpAndSettle();
+
+      await c.refresh();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(of: barMachine, matching: find.text('Studio')),
+        findsOneWidget,
+      );
       await close(tester, f, c);
     });
   });
