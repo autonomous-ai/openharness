@@ -20,9 +20,10 @@ const reviewer = /^reviewer(?:[\s#-]+\d+)?$/i
 const unnamed = (name: string): boolean => defaults.test(name) || reviewer.test(name) || automatic.test(name)
 
 function chosen(agent: NamedAgent): string | undefined {
-  // A role's name kept as a member's (every Reviewer's "Reviewer" until 2026-10-30) is given a real one.
+  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30: that one stored name is given a real one.
+  // Any other stored name stays, even one that reads like a role (a Buddy may be named so).
   const shown = agent.displayName?.trim()
-  if (shown && !unnamed(shown)) return agent.displayName
+  if (shown && !reviewer.test(shown)) return agent.displayName
   const name = agent.name.trim()
   return name && !unnamed(name) ? name : undefined
 }
@@ -53,7 +54,7 @@ export function assignAgentDisplayNames(agents: NamedAgent[]): void {
 export function agentDisplayName(agents: NamedAgent[], id: string): string | undefined {
   const member = agents.find(agent => agent.id === id)
   if (!member) return undefined
-  if (member.displayName && !unnamed(member.displayName.trim())) return member.displayName
+  if (member.displayName && !reviewer.test(member.displayName.trim())) return member.displayName
   const named = agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
   return named.find(agent => agent.id === id)!.displayName

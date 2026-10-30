@@ -62,6 +62,15 @@ describe('individual agent names', () => {
     expect(agentDisplayName([{ id: 'r', name: 'Reviewer', displayName: 'Reviewer' }], 'r')).not.toBe('Reviewer')
   })
 
+  it('keeps every other stored name, even one that reads like a role or an automatic session (review of #2281)', () => {
+    // A Buddy may be named "claude-2026-10-30" (buddies.ts accepts it); only a stored "Reviewer" is replaced.
+    const kept = ['Dev', 'PM', 'Lead 2', 'claude-2026-10-30', 'codex-2026-10-30T09']
+    const agents: NamedAgent[] = kept.map((displayName, i) => ({ id: `k-${i}`, name: 'Builder', displayName }))
+    assignAgentDisplayNames(agents)
+    expect(agents.map(a => a.displayName)).toEqual(kept)
+    for (const [i, name] of kept.entries()) expect(agentDisplayName(agents, `k-${i}`)).toBe(name)
+  })
+
   it('resolves legacy identities before filtering private projects without mutating reads', () => {
     const state = legacyState(), original = structuredClone(state)
     const all = visibleState(state, owner), publicOnly = visibleState(state, peer)
