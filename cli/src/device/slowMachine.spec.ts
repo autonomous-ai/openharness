@@ -16,6 +16,7 @@ import type { E2eeManager as Manager } from '../lib/e2ee/manager.js'
 import { LaneSessions } from '../gateway/lane.js'
 import { DeviceFleet } from './deviceFleet.js'
 import { DeviceLink } from './deviceLink.js'
+import { FleetRouter } from '../services/fleetRouter.js'
 
 type Frame = Record<string, unknown>
 const MACHINE = 'b1b2c3d4e5f60718293a4b5c6d7e8f90'
@@ -47,7 +48,7 @@ async function until(what: string, check: () => boolean): Promise<void> {
   throw new Error(`never: ${what}`)
 }
 
-async function slowMachine() {
+async function slowMachine(over: { now?: () => number } = {}) {
   const identity = C.newIdentity()
   const lane = new LaneSessions(() => identity)
   // The far machine, which trusts this one's key (as `harness link connect` leaves two machines).
@@ -88,6 +89,7 @@ async function slowMachine() {
     computerId: 'this-computer', autonomousEnv: 'test', seal: lane,
     peer: (machineId) => machineId === MACHINE ? { machineId, pub: farPub, label: 'far', linkedAt: 1 } as never : null,
     localMachineId: () => 'this-machine', log: (line) => { lines.push(line) },
+    ...(over.now ? { now: over.now } : {}),
   })
   stops.push(async () => link.stop())
   const rows = [{ machineId: MACHINE, name: 'slow-mac', state: 'ready', authMode: 'remote', local: false }]
@@ -105,8 +107,72 @@ async function slowMachine() {
     return asked[before]!
   }
   const read = (what: string) => until(what, () => lines.some((line) => line.includes(what)))
-  return { far, fleet, link, lines, toLane, timesOut, hellos, read, turns }
+  return { far, fleet, link, lines, toLane, timesOut, hellos, read, turns, asked }
 }
+
+/** The router over that fleet, with the far machine's one agent listed: what ⌘K and the dial send a turn through. */
+async function routed(m: Awaited<ReturnType<typeof slowMachine>>, answer: () => Promise<void>) {
+  const router = new FleetRouter({ machineName: () => 'here', machineId: () => 'this-machine', computerId: () => 'c', sessions: () => [],
+    displayName: () => '', desk: () => [], sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [],
+    log: (line) => { m.lines.push(line) } }, m.fleet)
+  await router.listAgentsFlat()
+  await answer()
+  expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['agent-1'])
+  return router
+}
+
+/** The far machine answering the last list it was asked, sealed for this session alone. */
+function answerLast(m: Awaited<ReturnType<typeof slowMachine>>) {
+  return async () => {
+    await until('the far machine to read the list', () => m.asked.some((a) => a.type === 'agents_list'))
+    const last = m.asked.filter((a) => a.type === 'agents_list').at(-1)!
+    m.toLane(m.far.wrapRpcReply(CONN, 'agents_list_result', last.requestId, { agents: [{ id: 'agent-1', name: 'api', engine: 'claude' }] })!)
+    await until('its answer', () => m.fleet.reachable(MACHINE)?.ok === true)
+  }
+}
+
+// #2387's review: B's daemon killed, nothing told this machine (the relay's list still said running), and a list to it
+// waited 45 s, so a turn sent meanwhile was lost, not refused ('B going away' in e2e/fleet.e2e.ts). Now the list fails
+// once the machine has been quiet 30 s, and the turn is refused from then.
+it('refuses a turn to a machine gone quiet with nothing said, 30 s after it was last heard, not after a 45 s list', async () => {
+  let clock = 1_000_000
+  const m = await slowMachine({ now: () => clock })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const router = await routed(m, answerLast(m))
+  expect(router.sendTurn('agent-1', 'while it is up')).toEqual({ ok: true })
+  // It dies now. The next list, 5 s on, is read by nobody who answers.
+  clock += 5_000
+  const listed = m.fleet.listAgents(MACHINE).catch((error: Error) => error)
+  await until('the list to go out', () => m.asked.filter((a) => a.type === 'agents_list').length === 2)
+  await vi.advanceTimersByTimeAsync(24_999)
+  expect(router.sendTurn('agent-1', 'just after it went')).toEqual({ ok: true })
+  await vi.advanceTimersByTimeAsync(1)
+  clock += 25_000
+  expect(router.sendTurn('agent-1', 'to a machine gone 30 s')).toMatchObject({ ok: false, reason: 'the last request to it did not come back' })
+  expect(await listed).toEqual(new Error('agents_list timed out'))
+})
+
+// #2381's rule kept: a machine answering every list 20 s late is never quiet 30 s, keeps its tiles, and takes every turn.
+it('keeps a machine that answers every list 20 s late reachable, on the carousel, and taking turns', async () => {
+  let clock = 1_000_000
+  const m = await slowMachine({ now: () => clock })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const router = await routed(m, answerLast(m))
+  for (let round = 1; round <= 4; round++) {
+    const listed = m.fleet.listAgents(MACHINE)
+    await until('the list to go out', () => m.asked.filter((a) => a.type === 'agents_list').length === round + 1)
+    for (let second = 0; second < 20; second++) {
+      await vi.advanceTimersByTimeAsync(1_000)
+      clock += 1_000
+      expect(router.sendTurn('agent-1', `round ${round}, ${second + 1} s`)).toEqual({ ok: true })
+    }
+    await answerLast(m)()
+    expect((await listed).map((a) => a.id)).toEqual(['agent-1'])
+    expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['agent-1'])
+  }
+  expect(m.lines.some((line) => line.includes('timed out'))).toBe(false)
+  expect(m.hellos()).toBe(1)
+})
 
 it('keeps a slow machine reachable with its session on its own late reply, and on nothing the relay or a commander could make', async () => {
   const { far, fleet, lines, toLane, timesOut, hellos, read, turns } = await slowMachine()

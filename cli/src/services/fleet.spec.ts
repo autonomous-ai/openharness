@@ -31,6 +31,7 @@ vi.mock('../device/deviceLink.js', () => ({
     onFrame(cb: (frame: Record<string, unknown>) => void) { lane.frames = cb; return () => {} }
     onUndelivered() { return () => {} }
     onAlive() { return () => {} }
+    onGone() { return () => {} }
     stop() { lane.stop() }
     rpc(type: string) { return lane.rpc(type) }
     sendSealed(...args: unknown[]) { return lane.sendSealed(...(args as [])) }
