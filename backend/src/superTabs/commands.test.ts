@@ -1396,8 +1396,11 @@ describe('Reviewer role', () => {
     // An agent from before the flag was kept is judged by its start: one that named the model is rated by that model's row.
     delete f.state.agents.find(a => a.id === reviewer)!.launchedDefault
     expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
+    f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-9-preview'
+    expect(member({ engine: 'codex', model: 'gpt-9-preview' })).toThrow('Codex gpt-9-preview is 1.')
+    // A named strong Codex model has its own row (Lead, 10-30): a start that named it reviews.
     f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-6.1-sol'
-    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).toThrow('Codex gpt-6.1-sol is 1.')
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
   })
 
   it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, once its start has finished', () => {
@@ -1428,9 +1431,9 @@ describe('Reviewer role', () => {
     expect(pick).toThrow('Codex gpt-5.5-mini is 1.')
     // A replaced terminal (Change agent) is not the session its start launched: it is rated by the model it reports.
     f.run({ type: 'agent.rebind', agentId: reviewer, machineId: 'host', projectId: 'lead', previousHarnessId: 'native-reviewer', harnessId: 'native-reviewer-2',
-      configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+      configuration: { ...config, model: 'gpt-9-preview' } }, reviewerActor)
     expect(f.state.agents.find(a => a.id === reviewer)).not.toHaveProperty('launchedDefault')
-    expect(pick).toThrow('Codex gpt-6.1-sol is 1.')
+    expect(pick).toThrow('Codex gpt-9-preview is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {

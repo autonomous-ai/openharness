@@ -39,6 +39,10 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   models: [
     { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
+    // Codex's own default model, now named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts)
+    // and costs Sonnet's API rate (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown
+    // slug (Lead, 10-30). Listed after `default`, which goes first at equal cost and strength.
+    { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
     { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
     { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
   ],
@@ -49,6 +53,9 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   // DeepSeek v4.1 do Sonnet's work (Ken, 2026-10-29: they were offered only for low work and rarely ran).
   localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }] },
 }
+
+/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). */
+const ADDED_ROWS = DEFAULT_ROUTING_POLICY.models.filter(m => m.engine === 'codex' && m.model === 'gpt-6.1-sol')
 
 export function effectivePolicy(account: unknown, override: unknown) {
   const warnings: string[] = []
@@ -67,6 +74,10 @@ export function effectivePolicy(account: unknown, override: unknown) {
       overridden.push(...(Object.keys(parsed.data) as Array<keyof RoutingOverride>))
     }
   }
+  // A policy saved before a named row was added has no row for that model, which rated it 1: the built-in row joins it. A
+  // row of the owner's own for the model, on or off, stays as it is.
+  const missing = ADDED_ROWS.filter(row => !policy.models.some(m => m.engine === row.engine && m.model === row.model))
+  if (missing.length) policy = { ...policy, models: [...policy.models, ...missing] }
   const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
   policy = { ...policy, localModels: { ...local, models: local.models ?? DEFAULT_ROUTING_POLICY.localModels!.models } }
   return { policy, warnings, overridden }
