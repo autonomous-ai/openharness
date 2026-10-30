@@ -31,6 +31,7 @@ import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_live_card.dart';
+import 'swarm_message_link.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
@@ -747,9 +748,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         nameOf: (kind, id) => _reactorName(c, kind, id),
         onReact: view.canPost ? (emoji) => unawaited(t.react(m, emoji)) : null,
       ),
-      onLongPress: view.canPost
-          ? () => unawaited(_pickThreadReaction(c, t, m.id))
-          : null,
+      onLongPress: () => unawaited(_pickThreadReaction(c, t, m.id)),
     );
   }
 
@@ -1192,14 +1191,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
+      react: c.canPost,
+      link: _linkTo(c, id),
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
   }
 
   /// The reaction picker over message [id]: the pick reacts to the message
-  /// as it is by then.
-  Future<void> _pickReaction(SwarmConversation c, String id) async {
+  /// as it is by then. The long-press sheet also copies the message's link;
+  /// the Add reaction chip's ([link] false) offers reactions alone.
+  Future<void> _pickReaction(
+    SwarmConversation c,
+    String id, {
+    bool link = true,
+  }) async {
     SuperTabMessage? shown() => c.messages.where((m) => m.id == id).firstOrNull;
     final message = shown();
     if (message == null) return;
@@ -1207,10 +1213,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
+      react: c.canPost,
+      link: link ? _linkTo(c, id) : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
   }
+
+  /// Message [id]'s link, the one Desktop copies.
+  SwarmMessageLink _linkTo(SwarmConversation c, String id) => SwarmMessageLink(
+    tabId: c.reader.tabId,
+    conversationId: c.id,
+    messageId: id,
+  );
 
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
@@ -1433,12 +1448,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     ? (emoji) => unawaited(c.react(m, emoji))
                     : null,
                 onAdd: widget.homeC && view.canPost
-                    ? () => unawaited(_pickReaction(c, m.id))
+                    ? () => unawaited(_pickReaction(c, m.id, link: false))
                     : null,
               ),
-              onLongPress: view.canPost
-                  ? () => unawaited(_pickReaction(c, m.id))
-                  : null,
+              onLongPress: () => unawaited(_pickReaction(c, m.id)),
               below: answerIn == null
                   ? null
                   : _AnswerIn(
@@ -1617,11 +1630,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         children: [
           if (query != null && snapshot != null)
             _MentionPicker(
+              people: c.mentionablePeople,
               agents: c.mentionable,
               snapshot: snapshot,
               query: query,
-              onPick: (agent) {
-                c.completeMention(agent.id);
+              onPick: (id) {
+                c.completeMention(id);
                 _focus.requestFocus();
               },
             ),
@@ -2515,20 +2529,25 @@ class _Ask extends StatelessWidget {
   }
 }
 
-/// The chat's agents whose name starts with what follows the @ being typed,
-/// over the composer: each with its role and what it is doing.
+/// Over the composer, who the @ being typed can name, as Desktop offers
+/// them: the chat's people whose username holds what follows it, then its
+/// agents whose name starts with it, each with its role and what it is doing.
 class _MentionPicker extends StatelessWidget {
   const _MentionPicker({
+    required this.people,
     required this.agents,
     required this.snapshot,
     required this.query,
     required this.onPick,
   });
 
+  final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final SuperTabSnapshot snapshot;
   final String query;
-  final ValueChanged<SuperTabAgent> onPick;
+
+  /// The person's or agent's id.
+  final ValueChanged<String> onPick;
 
   @override
   Widget build(BuildContext context) {
@@ -2538,6 +2557,10 @@ class _MentionPicker extends StatelessWidget {
         glance.agent.id: glance,
     };
     final prefix = query.toLowerCase();
+    final shownPeople = [
+      for (final person in people)
+        if (person.username.contains(prefix)) person,
+    ];
     final shown = [
       for (final agent in agents)
         if (snapshot.agentName(agent.id).toLowerCase().startsWith(prefix))
@@ -2554,11 +2577,11 @@ class _MentionPicker extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppMenu.panelRadius),
         boxShadow: AppSurface.shadow,
       ),
-      child: shown.isEmpty
+      child: shown.isEmpty && shownPeople.isEmpty
           ? Padding(
               padding: const EdgeInsets.all(AppSpace.l),
               child: Text(
-                'No agent by that name.',
+                'No one by that name.',
                 style: swarmChatText(14, color: AppPalette.textSecondary),
               ),
             )
@@ -2566,12 +2589,43 @@ class _MentionPicker extends StatelessWidget {
               shrinkWrap: true,
               padding: EdgeInsets.zero,
               children: [
+                for (final person in shownPeople)
+                  TtyTap(
+                    key: ValueKey('swarm-pick-person-${person.id}'),
+                    semanticsLabel: person.username,
+                    minHeight: 52,
+                    onTap: () => onPick(person.id),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.l,
+                      ),
+                      child: Row(
+                        children: [
+                          SwarmChatAvatar(
+                            name: person.username,
+                            id: person.id,
+                            agent: false,
+                            picture: person.avatar,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              person.username,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: swarmChatText(16, weight: FontWeight.w500),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 for (final agent in shown)
                   TtyTap(
                     key: ValueKey('swarm-pick-${agent.id}'),
                     semanticsLabel: snapshot.agentName(agent.id),
                     minHeight: 52,
-                    onTap: () => onPick(agent),
+                    onTap: () => onPick(agent.id),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: AppSpace.l,
