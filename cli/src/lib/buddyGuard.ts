@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { isTeamAccount } from '../team/config.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 
@@ -11,7 +13,7 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 export interface BuddyReads { file: string; drops: string }
 /** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
  *  outside its folder that stay closed, and its person's approvals on this machine. */
-export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[] }
+export interface BuddyWide { home: string; denied: readonly string[]; approvalsDir: string; repos: readonly string[]; hosts: readonly string[] }
 
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
@@ -29,9 +31,76 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
 
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
-export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[] }): BuddyWide {
-  return { home: input.home, repos: input.repos, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[] }): BuddyWide {
+  return { home: input.home, repos: input.repos, hosts: input.hosts ?? [], denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
     approvalsDir: join(input.dataDir, 'buddy-approvals') }
+}
+
+/** What a Buddy's launch reads of its machine to decide wide mode (`buddyLaunchWide`). */
+export interface BuddyLaunchFacts { platform: NodeJS.Platform; team: boolean; home: string; dataDir: string; uid: number; hasBwrap: boolean }
+const launchFacts = (): BuddyLaunchFacts => ({ platform: process.platform, team: isTeamAccount(), home: homedir(), dataDir: env.ADAPTER_DATA_DIR,
+  uid: process.getuid?.() ?? -1, hasBwrap: spawnSync('/bin/sh', ['-c', 'command -v bwrap'], { stdio: 'ignore' }).status === 0 })
+
+/** The GitHub repositories [root]'s remotes name, as owner/name: the only ones its gh api reads. */
+function githubRepos(root: string): string[] {
+  const remotes = spawnSync('git', ['-C', root, 'remote', '-v'], { encoding: 'utf8', timeout: 10_000 }).stdout ?? ''
+  const repos = [...remotes.matchAll(/github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\s/g)].map(match => `${match[1]}/${match[2]}`)
+  return [...new Set(repos)].sort()
+}
+
+/** The hosts the person's ArgoCD and cluster settings name, and nothing else of those files, which hold their tokens. */
+function configHosts(home: string): string[] {
+  const hosts: string[] = []
+  for (const file of [join(home, '.config', 'argocd', 'config'), join(home, '.argocd', 'config'), join(home, '.kube', 'config')]) {
+    let text = ''
+    try { text = readFileSync(file, 'utf8') } catch { continue }
+    for (const [, server] of text.matchAll(/^[ \t-]*server:[ \t]*["']?([^\s"']+)/gm)) {
+      const host = server!.replace(/^[a-z]+:\/\//i, '').split(/[/:]/)[0]!
+      if (/^[A-Za-z0-9.-]+$/.test(host)) hosts.push(host)
+    }
+  }
+  return [...new Set(hosts)]
+}
+
+/**
+ * Wide mode for a Buddy launched in [root], or null for its folder alone (docs/specs/2026-10-30-buddy-read-access.md,
+ * section 1). The Swarm starts a Buddy only on its person's own machine (backend BUDDY_OWN_MACHINE_REFUSAL); here it also
+ * needs their own account, never a Harness Team account, and Claude Code's sandbox to run its shell in: macOS, or Linux
+ * with bubblewrap. Windows has none.
+ */
+export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
+  if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap))) return null
+  // Where Claude Code keeps every session's tool output on this machine.
+  const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
+  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home) })
+}
+
+
+/** Where GitHub sends a run's logs, which gh run view --log fetches. */
+const GITHUB_LOG_HOSTS = ['*.actions.githubusercontent.com', '*.blob.core.windows.net']
+/** The tools' own sign-ins, which they read to sign in: closed to the Buddy's own reads, open to the tools in the sandbox. */
+const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
+
+/**
+ * Claude Code's sandbox for a wide Buddy's shell (tried with Claude Code 2.1.314): every command in it but Harness's own,
+ * which needs its daemon and terminal. Nothing may be written, its folder included (Claude Code otherwise lets a command
+ * write where it runs), and nothing reached but GitHub and the person's ArgoCD and cluster hosts, and this machine's own
+ * ports, where Harness's daemon listens. A command may never ask to leave it. The guard still judges every command first.
+ *
+ * gh, argocd and kubectl are Go tools: in the sandbox they verify TLS only through macOS's certificate service, which
+ * enableWeakerNetworkIsolation opens (without it every TLS check fails; with it an expired, self-signed or untrusted
+ * certificate is still refused). That service makes its own requests outside the host list, a small path out, for every
+ * command of the session. Ken chose it over running those tools outside the sandbox (10-30), so the sandbox's no-writes
+ * and host list hold for them too.
+ */
+export function buddySandboxSettings(root: string, wide: BuddyWide): Record<string, unknown> {
+  const signIns = new Set(TOOL_SIGN_INS.map(path => join(wide.home, path)))
+  return {
+    enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
+    excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
+    network: { allowedDomains: ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts], allowLocalBinding: true },
+    filesystem: { allowWrite: [], denyWrite: [root], denyRead: wide.denied.filter(path => !signIns.has(path)) },
+  }
 }
 
 /** One person's approvals on this machine, by their id and membership: a new membership starts with none. */
@@ -537,7 +606,10 @@ function decide(input) {
     return (tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'tree')) && typeof tool.pattern === 'string'
       && !outward(tool.pattern)
   }
-  if (input.tool_name !== 'Bash' || tool.run_in_background === true || typeof tool.command !== 'string') return false
+  // A command never leaves Claude Code's sandbox (wide mode's, lib/buddyGuard.ts buddySandboxSettings): the guard's allow
+  // must not stand in for the person's approval Claude Code would otherwise ask for.
+  if (input.tool_name !== 'Bash' || tool.run_in_background === true || tool.dangerouslyDisableSandbox !== undefined
+    || typeof tool.command !== 'string') return false
   if (bashAllowed(tool.command)) return true
   const w = words(tool.command)
   if (!w || !widerRead(w)) return false

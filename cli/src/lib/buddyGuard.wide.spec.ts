@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyWideOf, hasBuddyApprovals, judgeBuddyApprovals, recordBuddyApprovals } from './buddyGuard.js'
+import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, hasBuddyApprovals, judgeBuddyApprovals,
+  recordBuddyApprovals } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -460,4 +461,70 @@ describe('no secret leaves in a post or a proposal', () => {
     expect(refused.permissionDecisionReason).toContain('summar')
     expect(bash(`harness super-tab propose op-1 '${proposal('CPU 22 s per minute per pod on 4 pods; change feed is 63% of slow reads.')}'`)).toBe('allow')
   })
+})
+
+// Whether a Buddy's launch turns wide mode on (docs/specs/2026-10-30-buddy-read-access.md, section 1): its person's own
+// machine and account, with Claude Code's sandbox there to run its shell in. And the sandbox it runs in then.
+describe('the launch\'s wide mode and sandbox', () => {
+  const launchHome = join(parent, 'launch-home'), repo = join(parent, 'launch-repo')
+  mkdirSync(join(launchHome, '.config', 'argocd'), { recursive: true }); mkdirSync(join(launchHome, '.kube'), { recursive: true })
+  // Only host names are taken from the person's ArgoCD and cluster settings, which also hold their tokens.
+  writeFileSync(join(launchHome, '.config', 'argocd', 'config'), 'contexts:\n- name: deploy.autonomous.ai\n  server: deploy.autonomous.ai\n'
+    + '  user: deploy.autonomous.ai\ncurrent-context: deploy.autonomous.ai\nservers:\n- grpc-web-root-path: ""\n  server: deploy.autonomous.ai\n'
+    + 'users:\n- auth-token: not-a-token\n  name: deploy.autonomous.ai\n')
+  writeFileSync(join(launchHome, '.kube', 'config'), 'clusters:\n- cluster:\n    server: https://k8s.example.net:6443\n  name: prod\n')
+  mkdirSync(repo)
+  spawnSync('git', ['init', '-q'], { cwd: repo })
+  spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/autonomous-ai/openharness.git'], { cwd: repo })
+  spawnSync('git', ['remote', 'add', 'fork', 'git@github.com:someone/openharness.git'], { cwd: repo })
+  const deps = { platform: 'darwin' as NodeJS.Platform, team: false, home: launchHome, dataDir, uid: 501, hasBwrap: false }
+
+  it('turns wide mode on for its person\'s own Mac, naming its repositories and the hosts of their ArgoCD and cluster', () => {
+    const launched = buddyLaunchWide(repo, deps)!
+    expect(launched).toEqual({ home: launchHome, approvalsDir: join(dataDir, 'buddy-approvals'),
+      repos: ['autonomous-ai/openharness', 'someone/openharness'], hosts: ['deploy.autonomous.ai', 'k8s.example.net'],
+      denied: expect.arrayContaining([join(launchHome, '.ssh'), join(launchHome, '.claude'), dataDir, '/tmp/claude-501', '/private/tmp/claude-501']) })
+  })
+
+  it.each([
+    ['a Harness Team account', { team: true }],
+    ['Windows, where Claude Code has no sandbox', { platform: 'win32' as NodeJS.Platform }],
+    ['Linux without bubblewrap', { platform: 'linux' as NodeJS.Platform, hasBwrap: false }],
+  ])('keeps the folder only on %s', (_, change) => {
+    expect(buddyLaunchWide(repo, { ...deps, ...change })).toBeNull()
+  })
+
+  it('turns wide mode on for Linux with bubblewrap', () => {
+    expect(buddyLaunchWide(repo, { ...deps, platform: 'linux', hasBwrap: true })).not.toBeNull()
+  })
+
+  it('runs its whole shell but Harness\'s own commands in the sandbox: no writes, its hosts only, gh, argocd and kubectl able to verify TLS', () => {
+    const launched = buddyLaunchWide(repo, deps)!
+    expect(buddySandboxSettings(repo, launched)).toEqual({
+      enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
+      excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
+      network: { allowedDomains: ['api.github.com', 'github.com', '*.actions.githubusercontent.com', '*.blob.core.windows.net', 'deploy.autonomous.ai',
+        'k8s.example.net'], allowLocalBinding: true },
+      filesystem: { allowWrite: [], denyWrite: [repo], denyRead: launched.denied.filter(path => ![join(launchHome, '.config', 'gh'),
+        join(launchHome, '.config', 'argocd'), join(launchHome, '.argocd'), join(launchHome, '.kube')].includes(path)) },
+    })
+  })
+
+  it('leaves the tools\' own sign-ins readable to them in the sandbox, though the Buddy itself still may not read them', () => {
+    const launched = buddyLaunchWide(repo, deps)!
+    const denyRead = (buddySandboxSettings(repo, launched).filesystem as { denyRead: string[] }).denyRead
+    expect(denyRead).not.toContain(join(launchHome, '.config', 'gh'))
+    expect(denyRead).toContain(join(launchHome, '.ssh'))
+    expect(launched.denied).toContain(join(launchHome, '.config', 'gh'))
+  })
+})
+
+describe('a Buddy\'s shell stays in its sandbox', () => {
+  it.each(['git log --oneline', 'cat a.txt', 'harness super-tab --tab t messages chat'])(
+    'refuses %s when it asks to run outside the sandbox, in every mode', command => {
+      for (const guard of [script, narrow]) {
+        expect(decide('Bash', { command, description: 'x' }, guard)).toBe('allow')
+        expect(decide('Bash', { command, description: 'x', dangerouslyDisableSandbox: true }, guard)).toBe('deny')
+      }
+    })
 })

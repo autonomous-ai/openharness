@@ -16,6 +16,9 @@ import { hookArgv } from '../engines/kit/notifyHooks.js'
 import { messagesCommand, writeMessagesHook } from '../engines/kit/messagesHook.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 
+// A Buddy that reads its folder alone, whatever this machine is: wide mode has its own tests (lib/buddyGuard.wide.spec.ts).
+const folderOnly = () => null
+
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
 /**
@@ -228,7 +231,7 @@ describe.skipIf(!hasClaude).each([
     git('commit', '-qm', 'a teammate\'s settings')
     const before = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = join(root, 'config')
-    try { prepareSwarmSkill(folder, { role: 'buddy', key: 'session' }) } finally {
+    try { prepareSwarmSkill(folder, { role: 'buddy', key: 'session' }, folderOnly) } finally {
       if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before
     }
     refused.lateRead.input.file_path = join(folder, 'late-link')
@@ -418,7 +421,7 @@ describe.skipIf(!hasClaude).each([
     execFileSync('git', ['init', '-q', '--bare', remote]); git('remote', 'add', 'origin', remote)
     writeFileSync(join(root, 'secret.txt'), 'TOP-SECRET-outside\n')
     symlinkSync(join(root, 'secret.txt'), join(folder, 'outside-link'))
-    prepareSwarmSkill(folder, { role: 'buddy', key: 'session' })
+    prepareSwarmSkill(folder, { role: 'buddy', key: 'session' }, folderOnly)
     const settings = join(folder, '.claude', 'settings.local.json')
     if (slow) {
       // The folder's own guard, made to sleep before it answers.

@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyGuardCommand, buddyGuardSource, buddyReadsOf } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, type BuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
@@ -663,11 +663,12 @@ const modeOf = (role: SwarmRole, version: string) =>
 /** Launch and relaunch keep a session's saved bytes; only refreshSwarmSkill moves a running session to new built-in text.
  * A new file holds the text of the session's saved mode; a kept one is described by the text it holds, so the prompt line
  * never names one mode while the file holds the other. No project-wide native skill links: two roles may share a workspace. */
-export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file: string; instructions: string } {
+/** [wideOf]: whether a Buddy launched here reads beyond its folder (lib/buddyGuard.ts buddyLaunchWide); tests name it. */
+export function prepareSwarmSkill(workspace: string, saved: SwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide): { file: string; instructions: string } {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
   // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
-  if (saved.role === 'buddy') lockBuddyFolder(root, saved.key)
+  if (saved.role === 'buddy') lockBuddyFolder(root, saved.key, wideOf(root))
   const dir = skillDirectory(root, saved, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
@@ -687,7 +688,7 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
 /** Claude Code's settings in a Buddy's folder, the only ones it reads (it launches with `--setting-sources local` in dontAsk
  *  mode, engines/claude/launch.ts `buddy`): its guard answers every tool call, allowing only reads and its Super Tab
  *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
-const buddyClaudeSettings = (guard: string) => ({
+const buddyClaudeSettings = (guard: string, sandbox: Record<string, unknown> | null) => ({
   permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
   // No memory file at all. The local settings source still loads a CLAUDE.local.md, and a committed one importing files
   // from outside the folder (@/x, @~/x) stopped an interactive Buddy at "Allow external CLAUDE.md file imports?", which
@@ -697,6 +698,8 @@ const buddyClaudeSettings = (guard: string) => ({
   disableAllHooks: false,
   hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }],
     ...harnessClaudeHooks() },
+  // In wide mode its shell runs in Claude Code's sandbox: no writes, its hosts only (lib/buddyGuard.ts buddySandboxSettings).
+  ...(sandbox ? { sandbox } : {}),
 })
 
 /**
@@ -729,15 +732,17 @@ function harnessClaudeHooks(): Record<string, unknown[]> {
  * and every file in it is made read-only. Its folders stay writable, so the worktree is removed like any other, and the
  * Harness runtime folder (its skill and records) is left alone. A Codex Buddy runs in Codex's read-only sandbox instead,
  * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
- * Its guard reads its own session's list of what its person sent it (lib/buddyGuard.ts `buddyReadsOf`).
+ * Its guard reads its own session's list of what its person sent it (lib/buddyGuard.ts `buddyReadsOf`). In wide mode [wide] it
+ * also reads outside its folder and runs its person's approved reads, its shell in Claude Code's sandbox
+ * (docs/specs/2026-10-30-buddy-read-access.md).
  */
-function lockBuddyFolder(root: string, key: string): void {
+function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): void {
   const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
   // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
   for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
-  writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key)), { mode: 0o600 })
-  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard), null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide), { mode: 0o600 })
+  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide) : null), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (dir === root && (entry.name === '.harness' || entry.name === '.git')) continue

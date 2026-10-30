@@ -20,6 +20,9 @@ import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { createAccountHttp } from '../gateway/accountHttp.js'
 
+// A Buddy that reads its folder alone, whatever this machine is: wide mode has its own tests (lib/buddyGuard.wide.spec.ts).
+const folderOnly = () => null
+
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
 /** The machine's host form and Swarm reads, as the service hands them to the host and the role lookup. */
@@ -1173,7 +1176,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   it('lets the guard its launch wrote open the file its person sent, and no other download', async () => {
     const { host, shot, delivered } = buddyOn()
     const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    prepareSwarmSkill(folder, { role: 'buddy', key })
+    prepareSwarmSkill(folder, { role: 'buddy', key }, folderOnly)
     const other = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
     writeFileSync(other, 'png')
     const read = (path: string) => guardReads(join(folder, '.claude', 'buddy-guard.mjs'), folder, path)
