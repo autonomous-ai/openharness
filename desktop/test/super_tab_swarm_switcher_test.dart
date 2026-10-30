@@ -32,6 +32,12 @@ class _Backend {
   Completer<void>? holdCreate;
   bool failCreate = false;
 
+  /// While set, preparing a machine for a Swarm waits for it.
+  Completer<void>? holdPrepare;
+
+  /// The Swarm an account's personal-swarm request already made, by account.
+  final personalOf = <String, String>{};
+
   /// The account the next request is from.
   String account = 'owner';
 
@@ -93,7 +99,11 @@ class _Backend {
           statusCode: 503,
         );
       }
-      final id = 'swarm-$asker-${body['operationId']}';
+      final id =
+          (body['operationId'] == kPersonalSwarmOperation
+              ? personalOf[asker]
+              : null) ??
+          'swarm-$asker-${body['operationId']}';
       if (!servers.containsKey(id)) {
         add(id, body['name'] as String, owner: asker, members: [asker]);
       }
@@ -140,6 +150,7 @@ class _Connection extends WsConn {
     }
     backend.machineCalls.add((machineId, action ?? ''));
     if (action == 'prepareContribution') {
+      if (backend.holdPrepare case final hold?) await hold.future;
       return {
         'state': 'ready',
         'scope': 'swarm',
@@ -582,12 +593,123 @@ void main() {
     await app.superTabs.refreshTabs();
     expect(PersonalSwarm.of(app).id, 'own-personal');
     expect(swarmChoices(app).map((c) => c.id), ['alpha', 'their-personal']);
+    // The server confirms it is the one the personal-swarm request made.
+    backend.personalOf['owner'] = 'own-personal';
     final tab = app.swarms.firstWhere((s) => s.superTabId == 'alpha').id;
     await PersonalSwarm.of(app).show(tab);
     await _settle();
-    expect(backend.creates, isEmpty);
+    expect(backend.creates, hasLength(1));
+    expect(backend.servers.keys, hasLength(3));
     // Open in its own tab already: that tab is shown.
     expect(app.activeSwarm.superTabId, 'own-personal');
+  });
+
+  test(
+    'a Swarm the person owns named Personal is only taken for it when the '
+    'server says so: one with teammates is never used, nor added to',
+    () async {
+      final backend = _Backend()
+        ..add('alpha', 'Alpha')
+        ..add('team-personal', 'Personal', members: ['owner', 'mate']);
+      final app = _computer(backend, MemoryStore());
+      await app.superTabs.refreshTabs();
+      await (await app.superTabs.open('team-personal')).refresh();
+      expect(PersonalSwarm.of(app).id, isNull);
+      expect(swarmChoices(app).map((c) => c.id), contains('team-personal'));
+      final tab = app.swarms.firstWhere((s) => s.superTabId == 'alpha').id;
+      app.selectSwarm(tab);
+      await PersonalSwarm.of(app).show(tab);
+      await _settle();
+      const mine = 'swarm-owner-$kPersonalSwarmOperation';
+      expect(_shown(app, tab), mine);
+      expect(backend.contributions('team-personal'), isEmpty);
+      expect(backend.contributions(mine).map((c) => c['machineId']), ['m']);
+    },
+  );
+
+  test('a Swarm owned and named Personal but not the server\'s is not used, '
+      'even unread', () async {
+    final backend = _Backend()
+      ..add('alpha', 'Alpha')
+      ..add('renamed', 'Personal');
+    final app = _computer(backend, MemoryStore());
+    await app.superTabs.refreshTabs();
+    final tab = app.swarms.firstWhere((s) => s.superTabId == 'alpha').id;
+    app.selectSwarm(tab);
+    await PersonalSwarm.of(app).show(tab);
+    await _settle();
+    expect(backend.contributions('renamed'), isEmpty);
+    expect(_shown(app, tab), 'swarm-owner-$kPersonalSwarmOperation');
+  });
+
+  test('this computer joins Personal as Add machine adds it: through Team '
+      'accounts where the Swarm uses them', () async {
+    final (app, backend) = await _twoTabs();
+    await PersonalSwarm.of(app).show(app.activeSwarmId);
+    await _settle();
+    final id = PersonalSwarm.of(app).id!;
+    expect(backend.contributions(id).single['teamAccountOnly'], isTrue);
+  });
+
+  test('an add that answers after Personal was let go adds nothing and '
+      'says nothing', () async {
+    final (app, backend) = await _twoTabs();
+    final tab = app.activeSwarmId;
+    backend.holdPrepare = Completer<void>();
+    final picking = PersonalSwarm.of(app).show(tab);
+    await _settle();
+    final id = PersonalSwarm.of(app).id!;
+    expect(_shown(app, tab), id);
+    // The add goes out, and its answer is slow.
+    final answer = backend.servers[id]!.holdCommands = Completer<void>();
+    backend.holdPrepare!.complete();
+    await _settle();
+    expect(backend.contributions(id), hasLength(1));
+    // The person moves the tab on before it answers.
+    app.showSuperTabIn(tab, 'gamma', 'Gamma');
+    answer.complete();
+    await picking;
+    await _settle();
+    expect(PersonalSwarm.of(app).error, isNull);
+    expect(_shown(app, tab), 'gamma');
+  });
+
+  test('a loss handled once: with Personal open in another tab, that tab is '
+      'selected, and the tab that lost access is not bounced again', () async {
+    final (app, _) = await _twoTabs();
+    final betaTab = app.swarms.firstWhere((s) => s.superTabId == 'beta').id;
+    await PersonalSwarm.of(app).show(betaTab);
+    await _settle();
+    final personal = PersonalSwarm.of(app).id!;
+    expect(_shown(app, betaTab), personal);
+    final alphaTab = app.swarms.firstWhere((s) => s.superTabId == 'alpha').id;
+    app.selectSwarm(alphaTab);
+    final alpha = await app.superTabs.open('alpha');
+    await alpha.refresh();
+    alpha.revokeAccess('You no longer have access to this Swarm.');
+    await fallBackToPersonal(app, alpha);
+    expect(app.activeSwarmId, betaTab);
+    app.selectSwarm(alphaTab);
+    await fallBackToPersonal(app, alpha);
+    expect(app.activeSwarmId, alphaTab);
+  });
+
+  test('a loss right after launch waits for what this computer remembers of '
+      'Personal before deciding', () async {
+    final backend = _Backend()
+      ..add('alpha', 'Alpha')
+      ..add('mine', 'Personal');
+    final store = MemoryStore()..values['super_tab.personal.owner'] = 'mine';
+    final app = _computer(backend, store);
+    await app.superTabs.setTabVisible('mine', false);
+    await app.superTabs.refreshTabs();
+    final tab = app.swarms.firstWhere((s) => s.superTabId == 'alpha').id;
+    app.selectSwarm(tab);
+    final alpha = await app.superTabs.open('alpha');
+    await alpha.refresh();
+    alpha.revokeAccess('You no longer have access to this Swarm.');
+    await fallBackToPersonal(app, alpha);
+    expect(_shown(app, tab), 'mine');
   });
 
   test('a Swarm taken away while shown moves its tab to Personal and leaves '
@@ -597,7 +719,7 @@ void main() {
     final alpha = await app.superTabs.open('alpha');
     await alpha.refresh();
     alpha.revokeAccess('You no longer have access to this Swarm.');
-    fallBackToPersonal(app, alpha);
+    await fallBackToPersonal(app, alpha);
     expect(_shown(app, tab), 'alpha');
     expect(swarmChoices(app).map((c) => c.id), isNot(contains('alpha')));
 
@@ -611,7 +733,7 @@ void main() {
     final shown = await app2.superTabs.open('alpha');
     await shown.refresh();
     shown.revokeAccess('You no longer have access to this Swarm.');
-    fallBackToPersonal(app2, shown);
+    await fallBackToPersonal(app2, shown);
     expect(_shown(app2, tab2), personal);
     expect(app2.activeSwarm.name, 'Personal');
     expect(swarmChoices(app2).map((c) => c.id), isNot(contains('alpha')));
@@ -685,6 +807,8 @@ void main() {
       await tester.pump();
       alpha.revokeAccess('You no longer have access to this Swarm.');
       await tester.pump();
+      // What this computer remembers of Personal was read in the real zone.
+      await tester.runAsync(() => _settle());
       await tester.pump();
       expect(_shown(app, tab), dropdown ? personal : 'alpha');
       await _releaseAll(tester, app);

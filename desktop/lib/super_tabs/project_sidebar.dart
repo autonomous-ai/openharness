@@ -146,16 +146,9 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (badge > 0)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: SuperTabCountBadge(badge),
-                ),
-              if (trailing != null)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: trailing,
-                ),
+              if (trailing ?? (badge > 0 ? SuperTabCountBadge(badge) : null)
+                  case final mark?)
+                Padding(padding: const EdgeInsets.only(right: 10), child: mark),
             ],
           ),
         ),

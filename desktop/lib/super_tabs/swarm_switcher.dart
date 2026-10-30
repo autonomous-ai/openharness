@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
+import 'section_heading.dart' show SuperTabSectionHeading;
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
 /// Swarm the tab shows, and in its menu Personal, every other Swarm the
@@ -38,9 +39,10 @@ class PersonalSwarm extends ChangeNotifier {
 
   final AppNotifier app;
 
-  /// Each account's Personal Swarm as picked on this computer.
-  final _picked = <String, String>{};
-  final _reading = <String>{};
+  /// Each account's Personal Swarm as the personal-swarm request answered
+  /// on this computer.
+  final _pickedIds = <String, String>{};
+  final _reads = <String, Future<void>>{};
   final _creating = <String, Future<String>>{};
   final _adding = <String>{};
 
@@ -52,25 +54,26 @@ class PersonalSwarm extends ChangeNotifier {
   String? get _account => app.currentUser?.id;
   static String _key(String account) => 'super_tab.personal.$account';
 
-  /// The signed-in person's Personal Swarm, when there is one this computer
-  /// knows of: picked here before, or a Swarm they own named Personal. Never
-  /// one whose read was taken away.
+  /// The signed-in person's Personal Swarm as the menu shows it: picked here
+  /// before, else a Swarm they own named Personal that no one else is in, as
+  /// far as its read says. Never one whose read was taken away. Picking it
+  /// asks the server first ([ensure]).
   String? get id {
     final account = _account;
     if (account == null) return null;
-    _read(account);
-    final id = _picked[account] ?? _owned(account);
-    if (id == null ||
-        lost(id) ||
-        app.superTabs.peek(id)?.accessRevoked == true) {
-      return null;
-    }
-    return id;
+    unawaited(_read(account));
+    return _picked(account) ?? _owned(account);
   }
 
-  /// Whether the person picked Personal on this computer: only then does a
-  /// Swarm tab whose Swarm is taken away move to it.
-  bool get picked => _picked.containsKey(_account) && id != null;
+  /// The Swarm the personal-swarm request answered for [account], while it
+  /// is still theirs to read.
+  String? _picked(String account) => switch (_pickedIds[account]) {
+    final id? when _usable(id) => id,
+    _ => null,
+  };
+
+  bool _usable(String id) =>
+      !lost(id) && app.superTabs.peek(id)?.accessRevoked != true;
 
   /// Personal is being created or set up for the signed-in person.
   bool get busy =>
@@ -88,36 +91,34 @@ class PersonalSwarm extends ChangeNotifier {
   /// Whether Swarm [id] was taken away from the signed-in person while shown.
   bool lost(String id) => _lost[_account]?.contains(id) ?? false;
 
-  /// A Swarm the person owns named Personal, of those they belong to.
+  /// A Swarm the person owns named Personal, of those they belong to, with
+  /// no one else in it when it has been read.
   String? _owned(String account) {
     final ids = <String>[
       for (final tab in app.swarms) ?tab.superTabId,
       for (final closed in app.closedSuperTabs) closed.id,
     ]..sort();
-    return ids
-        .where(
-          (id) =>
-              !lost(id) &&
-              app.superTabs.ownerOf(id) == account &&
-              app.superTabName(id)?.trim() == kPersonalSwarmName,
-        )
-        .firstOrNull;
+    return ids.where((id) {
+      final people = app.superTabs.peek(id)?.snapshot?.people;
+      return _usable(id) &&
+          app.superTabs.ownerOf(id) == account &&
+          app.superTabName(id)?.trim() == kPersonalSwarmName &&
+          (people == null || people.every((p) => p.id == account));
+    }).firstOrNull;
   }
 
-  void _read(String account) {
-    if (!_reading.add(account)) return;
-    unawaited(() async {
-      try {
-        final saved = await app.superTabs.storage.read(_key(account));
-        if (saved != null && saved.isNotEmpty && _account == account) {
-          _picked.putIfAbsent(account, () => saved);
-          notifyListeners();
-        }
-      } catch (_) {
-        // Not remembered: the list's own Personal still stands.
+  /// What this computer remembers of [account]'s Personal, read once.
+  Future<void> _read(String account) => _reads[account] ??= () async {
+    try {
+      final saved = await app.superTabs.storage.read(_key(account));
+      if (saved != null && saved.isNotEmpty && _account == account) {
+        _pickedIds.putIfAbsent(account, () => saved);
+        notifyListeners();
       }
-    }());
-  }
+    } catch (_) {
+      // Not remembered: the server's answer is asked for when it is picked.
+    }
+  }();
 
   /// The person's Personal Swarm, created on the server if it is not known
   /// here. Every caller while one is being created joins that one.
@@ -128,10 +129,7 @@ class PersonalSwarm extends ChangeNotifier {
         const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.'),
       );
     }
-    if (id case final known?) {
-      _remember(account, known);
-      return Future.value(known);
-    }
+    if (_picked(account) case final known?) return Future.value(known);
     if (_creating[account] case final pending?) return pending;
     final creating = _create(account);
     _creating[account] = creating;
@@ -145,9 +143,14 @@ class PersonalSwarm extends ChangeNotifier {
     return creating;
   }
 
+  /// The Swarm the personal-swarm request names: remembered here, else
+  /// asked of the server, which creates it the first time. A Swarm merely
+  /// named Personal is never taken for it.
   Future<String> _create(String account) async {
     _error = null;
     try {
+      await _read(account);
+      if (_picked(account) case final known?) return known;
       final created = await app.superTabs.map(
         'POST',
         '/api/super-tabs',
@@ -177,8 +180,8 @@ class PersonalSwarm extends ChangeNotifier {
   }
 
   void _remember(String account, String id) {
-    if (_picked[account] == id) return;
-    _picked[account] = id;
+    if (_pickedIds[account] == id) return;
+    _pickedIds[account] = id;
     unawaited(
       app.superTabs.storage.write(_key(account), id).catchError((Object _) {}),
     );
@@ -229,9 +232,15 @@ class PersonalSwarm extends ChangeNotifier {
         .firstOrNull;
     if (here == null || !_adding.add(account)) return;
     notifyListeners();
+    SuperTabController? opened;
+    // Let go since (the tab moved on): its answers are no one's now.
+    bool alive() =>
+        _account == account &&
+        opened != null &&
+        !opened.accessRevoked &&
+        identical(app.superTabs.peek(personal), opened);
     try {
-      final c = await app.superTabs.open(personal);
-      bool alive() => _account == account && !c.accessRevoked;
+      final c = opened = await app.superTabs.open(personal);
       if (c.snapshot == null) await c.refresh();
       final machineId = here.machine.machineId;
       final snapshot = c.snapshot;
@@ -249,10 +258,16 @@ class PersonalSwarm extends ChangeNotifier {
         machineId,
         setupId: 'personal-swarm-setup',
         alive: alive,
+        // As Add machine: where the Swarm runs teammates' work through Team
+        // accounts, this Mac is never lent under its owner's own login.
+        teamAccountOnly: snapshot.teamAccounts,
         offerTeamAccount: false,
       );
     } catch (failure) {
-      _fail(account, failure, 'Could not add this computer to Personal.');
+      // A request still out when Personal was let go answers no one.
+      if (opened == null || alive()) {
+        _fail(account, failure, 'Could not add this computer to Personal.');
+      }
     } finally {
       _adding.remove(account);
       notifyListeners();
@@ -293,22 +308,26 @@ int swarmWaiting(AppNotifier app, String id) =>
     app.superTabs.waitingTags(id) + app.superTabs.waitingBuddy(id);
 
 /// The Swarm tab showing [c]'s Swarm moves to Personal when that Swarm is
-/// taken away, once the person has picked Personal here; it never creates
-/// Personal. Nothing of the lost Swarm stays in the tab.
-void fallBackToPersonal(AppNotifier app, SuperTabController c) {
+/// taken away, once the person has picked Personal here (read from this
+/// computer first); it never creates Personal. Nothing of the lost Swarm
+/// stays in the tab. Handled once per loss: with Personal open in another
+/// tab, that tab is selected and this one is left as it is after.
+Future<void> fallBackToPersonal(AppNotifier app, SuperTabController c) async {
   final personal = PersonalSwarm.of(app);
-  final id = personal.id;
+  final account = c.accountId;
+  if (!c.accessRevoked || account != app.currentUser?.id) return;
+  if (personal._lost[account]?.contains(c.tabId) ?? false) return;
+  await personal._read(account);
+  final id = personal._picked(account);
   if (!c.accessRevoked ||
-      c.accountId != app.currentUser?.id ||
-      !personal.picked ||
+      account != app.currentUser?.id ||
       id == null ||
-      id == c.tabId) {
+      id == c.tabId ||
+      !(personal._lost[account] ??= {}).add(c.tabId)) {
     return;
   }
   final tab = app.swarms.where((s) => s.superTabId == c.tabId).firstOrNull;
-  if (tab == null) return;
-  (personal._lost[c.accountId] ??= {}).add(c.tabId);
-  app.showSuperTabIn(tab.id, id, kPersonalSwarmName);
+  if (tab != null) app.showSuperTabIn(tab.id, id, kPersonalSwarmName);
 }
 
 /// The top row of a Swarm tab's left bar and its menu. [row] draws the row
@@ -456,15 +475,29 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                   ),
                 ),
               ),
-              if (personal.error case final error?)
-                Padding(
+              if (personal.error case final error?) ...[
+                // Under the row's label, as the row's own text column.
+                Row(
                   key: const ValueKey('super-swarm-switcher-error'),
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: Text(
-                    error,
-                    style: DesktopChrome.metadata(color: grid.AppPalette.warn),
-                  ),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width:
+                          SuperTabSectionHeading.indentFor(0) +
+                          SuperTabSectionHeading.actionWidth,
+                    ),
+                    Expanded(
+                      child: Text(
+                        error,
+                        style: DesktopChrome.metadata(
+                          color: grid.AppPalette.warn,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: grid.AppDesktop.controlGap),
+              ],
             ],
           );
         },

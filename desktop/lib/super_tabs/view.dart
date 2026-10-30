@@ -309,7 +309,7 @@ class _SuperTabViewState extends State<SuperTabView>
         final lost = c;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && widget.controller == lost) {
-            fallBackToPersonal(app, lost);
+            unawaited(fallBackToPersonal(app, lost));
           }
         });
       }
