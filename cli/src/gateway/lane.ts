@@ -30,12 +30,22 @@ export class LaneSessions implements LaneSeal {
    * and stays unreadable: it must not throw away the session that replaced it.
    */
   private readonly epochs = new Map<string, string[]>()
+  /**
+   * Each machine's group counters (epoch → highest counter read), shared by every session with it, as the
+   * windows' relay shares them (lib/remoteRelay.ts). A session that started from nothing would open again
+   * a card an earlier session already read: a relay could force a renewal (a made-up epoch, an offline
+   * notice) and then replay an old question or turn card from the same far process (security review 2
+   * on #2356). Bounded per machine by the session (GROUP_EPOCHS_KEPT epochs).
+   */
+  private readonly groupSeen = new Map<string, Map<string, number>>()
 
   /** `identity` is read when a session starts: the one on disk, as the gateway's own store holds it. */
   constructor(private readonly identity: () => Identity) {}
 
   async hello(machineId: string, peerPub: string): Promise<Frame> {
-    const session = new RelaySessionCrypto({ machineId, selfIdentity: this.identity(), peerPub: b64d(peerPub) })
+    let groupSeen = this.groupSeen.get(machineId)
+    if (!groupSeen) { groupSeen = new Map(); this.groupSeen.set(machineId, groupSeen) }
+    const session = new RelaySessionCrypto({ machineId, selfIdentity: this.identity(), peerPub: b64d(peerPub), groupSeen })
     this.sessions.set(machineId, session)
     return session.helloFrame()
   }
@@ -76,6 +86,7 @@ export class LaneSessions implements LaneSeal {
   clear(): void {
     this.sessions.clear()
     this.epochs.clear()
+    this.groupSeen.clear()
   }
 
   private remember(machineId: string, epoch: string): void {

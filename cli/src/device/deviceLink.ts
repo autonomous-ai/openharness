@@ -61,8 +61,11 @@ const DENIED_QUIET_MS = 10 * 60_000
 /** Frames held per machine while its session renews, and for how long. The restart replay is a few dozen. */
 const HELD_MAX = 64
 const HELD_TTL_MS = 30_000
-/** And by size: the socket takes frames of any size, so a count alone would let a relay park megabytes. */
+/** And by size, in bytes as they came: the socket takes frames of any size, so a count alone would let a
+ *  relay park megabytes. */
 const HELD_MAX_BYTES = 2 * 1024 * 1024
+/** How long a machine's linked-or-not answer is kept for frames arriving with no session (see `linked`). */
+const PEER_CACHE_MS = 5_000
 /** What the person sent each machine, kept under its session so a refusal can name what was not delivered. */
 const SENT_KEPT = 32
 /** A refusal with no counter names what was sealed this recently. */
@@ -105,6 +108,8 @@ export interface DeviceLinkOpts {
   now?: () => number
   /** How long a hello waits for its welcome. Tests only; 15 s otherwise. */
   handshakeTimeoutMs?: number
+  /** The per-machine limit on renewals and drops on another's word. Tests only; 30 s otherwise. */
+  renewEveryMs?: number
 }
 
 /** The lane's side of a machine's E2EE session: whether it is up. Its keys are the gateway's. */
@@ -166,13 +171,19 @@ export class DeviceLink {
   private readonly renewedAt = new Map<string, number>()
   private readonly startedAt = new Map<string, number>()
   private readonly offlineAt = new Map<string, number>()
+  /** A renewal the limit deferred, per machine: run once the limit allows, if the same session is still in use. */
+  private readonly renewLater = new Map<string, NodeJS.Timeout>()
+  /** Whether each machine is linked, read for frames that arrive with no session; kept a few seconds. */
+  private readonly linkedCache = new Map<string, { linked: boolean; at: number }>()
   /** What the person sent under each machine's current session, and under the one before it. */
   private readonly sent = new Map<string, SentUnder>()
   private readonly sentBefore = new Map<string, SentUnder>()
   private readonly now: () => number
+  private readonly renewEvery: number
 
   constructor(private readonly opts: DeviceLinkOpts) {
     this.now = opts.now ?? Date.now
+    this.renewEvery = opts.renewEveryMs ?? RENEW_EVERY_MS
   }
 
   status(): DeviceLinkStatus { return this.state }
@@ -299,11 +310,12 @@ export class DeviceLink {
    * and fail at once every request still waiting on that machine (and only that machine). Their answers
    * would come under a session nobody holds any more, so each would otherwise wait out its 15 seconds, and
    * the agents list would read as empty meanwhile. A handshake in flight is the repair already under way
-   * and is left alone, unless `andHandshake` (the machine went offline: nobody will answer it).
+   * and is left alone, with what is held for it — an offline notice too: the hello is answered when the
+   * machine is back, or times out (security review 2 on #2356: the notice can be the relay's).
    */
-  private sessionGone(machineId: string, andHandshake = false): void {
+  private sessionGone(machineId: string): void {
     if (this.handshakes.has(machineId)) {
-      if (andHandshake) this.failCrypto(machineId, new Error(SESSION_GONE))
+      // The repair already under way.
     } else if (this.sessions.has(machineId)) {
       this.retire(machineId)
       this.sessions.delete(machineId)
@@ -324,7 +336,7 @@ export class DeviceLink {
       this.opts.log(`device: ${machineId} reported offline again moments after the last — its session is kept`)
       return
     }
-    this.sessionGone(machineId, true)
+    this.sessionGone(machineId)
   }
 
   private hasPending(machineId: string): boolean {
@@ -347,7 +359,7 @@ export class DeviceLink {
   private allow(at: Map<string, number>, machineId: string): boolean {
     const now = this.now()
     const last = at.get(machineId)
-    if (last !== undefined && now - last < RENEW_EVERY_MS) return false
+    if (last !== undefined && now - last < this.renewEvery) return false
     at.set(machineId, now)
     return true
   }
@@ -648,19 +660,25 @@ export class DeviceLink {
    * Keep a sealed frame from a machine with no session up, and start one for it unless one is on its way.
    * `renewing`: the caller just threw the old session away for it, which was already limited.
    */
-  private hold(machineId: string, frame: DeviceFrame, bytes: number, renewing: boolean): void {
-    const list = this.held.get(machineId) ?? []
-    const total = list.reduce((sum, held) => sum + held.bytes, 0)
+  private hold(machineId: string, frame: DeviceFrame, bytes: number, start: 'now' | 'limited' | 'never'): void {
+    // Past their time first: a machine that starts no hello (denied, or limited) would otherwise keep them,
+    // and the count and size caps would stay full of frames nobody will read.
+    const now = this.now()
+    const held = this.held.get(machineId) ?? []
+    const list = held.filter((h) => now - h.at <= HELD_TTL_MS)
+    if (list.length < held.length) this.opts.log(`device: ${held.length - list.length} held frame(s) from ${machineId} waited too long — dropped`)
+    const total = list.reduce((sum, h) => sum + h.bytes, 0)
     if (list.length >= HELD_MAX) {
       this.opts.log(`device: held too many frames for ${machineId} while its session renews — dropped ${frame.type ?? '?'}`)
     } else if (total + bytes > HELD_MAX_BYTES) {
       this.opts.log(`device: held too much for ${machineId} while its session renews — dropped ${frame.type ?? '?'} (${bytes} bytes)`)
     } else {
-      list.push({ frame, at: this.now(), bytes })
-      this.held.set(machineId, list)
+      list.push({ frame, at: now, bytes })
     }
-    if (this.handshakes.has(machineId)) return
-    if (!renewing && !this.allow(this.startedAt, machineId)) return
+    if (list.length) this.held.set(machineId, list)
+    else this.held.delete(machineId)
+    if (start === 'never' || this.handshakes.has(machineId)) return
+    if (start === 'limited' && !this.allow(this.startedAt, machineId)) return
     // Not awaited: its welcome comes through the very inbound queue this is running in.
     void this.establish(machineId).catch((err: unknown) => {
       this.opts.log(`device: could not renew the E2EE session with ${machineId} (${err instanceof Error ? err.message : String(err)})`)
@@ -706,6 +724,8 @@ export class DeviceLink {
 
   private teardown(why: string): void {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null }
+    for (const timer of this.renewLater.values()) clearTimeout(timer)
+    this.renewLater.clear()
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)) }
     this.pending.clear()
@@ -754,6 +774,7 @@ export class DeviceLink {
     let frame: DeviceFrame
     const text = raw.toString()
     try { frame = JSON.parse(text) as DeviceFrame } catch { return }
+    const bytes = Buffer.byteLength(text)
 
     // WHICH MACHINE THIS CAME FROM. The backend tags every commander frame with it (hub.ts
     // deliverUpLocal), and with N machines attached at once it is the only thing that says which key
@@ -777,7 +798,7 @@ export class DeviceLink {
       this.opts.log(`device: e2e denied ${from} — the remote password may have changed or this machine's link was revoked, re-run \`harness link connect ${from}\``)
       this.failCrypto(from, new Error('E2EE_DENIED'))
       // Its frames start no session for a while: each would only be denied again.
-      this.startedAt.set(from, this.now() + DENIED_QUIET_MS - RENEW_EVERY_MS)
+      this.startedAt.set(from, this.now() + DENIED_QUIET_MS - this.renewEvery)
       return
     }
     if (frame.type === 'e2e_session_unknown') { if (from) this.onSessionUnknown(from, (frame.payload ?? {}) as Record<string, unknown>); return }
@@ -786,7 +807,7 @@ export class DeviceLink {
     const wrapped = isWrapped(frame.payload)
     // Sealed by a linked machine while no session with it is up — after a drop, or before the first call:
     // held, and read once one is (see `held`).
-    if (wrapped && from && !session?.ready && this.opts.peer(from)) { this.hold(from, frame, text.length, false); return }
+    if (wrapped && from && !session?.ready && this.linked(from)) { this.hold(from, frame, bytes, 'limited'); return }
     // A frame that was never sealed (a control frame) is read as it is, as the session itself would read it
     // (lib/e2ee/relayClient.ts `unwrapIncoming`): only a sealed one goes to the gateway to be opened.
     if (session?.ready && wrapped) {
@@ -795,18 +816,14 @@ export class DeviceLink {
         // The gateway restarted under the lane and holds no session: kept, and read under the next one.
         this.forget(from, session)
         this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — the E2EE session with ${from} is gone, holding it for a new one`)
-        this.hold(from, frame, text.length, false)
+        this.hold(from, frame, bytes, 'limited')
         return
       }
       if ('unknownEpoch' in opened) {
         // The far daemon restarted: this is its replay, under keys of a process the session here never met.
-        if (!this.mayRenew(from)) {
-          this.opts.log(`device: a ${frame.type ?? '?'} from ${from} names a new epoch, but it renewed its session moments ago — dropped`)
-          return
-        }
-        this.opts.log(`device: ${from} restarted (a new epoch) — renewing its E2EE session, holding what it sends until then`)
-        this.sessionGone(from)
-        this.hold(from, frame, text.length, true)
+        // Held either way: within the limit the renewal waits for it rather than losing the replay.
+        this.hold(from, frame, bytes, 'never')
+        this.renew(from, session, `${frame.type ?? '?'} names a new epoch`)
         return
       }
       if ('unreadable' in opened) {
@@ -836,13 +853,54 @@ export class DeviceLink {
       this.refused(from, this.sentBefore.get(from), n)
       return
     }
-    if (!this.mayRenew(from)) {
-      this.opts.log(`device: ${from} says it lost the session, but it renewed its session moments ago — ignored`)
-      return
-    }
+    // What it names is reported whatever the limit says: the limit gates only the drop (review 2 on #2356).
     this.refused(from, this.sent.get(from), n)
-    this.opts.log(`device: ${from} no longer knows this session (it restarted) — dropped it, the next call says hello again`)
-    this.sessionGone(from)
+    this.renew(from, session, 'it no longer knows this session')
+  }
+
+  /**
+   * Throw a machine's session away on the far side's word and start a new one if anything is held for it:
+   * now if the limit allows, else once it does — and then only if the same session is still the one in use,
+   * so a renewal that happened meanwhile is not repeated.
+   */
+  private renew(machineId: string, session: LaneSession, why: string): void {
+    if (this.mayRenew(machineId)) { this.renewNow(machineId, why); return }
+    this.opts.log(`device: ${machineId}: ${why}, but it renewed its session moments ago — held until it may renew again`)
+    if (this.renewLater.has(machineId)) return
+    const wait = Math.max(0, this.renewEvery - (this.now() - (this.renewedAt.get(machineId) ?? 0)))
+    const timer = setTimeout(() => {
+      this.renewLater.delete(machineId)
+      // In the inbound queue, so it lands between frames, never in the middle of one.
+      this.inbound = this.inbound.then(() => {
+        if (this.sessions.get(machineId) !== session || !session.ready) return
+        if (this.mayRenew(machineId)) this.renewNow(machineId, why)
+      })
+    }, wait)
+    timer.unref?.()
+    this.renewLater.set(machineId, timer)
+  }
+
+  private renewNow(machineId: string, why: string): void {
+    const later = this.renewLater.get(machineId)
+    if (later) { clearTimeout(later); this.renewLater.delete(machineId) }
+    this.opts.log(`device: ${machineId} restarted (${why}) — dropped its E2EE session, the next call says hello again`)
+    this.sessionGone(machineId)
+    if (this.held.get(machineId)?.length) {
+      void this.establish(machineId).catch((err: unknown) => {
+        this.opts.log(`device: could not renew the E2EE session with ${machineId} (${err instanceof Error ? err.message : String(err)})`)
+      })
+    }
+  }
+
+  /** Whether a machine is linked, for a sealed frame from one with no session: read fresh at most every few
+   *  seconds, not per frame (`peer()` reads the pinned keys from disk; review 2 on #2356). */
+  private linked(machineId: string): boolean {
+    const now = this.now()
+    const cached = this.linkedCache.get(machineId)
+    if (cached && now - cached.at >= 0 && now - cached.at < PEER_CACHE_MS) return cached.linked
+    const linked = !!this.opts.peer(machineId)
+    this.linkedCache.set(machineId, { linked, at: now })
+    return linked
   }
 
   /** A frame read (opened, or never sealed): to its waiter, or to the listeners. */

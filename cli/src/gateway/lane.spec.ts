@@ -137,6 +137,26 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     expect(await lane.open(MACHINE, late)).toEqual({ lost: true })
   })
 
+  it('never opens a card twice across a renewal: what one session read, the next refuses as a replay', async () => {
+    // Security review 2 on #2356: a relay can force a renewal (a made-up epoch, an offline notice) and then
+    // replay an old question or turn card from the same far process; a new session that starts its group
+    // counters from nothing would open it as new.
+    const { lane, far, welcome } = await welcomed()
+    expect(await lane.welcome(MACHINE, welcome.payload as Frame)).toBe(true)
+    const card = far.manager.wrapCommander({ type: 'commander_question', machineId: MACHINE, payload: { requestId: 'q1', questions: ['Ship it?'] } })
+    expect('frame' in await lane.open(MACHINE, card)).toBe(true)
+    // Renewed with the same far process: the same group key and epoch come back in its welcome.
+    lane.drop(MACHINE)
+    const hello = await lane.hello(MACHINE, far.pub)
+    far.manager.handleFrame('device:lane-2', hello)
+    const welcome2 = far.sent.filter((frame) => frame.type === 'e2e_welcome').at(-1)!
+    expect(await lane.welcome(MACHINE, welcome2.payload as Frame)).toBe(true)
+    expect(await lane.open(MACHINE, card)).toEqual({ unreadable: true })
+    // What the far process sends after the renewal is read as usual.
+    const next = far.manager.wrapCommander({ type: 'commander_event', machineId: MACHINE, payload: { kind: 'done', text: 'after' } })
+    expect('frame' in await lane.open(MACHINE, next)).toBe(true)
+  })
+
   it('takes the far machine\'s new keys, and a new hello replaces the session it had', async () => {
     const { lane, far, welcome, identity } = await welcomed()
     expect(await lane.welcome(MACHINE, welcome.payload as Frame)).toBe(true)
