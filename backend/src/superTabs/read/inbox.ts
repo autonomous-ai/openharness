@@ -235,10 +235,9 @@ export async function readInbox(store: SuperTabStore, user: AuthUser, tabId: str
   // A chat never marked read counts as read: its threads wait for the person's first visit.
   const unread = chats.filter(g => { const mark = marks.get(g.id) ?? 0; return mark > 0 && g.lastMessageSequence > mark })
   const shown = chats.slice(0, LATEST_CHATS)
-  const scanned = unread.slice(0, THREAD_CHATS)
-  // The person's thread marks of those chats: one indexed read (readMarks.ts).
-  const threadMarks = await readThreadMarks(db, tabId, user.sub, { conversationIds: scanned.map(g => g.id) })
-  const [latest, threaded] = await Promise.all([latestIn(db, tabId, shown), threadsIn(db, tabId, state, scanned, user.sub, marks, threadMarks)])
+  // The person's thread marks: one indexed read (readMarks.ts), beside the latest messages'.
+  const [latest, threaded] = await Promise.all([latestIn(db, tabId, shown),
+    readThreadMarks(db, tabId, user.sub).then(threadMarks => threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), user.sub, marks, threadMarks))])
   const threads = threaded.threads.sort((a, b) => newestFirst({ at: Date.parse(a.lastReplyAt), id: a.rootId }, { at: Date.parse(b.lastReplyAt), id: b.rootId }))
   const more = chats.length > LATEST_CHATS || latest.more || unread.length > THREAD_CHATS || threaded.more || threads.length > MAX_THREADS
   return { threads: threads.slice(0, MAX_THREADS), more,

@@ -14,10 +14,10 @@ export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
  *  mark went reads as far as its conversation's mark, as on a device that never kept one. */
 export const THREAD_MARK_CAP = 500
 
-/** Run by the singleton worker at startup, like the mention expiry. */
+/** Run by the singleton worker at startup, like the mention expiry. Thread marks need no index option: the hourly sweep
+ *  deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
 export async function ensureReadMarkExpiry(db: PrismaClient): Promise<void> {
   await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry', expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 })
-  await ensureIndex(db, 'SuperTabThreadMark', { key: { updatedAt: 1 }, name: 'thread_mark_expiry', expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 })
 }
 
 export interface ReadMarkWrite { tabId: string; personId: string; conversationId: string; sequence: number; now: number }
@@ -72,10 +72,10 @@ export async function writeThreadMark(db: PrismaClient, mark: ThreadMarkWrite): 
 /** Removes the person's least recently moved thread marks in the Swarm past THREAD_MARK_CAP, by the (tabId, personId,
  *  updatedAt) index: it counts the person's marks and reads only the ids of those past the cap. */
 async function capThreadMarks(db: PrismaClient, tabId: string, personId: string): Promise<void> {
-  const [counted] = await readBy(db, 'SuperTabThreadMark', 'moved', [{ $match: { tabId, personId } }, { $count: 'n' }])
+  const [counted] = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { tabId, personId } }, { $count: 'n' }])
   const over = Number(counted?.n ?? 0) - THREAD_MARK_CAP
   if (over <= 0) return
-  const oldest = await readBy(db, 'SuperTabThreadMark', 'moved', [{ $match: { tabId, personId } }, { $sort: { updatedAt: 1 } }, { $limit: over },
+  const oldest = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { tabId, personId } }, { $sort: { updatedAt: 1 } }, { $limit: over },
     { $project: { _id: 1 } }])
   // A plain $in on _id: Prisma's `in` plans slowly (parts/indexed.ts).
   await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q: { _id: { $in: oldest.map(row => row._id as string) } }, limit: 0 }] })
@@ -88,18 +88,15 @@ export async function readMarks(db: PrismaClient, tabId: string, personId: strin
   return new Map(rows.map(row => [row.conversationId, row.sequence]))
 }
 
-/** The person's thread marks in this tab, by conversation then thread root. With `conversationIds`, those of the listed
- *  conversations, by the (tabId, personId, conversationId) index; with `since`, those moved at or after it, by the
- *  (tabId, personId, updatedAt) index. One raw match each: Prisma's filters plan slowly at this size (parts/indexed.ts). */
-export async function readThreadMarks(db: Prisma.TransactionClient, tabId: string, personId: string, among: { conversationIds: string[] } | { since: number }):
+/** The person's thread marks in this tab, by conversation then thread root: every one (at most THREAD_MARK_CAP), or with
+ *  `since` those moved at or after it. One raw match by the (tabId, personId, updatedAt) index: Prisma's filters plan slowly
+ *  at this size (parts/indexed.ts). The caller keeps those of conversations the reader may read. */
+export async function readThreadMarks(db: Prisma.TransactionClient, tabId: string, personId: string, since?: number):
   Promise<Map<string, Map<string, number>>> {
   const marks = new Map<string, Map<string, number>>()
-  if ('conversationIds' in among && !among.conversationIds.length) return marks
-  const rows = 'conversationIds' in among
-    ? await readBy(db, 'SuperTabThreadMark', 'held', [{ $match: { tabId, personId, conversationId: { $in: among.conversationIds } } },
-      { $project: { _id: 0, conversationId: 1, threadId: 1, sequence: 1 } }])
-    : await readBy(db, 'SuperTabThreadMark', 'moved', [{ $match: { tabId, personId, updatedAt: { $gte: { $date: new Date(among.since).toISOString() } } } },
-      { $project: { _id: 0, conversationId: 1, threadId: 1, sequence: 1 } }])
+  const rows = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { tabId, personId,
+    ...(since === undefined ? {} : { updatedAt: { $gte: { $date: new Date(since).toISOString() } } }) } },
+  { $project: { _id: 0, conversationId: 1, threadId: 1, sequence: 1 } }])
   for (const row of rows) {
     const conversationId = row.conversationId as string, threadId = row.threadId as string, sequence = Number(row.sequence)
     let held = marks.get(conversationId)
@@ -107,4 +104,46 @@ export async function readThreadMarks(db: Prisma.TransactionClient, tabId: strin
     held.set(threadId, sequence)
   }
   return marks
+}
+
+/** How many marks one sweep deletes at most, in batches, each kind: the rest wait for the next hour. */
+export const THREAD_MARK_SWEEP = 20_000
+const SWEEP_BATCH = 1_000
+
+/** Deletes rows by id with a plain $in on _id (Prisma's `in` plans slowly). */
+async function deleteIds(db: PrismaClient, ids: string[]): Promise<number> {
+  if (!ids.length) return 0
+  const reply = await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q: { _id: { $in: ids } }, limit: 0 }] }) as { n?: number }
+  return Number(reply.n ?? 0)
+}
+
+/**
+ * The hourly sweep of thread marks (run by the singleton worker with the Swarm sweeps, sweeps.ts): deletes marks untouched for
+ * READ_MARK_EXPIRY_MS, then the marks of Swarms that no longer exist and of people no longer in their Swarm. Each kind reads
+ * by its index in batches of SWEEP_BATCH, at most THREAD_MARK_SWEEP a pass. A delete only makes a thread read as far as its
+ * conversation's mark, so a mark swept a moment before its person moves it again costs nothing.
+ */
+export async function sweepThreadMarks(db: PrismaClient, now: number): Promise<{ expired: number; lost: number }> {
+  let expired = 0
+  const before = { $date: new Date(now - READ_MARK_EXPIRY_MS).toISOString() }
+  while (expired < THREAD_MARK_SWEEP) {
+    const rows = await readBy(db, 'SuperTabThreadMark', 'age', [{ $match: { updatedAt: { $lt: before } } }, { $limit: SWEEP_BATCH }, { $project: { _id: 1 } }])
+    expired += await deleteIds(db, rows.map(row => row._id as string))
+    if (rows.length < SWEEP_BATCH) break
+  }
+  // Each Swarm's people with marks, read off the person index in order, then whether each Swarm and person is still there.
+  const pairs = (await readBy(db, 'SuperTabThreadMark', 'person', [{ $sort: { tabId: 1, personId: 1 } },
+    { $group: { _id: { tabId: '$tabId', personId: '$personId' } } }, { $limit: THREAD_MARK_SWEEP }]))
+    .map(row => row._id as { tabId: string; personId: string })
+  const tabIds = [...new Set(pairs.map(pair => pair.tabId))]
+  const members = new Map((tabIds.length ? await readBy(db, 'SuperTab', 'id', [{ $match: { _id: { $in: tabIds } } }, { $project: { memberIds: 1 } }]) : [])
+    .map(row => [row._id as string, new Set((row.memberIds as string[] | undefined) ?? [])]))
+  const gone = pairs.filter(pair => !members.get(pair.tabId)?.has(pair.personId))
+  let lost = 0
+  for (let at = 0; at < gone.length && lost < THREAD_MARK_SWEEP; at += SWEEP_BATCH) {
+    const reply = await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: gone.slice(at, at + SWEEP_BATCH)
+      .map(pair => ({ q: { tabId: pair.tabId, personId: pair.personId }, limit: 0 })) }) as { n?: number }
+    lost += Number(reply.n ?? 0)
+  }
+  return { expired, lost }
 }

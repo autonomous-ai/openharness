@@ -21,7 +21,7 @@ import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
+import { READ_MARK_EXPIRY_MS, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { listNamedIndexes, NAMED_INDEX } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -276,10 +276,14 @@ describe('thread marks (one per person and thread)', () => {
       sequence: at + i, thread: root, author: { kind: 'agent', id: 'lead-agent' }, text: i ? `Reply ${i}` : 'Root', recipientIds: [], mentions: [] })) })
   const scenario = async () => {
     const s = await scene()
-    const root = `${s.tabId}-root`, secretRoot = `${s.tabId}-secret-root`
+    const root = `${s.tabId}-root`, secretRoot = `${s.tabId}-secret-root`, agentRoot = `${s.tabId}-agent-root`
     await thread(s.tabId, s.web, root, 10)
     await thread(s.tabId, s.secretGroup, secretRoot, 20)
-    return { ...s, root, secretRoot }
+    // An agent-only notice to the Lead, with a reply: no person reads it.
+    await db.superTabMessage.createMany({ data: [agentRoot, `${agentRoot}-r1`].map((id, i) => ({ id, tabId: s.tabId, conversationId: s.web, sequence: 30 + i,
+      thread: agentRoot, author: { kind: 'agent', id: 'lead-agent' }, text: 'For the Lead', recipientIds: ['lead-agent'], mentions: [],
+      source: { kind: 'agent-only' } })) })
+    return { ...s, root, secretRoot, agentRoot }
   }
   const markThread = (tabId: string, conversationId: string, root: string, sequence: number, as: AuthUser = owner, query = '') =>
     call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/read${query}`, as, { sequence })
@@ -333,8 +337,11 @@ describe('thread marks (one per person and thread)', () => {
       await markThread(s.tabId, s.web, s.secretRoot, 21, outsider),
       await markThread(s.tabId, s.web, 'no-such-root', 21, outsider),
       await markThread(s.tabId, 'no-such-group', s.root, 21, outsider),
+      // A reply is no thread's root; an agent-only notice is no person's.
+      await markThread(s.tabId, s.web, `${s.root}-r1`, 21, outsider),
+      await markThread(s.tabId, s.web, s.agentRoot, 31, outsider),
     ]
-    expect(refused.map(r => r.status)).toEqual([404, 404, 404, 404])
+    expect(refused.map(r => r.status)).toEqual([404, 404, 404, 404, 404, 404])
     expect(new Set(refused.map(r => JSON.stringify(r.body.error)))).toHaveLength(1)
     expect(JSON.stringify(refused)).not.toContain('Secret')
     expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId } })).toBe(0)
@@ -411,6 +418,24 @@ describe('thread marks (one per person and thread)', () => {
     expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId, personId: peer.sub } })).toBe(1)
   }, 60_000)
 
+  it('sweeps marks untouched for 180 days and those of Swarms and people gone, keeping every live one', async () => {
+    const s = await scenario()
+    const write = (threadId: string, at: number, personId = owner.sub, tabId = s.tabId) =>
+      writeThreadMark(db, { tabId, personId, conversationId: s.web, threadId, sequence: 1, now: at })
+    const now = NOW + READ_MARK_EXPIRY_MS + 60_000
+    await write('old', NOW)
+    await write('fresh', now - 1_000)
+    await write('peers', now - 1_000, peer.sub)
+    // Someone no longer in the Swarm, and a Swarm that is gone.
+    await write('left', now - 1_000, 'person-who-left')
+    await write('deleted-swarm', now - 1_000, owner.sub, `${s.tabId}-deleted`)
+    const result = await sweepThreadMarks(db, now)
+    const kept = await db.superTabThreadMark.findMany({ where: { tabId: { startsWith: s.tabId } }, select: { threadId: true } })
+    expect(kept.map(k => k.threadId).sort()).toEqual(['fresh', 'peers'])
+    expect(result.expired).toBeGreaterThanOrEqual(1)
+    expect(result.lost).toBeGreaterThanOrEqual(2)
+  })
+
   it('reads a person\'s thread marks through their named indexes, planned once', async () => {
     const s = await scenario()
     await markThread(s.tabId, s.web, s.root, 11)
@@ -429,7 +454,8 @@ describe('thread marks (one per person and thread)', () => {
     const rows = (await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SuperTabThreadMark$' } }, batchSize: 1000 }) as unknown as
       { cursor: { firstBatch: Array<{ command?: { hint?: unknown }; planSummary?: string; fromMultiPlanner?: boolean }> } }).cursor.firstBatch
     const hints = rows.map(row => JSON.stringify(row.command?.hint))
-    expect(hints).toEqual(expect.arrayContaining([JSON.stringify(NAMED_INDEX.SuperTabThreadMark.held), JSON.stringify(NAMED_INDEX.SuperTabThreadMark.moved)]))
+    expect(rows.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(hints)).toEqual(new Set([JSON.stringify(NAMED_INDEX.SuperTabThreadMark.person)]))
     expect(rows.every(row => row.planSummary?.startsWith('IXSCAN') && !row.fromMultiPlanner), JSON.stringify(rows.map(r => r.planSummary))).toBe(true)
   })
 })

@@ -132,7 +132,9 @@ class SwarmReadMarks extends ChangeNotifier {
 
   /// The most threads whose marks the phone keeps per Swarm, as the server
   /// does (backend readMarks.ts THREAD_MARK_CAP): those of chats the Swarm's
-  /// read no longer has go first, then the oldest. A thread without one reads
+  /// read no longer has go first, then those of the chat kept longest, its
+  /// oldest first (not the oldest overall: no mark keeps a time). A thread
+  /// without one reads
   /// as far as the phone's other marks say (Activity's opened mark, the
   /// chat's).
   static const keptThreads = 500;
@@ -356,7 +358,8 @@ class SwarmReadMarks extends ChangeNotifier {
   }
 
   /// At most [keptThreads] thread marks: those of chats the Swarm's read no
-  /// longer has go first, then the oldest kept.
+  /// longer has go first, then those of the chat kept longest, its oldest
+  /// first.
   void _trimThreads() {
     int count() => _threads.values.fold(0, (n, roots) => n + roots.length);
     if (count() <= keptThreads) return;
@@ -364,7 +367,7 @@ class SwarmReadMarks extends ChangeNotifier {
       for (final group in reader.snapshot?.conversations ?? const []) group.id,
     };
     _threads.removeWhere((id, _) => !read.contains(id));
-    // Then the oldest: each chat's first kept is its oldest.
+    // Then the chat kept longest (the first key), its oldest mark first.
     while (count() > keptThreads) {
       final id = _threads.keys.first;
       final roots = _threads[id]!..remove(_threads[id]!.keys.first);
